@@ -30,7 +30,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 61 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
+Hiện có 69 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 17 test trong `vifast-elf`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
@@ -52,7 +52,8 @@ Hiện có 61 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 - Untyped byte accounting + OutOfMemory;
 - revoke Untyped destroy Frame + xoá mapping cũ;
 - revoke Untyped detach TCB đang BlockedRecv;
-- max_objects limit;
+- max_objects limit; Untyped con: range/quota, sibling PA uniqueness, frame
+  nằm trong dải con, revoke cha/con, nested child, cap không root, reparent TCB;
 - cap copy giữ parent chain;
 - TcbConfigure không còn validation entry/stack;
 - TcbResume từ chối TCB chưa configure;

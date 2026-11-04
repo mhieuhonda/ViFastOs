@@ -61,6 +61,27 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Map RW → unmap → map RX là hành vi cố ý (mô hình seL4): tại mỗi thời điểm
   Frame chỉ có một loại quyền. Nó không phải lỗ hổng.
 
+## 5b. Untyped con
+
+- API syscall: `Retype(a0 parent, a1 Untyped, a2 dest, a3 size bytes,
+  a4 child_max_objects)`. `size` phải dương, bội số trang; vùng được căn trang
+  và lấy từ `bump` của cha.
+- Điều kiện quota của cha:
+  `objects + reserved + child_max_objects + 1 <= max_objects`. Con chiếm một
+  object của cha; `child_max_objects` được giữ trong `reserved`.
+- Con có `base`, `size`, `max_objects`, `bump=0`, `objects=0`, `reserved=0`.
+  Không zero vùng của con; Frame/PageTable tự zero khi retype.
+- Cap con có `parent = CapRef` của cap cha và luôn `root=false`, kể cả sau
+  CapCopy.
+- Revoke cha thu hồi toàn bộ object trong cây con theo thứ tự Frame →
+  PageTable sâu nhất → VSpace → Untyped con; sau đó `reserved` được tính lại và
+  bump cha chỉ reset khi `objects == 0`.
+- Revoke cap con chỉ reset nội dung con, không đụng tới cha; object trực tiếp
+  của cha vẫn sống.
+- Delete cap cha bị từ chối khi còn object/cap con (quy tắc delete hiện có).
+- Con lồng con được phép; invariant 39 kiểm tra containment và PA uniqueness
+  sau mỗi bước.
+
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
@@ -91,8 +112,8 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Khi TCB bị hủy, object creator/cap con được reparent lên cap cha còn sống;
   delete Untyped cap trả IllegalOperation khi còn object/cap con.
 - x86 assert LoadedImage base/end nằm trong identity 0..1 GiB.
-- CapCopy Untyped vẫn chia sẻ vùng nhớ, chưa có Untyped con; Untyped con để Bước 7,
-  khi root phát tài nguyên cho task. 4.5 server không retype.
+- Untyped con đã có từ 7.2; CapCopy Untyped vẫn tồn tại cho tới khi 7.5 chuyển
+  client sang Untyped con. 4.5 server không retype.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable
   kernel.
 
@@ -135,6 +156,7 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
    giữ user.S.
 6. 7.1/7.1b/7.1c: FrameMap ⊆ Frame cap, W^X theo Frame + READ, PA uniqueness,
    sync_icache khi map EXEC và counter checked_add (đã xong).
-7. Bước 7.2–7.5: Untyped con, BootInfo, client VSpace riêng; bỏ slot hard-code.
+7. Bước 7.2–7.5: Untyped con (đã xong 7.2), BootInfo, client VSpace riêng;
+   bỏ slot hard-code.
 8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
 9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

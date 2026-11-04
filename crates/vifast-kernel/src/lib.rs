@@ -362,6 +362,7 @@ impl Kernel {
             page_size,
             max_objects,
             objects: 0,
+            reserved: 0,
         }))
     }
 
@@ -651,7 +652,7 @@ impl Kernel {
             }
             None => None,
         };
-        let (base, size, bump, page, max_objects, objects) = {
+        let (base, size, bump, page, max_objects, objects, reserved) = {
             let region = self.untyped(untyped).ok_or(KError::WrongType)?;
             (
                 region.base,
@@ -660,12 +661,17 @@ impl Kernel {
                 region.page_size,
                 region.max_objects,
                 region.objects,
+                region.reserved,
             )
         };
         if page == 0 || !page.is_power_of_two() {
             return Err(KError::Alignment);
         }
-        if objects >= max_objects {
+        if objects
+            .checked_add(reserved)
+            .and_then(|used| used.checked_add(1))
+            .is_none_or(|used| used > max_objects)
+        {
             return Err(KError::OutOfMemory);
         }
         if ty == ObjType::Tcb && self.tcb_count() >= MAX_TCBS {
@@ -753,6 +759,79 @@ impl Kernel {
         let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
         region.bump = consumed;
         region.objects = objects + 1;
+        Ok(object)
+    }
+
+    /// Carve a child Untyped region from the parent's bump and reserve its
+    /// object quota in the parent.  The child itself counts as one object of
+    /// the parent; its `max_objects` is charged to `parent.reserved`.
+    pub fn retype_untyped_child_as(
+        &mut self,
+        untyped: ObjRef,
+        size: usize,
+        child_max_objects: usize,
+        creator: Option<SlotAddr>,
+    ) -> KResult<ObjRef> {
+        let creator = match creator {
+            Some(addr) => {
+                let cap = self.cap_at(addr).ok_or(KError::InvalidCap)?;
+                if cap.obj != untyped || cap.ty != ObjType::Untyped {
+                    return Err(KError::InvalidCap);
+                }
+                Some(CapRef { addr, id: cap.id })
+            }
+            None => None,
+        };
+        let (base, parent_size, bump, page, max_objects, objects, reserved) = {
+            let region = self.untyped(untyped).ok_or(KError::WrongType)?;
+            (
+                region.base,
+                region.size,
+                region.bump,
+                region.page_size,
+                region.max_objects,
+                region.objects,
+                region.reserved,
+            )
+        };
+        if page == 0 || !page.is_power_of_two() {
+            return Err(KError::Alignment);
+        }
+        if size == 0 || size % page != 0 {
+            return Err(KError::InvalidArg);
+        }
+        let required = objects
+            .checked_add(reserved)
+            .and_then(|used| used.checked_add(child_max_objects))
+            .and_then(|used| used.checked_add(1))
+            .ok_or(KError::OutOfMemory)?;
+        if required > max_objects {
+            return Err(KError::OutOfMemory);
+        }
+        let parent_end = base.checked_add(parent_size).ok_or(KError::OutOfMemory)?;
+        let unaligned = base.checked_add(bump).ok_or(KError::OutOfMemory)?;
+        let child_base = (unaligned + page - 1) & !(page - 1);
+        let child_end = child_base.checked_add(size).ok_or(KError::OutOfMemory)?;
+        if child_end > parent_end {
+            return Err(KError::OutOfMemory);
+        }
+        let consumed = child_end - base;
+        let kind = Kind::Untyped(Untyped {
+            base: child_base,
+            size,
+            bump: 0,
+            page_size: page,
+            max_objects: child_max_objects,
+            objects: 0,
+            reserved: 0,
+        });
+        let object = self
+            .alloc_owned(kind, Some(untyped), creator)
+            .ok_or(KError::OutOfMemory)?;
+        let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
+        region.bump = consumed;
+        region.objects = objects + 1;
+        region.reserved = reserved + child_max_objects;
         Ok(object)
     }
 
@@ -1511,7 +1590,12 @@ impl Kernel {
                     }
                 }
                 Kind::Untyped(ref untyped) => {
-                    if untyped.bump > untyped.size || untyped.objects > untyped.max_objects {
+                    if untyped.bump > untyped.size
+                        || untyped
+                            .objects
+                            .checked_add(untyped.reserved)
+                            .is_none_or(|used| used > untyped.max_objects)
+                    {
                         return Err(KError::IllegalOperation);
                     }
                     if untyped_count >= untypeds.len() {
@@ -1610,6 +1694,26 @@ impl Kernel {
                         return Err(KError::IllegalOperation);
                     }
                 }
+            }
+        }
+        // The object/reserved counters are derived from the live ownership
+        // tree.  This also makes the parent-child quota split explicit.
+        for i in 0..untyped_count {
+            let (_, _, untyped) = untypeds[i];
+            let region = self.untyped(untyped).ok_or(KError::ObjectDestroyed)?;
+            let mut objects = 0usize;
+            let mut reserved = 0usize;
+            for candidate in self.objs.iter() {
+                if candidate.is_free() || candidate.owner != Some(untyped) {
+                    continue;
+                }
+                objects = objects.saturating_add(1);
+                if let Kind::Untyped(ref child) = candidate.kind {
+                    reserved = reserved.saturating_add(child.max_objects);
+                }
+            }
+            if region.objects != objects || region.reserved != reserved {
+                return Err(KError::IllegalOperation);
             }
         }
         // Counters are derived from the reverse map and checked after every
@@ -2252,6 +2356,7 @@ impl Kernel {
             Some(Kind::Frame(_)) => 0,
             Some(Kind::PageTable(_)) => 1,
             Some(Kind::VSpace(_)) => 3,
+            Some(Kind::Untyped(_)) => 4,
             _ => 2,
         }
     }
@@ -2338,6 +2443,75 @@ impl Kernel {
         Ok(())
     }
 
+    /// Collect the objects owned by one Untyped subtree.  Direct objects obey
+    /// the exact creator-cap rule; once a child Untyped itself is authorized
+    /// for destruction, everything inside that child is collected too.
+    fn collect_untyped_subtree(
+        &self,
+        untyped: ObjRef,
+        target: CapRef,
+        target_root: bool,
+        force: bool,
+        objects: &mut [ObjRef; MAX_OBJECTS],
+        count: &mut usize,
+    ) {
+        for i in 0..MAX_OBJECTS {
+            let object = &self.objs[i];
+            if object.is_free() || object.owner != Some(untyped) {
+                continue;
+            }
+            let created_here = force
+                || match object.creator {
+                    Some(creator) => self.cap_ref_is_descendant(creator, target),
+                    None => target_root,
+                };
+            if !created_here {
+                continue;
+            }
+            let reference = ObjRef {
+                index: i as u8,
+                gen: object.gen,
+            };
+            let child = matches!(object.kind, Kind::Untyped(_));
+            if child {
+                // Post-order: grandchildren and child objects are listed before
+                // the child itself, matching the destruction order.
+                self.collect_untyped_subtree(reference, target, target_root, true, objects, count);
+            }
+            if *count < objects.len() && !objects[..*count].contains(&reference) {
+                objects[*count] = reference;
+                *count += 1;
+            }
+        }
+    }
+
+    fn recount_untyped_accounting(&mut self) {
+        let mut object_counts = [0usize; MAX_OBJECTS];
+        let mut reserved_counts = [0usize; MAX_OBJECTS];
+        for object in self.objs.iter() {
+            if object.is_free() {
+                continue;
+            }
+            let Some(owner) = object.owner else {
+                continue;
+            };
+            let index = owner.index as usize;
+            if index >= MAX_OBJECTS || self.objs[index].gen != owner.gen {
+                continue;
+            }
+            object_counts[index] = object_counts[index].saturating_add(1);
+            if let Kind::Untyped(ref child) = object.kind {
+                reserved_counts[index] = reserved_counts[index].saturating_add(child.max_objects);
+            }
+        }
+        for (index, object) in self.objs.iter_mut().enumerate() {
+            if let Kind::Untyped(ref mut region) = object.kind {
+                region.objects = object_counts[index];
+                region.reserved = reserved_counts[index];
+            }
+        }
+    }
+
     /// Remove all capabilities derived from `slot`.  The root capability is
     /// left in place.  Returns the number of capabilities removed.
     pub fn revoke_cap(&mut self, tcb: ObjRef, slot: u8) -> KResult<usize> {
@@ -2351,30 +2525,20 @@ impl Kernel {
         let mut object_count = 0usize;
 
         if target_cap.ty == ObjType::Untyped {
-            for i in 0..MAX_OBJECTS {
-                if self.objs[i].owner != Some(target_cap.obj) {
-                    continue;
-                }
-                let created_here = match self.objs[i].creator {
-                    Some(creator) => self.cap_ref_is_descendant(creator, target_ref),
-                    None => target_cap.root,
-                };
-                if created_here {
-                    let r = ObjRef {
-                        index: i as u8,
-                        gen: self.objs[i].gen,
-                    };
-                    if !objects[..object_count].contains(&r) && object_count < objects.len() {
-                        objects[object_count] = r;
-                        object_count += 1;
-                    }
-                }
-            }
+            self.collect_untyped_subtree(
+                target_cap.obj,
+                target_ref,
+                target_cap.root,
+                false,
+                &mut objects,
+                &mut object_count,
+            );
             if objects[..object_count].contains(&self.current.unwrap_or(ObjRef::invalid())) {
                 return Err(KError::IllegalOperation);
             }
             // Destroy in dependency order: Frame leaves first, then page
-            // tables deepest-first, and finally VSpace roots.
+            // tables deepest-first, then VSpace roots, and finally child
+            // Untyped containers.
             for i in 1..object_count {
                 let mut j = i;
                 while j > 0 && self.destroy_before(objects[j], objects[j - 1]) {
@@ -2424,14 +2588,9 @@ impl Kernel {
             for object in objects.iter().take(object_count) {
                 self.destroy_object(*object)?;
             }
-            let remaining = self
-                .objs
-                .iter()
-                .filter(|object| object.owner == Some(target_cap.obj))
-                .count();
+            self.recount_untyped_accounting();
             if let Some(region) = self.untyped_mut(target_cap.obj) {
-                region.objects = remaining;
-                if remaining == 0 {
+                if region.objects == 0 {
                     region.bump = 0;
                 }
             }
@@ -2768,6 +2927,7 @@ impl Kernel {
                     n if n == ObjType::Frame as u64 => ObjType::Frame,
                     n if n == ObjType::PageTable as u64 => ObjType::PageTable,
                     n if n == ObjType::VSpace as u64 => ObjType::VSpace,
+                    n if n == ObjType::Untyped as u64 => ObjType::Untyped,
                     _ => {
                         return UserAction::Return {
                             value: 0,
@@ -2798,14 +2958,17 @@ impl Kernel {
                         error: KError::SlotOccupied,
                     };
                 }
-                let object = match self.retype_as(
-                    untyped.obj,
-                    ty,
-                    Some(SlotAddr {
-                        tcb,
-                        slot: untyped_slot,
-                    }),
-                ) {
+                let creator = Some(SlotAddr {
+                    tcb,
+                    slot: untyped_slot,
+                });
+                let object = match ty {
+                    ObjType::Untyped => {
+                        self.retype_untyped_child_as(untyped.obj, a3 as usize, a4 as usize, creator)
+                    }
+                    _ => self.retype_as(untyped.obj, ty, creator),
+                };
+                let object = match object {
                     Ok(object) => object,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
@@ -5938,6 +6101,482 @@ mod tests {
         let mut kernel = Kernel::new();
         let child = kernel.create_tcb("child", 1).unwrap();
         assert_eq!(kernel.resume_tcb(child), Err(KError::IllegalOperation));
+    }
+
+    #[test]
+    fn untyped_child_range_and_quota_are_checked() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let parent = kernel
+            .create_untyped_with_limit(0x100_0000, 0x4000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let before = *kernel.untyped(parent).unwrap();
+
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Untyped as u64,
+                2,
+                0x5000,
+                1,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::OutOfMemory,
+            }
+        );
+        assert_eq!(*kernel.untyped(parent).unwrap(), before);
+        assert!(kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).is_none());
+        assert!(kernel.check_invariants().is_ok());
+
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Untyped as u64,
+                2,
+                0x1000,
+                4,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::OutOfMemory,
+            }
+        );
+        assert_eq!(*kernel.untyped(parent).unwrap(), before);
+        assert!(kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn untyped_sibling_children_do_not_share_pa() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let parent = kernel
+            .create_untyped_with_limit(0x100_0000, 0x8000, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        for (slot, size) in [(2, 0x2000usize), (3, 0x2000usize)] {
+            assert_eq!(
+                kernel.user_syscall(
+                    root,
+                    SyscallId::Retype as u64,
+                    1,
+                    ObjType::Untyped as u64,
+                    slot,
+                    size as u64,
+                    1,
+                    0
+                ),
+                UserAction::Return {
+                    value: slot as u64,
+                    error: KError::Ok,
+                }
+            );
+            assert!(kernel.check_invariants().is_ok());
+        }
+        let child_a = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        let child_b = kernel.cap_at(SlotAddr { tcb: root, slot: 3 }).unwrap().obj;
+        let a = *kernel.untyped(child_a).unwrap();
+        let b = *kernel.untyped(child_b).unwrap();
+        assert!(a.base + a.size <= b.base || b.base + b.size <= a.base);
+
+        for (src, dest) in [(2, 4), (3, 5)] {
+            assert_eq!(
+                kernel.user_syscall(
+                    root,
+                    SyscallId::Retype as u64,
+                    src,
+                    ObjType::Frame as u64,
+                    dest,
+                    0,
+                    0,
+                    0
+                ),
+                UserAction::Return {
+                    value: dest as u64,
+                    error: KError::Ok,
+                }
+            );
+            assert!(kernel.check_invariants().is_ok());
+        }
+        let frame_a = kernel.cap_at(SlotAddr { tcb: root, slot: 4 }).unwrap().obj;
+        let frame_b = kernel.cap_at(SlotAddr { tcb: root, slot: 5 }).unwrap().obj;
+        let pa_a = kernel.frame(frame_a).unwrap().pa as u64;
+        let pa_b = kernel.frame(frame_b).unwrap().pa as u64;
+        assert_ne!(pa_a, pa_b);
+        assert!(pa_a >= a.base as u64 && pa_a < (a.base + a.size) as u64);
+        assert!(pa_b >= b.base as u64 && pa_b < (b.base + b.size) as u64);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn untyped_child_frame_stays_in_child_range() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let parent = kernel
+            .create_untyped_with_limit(0x100_0000, 0x4000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Untyped as u64,
+                2,
+                0x2000,
+                2,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok,
+            }
+        );
+        let child = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        let region = *kernel.untyped(child).unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                2,
+                ObjType::Frame as u64,
+                3,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 3,
+                error: KError::Ok,
+            }
+        );
+        let frame = kernel.cap_at(SlotAddr { tcb: root, slot: 3 }).unwrap().obj;
+        let pa = kernel.frame(frame).unwrap().pa as u64;
+        assert!(pa >= region.base as u64 && pa < (region.base + region.size) as u64);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn revoking_untyped_parent_destroys_child_mapping_and_reuses_zeroed_pa() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        for format in [PteFormat::Riscv, PteFormat::X86, PteFormat::AArch] {
+            reset_pte_fake();
+            let ops = pte_ops(format);
+            let mut kernel = Kernel::new();
+            kernel.set_page_table_ops(ops);
+            let root = kernel.root().unwrap();
+            let parent = kernel
+                .create_untyped_with_limit(0x2000, 0x4000, 4096, 4)
+                .unwrap();
+            kernel
+                .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+                .unwrap();
+            assert_eq!(
+                kernel.user_syscall(
+                    root,
+                    SyscallId::Retype as u64,
+                    1,
+                    ObjType::Untyped as u64,
+                    2,
+                    0x2000,
+                    1,
+                    0
+                ),
+                UserAction::Return {
+                    value: 2,
+                    error: KError::Ok,
+                }
+            );
+            assert_eq!(
+                kernel.user_syscall(
+                    root,
+                    SyscallId::Retype as u64,
+                    2,
+                    ObjType::Frame as u64,
+                    3,
+                    0,
+                    0,
+                    0
+                ),
+                UserAction::Return {
+                    value: 3,
+                    error: KError::Ok,
+                }
+            );
+            let child = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+            let frame = kernel.cap_at(SlotAddr { tcb: root, slot: 3 }).unwrap().obj;
+            let old_pa = kernel.frame(frame).unwrap().pa as u64;
+
+            let va = 0x10_0000_0000;
+            let space = kernel
+                .create_vspace_with_page_size(0xa000, va, 0x2000, 4096)
+                .unwrap();
+            for index in 0..ops.levels().saturating_sub(1) {
+                let table = 0x6000u64 + index as u64 * 0x1000;
+                let pt = kernel.create_page_table(table, 0).unwrap();
+                assert!(kernel.map_page_table(pt, space, va).is_ok());
+            }
+            let mapping = kernel
+                .map_frame(space, frame, va, Rights::READ | Rights::WRITE)
+                .unwrap();
+            assert_eq!(kernel.frame(frame).unwrap().mapped_w, 1);
+            let word = ((old_pa >> 12) as usize) * 512;
+            PTE_FAKE_MEM.lock().unwrap()[word] = 0xDEAD_BEEF;
+            assert!(kernel.check_invariants().is_ok());
+
+            kernel.revoke_cap(root, 1).unwrap();
+            assert!(kernel.untyped(child).is_none());
+            assert!(kernel.frame(frame).is_none());
+            assert!(kernel.mapping_at(space, mapping.va).is_none());
+            assert!(kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).is_none());
+            assert!(kernel.cap_at(SlotAddr { tcb: root, slot: 3 }).is_none());
+            let region = *kernel.untyped(parent).unwrap();
+            assert_eq!(region.objects, 0);
+            assert_eq!(region.reserved, 0);
+            assert_eq!(region.bump, 0);
+            assert!(kernel.check_invariants().is_ok());
+
+            assert_eq!(
+                kernel.user_syscall(
+                    root,
+                    SyscallId::Retype as u64,
+                    1,
+                    ObjType::Frame as u64,
+                    4,
+                    0,
+                    0,
+                    0
+                ),
+                UserAction::Return {
+                    value: 4,
+                    error: KError::Ok,
+                }
+            );
+            let replacement = kernel.cap_at(SlotAddr { tcb: root, slot: 4 }).unwrap().obj;
+            assert_eq!(kernel.frame(replacement).unwrap().pa as u64, old_pa);
+            assert_eq!(PTE_FAKE_MEM.lock().unwrap()[word], 0);
+            assert!(kernel.check_invariants().is_ok());
+        }
+    }
+
+    #[test]
+    fn revoking_child_untyped_leaves_parent_objects_alive() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let parent = kernel
+            .create_untyped_with_limit(0x100_0000, 0x4000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Frame as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok,
+            }
+        );
+        let frame = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Untyped as u64,
+                3,
+                0x1000,
+                1,
+                0
+            ),
+            UserAction::Return {
+                value: 3,
+                error: KError::Ok,
+            }
+        );
+        let child = kernel.cap_at(SlotAddr { tcb: root, slot: 3 }).unwrap().obj;
+        let bump_before = kernel.untyped(parent).unwrap().bump;
+        kernel.revoke_cap(root, 3).unwrap();
+        assert!(kernel.get(child).is_some());
+        assert_eq!(kernel.untyped(child).unwrap().bump, 0);
+        assert!(kernel.get(frame).is_some());
+        let region = *kernel.untyped(parent).unwrap();
+        assert_eq!(region.objects, 2);
+        assert_eq!(region.reserved, 1);
+        assert_eq!(region.bump, bump_before);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn untyped_child_caps_and_copies_are_not_root() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let parent = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Untyped as u64,
+                2,
+                0x1000,
+                1,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok,
+            }
+        );
+        let child_cap = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap();
+        assert!(!child_cap.root);
+        assert!(child_cap.parent.is_some());
+        assert_eq!(kernel.delete_cap(root, 1), Err(KError::IllegalOperation));
+        kernel.copy_cap(root, 2, root, 4, Rights::ALL, 0).unwrap();
+        assert!(!kernel.cap_at(SlotAddr { tcb: root, slot: 4 }).unwrap().root);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn revoking_nested_untyped_collects_all_descendants() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let parent = kernel
+            .create_untyped_with_limit(0x100_0000, 0x8000, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        for (src, slot, size, max) in [(1, 2, 0x4000usize, 4usize), (2, 3, 0x2000, 2)] {
+            assert_eq!(
+                kernel.user_syscall(
+                    root,
+                    SyscallId::Retype as u64,
+                    src,
+                    ObjType::Untyped as u64,
+                    slot,
+                    size as u64,
+                    max as u64,
+                    0
+                ),
+                UserAction::Return {
+                    value: slot as u64,
+                    error: KError::Ok,
+                }
+            );
+            assert!(kernel.check_invariants().is_ok());
+        }
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                3,
+                ObjType::Frame as u64,
+                4,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 4,
+                error: KError::Ok,
+            }
+        );
+        let child = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        let grandchild = kernel.cap_at(SlotAddr { tcb: root, slot: 3 }).unwrap().obj;
+        let frame = kernel.cap_at(SlotAddr { tcb: root, slot: 4 }).unwrap().obj;
+        assert!(kernel.check_invariants().is_ok());
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(child).is_none());
+        assert!(kernel.get(grandchild).is_none());
+        assert!(kernel.get(frame).is_none());
+        assert_eq!(kernel.untyped(parent).unwrap().reserved, 0);
+        assert_eq!(kernel.untyped(parent).unwrap().objects, 0);
+        assert_eq!(kernel.untyped(parent).unwrap().bump, 0);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn child_cap_reparents_when_holder_tcb_dies() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let parent = kernel
+            .create_untyped_with_limit(0x100_0000, 0x4000, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Untyped as u64,
+                2,
+                0x2000,
+                2,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok,
+            }
+        );
+        let child_cap = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap();
+        let child = child_cap.obj;
+        let client = kernel.create_tcb("client", 1).unwrap();
+        kernel.copy_cap(root, 2, client, 1, Rights::ALL, 0).unwrap();
+        let frame = kernel
+            .retype_as(
+                child,
+                ObjType::Frame,
+                Some(SlotAddr {
+                    tcb: client,
+                    slot: 1,
+                }),
+            )
+            .unwrap();
+        assert!(kernel.check_invariants().is_ok());
+        kernel.destroy_object(client).unwrap();
+        assert_eq!(
+            kernel.get(frame).unwrap().creator,
+            Some(CapRef {
+                addr: SlotAddr { tcb: root, slot: 2 },
+                id: child_cap.id,
+            })
+        );
+        assert!(kernel.check_invariants().is_ok());
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(child).is_none());
+        assert!(kernel.get(frame).is_none());
+        assert!(kernel.check_invariants().is_ok());
     }
 
     #[test]

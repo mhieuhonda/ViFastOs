@@ -365,7 +365,7 @@ impl Tcb {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Untyped {
     pub base: usize,
     pub size: usize,
@@ -373,6 +373,9 @@ pub struct Untyped {
     pub page_size: usize,
     pub max_objects: usize,
     pub objects: usize,
+    /// Sum of `max_objects` of live direct child Untypeds.  This quota is held
+    /// so siblings cannot consume the child's future object budget.
+    pub reserved: usize,
 }
 
 #[allow(clippy::large_enum_variant)]

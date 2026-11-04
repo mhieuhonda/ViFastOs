@@ -101,6 +101,8 @@ pub struct Message {
   làm slot cap; `Reply` truyền 4 data word và không chuyển cap.
 - Receiver phải chỉ định slot nhận cap rõ ràng; kernel không tự chọn slot
   fallback. Nếu slot 0/đã dùng, chuyển cap thất bại.
+- `Retype` tạo Untyped con lấy `size` bội số trang từ bump của cha và giữ
+  `child max_objects` trong `reserved` của cha.
 - `CapRevoke` trên Untyped gọi `PageTableOps` để unmap/flush ngay tại chỗ;
   object con bị free và `gen` tăng. Không còn report danh sách VA.
 - User fault không panic kernel: TCB chuyển `Faulted`, runtime chọn TCB khác.
@@ -122,7 +124,7 @@ Số syscall là ổn định. `-` nghĩa là không dùng.
 | 6 | `Wait` | a0 notification cap | Trả word hoặc block |
 | 7 | `Poll` | a0 notification cap | Trả word và clear |
 | 8 | `Yield` | — | Hiện trả `Ok`, chưa chuyển context |
-| 9 | `Retype` | a0 Untyped cap, a1 ObjType, a2 dest slot | Endpoint/Notification/Tcb/Frame/PageTable/VSpace |
+| 9 | `Retype` | a0 Untyped cap, a1 ObjType, a2 dest slot; Untyped con: a3 size bytes, a4 child max_objects | Endpoint/Notification/Tcb/Frame/PageTable/VSpace/Untyped con |
 | 10 | `CapCopy` | a0 src slot, a1 TCB cap, a2 dst slot, a3 rights | Copy cap sang TCB khác |
 | 14 | `CapRevoke` | a0 slot | Revoke cap; Untyped destroy object con + unmap qua PageTableOps |
 | 15 | `TcbConfigure` | a0 TCB cap, a1 entry, a2 stack, a3 VSpace cap, a4 priority | Set context |

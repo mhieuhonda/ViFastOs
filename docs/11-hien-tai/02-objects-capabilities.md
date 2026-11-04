@@ -105,6 +105,7 @@ pub struct Untyped {
     pub page_size: usize,
     pub max_objects: usize,
     pub objects: usize,
+    pub reserved: usize,
 }
 ```
 
@@ -117,8 +118,13 @@ pub struct Untyped {
 - `Tcb`: tiêu 1024 byte Untyped.
 
 Mỗi object đều tiêu `bump` và một slot `objects`; nếu không đủ byte hoặc
-không đủ `max_objects`, trả `OutOfMemory`. Revoke Untyped destroy object con
-thật, đặt `Kind::Free`, tăng `gen`, rồi reset `bump = 0`, `objects = 0`.
+không đủ `objects + reserved + 1`, trả `OutOfMemory`. `reserved` giữ tổng
+`max_objects` của các Untyped con trực tiếp, để sibling không tiêu hết quota
+của con. Retype Untyped con lấy vùng căn trang từ bump của cha; con có bump/
+objects/reserved riêng. Revoke Untyped cha thu hồi object bên trong con trước,
+sau đó hủy con và trả `reserved`; revoke cap con chỉ reset nội dung của con,
+không đụng tới cha. Revoke Untyped destroy object thật, đặt `Kind::Free`, tăng
+`gen`, rồi reset `bump = 0`, `objects = 0`.
 
 ## 4. Frame, VSpace, PageTable
 
@@ -201,6 +207,7 @@ Frame/TCB/Endpoint/Notification con, unmap Frame và tăng generation; ngoài
 - fd trỏ file còn tồn tại;
 - VSpace mapping đúng alignment, overlap, có READ và không W+X trên một leaf;
 - `Frame.mapped_w/mapped_x` khớp chính xác số leaf W/X trong toàn bộ reverse map;
+- `Untyped.objects`/`reserved` khớp cây owner; `objects + reserved <= max_objects`;
 - Frame/PageTable/VSpace root+aux không chồng dải PA; Untyped chỉ lồng theo
   owner chain và con nằm trọn trong cha;
 - Frame/PageTable alignment;
