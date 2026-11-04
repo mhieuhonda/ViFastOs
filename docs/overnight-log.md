@@ -11,6 +11,7 @@
 - `854744a` — 8.1 IPC buffer API/core.
 - `49e7b1f` — 8.1b IPC buffer demo end-to-end.
 - `82c9c11` — S2 x86 kernel data NX.
+- `ea3793b` — 8.4 Rust server/client ELF modules.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -20,9 +21,9 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## CẦN QUYẾT ĐỊNH
 
-- 8.4 server/client Rust ELF chưa triển khai. Demo IPC buffer dài trong user.S
-  đã nối xong (8.1b); x86 kernel data NX đã bật (S2); fuzz syscall 3 PTE
-  format đã có (S1).
+- 8.4 core đã có: server/client là crate Rust, build thành ELF riêng, root nạp
+  bằng `vifast-elf`/`FrameWrite` vào VSpace riêng. Chưa có BootInfo module list
+  để runtime cấp ELF thay vì nhúng bytes trong root image.
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -147,6 +148,31 @@ follow-up `62b31f4`.
 - `vifast-kernel` 77/77; PTE 11/11; ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; ROOT SWITCH 47861 / 38447 / 15977 (lần đầu).
 - Chưa nối demo chuỗi dài trong user.S; đó là phần còn lại của 3c.
+
+## 8.4 — Rust server/client ELF modules
+
+- Commit `ea3793b feat: load rust server and client elf modules`.
+- Thêm hai crate `vifast-server` và `vifast-client` (`no_std`, `no_main`), entry
+  `_start` assembly ngắn, logic server/client bằng Rust dùng `vifast-user`.
+- `build.sh` build hai ELF riêng cho RISC-V/AArch64/x86_64, strip, rồi nhúng bytes
+  vào root ELF bằng `include_bytes!`; root parse `vifast-elf` và nạp từng PT_LOAD
+  vào VSpace server/client, đúng quyền RX/RW.
+- Thêm syscall `FrameWrite` (42) + `Runtime UserAction::FrameWrite` +
+  `Kernel::copy_frame_bytes`: root copy thẳng bytes vào Frame qua kernel, không
+  cần mapping staging. Đây cũng là đường copy đúng cache/PA cho AArch64.
+- Server Rust dùng `ReplyRecv` + in IPC buffer; client Rust làm file/ramfs demo,
+  FrameMap, zero-frame, IPC Call và `Cap OK`/`Reply OK`. `user.S` chỉ còn fault
+  threads và jump table.
+- Sửa `vifast-user::syscall` để khai báo tất cả argument registers bị clobber;
+  lỗi này bị che bởi các debug `write` trước đó và làm root treo khi optimize.
+- AArch64 `sync_icache` đổi sang `dc civac`; CONTEXTS tăng 32→128 vì object
+  index dịch khi root ELF lớn hơn; Frame cap từ Retype có EXEC; allowlist user
+  code mở đến 0x20000 cho module strings/IPC buffer.
+- `vifast-kernel` 79/79; PTE 11/11; ELF 17/17; build không warning; QEMU 3/3
+  PASS ×3. Root ELF RISC-V 26168 B, AArch64 29768 B, x86 33128 B; RISC-V
+  headroom 573424 B.
+- DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
+  object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
 
 ## S1 — syscall fuzz trên 3 PTE format
 

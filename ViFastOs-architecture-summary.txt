@@ -55,11 +55,11 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a18663f feat: deliver user faults to endpoint
 - 854744a feat: add ipc buffer binding and copy.
 
-Cập nhật code gần nhất (commit 854744a): root/server/client VSpace, current_root từ TCB,
+Cập nhật code gần nhất (commit ea3793b): root + Rust server/client ELF modules, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
-root Rust ELF nạp vào boot, ROOT RUST/ROOT READY, jump table, FrameMap cap bound,
-W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, IPC buffer, 3 target link/FP
+root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
+W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, IPC buffer + FrameWrite loader, 3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
@@ -310,7 +310,8 @@ vifast-kernel-riscv64 / aarch64 / x86_64-uefi
 - Binary mỏng (RISC-V 81, AArch64 80, x86 UEFI 144 dòng main.rs).
 - Chỉ còn:
   - global_asm boot.S (RISC-V/AArch64);
-  - global_asm user.S (jump table + server/client/fault threads);
+  - global_asm user.S (jump table + fault threads);
+  - root nạp server/client Rust ELF từ bytes nhúng;
   - include_bytes!(VIFAST_ROOT_ELF) + UserImage(root_elf);
   - user_image() assert offset USER_ENTRY_*;
   - gọi runtime::boot::<Platform>(...);
@@ -1037,7 +1038,7 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 78 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 79 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1049,9 +1050,10 @@ Exit code:
 - Chưa có range VA allocator, ASID/PCID.
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
 - Chưa có IOMMU.
-- vifast-elf + vifast-root ELF đã build/validate và đã nối boot flow 6.4;
-  shared memory/IPC buffer core + demo end-to-end đã có (8.1/8.1b); chưa có
-  shared-memory mapping dùng chung ngoài IPC buffer.
+- vifast-elf + vifast-root ELF đã build/validate; server/client cũng là Rust ELF
+  được root nạp vào VSpace riêng. IPC buffer core + demo end-to-end đã có
+  (8.1/8.1b); chưa có shared-memory mapping dùng chung ngoài IPC buffer.
+- Module ELF hiện được nhúng trong root image; BootInfo module list chưa có.
 - Chưa có Reply mang capability; ReplyRecv và fault endpoint tối giản đã có.
 - VFS chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
 - Chưa có block device, FS bền vững, directory, permission.
@@ -1305,8 +1307,9 @@ scripts/test-qemu.py
 - user mode, IPC, capability transfer, page mapping, ramfs và timer preemption;
 - test QEMU 3 kiến trúc xanh.
 
-Nó chưa phải OS hoàn chỉnh. Root chạy từ ELF Rust; root, server và client mỗi
-task có VSpace riêng; client dùng Untyped con. 3b đã hoàn tất; khoảng trống
-lớn nhất hiện là 8.4 server/client Rust ELF; S1/S2 đã xong, S3 còn dọn sâu.
+Nó chưa phải OS hoàn chỉnh. Root và server/client đều chạy từ ELF Rust; mỗi
+task có VSpace riêng; client dùng Untyped con. 8.4 core đã xong; khoảng trống
+lớn nhất còn lại là BootInfo module list để runtime cấp ELF thay vì nhúng
+bytes trong root, rồi S3 dọn tài liệu sâu.
 allocator/revoke hoàn chỉnh, SMP thật (x86 AP, BKL, IPI, TLB shootdown),
 driver/FS/network và compositor/ViFastKey.
