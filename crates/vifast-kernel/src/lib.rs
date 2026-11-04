@@ -1577,6 +1577,8 @@ impl Kernel {
         }
         match kind {
             Kind::Tcb(_) => {
+                // TCB teardown is the one path allowed to bypass
+                // delete_cap's refusal rule: reparent first, then drop cspace.
                 self.reparent_tcb_caps(obj);
                 self.detach_tcb(obj);
             }
