@@ -1341,14 +1341,14 @@ impl Kernel {
         let frame = *self.frame(frame_obj).ok_or(KError::WrongType)?;
         let wants_w = rights.contains(Rights::WRITE);
         let wants_x = rights.contains(Rights::EXEC);
-        let (root, page_size, base, end, next_va) = {
+        let (root, page_size, base, end, next_free) = {
             let space = self.vspace(vspace).ok_or(KError::WrongType)?;
             (
                 space.root,
                 space.page_size,
                 space.base,
                 space.end,
-                space.next_va,
+                space.find_free_va(space.page_size),
             )
         };
         if page_size == 0
@@ -1358,7 +1358,11 @@ impl Kernel {
         {
             return Err(KError::Alignment);
         }
-        let va = if hint == 0 { next_va } else { hint };
+        let va = if hint == 0 {
+            next_free.ok_or(KError::OutOfMemory)?
+        } else {
+            hint
+        };
         if va % page_size != 0 {
             return Err(KError::Alignment);
         }
@@ -4040,6 +4044,30 @@ mod tests {
                 error: KError::NoRights
             }
         );
+    }
+
+    #[test]
+    fn vspace_range_allocator_reuses_unmapped_holes() {
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_vspace_with_page_size(0x1000, 0x4000_0000, 0x4000, 4096)
+            .unwrap();
+        let frame_a = kernel.create_frame(0x9000, 4096).unwrap();
+        let frame_b = kernel.create_frame(0xa000, 4096).unwrap();
+        let explicit = kernel
+            .map_frame(space, frame_a, 0x4000_1000, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert_eq!(explicit.va, 0x4000_1000);
+        let first_free = kernel
+            .map_frame(space, frame_b, 0, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert_eq!(first_free.va, 0x4000_0000);
+        kernel.unmap_frame(space, first_free.va).unwrap();
+        let reused = kernel
+            .map_frame(space, frame_b, 0, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert_eq!(reused.va, first_free.va);
+        assert!(kernel.check_invariants().is_ok());
     }
 
     #[test]

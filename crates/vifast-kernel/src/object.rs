@@ -292,6 +292,42 @@ impl VSpace {
             va < mapping.va.saturating_add(mapping.len) && mapping.va < va.saturating_add(len)
         })
     }
+
+    /// First-fit page-range allocation inside this VSpace.  Walking the
+    /// (small) reverse map makes unmapped holes reusable without a separate
+    /// heap or interval tree.
+    pub(crate) fn find_free_va(&self, len: u64) -> Option<u64> {
+        let page = self.page_size;
+        if page == 0 || len == 0 || len % page != 0 {
+            return None;
+        }
+        let mut candidate = self.base;
+        while candidate < self.end {
+            let end = candidate.checked_add(len)?;
+            if end > self.end {
+                return None;
+            }
+            let mut moved = false;
+            for mapping in self.mappings.iter().flatten() {
+                let mapping_end = mapping.va.saturating_add(mapping.len);
+                if candidate < mapping_end && mapping.va < end {
+                    let aligned = mapping_end
+                        .checked_add(page - 1)?
+                        .checked_div(page)?
+                        .checked_mul(page)?;
+                    if aligned <= candidate {
+                        return None;
+                    }
+                    candidate = aligned;
+                    moved = true;
+                }
+            }
+            if !moved {
+                return Some(candidate);
+            }
+        }
+        None
+    }
 }
 
 /// Where a PageTable object is attached.  A page-table page may be installed
