@@ -17,10 +17,11 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - eece7c3 harden: kernel trap stack, private x86 page tables, explicit cap slots
 - 3f16fb1 feat: root task, user pointer validation, untyped accounting
 - 604576e test: exercise PAN/SMEP/SMAP and document root task
-- c79d8f9 fix: destroy untyped children and isolate user faults.
+- c79d8f9 fix: destroy untyped children and isolate user faults
+- c9e3028 fix: distinguish kernel faults, zero retyped frames, record 3b design.
 
-Cập nhật gần nhất (commit c79d8f9): root task, revoke Untyped thật, fault
-suspend, max_objects, Yield/Wait, kiểm tra con trỏ user,
+Cập nhật gần nhất (commit c9e3028): root task, revoke Untyped thật, fault
+suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame khi retype,
 Untyped accounting, user layout chung 64 GiB, SMEP/SMAP/PAN/sscratch
 hardening và vifast-user.
 
