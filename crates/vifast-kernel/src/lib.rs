@@ -67,6 +67,16 @@ pub enum UserAction {
         ptr: u64,
         len: u64,
     },
+    /// Read one 512-byte block sector into a user buffer.
+    BlockRead {
+        lba: u64,
+        ptr: u64,
+    },
+    /// Write one 512-byte block sector from a user buffer.
+    BlockWrite {
+        lba: u64,
+        ptr: u64,
+    },
     /// Copy a user buffer into a Frame at a byte offset.
     FrameWrite {
         frame: ObjRef,
@@ -3071,6 +3081,21 @@ impl Kernel {
         }
         if number == SyscallId::Exit as u64 {
             return UserAction::Exit;
+        }
+
+        if number == SyscallId::BlockRead as u64 || number == SyscallId::BlockWrite as u64 {
+            let write = number == SyscallId::BlockWrite as u64;
+            if self.validate_user_range(tcb, a1, 512, write).is_err() {
+                return UserAction::Return {
+                    value: 0,
+                    error: KError::InvalidArg,
+                };
+            }
+            return if write {
+                UserAction::BlockWrite { lba: a0, ptr: a1 }
+            } else {
+                UserAction::BlockRead { lba: a0, ptr: a1 }
+            };
         }
 
         match number {

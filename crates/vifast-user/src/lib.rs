@@ -355,6 +355,16 @@ pub fn frame_unmap(vspace_slot: u8, va: u64, frame_slot: u8) -> SyscallResult {
     result(e, v)
 }
 
+pub fn block_read(lba: u64, ptr: u64) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::BlockRead as u64, [lba, ptr, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
+pub fn block_write(lba: u64, ptr: u64) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::BlockWrite as u64, [lba, ptr, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn iommu_map(domain_slot: u8, iova: u64, frame_slot: u8, rights: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

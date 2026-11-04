@@ -788,6 +788,22 @@ pub mod syscall {
                     }
                 }
             }
+            UserAction::BlockRead { lba, ptr } => {
+                let mut buf = [0u8; 512];
+                if A::block_read(lba, &mut buf) && A::write_user(ptr, &buf).is_ok() {
+                    A::write_result(context, KError::Ok, 512, 0, [0; 4]);
+                } else {
+                    A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
+                }
+            }
+            UserAction::BlockWrite { lba, ptr } => {
+                let mut buf = [0u8; 512];
+                if A::read_user(ptr, &mut buf).is_err() || !A::block_write(lba, &buf) {
+                    A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
+                } else {
+                    A::write_result(context, KError::Ok, 512, 0, [0; 4]);
+                }
+            }
             UserAction::Debug { ptr, len } => {
                 let len = (len as usize).min(USER_COPY_MAX);
                 let mut buf = [0u8; USER_COPY_MAX];

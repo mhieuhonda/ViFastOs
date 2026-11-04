@@ -63,6 +63,7 @@ def run_qemu(
     ok_codes: set[int],
     require_smp: bool = False,
     require_block: bool = False,
+    require_disk: bool = False,
 ) -> bool:
     if os.path.exists(serial):
         os.unlink(serial)
@@ -123,6 +124,7 @@ def run_qemu(
         and (name != "x86_64" or "KERNEL DATA NX OK" in output)
         and (not require_smp or ("SMP OK" in output and "ipi=1" in output))
         and (not require_block or "BLOCK OK" in output)
+        and (not require_disk or "FS DISK OK" in output)
     )
     if timed_out:
         print("FAIL: timeout")
@@ -177,7 +179,7 @@ def test_aarch64() -> bool:
         "-kernel", kernel,
     ]
     return run_qemu(
-        "aarch64", cmd, serial, 20, {0}, require_smp=True, require_block=True
+        "aarch64", cmd, serial, 20, {0}, require_smp=True, require_block=True, require_disk=True
     )
 
 

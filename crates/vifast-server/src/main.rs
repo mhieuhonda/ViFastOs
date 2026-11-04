@@ -26,6 +26,8 @@ const VFS_READY: &[u8] = b"VFS SERVER OK\n";
 const IPC_BYTES: usize = 11;
 const FILE_CAP: usize = 64;
 const MOTD: &[u8] = b"ViFastOS ramfs\n";
+const FS_MAGIC: &[u8; 4] = b"VF01";
+const FS_SECTOR: u64 = 0;
 
 #[derive(Clone, Copy)]
 struct File {
@@ -44,6 +46,8 @@ const EMPTY_FILE: File = File {
 
 static mut FILES: [File; vfs::MAX_FILES] = [EMPTY_FILE; vfs::MAX_FILES];
 static mut FILE_COUNT: usize = 0;
+static mut DISK_OK: bool = false;
+static mut PERSISTED: bool = false;
 
 fn write(bytes: &[u8]) {
     let _ = vifast_user::debug_write(bytes.as_ptr() as u64, bytes.len() as u64);
@@ -65,7 +69,38 @@ unsafe fn init_files() -> &'static mut [File; vfs::MAX_FILES] {
     files[1] = EMPTY_FILE;
     set_name(&mut files[1], b"/scratch");
     *core::ptr::addr_of_mut!(FILE_COUNT) = 2;
+    load_scratch(files);
     files
+}
+
+unsafe fn load_scratch(files: &mut [File; vfs::MAX_FILES]) {
+    let mut sector = [0u8; 512];
+    let result = vifast_user::block_read(FS_SECTOR, sector.as_mut_ptr() as u64);
+    if result.error != KError::Ok {
+        return;
+    }
+    DISK_OK = true;
+    if &sector[..4] == FS_MAGIC {
+        PERSISTED = true;
+        let len = u32::from_le_bytes([sector[4], sector[5], sector[6], sector[7]]) as usize;
+        let len = core::cmp::min(len, FILE_CAP);
+        files[1].data[..len].copy_from_slice(&sector[8..8 + len]);
+        files[1].len = len;
+    } else {
+        persist_scratch(files);
+    }
+}
+
+unsafe fn persist_scratch(files: &[File; vfs::MAX_FILES]) {
+    if !DISK_OK {
+        return;
+    }
+    let mut sector = [0u8; 512];
+    sector[..4].copy_from_slice(FS_MAGIC);
+    sector[4..8].copy_from_slice(&(files[1].len as u32).to_le_bytes());
+    let len = core::cmp::min(files[1].len, FILE_CAP);
+    sector[8..8 + len].copy_from_slice(&files[1].data[..len]);
+    let _ = vifast_user::block_write(FS_SECTOR, sector.as_ptr() as u64);
 }
 
 unsafe fn files() -> &'static mut [File; vfs::MAX_FILES] {
@@ -157,6 +192,9 @@ fn write_request(data: [u64; 4]) -> (u64, u64, u64, u64) {
         if offset + len > files[fd].len {
             files[fd].len = offset + len;
         }
+        if fd == 1 {
+            persist_scratch(files);
+        }
         (len as u64, 0, 0, 0)
     }
 }
@@ -191,6 +229,14 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
 pub extern "C" fn server_main() -> ! {
     write(SERVER);
     unsafe { init_files() };
+    if unsafe { DISK_OK } {
+        write(b"FS DISK OK\n");
+        if unsafe { PERSISTED } {
+            write(b"FS PERSIST OK\n");
+        }
+    } else {
+        write(b"FS DISK RAM\n");
+    }
     write(VFS_READY);
     // First receive has no pending caller; its reply arguments are ignored.
     let mut request = unsafe { vifast_user::reply_recv_message(1, 4, 0, 0, 0, 0) };
