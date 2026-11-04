@@ -37,3 +37,15 @@ follow-up `62b31f4`.
 - QEMU 3/3 PASS ×3; ROOT SWITCH 44665 / 46524 / 14456 (lần chạy đầu).
   Boot Untyped: RISC-V 20/32 free 12, AArch64/x86 22/32 free 10.
 - Root ELF mới: RISC-V 8688 B, AArch64/x86 8520 B; headroom RISC-V 626672 B.
+
+## 7.4 — Root dựng VSpace client
+
+- Commit `39fc83c feat: build private client vspace`.
+- `vifast-kernel` 70/70; PTE 11/11; ELF 17/17; runtime/user compile.
+- Root retype VSpace/page table/stack từ data Untyped; code map từ Frame cap RX
+  trong BootInfo; helper `map_with_tables` lặp PageTableMap/FrameMap; log
+  `CLIENT VSPACE OK`. Client chưa chuyển VSpace.
+- `DATA UNTYPED` giờ được log lúc test-exit: RISC-V 6/64 trang, AArch64/x86
+  7/64 trang, 5/48 object. Boot vẫn log 0/64 trước root chạy.
+- QEMU 3/3 PASS ×3; ROOT SWITCH 41561 / 39230 / 19240 (lần chạy đầu).
+- Root ELF: RISC-V 8704 B, AArch64/x86 8536 B; headroom vẫn 626672 B.
