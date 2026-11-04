@@ -36,6 +36,12 @@ Trang `+0x2000` dành riêng cho server và **không được map trong root VSp
 `Kernel::build_task_space_shared_code(untyped, code_frame, layout)` map cùng
 Frame code root vào VSpace server, chỉ nhận một trang code ở bring-up hiện tại.
 
+`Kernel::build_task_space_elf(untyped, vspace, image, bytes, stack)` map từng
+PT_LOAD theo trang: R → R+NX, RX → RX, RW → RW+NX; copy đúng `filesz` tại offset
+`vaddr % 4096`, phần BSS còn lại đã zero; stack có 4 trang và guard không map.
+Có thể thêm vào VSpace có sẵn. Lỗi giữa chừng rollback object, bump/objects và
+các PTE mới.
+
 `PageTableMap(page_table_cap, vspace_cap, va)`:
 
 - kernel walk từ root tới entry invalid đầu tiên trên đường tới `va`;

@@ -71,9 +71,9 @@ nếu không có VM/emulation. Vì vậy:
 
 ## 4. Những gì đã kiểm chứng
 
-- `cargo test -p vifast-kernel`: 49 test portable trên host.
-- `cargo test -p vifast-pte`: 10 test host cho cả 3 format PTE.
-- `cargo test -p vifast-elf`: 9 test parser ELF64 PT_LOAD.
+- `cargo test -p vifast-kernel`: 54 test portable trên host.
+- `cargo test -p vifast-pte`: 11 test host cho cả 3 format PTE.
+- `cargo test -p vifast-elf`: 17 test parser ELF64 PT_LOAD.
 - `cargo test -p vifast-user`: wrapper compile.
 - QEMU RISC-V64 (`-smp 2`): self-test + U-mode IPC + frame map/unmap + SMP
   bootstrap + timer preemption.

@@ -107,6 +107,10 @@ pub trait PageTableOps {
     }
     /// Copy bytes into a physical frame through the platform identity map.
     fn copy_to_frame(&self, _pa: u64, _bytes: &[u8]) {}
+    /// Copy bytes at a byte offset inside a physical frame.
+    fn copy_to_frame_at(&self, pa: u64, offset: usize, bytes: &[u8]) {
+        self.copy_to_frame(pa + offset as u64, bytes);
+    }
     /// True when a leaf PTE has the architecture user bit.
     fn leaf_is_user(&self, _pte: u64) -> bool {
         false
@@ -159,6 +163,16 @@ pub struct TaskLayout {
     pub stack_va: u64,
     pub stack_pages: usize,
     pub data: Option<TaskData>,
+}
+
+/// Stack placement for an ELF-loaded task.
+#[derive(Clone, Copy, Debug)]
+pub struct StackSpec {
+    /// First mapped stack page.
+    pub base: u64,
+    pub pages: usize,
+    /// Leave the page immediately below `base` unmapped.
+    pub guard: bool,
 }
 
 pub struct Kernel {
@@ -947,6 +961,139 @@ impl Kernel {
         }
 
         Ok(vspace)
+    }
+
+    /// Load an ELF image into a VSpace.  When `vspace` is `None` a new VSpace
+    /// is retyped; when it is `Some` the segments are added to that existing
+    /// space.  The stack is mapped separately, with an optional unmapped guard
+    /// page below it.
+    pub fn build_task_space_elf(
+        &mut self,
+        untyped: ObjRef,
+        vspace: Option<ObjRef>,
+        image: &vifast_elf::ElfImage,
+        bytes: &[u8],
+        stack: StackSpec,
+    ) -> KResult<ObjRef> {
+        let (page, bump, objects) = {
+            let region = self.untyped(untyped).ok_or(KError::WrongType)?;
+            (region.page_size, region.bump, region.objects)
+        };
+        if page == 0 || !page.is_power_of_two() || self.page_table_ops.is_none() {
+            return Err(KError::MissingPageTable);
+        }
+        if stack.pages != 0 && stack.base % page as u64 != 0 {
+            return Err(KError::Alignment);
+        }
+        let mut created = [ObjRef::invalid(); MAX_OBJECTS];
+        let mut created_count = 0usize;
+        let space = match vspace {
+            Some(space) => {
+                if self.vspace(space).is_none() {
+                    return Err(KError::WrongType);
+                }
+                space
+            }
+            None => {
+                let space = self.retype_as(untyped, ObjType::VSpace, None)?;
+                if created_count < created.len() {
+                    created[created_count] = space;
+                    created_count += 1;
+                } else {
+                    let _ = self.destroy_object(space);
+                    return Err(KError::OutOfMemory);
+                }
+                space
+            }
+        };
+
+        let step = |kernel: &mut Kernel,
+                    created: &mut [ObjRef; MAX_OBJECTS],
+                    count: &mut usize|
+         -> KResult<()> {
+            for segment in image.segments() {
+                let file_end = segment
+                    .file_offset
+                    .checked_add(segment.file_size)
+                    .ok_or(KError::InvalidArg)?;
+                if file_end > bytes.len() {
+                    return Err(KError::InvalidArg);
+                }
+                if segment.page_count() == 0 {
+                    continue;
+                }
+                let start = segment.vaddr & !(page as u64 - 1);
+                kernel.ensure_task_tables(untyped, space, start, created, count)?;
+                let rights = if segment.writable() {
+                    Rights::READ | Rights::WRITE
+                } else if segment.executable() {
+                    Rights::READ | Rights::EXEC
+                } else {
+                    Rights::READ
+                };
+                let mut copied = 0usize;
+                for page_index in 0..segment.page_count() {
+                    if *count >= created.len() {
+                        return Err(KError::OutOfMemory);
+                    }
+                    let frame = kernel.retype_as(untyped, ObjType::Frame, None)?;
+                    created[*count] = frame;
+                    *count += 1;
+                    let target = start
+                        .checked_add((page_index * page) as u64)
+                        .ok_or(KError::InvalidArg)?;
+                    kernel.map_frame(space, frame, target, rights)?;
+
+                    let frame_offset = if page_index == 0 {
+                        (segment.vaddr - target) as usize
+                    } else {
+                        0
+                    };
+                    let remaining = segment.file_size.saturating_sub(copied);
+                    let copy_len = remaining.min(page - frame_offset);
+                    if copy_len != 0 {
+                        let source = segment
+                            .file_offset
+                            .checked_add(copied)
+                            .ok_or(KError::InvalidArg)?;
+                        let slice = bytes
+                            .get(source..source + copy_len)
+                            .ok_or(KError::InvalidArg)?;
+                        let frame_pa = kernel.frame(frame).ok_or(KError::WrongType)?.pa as u64;
+                        kernel
+                            .page_table_ops
+                            .ok_or(KError::MissingPageTable)?
+                            .copy_to_frame_at(frame_pa, frame_offset, slice);
+                        copied += copy_len;
+                    }
+                }
+            }
+
+            if stack.pages != 0 {
+                kernel.ensure_task_tables(untyped, space, stack.base, created, count)?;
+                for page_index in 0..stack.pages {
+                    if *count >= created.len() {
+                        return Err(KError::OutOfMemory);
+                    }
+                    let frame = kernel.retype_as(untyped, ObjType::Frame, None)?;
+                    created[*count] = frame;
+                    *count += 1;
+                    let target = stack
+                        .base
+                        .checked_add((page_index * page) as u64)
+                        .ok_or(KError::InvalidArg)?;
+                    kernel.map_frame(space, frame, target, Rights::READ | Rights::WRITE)?;
+                }
+            }
+            let _ = stack.guard;
+            Ok(())
+        };
+
+        if let Err(error) = step(self, &mut created, &mut created_count) {
+            self.rollback_task_space(&created[..created_count], untyped, bump, objects);
+            return Err(error);
+        }
+        Ok(space)
     }
 
     /// Attach a retyped PageTable object at the first empty entry on the path
@@ -2786,7 +2933,7 @@ mod tests {
         kernel.set_page_table_ops(&MAP_OPS);
         let root = kernel.root().unwrap();
         let untyped = kernel
-            .create_untyped_with_limit(0x1000, 0x8000, 4096, 16)
+            .create_untyped_with_limit(0x1000, 0xf000, 4096, 16)
             .unwrap();
         let data_va = 0x10_0000_a000;
         let space = kernel
@@ -3483,10 +3630,9 @@ mod tests {
             FAKE_FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {
-            let base = ((pa >> 12) as usize) * 512;
             let mut mem = FAKE_MEM.lock().unwrap();
             for (index, byte) in bytes.iter().enumerate() {
-                let byte_index = base * 8 + index;
+                let byte_index = pa as usize + index;
                 let word = byte_index / 8;
                 let shift = (byte_index % 8) * 8;
                 if let Some(slot) = mem.get_mut(word) {
@@ -3593,10 +3739,9 @@ mod tests {
             }
         }
         fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {
-            let base = ((pa >> 12) as usize) * 512;
             let mut mem = PTE_FAKE_MEM.lock().unwrap();
             for (index, byte) in bytes.iter().enumerate() {
-                let byte_index = base * 8 + index;
+                let byte_index = pa as usize + index;
                 let word = byte_index / 8;
                 let shift = (byte_index % 8) * 8;
                 if let Some(slot) = mem.get_mut(word) {
@@ -4618,6 +4763,263 @@ mod tests {
             }
         }
         count
+    }
+
+    fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn test_elf(machine: u16) -> std::vec::Vec<u8> {
+        const PH: usize = 64;
+        const PHDR: usize = 56;
+        const R: u32 = 4;
+        const X: u32 = 1;
+        const W: u32 = 2;
+        let base = vifast_abi::user_layout::ROOT_ELF_BASE as u64;
+        let mut bytes = std::vec![0u8; 0x10000];
+        bytes[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        bytes[4] = 2;
+        bytes[5] = 1;
+        bytes[6] = 1;
+        put_u16(&mut bytes, 16, 2);
+        put_u16(&mut bytes, 18, machine);
+        put_u32(&mut bytes, 20, 1);
+        put_u64(&mut bytes, 24, base + 0x1010);
+        put_u64(&mut bytes, 32, PH as u64);
+        put_u16(&mut bytes, 52, PH as u16);
+        put_u16(&mut bytes, 54, PHDR as u16);
+        put_u16(&mut bytes, 56, 4);
+        let segments = [
+            (base, R, 0x1000usize, 0x100usize, 0x100usize),
+            (base + 0x1000, R | X, 0x2000, 0x100, 0x100),
+            (base + 0x2000, R | W, 0x3000, 0x100, 0x2800),
+            (base + 0x5100, R, 0x8100, 0x100, 0x100),
+        ];
+        for (index, (vaddr, flags, offset, filesz, memsz)) in segments.iter().copied().enumerate() {
+            let p = PH + index * PHDR;
+            put_u32(&mut bytes, p, 1);
+            put_u32(&mut bytes, p + 4, flags);
+            put_u64(&mut bytes, p + 8, offset as u64);
+            put_u64(&mut bytes, p + 16, vaddr);
+            put_u64(&mut bytes, p + 32, filesz as u64);
+            put_u64(&mut bytes, p + 40, memsz as u64);
+            put_u64(&mut bytes, p + 48, 4096);
+            bytes[offset..offset + filesz].fill(0x40 + index as u8);
+        }
+        bytes
+    }
+
+    fn fake_byte(pa: u64, offset: usize) -> u8 {
+        let mem = PTE_FAKE_MEM.lock().unwrap();
+        let byte = pa as usize + offset;
+        let word = mem[byte / 8];
+        (word >> ((byte % 8) * 8)) as u8
+    }
+
+    fn test_format_machine(format: PteFormat) -> u16 {
+        match format {
+            PteFormat::Riscv => vifast_pte::riscv::ELF_MACHINE,
+            PteFormat::X86 => vifast_pte::x86_64::ELF_MACHINE,
+            PteFormat::AArch => vifast_pte::aarch64::ELF_MACHINE,
+        }
+    }
+
+    fn elf_case(format: PteFormat) {
+        reset_pte_fake();
+        let ops = pte_ops(format);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(ops);
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0xf000, 4096, 32)
+            .unwrap();
+        let bytes = test_elf(test_format_machine(format));
+        let image = vifast_elf::parse(
+            &bytes,
+            test_format_machine(format),
+            vifast_pte::USER_VA_START,
+            vifast_pte::USER_VA_END,
+        )
+        .unwrap();
+        let base = vifast_abi::user_layout::ROOT_ELF_BASE as u64;
+        let stack = StackSpec {
+            base: vifast_abi::user_layout::ROOT_ELF_STACK_BASE as u64,
+            pages: 4,
+            guard: true,
+        };
+        let vspace = kernel
+            .build_task_space_elf(untyped, None, &image, &bytes, stack)
+            .unwrap();
+        let root = kernel.root().unwrap();
+        kernel.set_tcb_vspace(root, vspace).unwrap();
+        assert_eq!(
+            kernel.mapping_at(vspace, base).unwrap().rights,
+            Rights::READ
+        );
+        assert_eq!(
+            kernel.mapping_at(vspace, base + 0x1000).unwrap().rights,
+            Rights::READ | Rights::EXEC
+        );
+        assert_eq!(
+            kernel.mapping_at(vspace, base + 0x2000).unwrap().rights,
+            Rights::READ | Rights::WRITE
+        );
+
+        // A segment starting in the middle of a page copies at its exact
+        // virtual offset; the bytes before it remain zero.
+        let mid = kernel.mapping_at(vspace, base + 0x5000).unwrap();
+        assert_eq!(fake_byte(mid.pa, 0), 0);
+        assert_eq!(fake_byte(mid.pa, 0x100), 0x40 + 3);
+
+        // RW filesz is 0x100 but memsz spans three pages; the rest is BSS.
+        let data = kernel.mapping_at(vspace, base + 0x2000).unwrap();
+        assert_eq!(fake_byte(data.pa, 0xff), 0x40 + 2);
+        assert_eq!(fake_byte(data.pa, 0x100), 0);
+        let bss = kernel.mapping_at(vspace, base + 0x4000).unwrap();
+        assert_eq!(fake_byte(bss.pa, 0), 0);
+        assert_eq!(fake_byte(bss.pa, 0xfff), 0);
+
+        // Guard is not mapped and validation rejects it.
+        let guard = vifast_abi::user_layout::ROOT_ELF_STACK_BASE as u64 - 4096;
+        assert!(kernel.mapping_at(vspace, guard).is_none());
+        assert_eq!(
+            kernel.validate_user_range(root, guard, 1, false),
+            Err(KError::InvalidArg)
+        );
+        let root_pa = kernel.vspace(vspace).unwrap().root;
+        assert_eq!(count_user_leaves(ops, root_pa, 0), 10);
+    }
+
+    #[test]
+    fn elf_builder_riscv_maps_segments_and_guard() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        elf_case(PteFormat::Riscv);
+    }
+
+    #[test]
+    fn elf_builder_x86_64_maps_segments_and_guard() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        elf_case(PteFormat::X86);
+    }
+
+    #[test]
+    fn elf_builder_aarch64_maps_segments_and_guard() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        elf_case(PteFormat::AArch);
+    }
+
+    #[test]
+    fn elf_builder_extends_existing_vspace() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(vifast_pte::USER_VA_START, vifast_pte::USER_VA_END);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0xf000, 4096, 32)
+            .unwrap();
+        let code_va = vifast_abi::user_layout::CODE_VA as u64;
+        let existing = kernel
+            .build_task_space(
+                untyped,
+                b"OLD",
+                TaskLayout {
+                    code_va,
+                    stack_va: vifast_abi::user_layout::STACK_BASE as u64,
+                    stack_pages: 0,
+                    data: None,
+                },
+            )
+            .unwrap();
+        let bytes = test_elf(vifast_pte::x86_64::ELF_MACHINE);
+        let image = vifast_elf::parse(
+            &bytes,
+            vifast_pte::x86_64::ELF_MACHINE,
+            vifast_abi::user_layout::ROOT_ELF_BASE as u64,
+            vifast_abi::user_layout::ROOT_ELF_STACK_GUARD as u64,
+        )
+        .unwrap();
+        let extended = kernel
+            .build_task_space_elf(
+                untyped,
+                Some(existing),
+                &image,
+                &bytes,
+                StackSpec {
+                    base: vifast_abi::user_layout::ROOT_ELF_STACK_BASE as u64,
+                    pages: 1,
+                    guard: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(extended, existing);
+        assert!(kernel.mapping_at(existing, code_va).is_some());
+        assert!(kernel
+            .mapping_at(existing, vifast_abi::user_layout::ROOT_ELF_BASE as u64)
+            .is_some());
+        let root_pa = kernel.vspace(existing).unwrap().root;
+        assert_eq!(count_user_leaves(&MAP_OPS, root_pa, 0), 8);
+    }
+
+    #[test]
+    fn elf_builder_extends_existing_vspace_and_rolls_back() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(vifast_pte::USER_VA_START, vifast_pte::USER_VA_END);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0xf000, 4096, 16)
+            .unwrap();
+        let code_va = vifast_abi::user_layout::CODE_VA as u64;
+        let existing = kernel
+            .build_task_space(
+                untyped,
+                b"OLD",
+                TaskLayout {
+                    code_va,
+                    stack_va: vifast_abi::user_layout::STACK_BASE as u64,
+                    stack_pages: 0,
+                    data: None,
+                },
+            )
+            .unwrap();
+        let bytes = test_elf(vifast_pte::x86_64::ELF_MACHINE);
+        let image = vifast_elf::parse(
+            &bytes,
+            vifast_pte::x86_64::ELF_MACHINE,
+            vifast_abi::user_layout::ROOT_ELF_BASE as u64,
+            vifast_abi::user_layout::ROOT_ELF_STACK_GUARD as u64,
+        )
+        .unwrap();
+        let before_bump = kernel.untyped(untyped).unwrap().bump;
+        let before_objects = kernel.untyped(untyped).unwrap().objects;
+        let error = kernel
+            .build_task_space_elf(
+                untyped,
+                Some(existing),
+                &image,
+                &bytes,
+                StackSpec {
+                    base: vifast_abi::user_layout::ROOT_ELF_STACK_BASE as u64,
+                    pages: 4,
+                    guard: true,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, KError::OutOfMemory | KError::InvalidArg));
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, before_bump);
+        assert_eq!(kernel.untyped(untyped).unwrap().objects, before_objects);
+        assert!(kernel.mapping_at(existing, code_va).is_some());
+        let root_pa = kernel.vspace(existing).unwrap().root;
+        assert_eq!(count_user_leaves(&MAP_OPS, root_pa, 0), 1);
     }
 
     #[test]

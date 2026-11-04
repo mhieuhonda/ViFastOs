@@ -44,6 +44,7 @@ pub enum ElfError {
     BadUserRange,
     WrongMachine,
     UnsupportedSegment,
+    NotReadable,
     WriteAndExecute,
     Overlap,
     NoSegments,
@@ -221,6 +222,9 @@ pub fn parse(
         let memory_size = u64_at(bytes, base + 40).ok_or(ElfError::BadProgramHeader)?;
         let align = u64_at(bytes, base + 48).ok_or(ElfError::BadProgramHeader)?;
 
+        if flags & PF_R == 0 {
+            return Err(ElfError::NotReadable);
+        }
         if flags & PF_W != 0 && flags & PF_X != 0 {
             return Err(ElfError::WriteAndExecute);
         }
@@ -459,6 +463,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_image_outside_narrow_root_window() {
+        let bytes = valid_elf();
+        let root_base = TEST_USER_START + 0x20_0000;
+        assert_eq!(
+            parse(&bytes, TEST_MACHINE, root_base, root_base + 0x10_0000),
+            Err(ElfError::OutsideUserRange)
+        );
+    }
+
+    #[test]
     fn rejects_bad_user_range() {
         let bytes = valid_elf();
         assert_eq!(
@@ -479,6 +493,28 @@ mod tests {
         let mut bytes = valid_elf();
         put_u64(&mut bytes, ELF_HEADER_SIZE + 8, 0x1001);
         assert_eq!(parse_test(&bytes), Err(ElfError::Misaligned));
+    }
+
+    #[test]
+    fn rejects_segments_sharing_a_page_even_without_byte_overlap() {
+        let mut bytes = valid_elf();
+        put_u16(&mut bytes, 56, 2);
+        let base = ELF_HEADER_SIZE + PROGRAM_HEADER_SIZE;
+        put_u32(&mut bytes, base, PT_LOAD);
+        put_u32(&mut bytes, base + 4, PF_R);
+        put_u64(&mut bytes, base + 8, 0x1800);
+        put_u64(&mut bytes, base + 16, TEST_USER_START + 0x800);
+        put_u64(&mut bytes, base + 32, 0x100);
+        put_u64(&mut bytes, base + 40, 0x100);
+        put_u64(&mut bytes, base + 48, PAGE_SIZE);
+        assert_eq!(parse_test(&bytes), Err(ElfError::Overlap));
+    }
+
+    #[test]
+    fn rejects_load_segment_without_read_permission() {
+        let mut bytes = valid_elf();
+        put_u32(&mut bytes, ELF_HEADER_SIZE + 4, PF_X);
+        assert_eq!(parse_test(&bytes), Err(ElfError::NotReadable));
     }
 
     #[test]

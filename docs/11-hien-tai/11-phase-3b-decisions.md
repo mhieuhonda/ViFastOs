@@ -85,6 +85,9 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 ## 8. Root ELF và target
 
 - `ROOT_ELF_BASE = CODE_VA + 0x20_0000` (2 MiB kế tiếp); user.S vẫn ở 64 GiB.
+- Runtime parse root ELF với cửa sổ hẹp
+  `[ROOT_ELF_BASE, ROOT_ELF_STACK_GUARD)` (1 MiB), không dùng toàn dải
+  64..128 GiB, để linker sai không thể đè code user.S/stack.
 - Root stack 4 trang tại `ROOT_ELF_STACK_BASE`, guard page ngay dưới không map.
 - Vùng mới cần thêm PageTable cấp cuối; vẫn dùng chung PD/L2 với vùng 64 GiB.
 - Code user soft-float: RISC-V `riscv64imac-unknown-none-elf`, AArch64
@@ -94,15 +97,18 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - build.sh disassemble root ELF và từ chối FP/SIMD; kiểm tra e_type ET_EXEC.
 - vifast-elf nhận `machine`, user range từ caller và từ chối
   PT_INTERP/PT_DYNAMIC/PT_TLS; bỏ qua PT_NOTE/PT_GNU_*.
+- Overlap segment tính theo trang đã round-down/round-up; PT_LOAD phải có R;
+  p_offset và p_vaddr cùng dư trang. PT_LOAD chỉ R map R+NX, RX map RX,
+  RW map RW+NX.
 
 ## 9. Thứ tự triển khai
 
 1. Hoàn tất kiểm tra fault origin/self-revoke/zero frame.
 2. VSpace động + code/stack mapping + PageTableMap (đã xong 4.3).
 3. Root/server VSpace riêng + stack isolation (đã xong 4.5).
-4. vifast-elf parser + host test (đã xong, chưa nối boot).
-5. Bước 6: root task Rust nạp từ ELF; stack 4 trang + guard; server/client/fault
-   tạm giữ user.S.
+4. vifast-elf parser + host test (đã xong).
+5. Bước 6: build_task_space_elf + host test (đã xong); root task Rust nạp từ
+   ELF, stack 4 trang + guard vẫn là việc tiếp theo; server/client/fault giữ user.S.
 6. Bước 7: BootInfo, Untyped con, client VSpace riêng; bỏ slot hard-code.
 7. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
 8. AArch64 TTBR1 là giai đoạn riêng sau 3b.

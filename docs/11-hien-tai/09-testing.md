@@ -25,8 +25,8 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 49 test trong `vifast-kernel` + 10 test trong `vifast-pte` +
-14 test trong `vifast-elf`:
+Hiện có 54 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
+17 test trong `vifast-elf`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -60,6 +60,9 @@ Hiện có 49 test trong `vifast-kernel` + 10 test trong `vifast-pte` +
   map/unmap/PageTableMap/validate/build;
 - build không data rồi FrameMap tại `DATA_VA` thành công trên cả 3 format;
 - build_task_space_shared_code map cùng Frame code root/server;
+- build_task_space_elf map PT_LOAD R/RX/RW, BSS zero, segment mid-page, stack
+  4 trang + guard, mở rộng VSpace có sẵn và rollback khi thiếu trang;
+- PteFakeOps đếm leaf chính xác và bắt mapping thừa;
 - FrameUnmap đòi Frame cap đúng PA; VSpace cap đơn lẻ hoặc sai frame bị từ chối;
 - boot Untyped 128 KiB/32 object và build_task_space host test.
 - PageTableMap không thay entry 0 dùng chung;
@@ -74,11 +77,11 @@ Boot assert:
 - RISC-V/AArch64 kernel image end + metadata/data/boot Untyped trong kernel accessible range;
 - walk leaf thật cho kernel mapping: non-user, X trap entry, W stack/storage.
 
-`vifast-pte` có 10 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
+`vifast-pte` có 11 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
 kiến trúc, biên index và leaf L3 AArch64 RO+X / RW+NX / EL0 / leaf_is_user.
 
 `vifast-elf` không tự định nghĩa dải user; caller truyền machine và user range.
-Có 14 host test: ELF hợp lệ, magic/class, phdr table/phoff overflow,
+Có 17 host test: ELF hợp lệ, magic/class, phdr table/phoff overflow,
 file range, segment/memory offset overflow, congruence vaddr-offset, ET_DYN,
 wrong machine, PT_INTERP/PT_DYNAMIC/PT_TLS, W+X, overlap, entry sai và
 không có PT_LOAD.

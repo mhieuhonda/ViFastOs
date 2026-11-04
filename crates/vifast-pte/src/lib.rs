@@ -19,6 +19,9 @@ pub enum Pte {
 /// safe PTE crate lets host tests check the real numbers used by the platforms.
 pub const USER_VA_START: u64 = vifast_abi::user_layout::USER_VA_START as u64;
 pub const USER_VA_END: u64 = vifast_abi::user_layout::USER_VA_END as u64;
+pub const EM_RISCV: u16 = 243;
+pub const EM_AARCH64: u16 = 183;
+pub const EM_X86_64: u16 = 62;
 
 /// Number of virtual addresses covered by a page-table level.
 ///
@@ -59,6 +62,7 @@ pub mod riscv {
     use super::*;
 
     pub const LEVELS: usize = 3;
+    pub const ELF_MACHINE: u16 = crate::EM_RISCV;
     pub const USER_VA_START: u64 = crate::USER_VA_START;
     pub const USER_VA_END: u64 = crate::USER_VA_END;
     /// Root entries copied from the kernel root into a retyped VSpace:
@@ -130,6 +134,7 @@ pub mod x86_64 {
     use super::*;
 
     pub const LEVELS: usize = 4;
+    pub const ELF_MACHINE: u16 = crate::EM_X86_64;
     pub const USER_VA_START: u64 = crate::USER_VA_START;
     pub const USER_VA_END: u64 = crate::USER_VA_END;
     /// PDPT[0] points at the shared 0..1 GiB kernel PD.  PML4[0] itself is
@@ -190,6 +195,7 @@ pub mod aarch64 {
     use super::*;
 
     pub const LEVELS: usize = 4;
+    pub const ELF_MACHINE: u16 = crate::EM_AARCH64;
     pub const USER_VA_START: u64 = crate::USER_VA_START;
     pub const USER_VA_END: u64 = crate::USER_VA_END;
     /// L1[0] contains the low MMIO blocks (GIC/PL011); L1[1] contains the
@@ -306,6 +312,13 @@ mod tests {
             Pte::Leaf(pa, _) => assert_eq!(pa, 0x4000_0000),
             _ => panic!("not block"),
         }
+    }
+
+    #[test]
+    fn elf_machine_constants_match_architectures() {
+        assert_eq!(riscv::ELF_MACHINE, 243);
+        assert_eq!(aarch64::ELF_MACHINE, 183);
+        assert_eq!(x86_64::ELF_MACHINE, 62);
     }
 
     #[test]
