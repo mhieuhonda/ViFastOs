@@ -26,7 +26,7 @@ cargo test -p vifast-user
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
 Hiện có 49 test trong `vifast-kernel` + 10 test trong `vifast-pte` +
-9 test trong `vifast-elf`:
+14 test trong `vifast-elf`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -77,8 +77,10 @@ Boot assert:
 `vifast-pte` có 10 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
 kiến trúc, biên index và leaf L3 AArch64 RO+X / RW+NX / EL0 / leaf_is_user.
 
-`vifast-elf` có 9 host test: ELF hợp lệ, magic/class, phdr table/phoff overflow,
-file range, segment offset overflow, misaligned, W+X, overlap, entry sai và
+`vifast-elf` không tự định nghĩa dải user; caller truyền machine và user range.
+Có 14 host test: ELF hợp lệ, magic/class, phdr table/phoff overflow,
+file range, segment/memory offset overflow, congruence vaddr-offset, ET_DYN,
+wrong machine, PT_INTERP/PT_DYNAMIC/PT_TLS, W+X, overlap, entry sai và
 không có PT_LOAD.
 
 `vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.

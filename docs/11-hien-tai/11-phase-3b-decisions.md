@@ -82,7 +82,20 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Trả page-table page về Untyped.
 - TCB đang dùng VSpace đó chuyển `Faulted` (đã có).
 
-## 8. Thứ tự triển khai
+## 8. Root ELF và target
+
+- `ROOT_ELF_BASE = CODE_VA + 0x20_0000` (2 MiB kế tiếp); user.S vẫn ở 64 GiB.
+- Root stack 4 trang tại `ROOT_ELF_STACK_BASE`, guard page ngay dưới không map.
+- Vùng mới cần thêm PageTable cấp cuối; vẫn dùng chung PD/L2 với vùng 64 GiB.
+- Code user soft-float: RISC-V `riscv64imac-unknown-none-elf`, AArch64
+  `aarch64-unknown-none-softfloat`, x86_64 `x86_64-unknown-none` relocation
+  static. Kernel chưa lưu FP/SIMD context.
+- Linker: `-z max-page-size=4096`, `-z separate-code`, ALIGN(4096) giữa segment.
+- build.sh disassemble root ELF và từ chối FP/SIMD; kiểm tra e_type ET_EXEC.
+- vifast-elf nhận `machine`, user range từ caller và từ chối
+  PT_INTERP/PT_DYNAMIC/PT_TLS; bỏ qua PT_NOTE/PT_GNU_*.
+
+## 9. Thứ tự triển khai
 
 1. Hoàn tất kiểm tra fault origin/self-revoke/zero frame.
 2. VSpace động + code/stack mapping + PageTableMap (đã xong 4.3).

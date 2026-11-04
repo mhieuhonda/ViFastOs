@@ -37,9 +37,6 @@ dependencies = [
 [[package]]
 name = "vifast-elf"
 version = "0.1.0"
-dependencies = [
- "vifast-abi",
-]
 
 [[package]]
 name = "vifast-kernel"

@@ -7,14 +7,15 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use vifast_abi::user_layout::{USER_VA_END, USER_VA_START};
-
 pub const ELF_HEADER_SIZE: usize = 64;
 pub const PROGRAM_HEADER_SIZE: usize = 56;
 pub const PAGE_SIZE: u64 = 4096;
 pub const MAX_LOAD_SEGMENTS: usize = 16;
 
 pub const PT_LOAD: u32 = 1;
+pub const PT_DYNAMIC: u32 = 2;
+pub const PT_INTERP: u32 = 3;
+pub const PT_TLS: u32 = 7;
 pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
 pub const PF_R: u32 = 4;
@@ -40,6 +41,9 @@ pub enum ElfError {
     MemorySmallerThanFile,
     Overflow,
     OutsideUserRange,
+    BadUserRange,
+    WrongMachine,
+    UnsupportedSegment,
     WriteAndExecute,
     Overlap,
     NoSegments,
@@ -126,14 +130,24 @@ fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
     a_start < b_end && b_start < a_end
 }
 
-/// Parse an ELF64 little-endian executable.
+/// Parse an ELF64 little-endian executable for `expected_machine` inside
+/// `[user_start, user_end)`.
 ///
-/// All file offsets, virtual ranges and segment overlaps are validated before
-/// returning.  `PT_LOAD` segments must be page aligned, lie completely inside
-/// the common user range, and must not be writable and executable together.
-pub fn parse(bytes: &[u8]) -> Result<ElfImage, ElfError> {
+/// The caller owns the architecture constants; this crate never redefines the
+/// user address range.  `PT_LOAD` offsets and virtual addresses must be
+/// congruent modulo the page size, all ranges must fit the supplied user
+/// window, and no segment may be writable and executable together.
+pub fn parse(
+    bytes: &[u8],
+    expected_machine: u16,
+    user_start: u64,
+    user_end: u64,
+) -> Result<ElfImage, ElfError> {
     if bytes.len() < ELF_HEADER_SIZE {
         return Err(ElfError::TooSmall);
+    }
+    if user_start >= user_end {
+        return Err(ElfError::BadUserRange);
     }
     if bytes[0..4] != [0x7f, b'E', b'L', b'F'] {
         return Err(ElfError::BadMagic);
@@ -154,6 +168,9 @@ pub fn parse(bytes: &[u8]) -> Result<ElfImage, ElfError> {
         return Err(ElfError::BadVersion);
     }
     let machine = u16_at(bytes, 18).ok_or(ElfError::TooSmall)?;
+    if machine != expected_machine {
+        return Err(ElfError::WrongMachine);
+    }
     let entry = u64_at(bytes, 24).ok_or(ElfError::TooSmall)?;
     let phoff = u64_at(bytes, 32).ok_or(ElfError::TooSmall)?;
     let ehsize = u16_at(bytes, 52).ok_or(ElfError::TooSmall)? as usize;
@@ -189,8 +206,13 @@ pub fn parse(bytes: &[u8]) -> Result<ElfImage, ElfError> {
     for index in 0..phnum {
         let base = phoff + index * phentsize;
         let p_type = u32_at(bytes, base).ok_or(ElfError::BadProgramHeader)?;
-        if p_type != PT_LOAD {
-            continue;
+        match p_type {
+            PT_LOAD => {}
+            PT_DYNAMIC | PT_INTERP | PT_TLS => {
+                return Err(ElfError::UnsupportedSegment);
+            }
+            // Linkers commonly emit these non-mapped metadata entries.
+            _ => continue,
         }
         let flags = u32_at(bytes, base + 4).ok_or(ElfError::BadProgramHeader)?;
         let offset = u64_at(bytes, base + 8).ok_or(ElfError::BadProgramHeader)?;
@@ -211,7 +233,7 @@ pub fn parse(bytes: &[u8]) -> Result<ElfImage, ElfError> {
         if align != 0 && (!align.is_power_of_two() || align > PAGE_SIZE) {
             return Err(ElfError::BadAlignment);
         }
-        if vaddr % PAGE_SIZE != 0 || offset % PAGE_SIZE != 0 {
+        if vaddr % PAGE_SIZE != offset % PAGE_SIZE {
             return Err(ElfError::Misaligned);
         }
 
@@ -227,7 +249,7 @@ pub fn parse(bytes: &[u8]) -> Result<ElfImage, ElfError> {
         let memory_size_usize = usize::try_from(memory_size).map_err(|_| ElfError::Overflow)?;
         let memory_end = page_round_up(vaddr.checked_add(memory_size).ok_or(ElfError::Overflow)?)
             .ok_or(ElfError::Overflow)?;
-        if vaddr < USER_VA_START as u64 || memory_end > USER_VA_END as u64 {
+        if vaddr < user_start || memory_end > user_end {
             return Err(ElfError::OutsideUserRange);
         }
 
@@ -295,6 +317,14 @@ mod tests {
         put_u64(bytes, base + 48, PAGE_SIZE);
     }
 
+    const TEST_MACHINE: u16 = 0x3e;
+    const TEST_USER_START: u64 = 0x0000_0010_0000_0000;
+    const TEST_USER_END: u64 = 0x0000_0020_0000_0000;
+
+    fn parse_test(bytes: &[u8]) -> Result<ElfImage, ElfError> {
+        parse(bytes, TEST_MACHINE, TEST_USER_START, TEST_USER_END)
+    }
+
     fn valid_elf() -> Vec<u8> {
         let mut bytes = vec![0u8; 0x3000];
         bytes[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
@@ -304,22 +334,22 @@ mod tests {
         put_u16(&mut bytes, 16, ET_EXEC);
         put_u16(&mut bytes, 18, 0x3e);
         put_u32(&mut bytes, 20, 1);
-        put_u64(&mut bytes, 24, USER_VA_START as u64 + 0x100);
+        put_u64(&mut bytes, 24, TEST_USER_START + 0x100);
         put_u64(&mut bytes, 32, ELF_HEADER_SIZE as u64);
         put_u16(&mut bytes, 52, ELF_HEADER_SIZE as u16);
         put_u16(&mut bytes, 54, PROGRAM_HEADER_SIZE as u16);
         put_u16(&mut bytes, 56, 1);
-        phdr(&mut bytes, 0, 0x1000, USER_VA_START as u64, 0x100, 0x1000);
+        phdr(&mut bytes, 0, 0x1000, TEST_USER_START, 0x100, 0x1000);
         bytes[0x1000..0x1100].fill(0x90);
         bytes
     }
 
     #[test]
     fn accepts_page_aligned_executable_segment() {
-        let image = parse(&valid_elf()).unwrap();
+        let image = parse_test(&valid_elf()).unwrap();
         assert_eq!(image.segment_count(), 1);
         let segment = image.segment(0).unwrap();
-        assert_eq!(segment.vaddr, USER_VA_START as u64);
+        assert_eq!(segment.vaddr, TEST_USER_START);
         assert_eq!(segment.page_count(), 1);
         assert!(segment.readable());
         assert!(segment.executable());
@@ -330,25 +360,25 @@ mod tests {
     fn rejects_bad_magic_and_class() {
         let mut bytes = valid_elf();
         bytes[0] = 0;
-        assert_eq!(parse(&bytes), Err(ElfError::BadMagic));
+        assert_eq!(parse_test(&bytes), Err(ElfError::BadMagic));
         let mut bytes = valid_elf();
         bytes[4] = 1;
-        assert_eq!(parse(&bytes), Err(ElfError::Not64Bit));
+        assert_eq!(parse_test(&bytes), Err(ElfError::Not64Bit));
     }
 
     #[test]
     fn rejects_bad_program_header_table() {
         let mut bytes = valid_elf();
         put_u64(&mut bytes, 32, u64::MAX);
-        assert_eq!(parse(&bytes), Err(ElfError::Overflow));
+        assert_eq!(parse_test(&bytes), Err(ElfError::Overflow));
 
         let mut bytes = valid_elf();
         put_u64(&mut bytes, 32, 0x4000);
-        assert_eq!(parse(&bytes), Err(ElfError::HeaderOutOfBounds));
+        assert_eq!(parse_test(&bytes), Err(ElfError::HeaderOutOfBounds));
 
         let mut bytes = valid_elf();
         put_u16(&mut bytes, 56, (MAX_LOAD_SEGMENTS + 1) as u16);
-        assert_eq!(parse(&bytes), Err(ElfError::TooManySegments));
+        assert_eq!(parse_test(&bytes), Err(ElfError::TooManySegments));
     }
 
     #[test]
@@ -357,11 +387,11 @@ mod tests {
         let base = ELF_HEADER_SIZE;
         put_u64(&mut bytes, base + 32, 0x3000);
         put_u64(&mut bytes, base + 40, 0x3000);
-        assert_eq!(parse(&bytes), Err(ElfError::FileRange));
+        assert_eq!(parse_test(&bytes), Err(ElfError::FileRange));
 
         let mut bytes = valid_elf();
         put_u64(&mut bytes, base + 40, 0x80);
-        assert_eq!(parse(&bytes), Err(ElfError::MemorySmallerThanFile));
+        assert_eq!(parse_test(&bytes), Err(ElfError::MemorySmallerThanFile));
     }
 
     #[test]
@@ -369,7 +399,7 @@ mod tests {
         let mut bytes = valid_elf();
         put_u64(&mut bytes, ELF_HEADER_SIZE + 8, u64::MAX & !0xfff);
         assert!(matches!(
-            parse(&bytes),
+            parse_test(&bytes),
             Err(ElfError::Overflow | ElfError::FileRange)
         ));
     }
@@ -377,41 +407,84 @@ mod tests {
     #[test]
     fn rejects_unaligned_and_wx_segments() {
         let mut bytes = valid_elf();
-        put_u64(&mut bytes, ELF_HEADER_SIZE + 16, USER_VA_START as u64 + 1);
-        assert_eq!(parse(&bytes), Err(ElfError::Misaligned));
+        put_u64(&mut bytes, ELF_HEADER_SIZE + 16, TEST_USER_START + 1);
+        assert_eq!(parse_test(&bytes), Err(ElfError::Misaligned));
 
         let mut bytes = valid_elf();
         put_u32(&mut bytes, ELF_HEADER_SIZE + 4, PF_R | PF_W | PF_X);
-        assert_eq!(parse(&bytes), Err(ElfError::WriteAndExecute));
+        assert_eq!(parse_test(&bytes), Err(ElfError::WriteAndExecute));
     }
 
     #[test]
     fn rejects_outside_user_range_and_overlap() {
         let mut bytes = valid_elf();
         put_u64(&mut bytes, ELF_HEADER_SIZE + 16, 0x1000);
-        assert_eq!(parse(&bytes), Err(ElfError::OutsideUserRange));
+        assert_eq!(parse_test(&bytes), Err(ElfError::OutsideUserRange));
 
         let mut bytes = valid_elf();
         put_u16(&mut bytes, 56, 2);
-        phdr(&mut bytes, 1, 0x2000, USER_VA_START as u64, 0x100, 0x1000);
-        assert_eq!(parse(&bytes), Err(ElfError::Overlap));
+        phdr(&mut bytes, 1, 0x2000, TEST_USER_START, 0x100, 0x1000);
+        assert_eq!(parse_test(&bytes), Err(ElfError::Overlap));
     }
 
     #[test]
     fn rejects_bad_alignment_and_entry() {
         let mut bytes = valid_elf();
         put_u64(&mut bytes, ELF_HEADER_SIZE + 48, 3);
-        assert_eq!(parse(&bytes), Err(ElfError::BadAlignment));
+        assert_eq!(parse_test(&bytes), Err(ElfError::BadAlignment));
 
         let mut bytes = valid_elf();
-        put_u64(&mut bytes, 24, USER_VA_START as u64 + 0x2000);
-        assert_eq!(parse(&bytes), Err(ElfError::BadEntry));
+        put_u64(&mut bytes, 24, TEST_USER_START + 0x2000);
+        assert_eq!(parse_test(&bytes), Err(ElfError::BadEntry));
+    }
+
+    #[test]
+    fn rejects_dynamic_interpreted_and_tls_segments() {
+        for segment_type in [PT_DYNAMIC, PT_INTERP, PT_TLS] {
+            let mut bytes = valid_elf();
+            put_u32(&mut bytes, ELF_HEADER_SIZE, segment_type);
+            assert_eq!(parse_test(&bytes), Err(ElfError::UnsupportedSegment));
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_machine_and_non_exec_type() {
+        let mut bytes = valid_elf();
+        put_u16(&mut bytes, 18, 0x03);
+        assert_eq!(parse_test(&bytes), Err(ElfError::WrongMachine));
+
+        let mut bytes = valid_elf();
+        put_u16(&mut bytes, 16, 3);
+        assert_eq!(parse_test(&bytes), Err(ElfError::NotExecutable));
+    }
+
+    #[test]
+    fn rejects_bad_user_range() {
+        let bytes = valid_elf();
+        assert_eq!(
+            parse(&bytes, TEST_MACHINE, TEST_USER_START, TEST_USER_START),
+            Err(ElfError::BadUserRange)
+        );
+    }
+
+    #[test]
+    fn rejects_memory_range_overflow() {
+        let mut bytes = valid_elf();
+        put_u64(&mut bytes, ELF_HEADER_SIZE + 40, u64::MAX);
+        assert_eq!(parse_test(&bytes), Err(ElfError::Overflow));
+    }
+
+    #[test]
+    fn rejects_offset_vaddr_congruence_mismatch() {
+        let mut bytes = valid_elf();
+        put_u64(&mut bytes, ELF_HEADER_SIZE + 8, 0x1001);
+        assert_eq!(parse_test(&bytes), Err(ElfError::Misaligned));
     }
 
     #[test]
     fn rejects_missing_load_segments() {
         let mut bytes = valid_elf();
         put_u16(&mut bytes, 56, 0);
-        assert_eq!(parse(&bytes), Err(ElfError::NoSegments));
+        assert_eq!(parse_test(&bytes), Err(ElfError::NoSegments));
     }
 }
