@@ -60,10 +60,11 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 395a589 feat: demo notification capability transfer over call
 - 85fe2cf feat: add user-space vfs server over ipc
 - 687962c feat: add software iommu domains and dma maps
+- ed06f82 feat: add smp maintenance ipi and tlb shootdown
 - fffa7d6 feat: add vfs stat request
 - 826efed feat: tag vspaces with asid and pcid
 
-Cập nhật code gần nhất (commit 687962c): software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit ed06f82): SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
@@ -106,7 +107,7 @@ Test hiện tại:
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
-  headroom 561.120 B dưới 0x80400000
+  headroom 565.200 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -115,7 +116,7 @@ Test hiện tại:
 
 Output tiêu biểu:
 - SELFTEST PASS
-- SMP OK (harts=2) trên RISC-V/AArch64
+- SMP OK (harts=2, ipi=1) trên RISC-V/AArch64
 - SMP SKIP (x86 AP bootstrap pending) trên x86_64
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
@@ -1065,9 +1066,9 @@ Exit code:
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
 - Scheduler một hart; SMP mới bootstrap, hart phụ idle.
-- SMP I-cache shootdown chưa có: RISC-V cần remote fence qua SBI/IPI và AArch64
-  cần đồng bộ I-cache sang các PE khác trước khi cho hart khác chạy code mới.
-  Hiện `sync_icache` chỉ bảo đảm hart đang map.
+- SMP full TLB shootdown đã có qua SBI IPI/GICv2 SGI; per-VA shootdown và
+  I-cache shootdown cho code mới trên hart khác vẫn chưa hoàn chỉnh.
+  `sync_icache` hiện chỉ bảo đảm hart đang map.
 - x86_64 chưa boot AP.
 - Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
   chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
@@ -1138,8 +1139,8 @@ C. SMP
 1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI.
 2. Per-hart context/runqueue.
 3. BKL trước, lock mịn sau.
-4. IPI wakeup/reschedule.
-5. TLB shootdown đa hart.
+4. IPI wakeup/reschedule — IPI maintenance đã có; wakeup/reschedule chưa.
+5. TLB shootdown đa hart — full shootdown đã có; per-VA chưa.
 6. Timer đa hart.
 
 D. VFS / driver
