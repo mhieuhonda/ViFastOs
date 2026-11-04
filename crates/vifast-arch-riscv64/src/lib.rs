@@ -57,8 +57,17 @@ impl Arch for Riscv64 {
         }
     }
 
-    fn send_ipi(_hart: usize) {
-        // SBI IPI will be added together with SMP bring-up.
+    fn send_ipi(hart: usize) {
+        let mask = 1usize << hart;
+        unsafe {
+            core::arch::asm!(
+                "ecall",
+                in("a7") 0x7350_49usize,
+                in("a6") 0usize,
+                in("a0") mask,
+                in("a1") 0usize,
+            );
+        }
     }
 
     fn halt() -> ! {

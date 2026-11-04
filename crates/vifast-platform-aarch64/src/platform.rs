@@ -1,6 +1,6 @@
 //! AArch64 QEMU `virt` platform: 4-level MMU, GICv2, generic timer and PSCI.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::Arch;
@@ -62,6 +62,8 @@ static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut ACTIVE_ROOT: u64 = 0;
 static mut ACTIVE_ASID: u16 = 0;
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
+static IPI_PENDING: AtomicBool = AtomicBool::new(false);
+static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -113,7 +115,7 @@ fn write8(addr: u64, value: u8) {
 
 fn init_gic() {
     write32(GICD + 0x000, 1);
-    write32(GICD + 0x100, 1 << TIMER_IRQ);
+    write32(GICD + 0x100, (1 << TIMER_IRQ) | 1);
     write8(GICD + 0x400 + TIMER_IRQ as u64, 0xA0);
     write8(GICD + 0x800 + TIMER_IRQ as u64, 1);
     write32(GICC + 0x004, 0xFF);
@@ -146,10 +148,31 @@ fn pan_supported() -> bool {
 pub extern "C" fn rust_secondary(_context: u64) -> ! {
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
-        unsafe {
-            core::arch::asm!("wfi");
+        if IPI_PENDING.swap(false, Ordering::SeqCst) {
+            unsafe {
+                core::arch::asm!("dsb ish");
+                core::arch::asm!("isb");
+            }
+            IPI_ACK.fetch_add(1, Ordering::SeqCst);
         }
+        core::hint::spin_loop();
     }
+}
+
+fn request_ipi() -> bool {
+    if SECONDARY_ONLINE.load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    IPI_ACK.store(0, Ordering::SeqCst);
+    IPI_PENDING.store(true, Ordering::SeqCst);
+    // GICv2 SGIR: SGI 0, target list = CPU1.
+    write32(GICD + 0xF00, 1 << 16);
+    let mut spins = 0usize;
+    while IPI_ACK.load(Ordering::SeqCst) == 0 && spins < 5_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    IPI_ACK.load(Ordering::SeqCst) > 0
 }
 
 fn active_root_matches_current() -> bool {
@@ -677,7 +700,19 @@ impl Platform for Aarch64Platform {
             spins += 1;
         }
         if SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            vifast_kernel::klog!(Aarch64Platform, "SMP OK (harts=2, psci={})", result as i64);
+            if request_ipi() {
+                vifast_kernel::klog!(
+                    Aarch64Platform,
+                    "SMP OK (harts=2, psci={}, ipi=1)",
+                    result as i64
+                );
+            } else {
+                vifast_kernel::klog!(
+                    Aarch64Platform,
+                    "SMP OK (harts=2, psci={}, ipi=pending)",
+                    result as i64
+                );
+            }
         } else {
             vifast_kernel::klog!(Aarch64Platform, "SMP SKIP (psci={})", result as i64);
         }

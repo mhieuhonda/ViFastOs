@@ -1,6 +1,6 @@
 //! RISC-V QEMU `virt` platform: Sv39 MMU, SBI timer, trap entry and SMP.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::Arch;
@@ -52,6 +52,8 @@ static mut ACTIVE_ASID: u16 = 0;
 struct TrapStack([u8; 32768]);
 static mut TRAP_STACK: TrapStack = TrapStack([0; 32768]);
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
+static IPI_PENDING: AtomicBool = AtomicBool::new(false);
+static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -106,10 +108,30 @@ unsafe fn set_timer(at: u64) {
 pub extern "C" fn rust_secondary(_hartid: usize) -> ! {
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
-        unsafe {
-            core::arch::asm!("wfi");
+        if IPI_PENDING.swap(false, Ordering::SeqCst) {
+            unsafe {
+                core::arch::asm!("sfence.vma zero, zero");
+                core::arch::asm!("fence.i");
+            }
+            IPI_ACK.fetch_add(1, Ordering::SeqCst);
         }
+        core::hint::spin_loop();
     }
+}
+
+fn request_ipi() -> bool {
+    if SECONDARY_ONLINE.load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    IPI_ACK.store(0, Ordering::SeqCst);
+    IPI_PENDING.store(true, Ordering::SeqCst);
+    <Riscv64 as Arch>::send_ipi(1);
+    let mut spins = 0usize;
+    while IPI_ACK.load(Ordering::SeqCst) == 0 && spins < 5_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    IPI_ACK.load(Ordering::SeqCst) > 0
 }
 
 unsafe fn build_kernel_page_tables() {
@@ -245,6 +267,7 @@ impl vifast_kernel::PageTableOps for PageOps {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
         }
+        let _ = request_ipi();
     }
 
     fn sync_icache(&self, _pa: u64, _size: usize) {
@@ -579,7 +602,11 @@ impl Platform for RiscvPlatform {
             spins += 1;
         }
         if SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2)");
+            if request_ipi() {
+                vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2, ipi=1)");
+            } else {
+                vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2, ipi=pending)");
+            }
         } else {
             vifast_kernel::klog!(RiscvPlatform, "SMP SKIP (hsm_start={:#x})", started);
         }
