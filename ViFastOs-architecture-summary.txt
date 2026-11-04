@@ -692,6 +692,7 @@ Exit code:
 - Data Untyped 256 KiB/max64; metadata Untyped max32.
 - vifast-kernel bỏ dependency vifast-arch; dùng Console trait.
 - x86 page-fault/exception entry dùng efiapi rcx/rdx/r8; vector 0..31 có handler.
+- #DF/NMI/#MC dùng IST1 và luôn panic, kể cả khi CS là user.
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 396808 bytes dùng static storage.
@@ -719,7 +720,6 @@ Exit code:
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
 - Self-revoke Untyped bị từ chối nếu TCB hiện tại nằm trong nhóm con.
-- #DF/NMI/#MC dùng IST1 và luôn panic; vector 0..31 khác đã có handler.
 - Self-revoke hiện trả IllegalOperation; supervisor hủy nhóm gồm chính nó sẽ cần
   destroy-xong-rồi-pick sau này.
 - Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
