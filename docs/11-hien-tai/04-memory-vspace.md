@@ -15,7 +15,7 @@ Trình tự map:
 
 ```text
 FrameMap syscall
-  → Kernel::map_frame() kiểm tra W^X/range/reverse map
+  → Kernel::map_frame() kiểm tra W^X theo Frame/range/reverse map
   → Kernel map_page_table() walk generic
   → PageTableOps::write_pte + flush_va
   → Runtime trả VA cho user
