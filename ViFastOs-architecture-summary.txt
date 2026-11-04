@@ -39,11 +39,13 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a68b488 test: exercise real PTE formats through fake ops
 - 1c488a2 feat: build root task space from boot untyped
 - 3758e81 feat: isolate server VSpace and switch roots from TCB
-- 1fb01b2 feat: centralize user layout and add ELF parser.
+- 1fb01b2 feat: centralize user layout and add ELF parser
+- 7fd7a3d feat: harden ELF parser constraints.
 
-Cập nhật code gần nhất (commit 1fb01b2): root/server VSpace, current_root từ TCB,
+Cập nhật code gần nhất (commit 7fd7a3d): root/server VSpace, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
-vifast-elf parser + 9 host test, boot quota 117, revoke Untyped thật, fault
+vifast-elf parser machine/range + 14 host test, ROOT_ELF_BASE/soft-float chốt,
+boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
@@ -76,7 +78,7 @@ hardening và vifast-user.
 Test hiện tại:
 - cargo test -p vifast-kernel: 49/49 PASS
 - cargo test -p vifast-pte: 10/10 PASS
-- cargo test -p vifast-elf: 9/9 PASS
+- cargo test -p vifast-elf: 14/14 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -132,7 +134,7 @@ Quan hệ phụ thuộc chính:
 - vifast-kernel -> vifast-abi + vifast-pte (không còn phụ thuộc vifast-arch)
 - vifast-runtime -> vifast-kernel + vifast-arch
 - vifast-user -> vifast-abi (syscall wrappers + layout)
-- vifast-elf -> vifast-abi (ELF64 PT_LOAD parser, no_std, host-tested)
+- vifast-elf -> không dependency (ELF64 PT_LOAD parser, no_std, host-tested)
 - vifast-platform-* -> vifast-runtime + vifast-kernel + vifast-arch-*
 - vifast-platform-* implement PageTableOps (read/write/flush/zero)
 - vifast-kernel-* -> vifast-platform-* + vifast-runtime + vifast-arch
@@ -202,12 +204,14 @@ vifast-pte
 
 vifast-elf
 - no_std, forbid unsafe; parser ELF64 little-endian executable.
-- Chỉ nhận PT_LOAD; kiểm tra header/phdr bounds, file range, page alignment,
-  user VA range, overlap, W^X và entry nằm trong segment executable.
-- Host test ELF hỏng: magic/class, phdr phoff/table overflow, file range,
-  offset overflow, misaligned, W+X, overlap, bad entry, no segments.
+- Chỉ nhận PT_LOAD; từ chối PT_INTERP/PT_DYNAMIC/PT_TLS; bỏ qua các metadata
+  PT_NOTE/PT_GNU_*; kiểm tra header/phdr bounds, file range, p_offset cùng dư
+  trang với p_vaddr, user VA range truyền vào, overlap, W^X và entry executable.
+- Host test ELF hỏng: magic/class, phdr table/offset overflow, file range,
+  memory range overflow, misaligned/congruence, ET_DYN, wrong machine,
+  unsupported segment, W+X, overlap, bad entry, no segments.
 - File: crates/vifast-elf/src/lib.rs.
-- 9 host test.
+- 14 host test.
 
 vifast-user
 - no_std syscall wrappers cho 3 kiến trúc.
@@ -288,7 +292,7 @@ vifast-user:
 - khoảng 208 dòng
 
 vifast-elf:
-- 417 dòng, no_std, không unsafe
+- 490 dòng, no_std, không unsafe
 
 vifast-kernel:
 - 4914 dòng, không còn dependency vifast-arch
@@ -729,7 +733,7 @@ Lệnh:
     python3 scripts/test-qemu.py
 
 Host test hiện có 49 test `vifast-kernel` + 10 test `vifast-pte` +
-9 test `vifast-elf`:
+14 test `vifast-elf`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -898,7 +902,7 @@ Exit code:
   trên cả 3 arch; tổng 3 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 49 test `vifast-kernel` + 10 test `vifast-pte` + 9 test `vifast-elf`.
+- Host test hiện có 49 test `vifast-kernel` + 10 test `vifast-pte` + 14 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1043,9 +1047,17 @@ E. Desktop / Space
 30. Stack tops/bases và server VSpace slot là hằng trong vifast-abi; user.S
     nhận qua global_asm const, runtime dùng trực tiếp. Host test server VSpace
     đúng 2 leaf user (code + stack); root builder test đúng 1 leaf code.
-31. vifast-elf parse/validate ELF64 PT_LOAD (range, alignment, overlap, W^X,
-    entry) đã host-test; root Rust nạp ELF là Bước 6, BootInfo/Untyped con/
-    client VSpace là Bước 7.
+31. vifast-elf parse/validate ELF64 PT_LOAD (machine/user-range tham số,
+    file range, congruence, overlap, W^X, entry, segment cấm) đã host-test;
+    root Rust nạp ELF là Bước 6, BootInfo/Untyped con/client VSpace là Bước 7.
+32. Root Rust ELF ở `ROOT_ELF_BASE = CODE_VA + 0x20_0000` (2 MiB kế tiếp), giữ
+    user.S tại 64 GiB. Stack root 4 trang tại `ROOT_ELF_STACK_BASE`, một trang
+    guard ngay dưới không map. Vùng mới cần PageTable cấp cuối riêng.
+33. Code user không dùng FP/SIMD: RISC-V `riscv64imac-unknown-none-elf`,
+    AArch64 `aarch64-unknown-none-softfloat`, x86_64 `x86_64-unknown-none`
+    relocation static. Kernel chưa lưu FP/SIMD context; build.sh sẽ disassemble
+    root ELF và từ chối thanh ghi FP/SIMD. Linker dùng `-z max-page-size=4096`
+    và `-z separate-code`, mỗi segment căn 4096.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
