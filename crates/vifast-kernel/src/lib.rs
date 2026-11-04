@@ -135,6 +135,8 @@ pub trait PageTableOps {
     /// Make recently written instruction bytes visible to the local
     /// instruction fetch path before an executable mapping becomes live.
     fn sync_icache(&self, _pa: u64, _size: usize) {}
+    /// Copy a range between two physical frames (IPC buffer transfer).
+    fn copy_frame_to_frame(&self, _src: u64, _dst: u64, _size: usize) {}
     fn zero_frame(&self, _pa: u64, _size: usize) {}
 }
 
@@ -1289,6 +1291,16 @@ impl Kernel {
                 }
                 if mapping.rights.contains(Rights::EXEC) {
                     frame.mapped_x = frame.mapped_x.saturating_sub(1);
+                }
+            }
+        }
+        for object in self.objs.iter_mut() {
+            if let Kind::Tcb(ref mut table) = object.kind {
+                if table
+                    .ipc_buffer
+                    .is_some_and(|buffer| buffer.frame == mapping.frame && buffer.va == mapping.va)
+                {
+                    table.ipc_buffer = None;
                 }
             }
         }
@@ -2723,6 +2735,51 @@ impl Kernel {
             .and_then(|table| table.resume_error.take())
     }
 
+    pub fn set_ipc_buffer(&mut self, tcb: ObjRef, frame: ObjRef, va: u64) -> KResult<()> {
+        let vspace = self
+            .tcb(tcb)
+            .and_then(|table| table.vspace)
+            .ok_or(KError::InvalidArg)?;
+        let mapping = self.mapping_at(vspace, va).ok_or(KError::NotMapped)?;
+        if mapping.frame != frame
+            || mapping.va != va
+            || !mapping.rights.contains(Rights::WRITE)
+            || mapping.len < DEFAULT_PAGE_SIZE
+        {
+            return Err(KError::InvalidArg);
+        }
+        let frame_object = self.frame(frame).ok_or(KError::WrongType)?;
+        if frame_object.size < mapping.len as usize {
+            return Err(KError::InvalidArg);
+        }
+        let table = self.tcb_mut(tcb).ok_or(KError::InvalidCap)?;
+        table.ipc_buffer = Some(IpcBuffer { frame, va });
+        Ok(())
+    }
+
+    fn copy_ipc_buffers(&self, sender: ObjRef, receiver: ObjRef) {
+        let Some(sender_buffer) = self.tcb(sender).and_then(|table| table.ipc_buffer) else {
+            return;
+        };
+        let Some(receiver_buffer) = self.tcb(receiver).and_then(|table| table.ipc_buffer) else {
+            return;
+        };
+        let Some(ops) = self.page_table_ops else {
+            return;
+        };
+        let Some(sender_frame) = self.frame(sender_buffer.frame) else {
+            return;
+        };
+        let Some(receiver_frame) = self.frame(receiver_buffer.frame) else {
+            return;
+        };
+        let size = IPC_BUFFER_WORDS * core::mem::size_of::<u64>();
+        if sender_frame.size < size || receiver_frame.size < size {
+            return;
+        }
+        ops.copy_frame_to_frame(sender_frame.pa as u64, receiver_frame.pa as u64, size);
+    }
+
     pub fn set_fault_endpoint(&mut self, tcb: ObjRef, endpoint: Option<CapRef>) -> KResult<()> {
         let table = self.tcb_mut(tcb).ok_or(KError::InvalidCap)?;
         table.fault_ep = endpoint;
@@ -3176,6 +3233,33 @@ impl Kernel {
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
                 match self.resume_tcb(cap.obj) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbSetIpcBuffer as u64 => {
+                let target = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let frame = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a1).unwrap_or(0),
+                    Some(ObjType::Frame),
+                    Rights::READ,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.set_ipc_buffer(target.obj, frame.obj, a2) {
                     Ok(()) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,
@@ -4621,6 +4705,27 @@ mod tests {
         }
         fn sync_icache(&self, _pa: u64, _size: usize) {
             FAKE_ICACHE_SYNCS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn copy_frame_to_frame(&self, src: u64, dst: u64, size: usize) {
+            let bytes: Vec<u8> = {
+                let mem = FAKE_MEM.lock().unwrap();
+                (0..size)
+                    .map(|index| {
+                        let byte_index = src as usize + index;
+                        let word = mem[byte_index / 8];
+                        ((word >> ((byte_index % 8) * 8)) & 0xff) as u8
+                    })
+                    .collect()
+            };
+            let mut mem = FAKE_MEM.lock().unwrap();
+            for (index, byte) in bytes.iter().enumerate() {
+                let byte_index = dst as usize + index;
+                let word_index = byte_index / 8;
+                let shift = (byte_index % 8) * 8;
+                if let Some(word) = mem.get_mut(word_index) {
+                    *word = (*word & !(0xffu64 << shift)) | ((*byte as u64) << shift);
+                }
+            }
         }
         fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {
             let mut mem = FAKE_MEM.lock().unwrap();
@@ -6925,6 +7030,92 @@ mod tests {
             .unwrap();
         assert!(kernel.delete_cap(faulting, 1).is_ok());
         assert_eq!(kernel.fault_endpoint(faulting), None);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn ipc_buffer_requires_rw_mapping_and_copies_words() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let sender = kernel.create_tcb("sender", 1).unwrap();
+        let receiver = kernel.create_tcb("receiver", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let va = 0x10_0000_0000;
+        let sender_space = kernel
+            .create_vspace_with_page_size(0x1000, va, 0x1000, 4096)
+            .unwrap();
+        let receiver_space = kernel
+            .create_vspace_with_page_size(0x2000, va, 0x1000, 4096)
+            .unwrap();
+        let sender_frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let receiver_frame = kernel.create_frame(0xa000, 4096).unwrap();
+        kernel.set_tcb_vspace(sender, sender_space).unwrap();
+        kernel.set_tcb_vspace(receiver, receiver_space).unwrap();
+        for (space, tables) in [
+            (sender_space, [0x3000, 0x4000, 0x5000]),
+            (receiver_space, [0x6000, 0x7000, 0x8000]),
+        ] {
+            for table in tables {
+                let pt = kernel.create_page_table(table, 0).unwrap();
+                assert!(kernel.map_page_table(pt, space, va).is_ok());
+            }
+        }
+        assert_eq!(
+            kernel.set_ipc_buffer(sender, sender_frame, va),
+            Err(KError::NotMapped)
+        );
+        kernel
+            .map_frame(sender_space, sender_frame, va, Rights::READ)
+            .unwrap();
+        assert_eq!(
+            kernel.set_ipc_buffer(sender, sender_frame, va),
+            Err(KError::InvalidArg)
+        );
+        kernel.unmap_frame(sender_space, va).unwrap();
+        kernel
+            .map_frame(sender_space, sender_frame, va, Rights::READ | Rights::WRITE)
+            .unwrap();
+        kernel
+            .map_frame(
+                receiver_space,
+                receiver_frame,
+                va,
+                Rights::READ | Rights::WRITE,
+            )
+            .unwrap();
+        assert!(kernel.set_ipc_buffer(sender, sender_frame, va).is_ok());
+        assert!(kernel.set_ipc_buffer(receiver, receiver_frame, va).is_ok());
+        let source_words = [0x1122_3344_5566_7788u64, 0x99aa_bbcc_ddee_ff00];
+        let mut source_bytes = [0u8; 16];
+        for (index, word) in source_words.iter().enumerate() {
+            source_bytes[index * 8..index * 8 + 8].copy_from_slice(&word.to_le_bytes());
+        }
+        MAP_OPS.copy_to_frame(0x9000, &source_bytes);
+        assert_eq!(kernel.recv(receiver, endpoint, 4), Ok(None));
+        assert!(kernel
+            .send(
+                sender,
+                endpoint,
+                0,
+                Message::new(0x77, &[1]).unwrap(),
+                false
+            )
+            .unwrap());
+        assert_eq!(kernel.take_resume(receiver).unwrap().label, 0x77);
+        let (d0, d1) = {
+            let mem = FAKE_MEM.lock().unwrap();
+            let base = ((0xa000 >> 12) as usize) * 512;
+            (mem[base], mem[base + 1])
+        };
+        assert_eq!(d0, source_words[0]);
+        assert_eq!(d1, source_words[1]);
+        assert!(kernel.check_invariants().is_ok());
+
+        kernel.unmap_frame(sender_space, va).unwrap();
+        assert!(kernel.tcb(sender).unwrap().ipc_buffer.is_none());
         assert!(kernel.check_invariants().is_ok());
     }
 

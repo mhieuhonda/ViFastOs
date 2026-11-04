@@ -22,6 +22,7 @@ Hằng số quan trọng:
 | `USER_IO_MAX` | 256 | Số byte tối đa một lần copy user |
 | `OBJ_ENDPOINT_BYTES` | 256 | Untyped charge cho Endpoint |
 | `OBJ_NOTIFICATION_BYTES` | 128 | Untyped charge cho Notification |
+| `IPC_BUFFER_WORDS` | 32 | Số word copy giữa IPC buffer hai TCB |
 | `OBJ_TCB_BYTES` | 4096 | Untyped quota cho Tcb (chỉ là quota) |
 
 User layout dùng chung cho cả 3 kiến trúc:

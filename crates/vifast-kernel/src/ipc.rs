@@ -92,6 +92,7 @@ impl Kernel {
                     return Err(error);
                 }
             }
+            self.copy_ipc_buffers(sender, receiver);
             if let Some(table) = self.tcb_mut(receiver) {
                 table.resume = Some(msg);
                 table.resume_error = None;
@@ -184,6 +185,7 @@ impl Kernel {
                     return Err(error);
                 }
             }
+            self.copy_ipc_buffers(sender, receiver);
             if pending.is_call {
                 let epoch = self.tcb(sender).ok_or(KError::ObjectDestroyed)?.reply_epoch;
                 let table = self.tcb_mut(receiver).ok_or(KError::InvalidCap)?;

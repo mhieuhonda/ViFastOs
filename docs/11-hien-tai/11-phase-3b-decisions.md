@@ -143,6 +143,16 @@ retype; 4.5 server có VSpace riêng; 7.5 client có VSpace riêng và Untyped c
   việc resume handler sau page fault.
 - Fault1/2/3 không cấu hình endpoint nên giữ hành vi suspend cũ.
 
+## 5h. IPC buffer (8.1)
+
+- TCB có `ipc_buffer: Option<{frame, va}>`; `TcbSetIpcBuffer(tcb, frame, va)`
+  yêu cầu Frame map RW đúng VA trong VSpace của TCB.
+- Khi sender và receiver đều có buffer, kernel copy `IPC_BUFFER_WORDS=32` word
+  trực tiếp qua PA (`copy_frame_to_frame`), không qua VA user.
+- Unmap/revoke Frame/VSpace xoá liên kết buffer của TCB qua `note_frame_unmapping`.
+- Host test: reject chưa map/RO, copy word, unmap xoá link. Demo IPC dài trong
+  user.S chưa nối; API đã sẵn cho 3c.
+
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
@@ -219,5 +229,5 @@ retype; 4.5 server có VSpace riêng; 7.5 client có VSpace riêng và Untyped c
    sync_icache khi map EXEC và counter checked_add (đã xong).
 7. Bước 7.2–7.5: Untyped con (7.2), BootInfo (7.3), VSpace client (7.4),
    tách client/fault4 (7.5 — hoàn tất 3b).
-8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv (đã xong 8.2), fault endpoint (đã xong 8.3).
+8. 8.1 IPC buffer API/core đã xong; 3c còn server/client Rust ELF và demo buffer dài.
 9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

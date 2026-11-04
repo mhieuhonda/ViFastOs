@@ -441,6 +441,16 @@ pub fn signal(notification_slot: u8) -> SyscallResult {
     result(e, v)
 }
 
+pub fn tcb_set_ipc_buffer(tcb_slot: u8, frame_slot: u8, va: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::TcbSetIpcBuffer as u64,
+            [tcb_slot as u64, frame_slot as u64, va, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn tcb_resume(tcb_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

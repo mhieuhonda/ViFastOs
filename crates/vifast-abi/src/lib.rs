@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub const MSG_MAX_WORDS: usize = 8;
+pub const IPC_BUFFER_WORDS: usize = 32;
 pub const DEFAULT_PAGE_SIZE: u64 = 4096;
 
 /// Shared user-address layout for all architectures.  The high base keeps
@@ -439,6 +440,7 @@ pub enum SyscallId {
     Close = 38,
     Stat = 39,
     Seek = 40,
+    TcbSetIpcBuffer = 41,
 }
 
 /// Generic register arguments for a syscall.  Architecture ports decode

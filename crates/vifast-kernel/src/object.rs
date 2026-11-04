@@ -312,6 +312,12 @@ pub struct PageTable {
     pub mapped: Option<PageTableMapping>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IpcBuffer {
+    pub frame: ObjRef,
+    pub va: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Fd {
     pub file: u8,
@@ -334,6 +340,7 @@ pub struct Tcb {
     pub recv_slot: u8,
     pub bound_ntfn: Option<ObjRef>,
     pub fault_ep: Option<CapRef>,
+    pub ipc_buffer: Option<IpcBuffer>,
     pub pending: Option<PendingSend>,
     pub resume: Option<Message>,
     pub resume_error: Option<KError>,
@@ -357,6 +364,7 @@ impl Tcb {
             recv_slot: 0,
             bound_ntfn: None,
             fault_ep: None,
+            ipc_buffer: None,
             pending: None,
             resume: None,
             resume_error: None,
