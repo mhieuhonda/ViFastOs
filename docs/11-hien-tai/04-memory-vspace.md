@@ -29,9 +29,10 @@ retype VSpace, gắn PageTable còn thiếu, copy ảnh vào Frame, map code RX 
 `stack_pages` trang stack RW; `data: Option<TaskData>` chỉ map khi được yêu cầu.
 Nếu lỗi thì rollback object và bump/objects của Untyped.
 
-Root dùng builder với `stack_pages=0`, rồi runtime map rời 5 stack page
-`+0x4000/+0x5000/+0x6000/+0x7000/+0x8000` cho root, fault1/2/3 và client.
-Trang `+0x2000` dành riêng cho server và **không được map trong root VSpace**.
+Root dùng builder với `stack_pages=0`, rồi runtime map rời 4 stack page
+`+0x5000/+0x6000/+0x7000/+0x8000` cho fault1/2/3 và client. Root Rust ELF dùng
+stack 4 trang + guard tại `ROOT_ELF_STACK_BASE`. Trang `+0x2000` dành riêng cho
+server và **không được map trong root VSpace**.
 
 `Kernel::build_task_space_shared_code(untyped, code_frame, layout)` map cùng
 Frame code root vào VSpace server, chỉ nhận một trang code ở bring-up hiện tại.
@@ -88,8 +89,9 @@ File: `crates/vifast-platform-riscv64/src/platform.rs`.
 - UART `0x1000_0000` map 2 MiB.
 - Kernel accessible chỉ khoảng 4 MiB (`0x8000_0000..0x8040_0000`); kernel image
   và metadata/data Untyped phải nằm trọn trong dải này.
-- Root VSpace retyped từ boot Untyped: code +0 RX, stack rời
-  +0x4000/+0x5000/+0x6000/+0x7000/+0x8000 RW; data +0xa000 để trống.
+- Root VSpace: code user.S +0 RX, stack rời +0x5000/+0x6000/+0x7000/+0x8000
+  cho fault/client; root ELF và stack Rust tại ROOT_ELF_BASE. Data +0xa000
+  để trống cho client FrameMap.
 - Server VSpace: code dùng chung Frame root, stack +0x2000 RW; root VSpace
   không map trang này.
 - Code: `R|X|U` (không W).
@@ -107,8 +109,9 @@ File: `crates/vifast-platform-aarch64/src/platform.rs`.
 - 4-level bảng kernel-only tĩnh; root VSpace/PageTable user retyped từ boot Untyped.
 - GICv2 `0x0800_0000`, PL011 `0x0900_0000` map trong L1[0]; RAM kernel
   `0x4000_0000..` map trong L1[1]. `KERNEL_SHARED_SLOTS = [0, 1]`.
-- Root VSpace: code +0 EL0 RO+X, stack rời +0x4000/+0x5000/+0x6000/+0x7000/
-  +0x8000 RW+NX; data +0xa000 để trống cho client FrameMap.
+- Root VSpace: code user.S +0 EL0 RO+X, stack fault/client
+  +0x5000..+0x8000 RW+NX; root ELF + stack Rust ở ROOT_ELF_BASE; data +0xa000
+  để trống cho client FrameMap.
 - Server VSpace: code dùng chung Frame root, stack +0x2000 RW+NX.
 - Code: EL0 read-only + executable (`AP_USER_RO`, UXN=0).
 - Stack: EL0 read-write + NX (`AP_USER_RW`, UXN=1).
@@ -128,8 +131,9 @@ File: `crates/vifast-platform-x86_64/src/platform.rs`.
 - Tự dựng PML4/PDPT/PD identity 4 KiB kernel-only, không sửa page table UEFI.
 - Identity map 0..1 GiB cho kernel/UEFI image, stack, GDT/TSS/IDT; PDPT[0]
   là shared slot, PML4[0]/PDPT là private mỗi VSpace.
-- Root VSpace: code +0 P|US RX, stack rời +0x4000/+0x5000/+0x6000/+0x7000/
-  +0x8000 RW|NX; data +0xa000 để trống cho client FrameMap.
+- Root VSpace: code user.S +0 P|US RX, stack fault/client +0x5000..+0x8000
+  RW|NX; root ELF + stack Rust ở ROOT_ELF_BASE; data +0xa000 để trống cho
+  client FrameMap.
 - Server VSpace: code dùng chung Frame root, stack +0x2000 RW|NX|US.
 - Code: P|US, read+execute, NX clear.
 - Stack/data: P|W|US|NX.

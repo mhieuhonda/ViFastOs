@@ -17,8 +17,6 @@ const USER_CODE_RPL3: u64 = USER_CODE_SEL | 3;
 
 const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
 const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
-const USER_STACK_A_TOP: usize = vifast_abi::user_layout::STACK_A_TOP;
-const USER_STACK_B_TOP: usize = vifast_abi::user_layout::STACK_B_TOP;
 const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
 const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
 const PAGE_PRESENT: u64 = 1;
@@ -535,13 +533,7 @@ impl Platform for X86Platform {
 
     const USER_CODE_VA: usize = USER_CODE_VA;
     const USER_DATA_VA: usize = USER_DATA_VA;
-
-    fn stack_a_top() -> usize {
-        USER_STACK_A_TOP
-    }
-    fn stack_b_top() -> usize {
-        USER_STACK_B_TOP
-    }
+    const ELF_MACHINE: u16 = vifast_pte::x86_64::ELF_MACHINE;
 
     fn init_platform(_info: PlatformInfo) {
         unsafe {
@@ -637,6 +629,13 @@ impl Platform for X86Platform {
         if !user_range(ptr, out.len(), USER_CODE_VA, 4096)
             && !user_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             && !user_range(ptr, out.len(), USER_DATA_VA, 4096)
+            && !user_range(
+                ptr,
+                out.len(),
+                vifast_abi::user_layout::ROOT_ELF_BASE,
+                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
+                    - vifast_abi::user_layout::ROOT_ELF_BASE,
+            )
         {
             return Err(KError::InvalidArg);
         }
@@ -658,6 +657,13 @@ impl Platform for X86Platform {
         }
         if !user_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
             && !user_range(ptr, input.len(), USER_DATA_VA, 4096)
+            && !user_range(
+                ptr,
+                input.len(),
+                vifast_abi::user_layout::ROOT_ELF_BASE,
+                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
+                    - vifast_abi::user_layout::ROOT_ELF_BASE,
+            )
         {
             return Err(KError::InvalidArg);
         }

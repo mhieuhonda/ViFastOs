@@ -43,6 +43,10 @@ def root_switch_count(output: str) -> int:
     return int(match.group(1)) if match else -1
 
 
+def fault_addresses(output: str) -> list[int]:
+    return [int(value, 16) for value in re.findall(r"USER FAULT.*?addr=(0x[0-9a-fA-F]+)", output)]
+
+
 def run_qemu(
     name: str,
     cmd: list[str],
@@ -68,6 +72,10 @@ def run_qemu(
         output = open(serial, "rb").read().decode("utf-8", errors="replace")
     print(f"\n--- {name} (rc={rc}, {elapsed:.1f}s) ---")
     print(output[-1800:])
+    faults = fault_addresses(output)
+    root_rust_at = output.find("ROOT RUST")
+    server_at = output.find("Server")
+    client_at = output.find("Client")
     ok = (
         "SELFTEST PASS" in output
         and "booting on" in output
@@ -82,7 +90,15 @@ def run_qemu(
         and "ViFastOS ramfs" in output
         and "ViFastOS write" in output
         and "Reply OK" in output
-        and output.count("USER FAULT") >= 3
+        and len(faults) == 3
+        and 0x8000_0000 in faults
+        and 0x1000002000 in faults
+        and output.count("ROOT RUST") == 1
+        and output.count("ROOT READY") == 1
+        and "ROOT PANIC" not in output
+        and root_rust_at >= 0
+        and server_at > root_rust_at
+        and client_at > root_rust_at
         and "Zero OK" in output
         and (not require_smp or "SMP OK" in output)
     )

@@ -43,5 +43,13 @@ codegen-units = 1
 opt-level = "s"
 debug = true
 
+[profile.root-task]
+inherits = "release"
+opt-level = "s"
+debug = 0
+panic = "abort"
+lto = true
+codegen-units = 1
+
 [profile.dev]
 panic = "unwind"

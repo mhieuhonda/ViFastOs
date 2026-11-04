@@ -111,8 +111,8 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 3. Root/server VSpace riêng + stack isolation (đã xong 4.5).
 4. vifast-elf parser + host test (đã xong).
 5. Bước 6: build_task_space_elf + host test, jump table user.S, vifast-root
-   ELF/link 3 target (đã xong); nối root ELF vào runtime 6.4 là việc tiếp theo;
-   server/client/fault giữ user.S.
+   ELF/link 3 target, nối root ELF vào runtime 6.4 (đã xong); server/client/fault
+   giữ user.S.
 6. Bước 7: BootInfo, Untyped con, client VSpace riêng; bỏ slot hard-code.
 7. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
 8. AArch64 TTBR1 là giai đoạn riêng sau 3b.

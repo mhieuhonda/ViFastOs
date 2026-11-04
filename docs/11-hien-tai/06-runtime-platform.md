@@ -31,8 +31,6 @@ type Context: Copy + 'static;
 const USER_CODE_VA: usize;
 const USER_DATA_VA: usize;
 fn user_code_base() -> usize;
-fn stack_a_top() -> usize;
-fn stack_b_top() -> usize;
 ```
 
 User layout lấy từ `vifast-abi::user_layout`; cả 3 port dùng chung code VA
@@ -99,21 +97,23 @@ MP Services, tránh làm hỏng môi trường firmware.
 7. `A::start_smp()`.
 8. Tạo boot Untyped 128 KiB/32 object, metadata Untyped, data Untyped.
 9. Cài metadata/data Untyped slot 2/3.
-10. `build_task_space` dựng root VSpace: code RX, không stack/data; map rời
-    5 stack page; cài VSpace slot 1 và TCB root.
-11. Dựng server VSpace từ boot Untyped, code dùng chung Frame root, stack
+10. `build_task_space` dựng root VSpace: code user.S RX, không stack/data;
+    map rời 4 stack page fault/client; cài VSpace slot 1 và TCB root.
+11. Parse root ELF trong cửa sổ 1 MiB; `build_task_space_elf(Some(root))`
+    thêm root ELF + stack 4 trang + guard.
+12. Dựng server VSpace từ boot Untyped, code dùng chung Frame root, stack
     +0x2000; cài server VSpace slot 12.
-12. `check_kernel_mappings(root_pa/server_pa)`; log used/free pages/objects.
-13. `A::prepare_user()`.
-14. Tạo context duy nhất cho root.
-15. `A::set_kernel()`.
-16. Enqueue root, `pick()`, `ensure_current_root()` -> `ROOT SWITCH 1`.
-17. `A::start_timer()`.
-18. `A::enter_user(context root)`.
+13. `check_kernel_mappings(root_pa/server_pa)`; log BOOT/DATA Untyped.
+14. `A::prepare_user()`.
+15. Tạo context root từ entry ELF + `ROOT_ELF_STACK_TOP`.
+16. `A::set_kernel()`.
+17. Enqueue root, `pick()`, `ensure_current_root()` -> `ROOT SWITCH 1`.
+18. `A::start_timer()`.
+19. `A::enter_user(context root)`.
 
-Root task tự Retype/CapCopy/TcbConfigure/TcbResume server/client/fault thread,
-sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham chiếu
-"Server"/"Client".
+Root task Rust in `ROOT RUST`, tự Retype/CapCopy/TcbConfigure/TcbResume
+server/client/fault thread, in `ROOT READY`, rồi block bằng `Wait` trên
+notification riêng. Runtime không còn tham chiếu "Server"/"Client".
 
 ## 4. Syscall dispatch
 

@@ -54,9 +54,10 @@ OVMF
 
 Binary kernel chứa một `user.S`:
 
-- `user_root`: root task tạo TCB/endpoint/notification bằng syscall.
+- Jump table `USER_ENTRY_*`: server/client/fault1/2/3.
 - `user_thread_a`: server IPC.
 - `user_thread_b`: client.
+- Root task là Rust ELF riêng (`vifast-root`), không còn trong user.S.
 
 `UserImage` chứa:
 
@@ -65,14 +66,13 @@ pub struct UserImage {
     pub code: &'static [u8],
     pub entry_a: usize,
     pub entry_b: usize,
-    pub entry_root: usize,
+    pub root_elf: &'static [u8],
 }
 ```
 
-Runtime chỉ dùng `entry_root`; root task tự lấy địa chỉ server/client bằng
-label PC-relative. Builder copy image vào Frame lấy từ boot Untyped; các
-message nằm trong code page RX.
-
+Runtime parse `root_elf` trong cửa sổ 1 MiB và lấy entry từ ELF;
+server/client/fault dùng jump table `USER_ENTRY_*`. Builder copy image
+vào Frame lấy từ boot Untyped; các message nằm trong code page RX.
 Root task nhận cap:
 - slot 1 root VSpace;
 - slot 2 metadata Untyped;

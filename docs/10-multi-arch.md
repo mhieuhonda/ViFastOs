@@ -85,8 +85,8 @@ nếu không có VM/emulation. Vì vậy:
   AP bring-up chưa có.
 - `scripts/test-qemu.py` chạy lặp lại và kiểm tra `SELFTEST PASS`, banner,
   `Server`, `Mapped`, `ViFastOS ramfs`, `ViFastOS write`, `Client`, `Fault`,
-  `Isolation`, `USER FAULT` x3, `Zero OK`, `Cap OK`, `Reply OK`, `PREEMPT OK`,
-  `ROOT SWITCH n>1`.
+  `ROOT RUST`, `ROOT READY`, `Isolation`, `USER FAULT` x3, `Zero OK`, `Cap OK`,
+  `Reply OK`, `PREEMPT OK`, `ROOT SWITCH n>1`.
 
 ## 5. Những gì cần thêm để thành OS
 

@@ -14,3 +14,4 @@ test-exit = []
 vifast-abi = { path = "../vifast-abi" }
 vifast-arch = { path = "../vifast-arch" }
 vifast-kernel = { path = "../vifast-kernel" }
+vifast-elf = { path = "../vifast-elf" }

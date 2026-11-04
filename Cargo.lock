@@ -134,6 +134,7 @@ version = "0.1.0"
 dependencies = [
  "vifast-abi",
  "vifast-arch",
+ "vifast-elf",
  "vifast-kernel",
 ]
 

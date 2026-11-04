@@ -194,7 +194,7 @@ cargo test -p vifast-elf
 
 - User mode vẫn là **bring-up tối giản**, chưa phải userland đầy đủ; đã có
   crate `vifast-user` với syscall wrapper 3 kiến trúc, nhưng chương trình mẫu
-  vẫn là assembly; `vifast-elf` đã parse/host-test ELF64 nhưng chưa nạp root.
+  vẫn là assembly; root task đã được nạp từ ELF Rust ở 6.4.
 - IPC user có subset `Send/Call/Recv/Reply/Signal/Wait/Poll`; chuyển cap đã có
   end-to-end cho `Send`/`Call` (không cho `Reply`), chưa có shared memory,
   reply object/ReplyRecv, IPC buffer hay fault endpoint.
@@ -239,9 +239,8 @@ bare-metal này.
    x86_64 AP, BKL, per-hart runqueue, IPI scheduler và TLB shootdown.
 5. ~~Untyped/retype cơ bản~~ — đã có frame/page-table page + accounting metadata;
    còn allocator vật lý đầy đủ và thu hồi object.
-6. **Root task + vifast-user** — root assembly và crate root Rust ELF đã có,
-   ELF link 3 target đã validate; còn nạp root ELF vào runtime (6.4), BootInfo,
-   IPC buffer/shared memory.
+6. **Root task + vifast-user** — root Rust ELF đã được nạp vào runtime 6.4;
+   còn BootInfo, Untyped con/client VSpace, IPC buffer/shared memory.
 7. **Driver framework** user space: VirtIO console/block/net.
 8. **FS thật + block driver, name server, pager, supervisor, compositor,
    ViFastKey** — ramfs phẳng đã có.

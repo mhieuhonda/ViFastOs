@@ -11,7 +11,7 @@ use vifast_abi::{KError, Message, ObjType, Rights};
 use vifast_arch::Arch;
 use vifast_kernel::console::Console;
 use vifast_kernel::fs::MAX_PATH;
-use vifast_kernel::{Cap, Kernel, TaskLayout, UserAction};
+use vifast_kernel::{Cap, Kernel, StackSpec, TaskLayout, UserAction};
 
 #[cfg(feature = "test-exit")]
 pub const TIMER_TICKS: u64 = 20;
@@ -35,8 +35,8 @@ pub struct UserImage {
     pub entry_a: usize,
     /// Offset of `user_thread_b` from the start of `code`.
     pub entry_b: usize,
-    /// Offset of the root task entry.
-    pub entry_root: usize,
+    /// Root task ELF image, loaded into the root VSpace.
+    pub root_elf: &'static [u8],
 }
 
 /// The complete architecture/platform contract used by the shared runtime.
@@ -49,12 +49,12 @@ pub trait Platform: Arch + Console {
 
     const USER_CODE_VA: usize;
     const USER_DATA_VA: usize;
+    /// ELF machine value accepted for the root task image.
+    const ELF_MACHINE: u16;
 
     fn user_code_base() -> usize {
         Self::USER_CODE_VA
     }
-    fn stack_a_top() -> usize;
-    fn stack_b_top() -> usize;
 
     fn init_platform(info: PlatformInfo);
     fn init_kernel() -> &'static mut Kernel;
@@ -274,14 +274,13 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     /* Root VSpace maps only the root, client and fault-thread stacks.  The
     page at SERVER_STACK_BASE belongs to the server VSpace and stays invalid. */
-    const ROOT_STACK_BASES: [usize; 5] = [
-        vifast_abi::user_layout::ROOT_STACK_BASE,
+    const ROOT_USER_STACK_BASES: [usize; 4] = [
         vifast_abi::user_layout::FAULT1_STACK_BASE,
         vifast_abi::user_layout::FAULT2_STACK_BASE,
         vifast_abi::user_layout::FAULT3_STACK_BASE,
         vifast_abi::user_layout::CLIENT_STACK_BASE,
     ];
-    for va in ROOT_STACK_BASES {
+    for va in ROOT_USER_STACK_BASES {
         let Ok(frame) = kernel.retype(boot_untyped, ObjType::Frame) else {
             vifast_kernel::klog!(A, "ROOT STACK RETYPE FAILED");
             A::exit(1);
@@ -293,6 +292,68 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
             vifast_kernel::klog!(A, "ROOT STACK MAP FAILED va={:#x}", va);
             A::exit(1);
         }
+    }
+
+    let root_elf = match vifast_elf::parse(
+        image.root_elf,
+        A::ELF_MACHINE,
+        vifast_abi::user_layout::ROOT_ELF_BASE as u64,
+        vifast_abi::user_layout::ROOT_ELF_STACK_GUARD as u64,
+    ) {
+        Ok(image) => image,
+        Err(error) => {
+            vifast_kernel::klog!(A, "ROOT ELF INVALID: {:?}", error);
+            A::exit(1);
+        }
+    };
+    if kernel
+        .build_task_space_elf(
+            boot_untyped,
+            Some(vspace),
+            &root_elf,
+            image.root_elf,
+            StackSpec {
+                base: vifast_abi::user_layout::ROOT_ELF_STACK_BASE as u64,
+                pages: 4,
+                guard: true,
+            },
+        )
+        .is_err()
+    {
+        vifast_kernel::klog!(A, "ROOT ELF BUILD FAILED");
+        A::exit(1);
+    }
+    if let Some(space) = kernel.vspace_mut(vspace) {
+        space.next_va = vifast_abi::user_layout::DATA_VA as u64;
+    }
+    if kernel.set_tcb_vspace(root, vspace).is_err() {
+        A::exit(1);
+    }
+    vifast_kernel::klog!(
+        A,
+        "ROOT ELF entry={:#x} segments={} stack={:#x}",
+        root_elf.entry,
+        root_elf.segment_count(),
+        vifast_abi::user_layout::ROOT_ELF_STACK_TOP
+    );
+    if kernel
+        .validate_user_range(root, root_elf.entry, 1, false)
+        .is_err()
+    {
+        vifast_kernel::klog!(A, "ROOT ELF ENTRY NOT MAPPED");
+        A::exit(1);
+    }
+    if kernel
+        .validate_user_range(
+            root,
+            vifast_abi::user_layout::ROOT_ELF_BASE as u64 + 0x1000,
+            1,
+            false,
+        )
+        .is_err()
+    {
+        vifast_kernel::klog!(A, "ROOT ELF RODATA NOT MAPPED");
+        A::exit(1);
     }
 
     if image.code.len() > A::PAGE_SIZE {
@@ -362,18 +423,36 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
             free_pages,
             free_objects
         );
-        if free_pages == 0 || free_objects == 0 {
-            vifast_kernel::klog!(A, "BOOT UNTYPED EXHAUSTED");
+        if free_pages < 2 || free_objects < 2 {
+            vifast_kernel::klog!(A, "BOOT UNTYPED TOO SMALL FOR BOOT INFO");
             A::exit(1);
         }
     } else {
         A::exit(1);
     }
+    if let Some((size, bump, objects, max_objects)) = kernel.untyped_usage(data_untyped) {
+        let pages = size / page_size as usize;
+        let used = bump / page_size as usize;
+        vifast_kernel::klog!(
+            A,
+            "DATA UNTYPED pages={}/{} objects={}/{}",
+            used,
+            pages,
+            objects,
+            max_objects
+        );
+        if max_objects < 6 {
+            vifast_kernel::klog!(A, "DATA UNTYPED TOO SMALL FOR CLIENT VSPACE");
+            A::exit(1);
+        }
+    }
     A::prepare_user();
 
     let contexts = A::contexts();
-    contexts[root.index as usize] =
-        A::context_for_user(A::user_code_base() + image.entry_root, A::stack_a_top());
+    contexts[root.index as usize] = A::context_for_user(
+        root_elf.entry as usize,
+        vifast_abi::user_layout::ROOT_ELF_STACK_TOP,
+    );
 
     A::set_kernel(kernel as *mut Kernel);
     kernel.enqueue(root);

@@ -28,6 +28,7 @@ core::arch::global_asm!(include_str!("start_aarch64.S"));
 core::arch::global_asm!(include_str!("start_riscv64.S"));
 
 const ROOT_RUST: &[u8] = b"ROOT RUST\n";
+const ROOT_READY: &[u8] = b"ROOT READY\n";
 const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
 
 fn check(result: SyscallResult) {
@@ -130,6 +131,7 @@ pub extern "C" fn root_main() -> ! {
         6,
     ));
     check(vifast_user::tcb_resume(FAULT3_TCB_SLOT as u8));
+    write(ROOT_READY);
 
     loop {
         let _ = vifast_user::wait(ROOT_NOTIFICATION_SLOT as u8);

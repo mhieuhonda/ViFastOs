@@ -67,7 +67,7 @@ Kernel portable hiện có:
 - Revoke Untyped đã destroy object con; còn allocator vật lý đầy đủ, free toàn
   bộ object ngoài revoke và IOMMU.
 - `vifast-user` mới có syscall wrapper, chưa thay chương trình assembly;
-  `vifast-elf` đã parse/host-test nhưng chưa nạp root; chưa có boot info page,
+  root Rust đã nạp từ ELF; chưa có boot info page,
   ABI encode/decode đầy đủ, shared memory.
 - VFS đầy đủ (block device, cây thư mục, quyền, mount, pager, FS bền vững).
 - Driver, mạng, GPU, compositor, ViFastKey.

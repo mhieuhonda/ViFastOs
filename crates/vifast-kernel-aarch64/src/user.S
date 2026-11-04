@@ -22,136 +22,6 @@ user_entry_fault3:
     b user_thread_fault3
     .balign 16
 
-    .globl user_root
-user_root:
-    mov x8, #9
-    mov x0, #2
-    mov x1, #2
-    mov x2, #4
-    svc #0
-    mov x8, #9
-    mov x0, #2
-    mov x1, #1
-    mov x2, #5
-    svc #0
-    mov x8, #9
-    mov x0, #2
-    mov x1, #1
-    mov x2, #6
-    svc #0
-    mov x8, #9
-    mov x0, #2
-    mov x1, #3
-    mov x2, #7
-    svc #0
-    mov x8, #9
-    mov x0, #2
-    mov x1, #3
-    mov x2, #8
-    svc #0
-    mov x8, #9
-    mov x0, #2
-    mov x1, #1
-    mov x2, #9
-    svc #0
-    mov x8, #9
-    mov x0, #2
-    mov x1, #1
-    mov x2, #10
-    svc #0
-    mov x8, #9
-    mov x0, #2
-    mov x1, #1
-    mov x2, #11
-    svc #0
-
-    mov x8, #10
-    mov x0, #4
-    mov x1, #5
-    mov x2, #1
-    mov x3, #1
-    svc #0
-    mov x8, #10
-    mov x0, #4
-    mov x1, #6
-    mov x2, #1
-    mov x3, #2
-    svc #0
-    mov x8, #10
-    mov x0, #1
-    mov x1, #6
-    mov x2, #2
-    mov x3, #2
-    svc #0
-    mov x8, #10
-    mov x0, #3
-    mov x1, #6
-    mov x2, #3
-    mov x3, #2
-    svc #0
-    mov x8, #10
-    mov x0, #7
-    mov x1, #6
-    mov x2, #5
-    mov x3, #11
-    svc #0
-
-    mov x8, #15
-    mov x0, #5
-    adr x1, user_thread_a
-    ldr x2, ={SERVER_STACK_TOP}
-    mov x3, {SERVER_VSPACE_SLOT}
-    mov x4, #5
-    svc #0
-    mov x8, #15
-    mov x0, #6
-    adr x1, user_thread_b
-    ldr x2, ={CLIENT_STACK_TOP}
-    mov x3, #1
-    mov x4, #5
-    svc #0
-    mov x8, #16
-    mov x0, #5
-    svc #0
-    mov x8, #16
-    mov x0, #6
-    svc #0
-    mov x8, #15
-    mov x0, #9
-    adr x1, user_thread_fault
-    ldr x2, ={FAULT1_STACK_TOP}
-    mov x3, #1
-    mov x4, #6
-    svc #0
-    mov x8, #16
-    mov x0, #9
-    svc #0
-    mov x8, #15
-    mov x0, #10
-    adr x1, user_thread_fault2
-    ldr x2, ={FAULT2_STACK_TOP}
-    mov x3, #1
-    mov x4, #6
-    svc #0
-    mov x8, #16
-    mov x0, #10
-    svc #0
-    mov x8, #15
-    mov x0, #11
-    adr x1, user_thread_fault3
-    ldr x2, ={FAULT3_STACK_TOP}
-    mov x3, #1
-    mov x4, #6
-    svc #0
-    mov x8, #16
-    mov x0, #11
-    svc #0
-    mov x8, #6
-    mov x0, #8
-    svc #0
-1:
-    b 1b
-
     .globl user_thread_fault
 user_thread_fault:
     mov x8, #32
@@ -180,7 +50,9 @@ user_thread_fault3:
     adr x0, user_isolation_msg
     mov x1, #10
     svc #0
-    ldr x1, ={SERVER_STACK_BASE}
+    mov x1, #0x10
+    lsl x1, x1, #32
+    add x1, x1, #0x2000
     str xzr, [x1]
 1:
     b 1b

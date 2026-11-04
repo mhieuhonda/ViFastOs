@@ -120,7 +120,9 @@ Script chạy:
 - `ViFastOS ramfs`;
 - `ViFastOS write`;
 - `Reply OK`;
-- `USER FAULT` ít nhất 3 lần, gồm fault3 ghi stack server;
+- đúng 3 `USER FAULT`, có `addr=0x80000000` và `addr=0x1000002000`;
+- `ROOT RUST` và `ROOT READY` mỗi chuỗi đúng 1 lần, trước `Server`/`Client`;
+- không có `ROOT PANIC`;
 - `Isolation`;
 - `ROOT SWITCH n` với n > 1;
 - `Zero OK`;

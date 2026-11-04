@@ -20,16 +20,12 @@ pub const DEFAULT_PAGE_SIZE: u64 = 4096;
 pub mod user_layout {
     pub const CODE_VA: usize = 0x0000_0010_0000_0000;
     pub const DATA_VA: usize = CODE_VA + 0xa000;
-    pub const STACK_A_TOP: usize = CODE_VA + 0x5000;
-    pub const STACK_B_TOP: usize = CODE_VA + 0x9000;
     pub const STACK_BASE: usize = CODE_VA + 0x1000;
     pub const STACK_LEN: usize = 0x8000;
 
     /// Per-thread stack tops used by the bootstrap user image.  The layout is
     /// deliberately disjoint: the server page at +0x2000 is not mapped in the
     /// root VSpace so the isolation test can fault on it.
-    pub const ROOT_STACK_BASE: usize = CODE_VA + 0x4000;
-    pub const ROOT_STACK_TOP: usize = CODE_VA + 0x5000;
     pub const SERVER_STACK_BASE: usize = CODE_VA + 0x2000;
     pub const SERVER_STACK_TOP: usize = CODE_VA + 0x3000;
     pub const CLIENT_STACK_BASE: usize = CODE_VA + 0x8000;

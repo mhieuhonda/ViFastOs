@@ -13,8 +13,6 @@ pub struct Aarch64Platform;
 
 pub const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
 pub const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
-pub const USER_STACK_A_TOP: usize = vifast_abi::user_layout::STACK_A_TOP;
-pub const USER_STACK_B_TOP: usize = vifast_abi::user_layout::STACK_B_TOP;
 const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
 const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
 const USER_SPSR: u64 = 0x340;
@@ -365,13 +363,7 @@ impl Platform for Aarch64Platform {
 
     const USER_CODE_VA: usize = USER_CODE_VA;
     const USER_DATA_VA: usize = USER_DATA_VA;
-
-    fn stack_a_top() -> usize {
-        USER_STACK_A_TOP
-    }
-    fn stack_b_top() -> usize {
-        USER_STACK_B_TOP
-    }
+    const ELF_MACHINE: u16 = vifast_pte::aarch64::ELF_MACHINE;
 
     fn init_platform(_info: PlatformInfo) {
         unsafe {
@@ -466,6 +458,13 @@ impl Platform for Aarch64Platform {
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
+            || page_in_range(
+                ptr,
+                out.len(),
+                vifast_abi::user_layout::ROOT_ELF_BASE,
+                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
+                    - vifast_abi::user_layout::ROOT_ELF_BASE,
+            )
         {
             unsafe {
                 if pan_supported() {
@@ -488,6 +487,13 @@ impl Platform for Aarch64Platform {
         }
         if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
+            || page_in_range(
+                ptr,
+                input.len(),
+                vifast_abi::user_layout::ROOT_ELF_BASE,
+                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
+                    - vifast_abi::user_layout::ROOT_ELF_BASE,
+            )
         {
             unsafe {
                 if pan_supported() {
