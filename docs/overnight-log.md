@@ -12,6 +12,7 @@
 - `49e7b1f` — 8.1b IPC buffer demo end-to-end.
 - `82c9c11` — S2 x86 kernel data NX.
 - `ea3793b` — 8.4 Rust server/client ELF modules.
+- `6963f58` — 8.4b runtime boot modules via BootInfo.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -21,9 +22,9 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## CẦN QUYẾT ĐỊNH
 
-- 8.4 core đã có: server/client là crate Rust, build thành ELF riêng, root nạp
-  bằng `vifast-elf`/`FrameWrite` vào VSpace riêng. Chưa có BootInfo module list
-  để runtime cấp ELF thay vì nhúng bytes trong root image.
+- 8.4/8.4b đã có: server/client là crate Rust, build thành ELF riêng; runtime
+  cấp module qua BootInfo, map bytes read-only vào root VSpace; root parse và nạp
+  vào VSpace riêng bằng `FrameWrite`.
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -173,6 +174,20 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## 8.4b — Runtime boot modules qua BootInfo
+
+- Commit `6963f58 refactor: supply rust modules through bootinfo`.
+- BootInfo tăng 32 → 64 byte, thêm `server/client_elf_va/len`. Runtime cấp
+  Frame từ data Untyped, copy bytes ELF bằng kernel, map read-only vào
+  `ROOT_MODULE_SERVER_VA`/`ROOT_MODULE_CLIENT_VA`, rồi root parse các slice này.
+- Root ELF không còn `include_bytes!` module; root ELF giảm còn RISC-V 12880 B,
+  AArch64 12704 B, x86 16744 B. Build module ELF trước, kernel nhận env
+  `VIFAST_SERVER_ELF`/`VIFAST_CLIENT_ELF`.
+- Allowlist user-copy mở module staging window; `FrameWrite` copy bytes vào Frame
+  con, không cần mapping staging phụ.
+- QEMU 3/3 PASS ×3; `vifast-kernel` 79/79, PTE 11/11, ELF 17/17; data Untyped
+  33/34 trang, 18/48 object; RISC-V headroom 569328 B.
 
 ## S1 — syscall fuzz trên 3 PTE format
 
