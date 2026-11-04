@@ -156,7 +156,10 @@ pub struct VSpace {
 - `Cap` có `id: u64` tăng đơn điệu; `parent` là `CapRef { addr, id }`.
 - `Object.creator` lưu `CapRef`; revoke chỉ khớp cả slot và id, nên slot tái
   sử dụng không kế thừa creator cũ.
-- `delete_cap` từ chối xoá Untyped cap khi còn object hoặc cap con sống.
+- `delete_cap` trả `KResult`; từ chối bằng `IllegalOperation` khi Untyped cap còn
+  object hoặc cap con sống.
+- Object có creator đã chết (TCB bị hủy) được coi là orphan và được thu hồi
+  khi revoke owner Untyped.
 - `PageTable { root, mapped }`; level nằm trong mapping do PageTableMap gán, và không thay entry 0 dùng chung.
 - `next_va` dùng để cấp VA tuần tự trong range `[base, end)`.
 

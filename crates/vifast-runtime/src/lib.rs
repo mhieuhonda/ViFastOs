@@ -71,6 +71,9 @@ pub trait Platform: Arch + Console {
     /// Verify that trap entry, kernel stacks, descriptor tables, kernel
     /// storage and MMIO all live in KERNEL_SHARED_SLOTS before switching roots.
     fn check_kernel_mappings(root_pa: u64) -> bool;
+    /// End of the boot kernel image/stack in physical memory, or 0 when the
+    /// platform's linker layout does not expose such a symbol.
+    fn kernel_image_end() -> u64;
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError>;
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError>;
 
@@ -168,6 +171,11 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     let data = A::data_page();
     let metadata = A::metadata_page();
     let (accessible_lo, accessible_hi) = A::page_table_ops().kernel_accessible_range();
+    let image_end = A::kernel_image_end();
+    if image_end != 0 && (image_end < accessible_lo || image_end > accessible_hi) {
+        vifast_kernel::klog!(A, "KERNEL IMAGE OUTSIDE KERNEL ACCESSIBLE RANGE");
+        A::exit(1);
+    }
     let accessible = |base: usize, len: usize| {
         accessible_lo >= accessible_hi
             || (base as u64 >= accessible_lo

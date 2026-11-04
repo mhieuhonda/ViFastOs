@@ -69,6 +69,8 @@ File: `crates/vifast-platform-riscv64/src/platform.rs`.
 - Sv39, root tĩnh `ROOT`.
 - Kernel identity map `0x8000_0000..0x803f_ffff`.
 - UART `0x1000_0000` map 2 MiB.
+- Kernel accessible chỉ khoảng 4 MiB (`0x8000_0000..0x8040_0000`); kernel image
+  và metadata/data Untyped phải nằm trọn trong dải này.
 - User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
   boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
 - Code: `R|X|U` (không W).

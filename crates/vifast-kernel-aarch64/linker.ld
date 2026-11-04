@@ -29,6 +29,7 @@ SECTIONS
         __stack_bottom = .;
         . += 0x40000;
         __stack_top = .;
+        __kernel_end = .;
     }
 
     /DISCARD/ : {

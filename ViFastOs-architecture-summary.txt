@@ -37,7 +37,8 @@ suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTabl
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
 range + table_span), PageTableMap level động, retype VSpace/install_kernel,
-creator cap, KERNEL_SHARED_SLOTS, kernel accessible range, thứ tự revoke
+creator CapRef id, delete cap an toàn, KERNEL_SHARED_SLOTS, kernel accessible
+range, thứ tự revoke
 Frame → PageTable sâu → VSpace, vifast-pte host test, SMEP/SMAP/PAN/sscratch
 hardening và vifast-user.
 
@@ -60,7 +61,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 36/36 PASS
+- cargo test -p vifast-kernel: 37/37 PASS
 - cargo test -p vifast-pte: 9/9 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
@@ -246,18 +247,18 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 549 dòng
-- AArch64: 664 dòng
-- x86_64: 781 dòng
+- RISC-V: 554 dòng
+- AArch64: 669 dòng
+- x86_64: 785 dòng
 
 runtime:
-- 429 dòng
+- 437 dòng
 
 vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 3666 dòng, không còn dependency vifast-arch
+- 3729 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597616 bytes
@@ -669,7 +670,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 36 test `vifast-kernel` + 9 test `vifast-pte`:
+Host test hiện có 37 test `vifast-kernel` + 9 test `vifast-pte`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -795,7 +796,7 @@ Exit code:
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 597616 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 36 test `vifast-kernel` + 9 test `vifast-pte`.
+- Host test hiện có 37 test `vifast-kernel` + 9 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -812,6 +813,8 @@ Exit code:
 - Chưa có driver network/GPU/input.
 - Chưa có compositor, ViFastKey.
 - Chưa có formal verification/fuzz diện rộng.
+- RISC-V kernel accessible chỉ 4 MiB (0x8000_0000..0x8040_0000); runtime/assert
+  kiểm tra kernel image + metadata/data Untyped nằm trọn trong dải này.
 - x86 identity map 0..1 GiB; nếu OVMF/RAM vượt mốc này phải lấy memory map.
 - Kernel x86 identity map chưa đặt NX cho data.
 - Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
@@ -911,11 +914,15 @@ E. Desktop / Space
 25. User VA range thật nằm trong vifast-pte: 64..128 GiB, không giao kernel
     identity; RISC-V nằm trong nửa thấp Sv39. x86/AArch64 chỉ dùng chung các
     slot kernel trong PDPT/L1; PML4/L0 và PDPT/L1 là riêng mỗi VSpace.
-26. Object lưu creator cap; revoke Untyped copy chỉ hủy object tạo qua cap đó
-    hoặc cap con. Chỉ reset bump khi không còn object từ bất kỳ cap nào.
-27. Runtime assert Untyped nằm trong kernel_accessible_range(); boot check
-    trap entry/stack/IST/GDT/IDT/VBAR/KERNEL_STORAGE/MMIO nằm trong
-    KERNEL_SHARED_SLOTS.
+26. Object lưu creator = CapRef { addr, id }; revoke chỉ khớp cap id chính xác,
+    hủy object tạo qua cap đó hoặc cap con. Object có creator đã chết (TCB bị
+    hủy) được coi là orphan và được thu hồi khi revoke owner Untyped.
+    delete Untyped cap bị từ chối khi còn object/cap con. Chỉ reset bump khi
+    không còn object từ bất kỳ cap nào.
+27. Runtime assert Untyped nằm trong kernel_accessible_range(). Boot check
+    walk leaf thật từ root, kiểm tra non-user, X cho trap entry, W cho
+    stack/storage và toàn bộ trang kernel accessible; chạy lại trên root mới
+    trước lần switch root đầu tiên.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

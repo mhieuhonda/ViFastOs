@@ -1008,9 +1008,9 @@ impl Kernel {
             .and_then(|cap| *cap)
     }
 
-    pub fn delete_cap(&mut self, tcb: ObjRef, slot: u8) -> Option<Cap> {
+    pub fn delete_cap(&mut self, tcb: ObjRef, slot: u8) -> KResult<Cap> {
         let addr = SlotAddr { tcb, slot };
-        let cap = self.cap_at(addr)?;
+        let cap = self.cap_at(addr).ok_or(KError::InvalidCap)?;
         if cap.ty == ObjType::Untyped {
             let target = CapRef { addr, id: cap.id };
             let has_live_objects = self.objs.iter().any(|object| {
@@ -1032,10 +1032,12 @@ impl Kernel {
                     })
                 });
             if has_live_objects || has_child_caps {
-                return None;
+                return Err(KError::IllegalOperation);
             }
         }
-        self.tcb_mut(tcb)?.cspace.get_mut(slot as usize)?.take()
+        self.tcb_mut(tcb)
+            .and_then(|table| table.cspace.get_mut(slot as usize)?.take())
+            .ok_or(KError::InvalidCap)
     }
 
     pub fn copy_cap(
@@ -1057,6 +1059,11 @@ impl Kernel {
             id: source.id,
         });
         self.install_cap(dst_tcb, dst_slot, derived)
+    }
+
+    fn creator_alive(&self, creator: CapRef) -> bool {
+        self.cap_at(creator.addr)
+            .is_some_and(|cap| cap.id == creator.id)
     }
 
     fn cap_ref_is_descendant(&self, creator: CapRef, target: CapRef) -> bool {
@@ -1544,9 +1551,9 @@ impl Kernel {
                 if self.objs[i].owner != Some(target_cap.obj) {
                     continue;
                 }
-                let created_here = self.objs[i]
-                    .creator
-                    .is_some_and(|creator| self.cap_ref_is_descendant(creator, target_ref));
+                let created_here = self.objs[i].creator.is_some_and(|creator| {
+                    self.cap_ref_is_descendant(creator, target_ref) || !self.creator_alive(creator)
+                });
                 if created_here {
                     let r = ObjRef {
                         index: i as u8,
@@ -2374,7 +2381,7 @@ mod tests {
                 error: KError::WrongType
             }
         );
-        assert!(kernel.delete_cap(root, 1).is_some());
+        assert!(kernel.delete_cap(root, 1).is_ok());
         assert_eq!(
             kernel.user_syscall(root, SyscallId::Send as u64, 1, 0, 0, 0, 0, 0),
             UserAction::Return {
@@ -3341,15 +3348,15 @@ mod tests {
                 Some(SlotAddr { tcb: root, slot: 1 }),
             )
             .unwrap();
-        assert!(kernel.delete_cap(root, 1).is_none());
+        assert_eq!(kernel.delete_cap(root, 1), Err(KError::IllegalOperation));
         assert!(kernel.get(frame).is_some());
         kernel.copy_cap(root, 1, client, 1, Rights::ALL, 0).unwrap();
-        assert!(kernel.delete_cap(root, 1).is_none());
+        assert_eq!(kernel.delete_cap(root, 1), Err(KError::IllegalOperation));
 
         kernel.revoke_cap(root, 1).unwrap();
         assert!(kernel.get(frame).is_none());
         // After revoke there are neither objects nor child caps.
-        assert!(kernel.delete_cap(root, 1).is_some());
+        assert!(kernel.delete_cap(root, 1).is_ok());
     }
 
     #[test]
@@ -3362,13 +3369,69 @@ mod tests {
             .install_cap(root, 1, Cap::new(first, ObjType::Endpoint, Rights::ALL))
             .unwrap();
         let first_id = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().id;
-        assert!(kernel.delete_cap(root, 1).is_some());
+        assert!(kernel.delete_cap(root, 1).is_ok());
         kernel
             .install_cap(root, 1, Cap::new(second, ObjType::Endpoint, Rights::ALL))
             .unwrap();
         let second_id = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().id;
         assert_ne!(first_id, second_id);
         assert!(second_id > first_id);
+    }
+
+    #[test]
+    fn revoke_owner_collects_orphaned_creator_objects() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let data_untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        let meta_untyped = kernel
+            .create_untyped_with_limit(0x200_0000, 0x2000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(data_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(meta_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        let client = kernel
+            .retype_as(
+                meta_untyped,
+                ObjType::Tcb,
+                Some(SlotAddr { tcb: root, slot: 2 }),
+            )
+            .unwrap();
+        kernel.copy_cap(root, 1, client, 1, Rights::ALL, 0).unwrap();
+        let client_frame = kernel
+            .retype_as(
+                data_untyped,
+                ObjType::Frame,
+                Some(SlotAddr {
+                    tcb: client,
+                    slot: 1,
+                }),
+            )
+            .unwrap();
+
+        // Destroying the client TCB also removes its cspace (and therefore
+        // the only cap that created the frame from data_untyped).
+        kernel.revoke_cap(root, 2).unwrap();
+        assert!(kernel.get(client).is_none());
+        assert!(kernel.get(client_frame).is_some());
+
+        // Revoking the owner Untyped must still collect the orphaned frame.
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(client_frame).is_none());
+        assert_eq!(kernel.untyped(data_untyped).unwrap().objects, 0);
+        assert_eq!(kernel.untyped(data_untyped).unwrap().bump, 0);
     }
 
     #[test]

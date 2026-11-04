@@ -452,6 +452,10 @@ impl Platform for Aarch64Platform {
         &PAGE_OPS
     }
 
+    fn kernel_image_end() -> u64 {
+        core::ptr::addr_of!(__kernel_end) as u64
+    }
+
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
             && kernel_leaf_ok(
@@ -628,6 +632,7 @@ extern "C" fn aarch64_kernel_fault() -> ! {
 
 extern "C" {
     static vector_table: u8;
+    static __kernel_end: u8;
     fn secondary_entry();
 }
 

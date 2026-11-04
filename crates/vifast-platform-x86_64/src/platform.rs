@@ -598,6 +598,10 @@ impl Platform for X86Platform {
         &PAGE_OPS
     }
 
+    fn kernel_image_end() -> u64 {
+        0
+    }
+
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
             && kernel_leaf_ok(root_pa, unsafe { x86_exception_table[0] }, false, true)

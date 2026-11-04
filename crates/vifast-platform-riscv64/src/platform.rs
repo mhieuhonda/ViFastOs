@@ -370,6 +370,10 @@ impl Platform for RiscvPlatform {
         &PAGE_OPS
     }
 
+    fn kernel_image_end() -> u64 {
+        core::ptr::addr_of!(__kernel_end) as u64
+    }
+
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
             && kernel_leaf_ok(root_pa, trap_entry as *const () as u64, false, true)
@@ -512,6 +516,7 @@ extern "C" fn riscv_kernel_trap() -> ! {
 extern "C" {
     fn trap_entry();
     fn secondary_entry();
+    static __kernel_end: u8;
 }
 
 #[no_mangle]
