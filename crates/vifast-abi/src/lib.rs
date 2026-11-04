@@ -134,6 +134,9 @@ pub const OBJ_ENDPOINT_BYTES: usize = 256;
 pub const OBJ_NOTIFICATION_BYTES: usize = 128;
 pub const OBJ_TCB_BYTES: usize = 4096;
 pub const OBJ_METADATA_ALIGN: usize = 16;
+pub const OBJ_IOMMU_BYTES: usize = 1024;
+/// Base of the software IOMMU IOVA window used by the portable model.
+pub const IOMMU_IOVA_BASE: u64 = 0x1_0000_0000;
 pub const LABEL_FAULT: u64 = 0xFFFF_0001;
 pub const LABEL_NOTIFICATION: u64 = 0xFFFF_0002;
 /// Sentinel used instead of `Option<u64>` in the wire message.
@@ -312,6 +315,7 @@ pub enum ObjType {
     VSpace = 6,
     PageTable = 7,
     SchedContext = 8,
+    Iommu = 9,
 }
 
 /// Thread states are exposed to the ABI for introspection and fault reports.

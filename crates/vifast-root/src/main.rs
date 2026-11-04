@@ -32,6 +32,7 @@ const CLIENT_VSPACE_OK: &[u8] = b"CLIENT VSPACE OK\n";
 const FAULT_EP_OK: &[u8] = b"FAULT EP OK addr=0x";
 const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
 const MODULES_OK: &[u8] = b"RUST MODULES OK\n";
+const IOMMU_OK: &[u8] = b"IOMMU OK\n";
 const MODULE_WINDOW: u64 = 0x10_0000;
 #[cfg(target_arch = "riscv64")]
 const USER_ELF_MACHINE: u16 = 243;
@@ -322,6 +323,17 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         Rights::READ | Rights::WRITE,
         &mut slots,
     );
+
+    let iommu = slots.alloc();
+    retype(data_untyped, ObjType::Iommu, iommu);
+    check(vifast_user::iommu_map(
+        iommu,
+        vifast_abi::IOMMU_IOVA_BASE,
+        server_buffer_frame,
+        (Rights::READ | Rights::WRITE).0,
+    ));
+    check(vifast_user::iommu_unmap(iommu, vifast_abi::IOMMU_IOVA_BASE));
+    write(IOMMU_OK);
 
     let server_bytes = unsafe {
         core::slice::from_raw_parts(

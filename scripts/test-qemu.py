@@ -94,6 +94,7 @@ def run_qemu(
         and output.count("VFS SERVER OK") == 1
         and output.count("VFS OK") == 1
         and output.count("VFS STAT OK") == 1
+        and output.count("IOMMU OK") == 1
         and "VFS BAD" not in output
         and len(faults) == 4
         and 0x8000_0000 in faults

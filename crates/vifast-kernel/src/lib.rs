@@ -273,6 +273,62 @@ impl Kernel {
         self.root
     }
 
+    /// Map a Frame into a software IOMMU domain.  DMA mappings are
+    /// read/write only (never executable) and use the domain's IOVA window.
+    pub fn iommu_map(
+        &mut self,
+        domain: ObjRef,
+        frame_obj: ObjRef,
+        iova: u64,
+        rights: Rights,
+    ) -> KResult<IommuMapping> {
+        let frame = *self.frame(frame_obj).ok_or(KError::WrongType)?;
+        let allowed = Rights::READ | Rights::WRITE;
+        if rights.is_empty() || !allowed.contains(rights) {
+            return Err(KError::InvalidArg);
+        }
+        if frame.pa as u64 % DEFAULT_PAGE_SIZE != 0
+            || (frame.size as u64) < DEFAULT_PAGE_SIZE
+            || iova % DEFAULT_PAGE_SIZE != 0
+            || iova < IOMMU_IOVA_BASE
+            || iova.saturating_add(DEFAULT_PAGE_SIZE) > IOMMU_IOVA_BASE.saturating_add(0x4000_0000)
+        {
+            return Err(KError::Alignment);
+        }
+        if rights.contains(Rights::WRITE) && frame.mapped_x != 0 {
+            return Err(KError::NoRights);
+        }
+        let mapping = IommuMapping {
+            iova,
+            pa: frame.pa as u64,
+            len: DEFAULT_PAGE_SIZE,
+            rights,
+            frame: frame_obj,
+        };
+        self.iommu_mut(domain)
+            .ok_or(KError::WrongType)?
+            .insert(mapping)?;
+        Ok(mapping)
+    }
+
+    pub fn iommu_unmap(&mut self, domain: ObjRef, iova: u64) -> KResult<IommuMapping> {
+        self.iommu_mut(domain)
+            .ok_or(KError::WrongType)?
+            .remove(iova)
+    }
+
+    fn unmap_iommu_frame_everywhere(&mut self, frame: ObjRef) {
+        for index in 0..MAX_OBJECTS {
+            let obj = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if let Some(domain) = self.iommu_mut(obj) {
+                domain.remove_frame(frame);
+            }
+        }
+    }
+
     pub fn set_page_table_ops(&mut self, ops: &'static dyn PageTableOps) {
         self.page_table_ops = Some(ops);
     }
@@ -636,6 +692,20 @@ impl Kernel {
         }
     }
 
+    pub fn iommu(&self, r: ObjRef) -> Option<&IommuDomain> {
+        match self.get(r)?.kind {
+            Kind::Iommu(ref domain) => Some(domain),
+            _ => None,
+        }
+    }
+
+    pub fn iommu_mut(&mut self, r: ObjRef) -> Option<&mut IommuDomain> {
+        match self.get_mut(r)?.kind {
+            Kind::Iommu(ref mut domain) => Some(domain),
+            _ => None,
+        }
+    }
+
     pub fn untyped(&self, r: ObjRef) -> Option<&Untyped> {
         match self.get(r)?.kind {
             Kind::Untyped(ref untyped) => Some(untyped),
@@ -746,6 +816,11 @@ impl Kernel {
                 let charge = page.checked_mul(vspace_pages).ok_or(KError::OutOfMemory)?;
                 (Kind::Free, charge, page)
             }
+            ObjType::Iommu => (
+                Kind::Iommu(IommuDomain::default()),
+                OBJ_IOMMU_BYTES,
+                OBJ_METADATA_ALIGN,
+            ),
             _ => return Err(KError::NotImplemented),
         };
         let unaligned = base.checked_add(bump).ok_or(KError::OutOfMemory)?;
@@ -791,6 +866,8 @@ impl Kernel {
             space.aux_pa = aux_pa;
             space.asid = self.take_asid();
             Kind::VSpace(space)
+        } else if ty == ObjType::Iommu {
+            Kind::Iommu(IommuDomain::default())
         } else {
             kind
         };
@@ -1644,6 +1721,43 @@ impl Kernel {
                         physical_count += 1;
                     }
                 }
+                Kind::Iommu(ref domain) => {
+                    for (index, mapping) in domain.mappings.iter().enumerate() {
+                        let Some(mapping) = mapping else { continue };
+                        if mapping.len != DEFAULT_PAGE_SIZE
+                            || mapping.iova % DEFAULT_PAGE_SIZE != 0
+                            || mapping.pa % DEFAULT_PAGE_SIZE != 0
+                            || mapping.iova < IOMMU_IOVA_BASE
+                            || mapping.iova.saturating_add(mapping.len)
+                                > IOMMU_IOVA_BASE.saturating_add(0x4000_0000)
+                            || mapping.rights.is_empty()
+                            || !(Rights::READ | Rights::WRITE).contains(mapping.rights)
+                        {
+                            return Err(KError::IllegalOperation);
+                        }
+                        let frame_index = mapping.frame.index as usize;
+                        if frame_index >= MAX_OBJECTS {
+                            return Err(KError::ObjectDestroyed);
+                        }
+                        let frame_object = &self.objs[frame_index];
+                        if frame_object.is_free() || frame_object.gen != mapping.frame.gen {
+                            return Err(KError::ObjectDestroyed);
+                        }
+                        let Kind::Frame(ref frame) = frame_object.kind else {
+                            return Err(KError::WrongType);
+                        };
+                        if frame.pa as u64 != mapping.pa || frame.size < mapping.len as usize {
+                            return Err(KError::WrongType);
+                        }
+                        for other in domain.mappings.iter().skip(index + 1).flatten() {
+                            if mapping.iova < other.iova.saturating_add(other.len)
+                                && other.iova < mapping.iova.saturating_add(mapping.len)
+                            {
+                                return Err(KError::AlreadyMapped);
+                            }
+                        }
+                    }
+                }
                 Kind::Untyped(ref untyped) => {
                     if untyped.bump > untyped.size
                         || untyped
@@ -2478,7 +2592,10 @@ impl Kernel {
             }
             Kind::Endpoint(_) => self.destroy_endpoint(obj),
             Kind::Notification(_) => self.destroy_notification(obj),
-            Kind::Frame(frame) => self.unmap_frame_everywhere(frame),
+            Kind::Frame(frame) => {
+                self.unmap_frame_everywhere(frame);
+                self.unmap_iommu_frame_everywhere(obj);
+            }
             Kind::PageTable(_) => self.detach_page_table(obj),
             Kind::VSpace(_) => {
                 self.destroy_vspace_page_tables(obj);
@@ -2495,7 +2612,7 @@ impl Kernel {
                     }
                 }
             }
-            Kind::Untyped(_) | Kind::Free => {}
+            Kind::Iommu(_) | Kind::Untyped(_) | Kind::Free => {}
         }
         self.remove_caps_to(obj);
         if let Some(object) = self.get_mut(obj) {
@@ -3112,6 +3229,52 @@ impl Kernel {
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
+            n if n == SyscallId::IoMap as u64 => {
+                let domain = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Iommu),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let frame = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a2).unwrap_or(0),
+                    Some(ObjType::Frame),
+                    Rights::READ,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let rights = Rights((a3 as u8) & (Rights::READ | Rights::WRITE).0);
+                match self.iommu_map(domain.obj, frame.obj, a1, rights) {
+                    Ok(mapping) => UserAction::Return {
+                        value: mapping.iova,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::IoUnmap as u64 => {
+                let domain = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Iommu),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.iommu_unmap(domain.obj, a1) {
+                    Ok(mapping) => UserAction::Return {
+                        value: mapping.iova,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
             n if n == SyscallId::Retype as u64 => {
                 let untyped_slot = slot_arg(a0).unwrap_or(0);
                 let untyped =
@@ -3127,6 +3290,7 @@ impl Kernel {
                     n if n == ObjType::Frame as u64 => ObjType::Frame,
                     n if n == ObjType::PageTable as u64 => ObjType::PageTable,
                     n if n == ObjType::VSpace as u64 => ObjType::VSpace,
+                    n if n == ObjType::Iommu as u64 => ObjType::Iommu,
                     n if n == ObjType::Untyped as u64 => ObjType::Untyped,
                     _ => {
                         return UserAction::Return {
@@ -4102,6 +4266,60 @@ mod tests {
         assert_ne!(second_asid, 0);
         assert_ne!(first_asid, second_asid);
         assert_eq!(kernel.current_asid(kernel.root().unwrap()), None);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn iommu_domain_maps_and_rejects_invalid_dma() {
+        let mut kernel = Kernel::new();
+        let untyped = kernel
+            .create_untyped_with_limit(0x200_0000, 0x4000, 4096, 8)
+            .unwrap();
+        let domain = kernel.retype(untyped, ObjType::Iommu).unwrap();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let mapping = kernel
+            .iommu_map(domain, frame, IOMMU_IOVA_BASE, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert_eq!(mapping.pa, 0x9000);
+        assert_eq!(
+            kernel.iommu_map(domain, frame, IOMMU_IOVA_BASE, Rights::READ),
+            Err(KError::AlreadyMapped)
+        );
+        assert_eq!(
+            kernel.iommu_map(domain, frame, IOMMU_IOVA_BASE + 0x1000, Rights::EXEC),
+            Err(KError::InvalidArg)
+        );
+        assert!(kernel
+            .iommu(domain)
+            .unwrap()
+            .find(IOMMU_IOVA_BASE)
+            .is_some());
+        assert_eq!(kernel.iommu_unmap(domain, IOMMU_IOVA_BASE), Ok(mapping));
+        assert!(kernel
+            .iommu(domain)
+            .unwrap()
+            .find(IOMMU_IOVA_BASE)
+            .is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn destroying_frame_removes_dma_mapping() {
+        let mut kernel = Kernel::new();
+        let untyped = kernel
+            .create_untyped_with_limit(0x210_0000, 0x4000, 4096, 8)
+            .unwrap();
+        let domain = kernel.retype(untyped, ObjType::Iommu).unwrap();
+        let frame = kernel.create_frame(0xa000, 4096).unwrap();
+        kernel
+            .iommu_map(domain, frame, IOMMU_IOVA_BASE, Rights::READ)
+            .unwrap();
+        kernel.destroy_object(frame).unwrap();
+        assert!(kernel
+            .iommu(domain)
+            .unwrap()
+            .find(IOMMU_IOVA_BASE)
+            .is_none());
         assert!(kernel.check_invariants().is_ok());
     }
 

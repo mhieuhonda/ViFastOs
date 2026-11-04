@@ -11,6 +11,7 @@ pub const MAX_TCBS: usize = 16;
 pub const MAX_CAPS: usize = 64;
 pub const MAX_QUEUE: usize = 8;
 pub const MAX_MAPPINGS: usize = 32;
+pub const MAX_IOMMU_MAPPINGS: usize = 32;
 pub const MAX_FDS: usize = 8;
 pub const MAX_PRIORITY: u8 = 15;
 const _: () = assert!(MAX_OBJECTS <= 256);
@@ -216,6 +217,93 @@ impl Default for Mapping {
             len: 0,
             rights: Rights::NONE,
             frame: ObjRef::invalid(),
+        }
+    }
+}
+
+/// One IOMMU/DMA mapping.  The portable model owns the reverse map; a
+/// hardware IOMMU driver can consume the same entries later.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IommuMapping {
+    pub iova: u64,
+    pub pa: u64,
+    pub len: u64,
+    pub rights: Rights,
+    pub frame: ObjRef,
+}
+
+impl Default for IommuMapping {
+    fn default() -> Self {
+        Self {
+            iova: 0,
+            pa: 0,
+            len: 0,
+            rights: Rights::NONE,
+            frame: ObjRef::invalid(),
+        }
+    }
+}
+
+/// A software IOMMU domain.  It is deliberately independent of a VSpace:
+/// device-visible IOVAs are not user VAs and are validated separately.
+#[derive(Clone, Copy, Debug)]
+pub struct IommuDomain {
+    pub mappings: [Option<IommuMapping>; MAX_IOMMU_MAPPINGS],
+}
+
+impl Default for IommuDomain {
+    fn default() -> Self {
+        Self {
+            mappings: [None; MAX_IOMMU_MAPPINGS],
+        }
+    }
+}
+
+impl IommuDomain {
+    pub fn find(&self, iova: u64) -> Option<IommuMapping> {
+        self.mappings
+            .iter()
+            .flatten()
+            .find(|mapping| iova >= mapping.iova && iova < mapping.iova.saturating_add(mapping.len))
+            .copied()
+    }
+
+    pub fn contains(&self, iova: u64, len: u64) -> bool {
+        self.mappings.iter().flatten().any(|mapping| {
+            iova < mapping.iova.saturating_add(mapping.len)
+                && mapping.iova < iova.saturating_add(len)
+        })
+    }
+
+    pub fn insert(&mut self, mapping: IommuMapping) -> KResult<()> {
+        if self.contains(mapping.iova, mapping.len) {
+            return Err(KError::AlreadyMapped);
+        }
+        for slot in self.mappings.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(mapping);
+                return Ok(());
+            }
+        }
+        Err(KError::OutOfMemory)
+    }
+
+    pub fn remove(&mut self, iova: u64) -> KResult<IommuMapping> {
+        for slot in self.mappings.iter_mut() {
+            if slot.is_some_and(|mapping| {
+                mapping.iova <= iova && iova < mapping.iova.saturating_add(mapping.len)
+            }) {
+                return slot.take().ok_or(KError::NotMapped);
+            }
+        }
+        Err(KError::NotMapped)
+    }
+
+    pub fn remove_frame(&mut self, frame: ObjRef) {
+        for slot in self.mappings.iter_mut() {
+            if slot.is_some_and(|mapping| mapping.frame == frame) {
+                *slot = None;
+            }
         }
     }
 }
@@ -440,6 +528,7 @@ pub enum Kind {
     Frame(Frame),
     VSpace(VSpace),
     PageTable(PageTable),
+    Iommu(IommuDomain),
 }
 
 impl Kind {
@@ -453,6 +542,7 @@ impl Kind {
             Kind::Frame(_) => Some(ObjType::Frame),
             Kind::VSpace(_) => Some(ObjType::VSpace),
             Kind::PageTable(_) => Some(ObjType::PageTable),
+            Kind::Iommu(_) => Some(ObjType::Iommu),
         }
     }
 }
