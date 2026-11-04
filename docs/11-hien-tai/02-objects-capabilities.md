@@ -128,11 +128,15 @@ thật, đặt `Kind::Free`, tăng `gen`, rồi reset `bump = 0`, `objects = 0`.
 pub struct Frame {
     pub pa: usize,
     pub size: usize,
+    pub mapped_w: u16,
+    pub mapped_x: u16,
 }
 ```
 
 Chỉ là metadata vật lý. Kernel không tự đọc/ghi nội dung frame trừ khi
-platform map nó hoặc copy user image.
+platform map nó hoặc copy user image. `mapped_w`/`mapped_x` đếm số leaf đang
+WRITE/EXEC của chính Frame object này; W^X được kiểm tra trên toàn bộ Frame,
+không chỉ một mapping, nên không thể map RW ở VA này rồi RX ở VA khác.
 
 ### VSpace
 
@@ -149,7 +153,8 @@ pub struct VSpace {
 ```
 
 - `root` là handle mờ với kernel: Sv39 root, TTBR0 root hoặc CR3.
-- `mappings` là reverse map để kiểm tra overlap/W^X/unmap; page table thật là nguồn sự thật.
+- `mappings` là reverse map để kiểm tra overlap/unmap và là nguồn tính
+  `Frame.mapped_w/mapped_x`; page table thật là nguồn sự thật của phần cứng.
 - `Cap` có `id: u64` tăng đơn điệu; `root: bool`; `parent` là `CapRef { addr, id }`.
   `root=true` chỉ do `install_cap` đặt cho Untyped khi parent=None lúc runtime boot;
   CapCopy, IPC và reparent giữ `root=false`.
@@ -171,8 +176,13 @@ pub struct Mapping {
     pub pa: u64,
     pub len: u64,
     pub rights: Rights,
+    pub frame: ObjRef,
 }
 ```
+
+`frame` trỏ đúng Frame object đã tạo leaf, nhờ đó bộ đếm W/X vẫn chính xác
+nếu hai Frame object cùng PA (điều này không được tạo bởi đường retype bình
+thường, nhưng invariant không phụ thuộc vào giả định đó).
 
 ## 5. Object lifecycle
 
@@ -189,7 +199,8 @@ Frame/TCB/Endpoint/Notification con, unmap Frame và tăng generation; ngoài
 - `current` phải `Running` và không queued;
 - cspace trỏ object sống, đúng type;
 - fd trỏ file còn tồn tại;
-- VSpace mapping đúng alignment, overlap, W^X;
+- VSpace mapping đúng alignment, overlap, có READ và không W+X trên một leaf;
+- `Frame.mapped_w/mapped_x` khớp chính xác số leaf W/X trong toàn bộ reverse map;
 - Frame/PageTable alignment;
 - Untyped bump không vượt size;
 - notification waiter còn sống.

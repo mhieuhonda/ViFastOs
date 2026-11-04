@@ -45,8 +45,15 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 
 ## 5. Frame map nhiều VSpace
 
-- Frame phải theo dõi **tất cả mapping** (hoặc mỗi mapping là một cap riêng).
+- Đã chọn reverse map nhiều mapping: mỗi `Mapping` lưu Frame object chính xác;
+  không dùng phương án mỗi mapping một Frame cap.
+- Frame giữ `mapped_w`/`mapped_x` là số leaf W/X trên toàn bộ các VSpace.
+  `FrameMap` từ chối W khi Frame đã có X và từ chối X khi Frame đã có W; như
+  vậy hai alias của cùng Frame không thể lách W^X.
+- Mapping bắt buộc có READ; mask rights rỗng/W-only/X-only trả `InvalidArg`.
 - Revoke phải unmap mọi nơi; đây là điều kiện cho IPC buffer ở 3c.
+- Revoke VSpace/PageTable, `FrameUnmap` và destroy Frame đều giảm bộ đếm.
+  `check_invariants()` đối chiếu `mapped_w`/`mapped_x` với reverse map.
 
 ## 6. Page table
 
@@ -67,6 +74,8 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
   unmap mapping của frame không sở hữu.
 - FrameMap kiểm tra quyền mapping ⊆ quyền Frame cap. Frame cap code user.S là
   READ|EXEC, không WRITE, nên không thể map code dùng chung thành RW.
+- 7.1b: W^X tính theo Frame, không theo từng mapping; đây là lớp bảo vệ bắt
+  buộc trước khi root nhận Frame code dùng chung ở 7.3/7.4.
 - Object có `creator: CapRef { addr, id }` để revoke Untyped copy không phá
   object của cap gốc; `delete_cap` từ chối khi còn object/cap con.
 - Kernel mapping check dùng walk leaf thật (non-user/X/W), không chỉ kiểm tra slot.
@@ -115,6 +124,7 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 5. Bước 6: build_task_space_elf + host test, jump table user.S, vifast-root
    ELF/link 3 target, nối root ELF vào runtime 6.4 (đã xong); server/client/fault
    giữ user.S.
-6. Bước 7: BootInfo, Untyped con, client VSpace riêng; bỏ slot hard-code.
-7. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
-8. AArch64 TTBR1 là giai đoạn riêng sau 3b.
+6. 7.1/7.1b: FrameMap ⊆ Frame cap, rồi W^X theo Frame + bắt buộc READ (đã xong).
+7. Bước 7.2–7.5: Untyped con, BootInfo, client VSpace riêng; bỏ slot hard-code.
+8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
+9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

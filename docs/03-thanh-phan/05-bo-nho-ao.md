@@ -28,7 +28,7 @@ Lý do: nếu kernel tự cấp page table thì cần heap kernel, và một tas
 `leaf_flags(rights)`:
 - R → PTE_R; W → PTE_W | PTE_R (RISC-V cấm W mà không R); X → PTE_X.
 - Không có R lẫn X: `INVALID_ARG`.
-- **W và X cùng lúc: `ILLEGAL_OPERATION`** (chính sách W^X). Một trang không bao giờ vừa ghi vừa thực thi được, chặn lớp tấn công tiêm mã. JIT phải map hai lần (một bản W, một bản X ở địa chỉ khác) hoặc đổi quyền theo pha.
+- **W và X cùng lúc: `NO_RIGHTS`** (chính sách W^X). Một Frame không bao giờ vừa ghi vừa thực thi được, chặn lớp tấn công tiêm mã. JIT không được map hai alias W/X của cùng Frame; phải unmap bản W rồi map X (hoặc ngược lại) theo pha, và mỗi lần đổi phải flush TLB.
 
 Test `wx_and_exec_permission`: RWX bị từ chối, RX được, Fetch trên trang RW gây fault.
 

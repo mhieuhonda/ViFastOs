@@ -41,8 +41,8 @@ Kernel portable hiện có:
 - notification wait/signal/poll;
 - scheduler ưu tiên + round-robin;
 - invariant checker cho object/capability/runqueue/VSpace/fd;
-- `Frame`, `VSpace`, `PageTable` object; map/unmap, overlap check, W^X, shadow
-  mapping table;
+- `Frame`, `VSpace`, `PageTable` object; map/unmap, overlap check, W^X theo
+  Frame (`mapped_w`/`mapped_x`), shadow mapping table;
 - chuyển capability qua `Send`/`Call`, cài vào slot receiver, kiểm tra `GRANT`
   và không chuyển tiếp quyền `GRANT`;
 - `Untyped`/`retype` cho Frame/PageTable và metadata object, có tính phí

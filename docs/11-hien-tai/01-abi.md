@@ -128,7 +128,7 @@ Số syscall là ổn định. `-` nghĩa là không dùng.
 | 15 | `TcbConfigure` | a0 TCB cap, a1 entry, a2 stack, a3 VSpace cap, a4 priority | Set context |
 | 16 | `TcbResume` | a0 TCB cap | Đưa TCB vào runqueue |
 | 24 | `PageTableMap` | a0 PageTable cap, a1 VSpace cap, a2 VA | Kernel tự chọn level; trả level; toàn bộ table_span phải nằm trong user range |
-| 25 | `FrameMap` | a0 VSpace cap, a1 Frame cap, a2 VA hint, a3 rights | Map, trả VA |
+| 25 | `FrameMap` | a0 VSpace cap, a1 Frame cap, a2 VA hint, a3 rights | Map, trả VA; rights phải có READ; từ chối W^X theo Frame |
 | 26 | `FrameUnmap` | a0 VSpace cap, a1 VA, a2 Frame cap | Unmap + flush; Frame cap phải khớp PA |
 | 27–31 | IO/IRQ | — | Chưa triển khai |
 | 32 | `DebugWrite` | a0 user ptr, a1 len | In ra console |

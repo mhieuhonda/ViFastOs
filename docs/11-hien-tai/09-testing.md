@@ -30,7 +30,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 55 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
+Hiện có 58 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 17 test trong `vifast-elf`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
@@ -38,6 +38,9 @@ Hiện có 55 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 - capability rights monotonic;
 - revoke descendant;
 - VSpace W^X + overlap + unmap;
+- W^X theo Frame: RW ở một VA rồi RX cùng Frame ở VA/VSpace khác bị từ chối,
+  snapshot page table không đổi; unmap hoặc revoke VSpace giải phóng bộ đếm;
+- mapping bắt buộc có READ (mask rỗng/W-only/X-only trả `InvalidArg`);
 - frame alignment;
 - syscall từ chối cap sai type/đã revoke và W^X;
 - chuyển cap yêu cầu slot đích rõ ràng, không fallback;
@@ -70,6 +73,7 @@ Hiện có 55 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 - PteFakeOps đếm leaf chính xác và bắt mapping thừa;
 - FrameUnmap đòi Frame cap đúng PA; VSpace cap đơn lẻ hoặc sai frame bị từ chối;
 - FrameMap chỉ cho quyền mapping ⊆ quyền Frame cap (READ|EXEC không map RW);
+- Frame code dùng chung root/server map RX hai lần, `mapped_x=2`, không WRITE;
 - boot Untyped 128 KiB/32 object và build_task_space host test.
 - PageTableMap không thay entry 0 dùng chung;
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE

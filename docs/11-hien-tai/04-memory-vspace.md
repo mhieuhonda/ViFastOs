@@ -73,7 +73,9 @@ cần ghi. Code/stack window fields đã bị xoá; reverse map chỉ còn cho r
 `Kernel::map_frame` kiểm tra:
 
 - rights chỉ gồm `READ|WRITE|EXEC`;
-- không đồng thời `WRITE` và `EXEC` (W^X);
+- không đồng thời `WRITE` và `EXEC` trên một leaf, và W^X được kiểm tra theo
+  **Frame**: Frame đang có leaf W thì không nhận leaf X ở bất kỳ VA/VSpace nào,
+  ngược lại cũng vậy;
 - PA căn page;
 - Frame đủ một page;
 - VA căn page;
@@ -188,3 +190,9 @@ mới tách hoàn toàn client.
 | x86_64 | RX + U | RW + NX data/stack |
 
 Kernel từ chối mọi mapping user yêu cầu đồng thời `WRITE` và `EXEC`.
+Ngoài ra mỗi `Frame` giữ `mapped_w`/`mapped_x`; `FrameMap` từ chối W nếu Frame
+đã có leaf X và từ chối X nếu Frame đã có leaf W. Vì vậy hai alias của cùng
+một Frame không thể tạo ra một trang vừa ghi vừa chạy được. `FrameUnmap`,
+revoke VSpace/PageTable và destroy Frame đều giảm bộ đếm này; host test và
+`check_invariants()` đối chiếu bộ đếm với reverse map. Mapping cũng bắt buộc
+có `READ` trên mọi kiến trúc.

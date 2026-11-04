@@ -34,7 +34,8 @@ cùng bit thấp `0b11`.
 
 ## 3. Quy tắc
 
-- `W^X`: leaf không được vừa write vừa exec.
+- `W^X`: leaf không được vừa write vừa exec; kernel còn kiểm tra W/X theo
+  Frame qua `mapped_w`/`mapped_x`, nên hai alias cũng bị chặn.
 - RISC-V: W không hợp lệ nếu thiếu R; encoder tự thêm R khi W.
 - KERNEL_SHARED_SLOTS: RISC-V root[0,2], x86 PDPT[0], AArch64 L1[0,1].
 - x86: leaf có U/S, RW, NX; table có P|W|U.
