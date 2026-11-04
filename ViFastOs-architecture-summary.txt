@@ -704,7 +704,9 @@ Host test hiện có 38 test `vifast-kernel` + 9 test `vifast-pte`:
 - PageTableMap không thay các kernel slot trong PDPT/L1
 - revoke bản copy Untyped không hủy object của cap gốc
 - root revoke thu hồi cả object của cap con
-- delete Untyped cap bị từ chối khi còn object/cap con
+- TCB bị hủy: creator/cap con được reparent; client copy không revoke object server
+- delete Untyped cap bị từ chối khi còn object/cap con; delete trả KResult
+- x86 assert LoadedImage base/end trong 0..1 GiB
 - assert Untyped nằm trong kernel_accessible_range()
 - walk leaf thật cho kernel mapping, kiểm tra non-user/X/W
 - VSpace/PageTable cross-Untyped, kernel slots và retype page shortage
@@ -921,7 +923,7 @@ E. Desktop / Space
     slot kernel trong PDPT/L1; PML4/L0 và PDPT/L1 là riêng mỗi VSpace.
 26. Object lưu creator = CapRef { addr, id }; revoke chỉ khớp cap id chính xác.
     Khi TCB bị hủy, object creator và cap con được reparent lên cap cha còn
-    sống gần nhất; không có orphan. delete Untyped cap trả KResult và bị từ chối
+    sống gần nhất; không còn creator treo. delete Untyped cap trả KResult và bị từ chối
     khi còn object/cap con. Chỉ reset bump khi không còn object từ bất kỳ cap nào.
 27. Runtime assert Untyped nằm trong kernel_accessible_range(); x86 assert
     LoadedImage base/end nằm trong 0..1 GiB. Boot check walk leaf thật từ root,
