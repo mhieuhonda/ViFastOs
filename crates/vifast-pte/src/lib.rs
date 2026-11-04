@@ -120,6 +120,10 @@ pub mod riscv {
     pub fn valid_rights(access: Rights) -> bool {
         !access.contains(Rights::WRITE) || access.contains(Rights::READ)
     }
+
+    pub fn is_user(entry: u64) -> bool {
+        entry & PTE_U != 0
+    }
 }
 
 pub mod x86_64 {
@@ -175,6 +179,10 @@ pub mod x86_64 {
 
     pub fn decode(entry: u64) -> Pte {
         decode_at(entry, LEVELS - 1)
+    }
+
+    pub fn is_user(entry: u64) -> bool {
+        entry & U != 0
     }
 }
 
@@ -240,6 +248,10 @@ pub mod aarch64 {
 
     pub fn decode(entry: u64) -> Pte {
         decode_at(entry, LEVELS - 1)
+    }
+
+    pub fn is_user(entry: u64) -> bool {
+        entry & (0b11 << 6) != 0
     }
 }
 

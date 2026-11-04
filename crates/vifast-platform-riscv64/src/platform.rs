@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::Arch;
-use vifast_kernel::Kernel;
+use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
 
 use vifast_arch_riscv64::Riscv64;
@@ -239,6 +239,46 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 }
 
+/// Walk the real boot page table and verify a kernel leaf.
+fn kernel_leaf_ok(root_pa: u64, va: u64, need_write: bool, need_exec: bool) -> bool {
+    let mut table = root_pa;
+    for level in 0..vifast_pte::riscv::LEVELS {
+        let idx = vifast_pte::riscv::index(va, level);
+        let pte = PageOps.read_pte(table, idx);
+        match PageOps.decode_at(pte, level) {
+            vifast_kernel::Pte::Table(next) => {
+                if level + 1 == vifast_pte::riscv::LEVELS {
+                    return false;
+                }
+                table = next;
+            }
+            vifast_kernel::Pte::Leaf(_, rights) => {
+                return rights.contains(Rights::READ)
+                    && !vifast_pte::riscv::is_user(pte)
+                    && (!need_write || pte & vifast_pte::riscv::PTE_W != 0)
+                    && (!need_exec || pte & vifast_pte::riscv::PTE_X != 0);
+            }
+            vifast_kernel::Pte::Invalid => return false,
+        }
+    }
+    false
+}
+
+fn kernel_range_ok(root_pa: u64) -> bool {
+    let (start, end) = PageOps.kernel_accessible_range();
+    let mut va = start;
+    while va < end {
+        if !kernel_leaf_ok(root_pa, va, false, false) {
+            return false;
+        }
+        va = match va.checked_add(4096) {
+            Some(next) => next,
+            None => break,
+        };
+    }
+    true
+}
+
 static PAGE_OPS: PageOps = PageOps;
 
 static mut KERNEL_STORAGE: Kernel = Kernel::new_const();
@@ -330,17 +370,17 @@ impl Platform for RiscvPlatform {
         &PAGE_OPS
     }
 
-    fn check_kernel_mappings() -> bool {
-        let slots = vifast_pte::riscv::KERNEL_SHARED_SLOTS;
-        let addresses = [
-            trap_entry as *const () as u64,
-            core::ptr::addr_of!(TRAP_STACK) as u64,
-            core::ptr::addr_of!(KERNEL_STORAGE) as u64,
-            0x1000_0000u64, // UART
-        ];
-        addresses
-            .iter()
-            .all(|address| slots.contains(&vifast_pte::riscv::index(*address, 0)))
+    fn check_kernel_mappings(root_pa: u64) -> bool {
+        kernel_range_ok(root_pa)
+            && kernel_leaf_ok(root_pa, trap_entry as *const () as u64, false, true)
+            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(TRAP_STACK) as u64, true, false)
+            && kernel_leaf_ok(
+                root_pa,
+                core::ptr::addr_of!(KERNEL_STORAGE) as u64,
+                true,
+                false,
+            )
+            && kernel_leaf_ok(root_pa, 0x1000_0000, true, false)
     }
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {

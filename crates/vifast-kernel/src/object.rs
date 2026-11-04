@@ -41,13 +41,23 @@ pub struct SlotAddr {
     pub slot: u8,
 }
 
+/// Exact capability identity.  The slot part is only a lookup location; the
+/// monotonically increasing id prevents a reused slot from inheriting the
+/// old capability's children or creator relationships.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CapRef {
+    pub addr: SlotAddr,
+    pub id: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cap {
     pub obj: ObjRef,
     pub ty: ObjType,
     pub rights: Rights,
     pub badge: u64,
-    pub parent: Option<SlotAddr>,
+    pub id: u64,
+    pub parent: Option<CapRef>,
 }
 
 impl Cap {
@@ -57,6 +67,7 @@ impl Cap {
             ty,
             rights,
             badge: 0,
+            id: 0,
             parent: None,
         }
     }
@@ -75,6 +86,7 @@ impl Cap {
             ty: self.ty,
             rights: Rights(self.rights.0 & rights.0),
             badge: if badge != 0 { badge } else { self.badge },
+            id: 0,
             parent: None,
         })
     }
@@ -452,9 +464,9 @@ pub struct Object {
     pub kind: Kind,
     /// Untyped that owns this object, if it was created by retype.
     pub owner: Option<ObjRef>,
-    /// Capability slot through which retype created this object.  Revoking a
+    /// Exact capability through which retype created this object.  Revoking a
     /// different copy of the same Untyped must not destroy it.
-    pub creator: Option<SlotAddr>,
+    pub creator: Option<CapRef>,
 }
 
 impl Object {

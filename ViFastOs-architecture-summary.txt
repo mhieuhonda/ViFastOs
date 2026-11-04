@@ -59,7 +59,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 32/32 PASS
+- cargo test -p vifast-kernel: 36/36 PASS
 - cargo test -p vifast-pte: 9/9 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
@@ -245,9 +245,9 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 509 dòng
-- AArch64: 620 dòng
-- x86_64: 742 dòng
+- RISC-V: 549 dòng
+- AArch64: 664 dòng
+- x86_64: 781 dòng
 
 runtime:
 - 429 dòng
@@ -256,12 +256,12 @@ vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 3516 dòng, không còn dependency vifast-arch
+- 3666 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
-- Kernel = 396808 bytes
-- Object = 3064 bytes
-- Tcb = 3048 bytes
+- Kernel = 597616 bytes
+- Object = 4632 bytes
+- Tcb = 4584 bytes
 - Kernel nằm trong static storage per platform, không trên boot stack.
 
 arch primitive:
@@ -332,7 +332,7 @@ Giới hạn cố định:
 - MAX_FILES = 8
 
 Object:
-- Object { gen: u32, kind: Kind, owner: Option<ObjRef>, creator: Option<SlotAddr> }
+- Object { gen: u32, kind: Kind, owner: Option<ObjRef>, creator: Option<CapRef> }
 - ObjRef { index: u8, gen: u32 }
 - Generation tăng khi slot tái sử dụng; ObjRef cũ bị từ chối.
 
@@ -362,7 +362,7 @@ Tcb:
 - queued, queue_seq
 
 Capability:
-- Cap { obj, ty, rights, badge, parent }
+- Cap { obj, ty, rights, badge, id: u64, parent: Option<CapRef> }
 - install_cap/lookup_cap/copy_cap/delete_cap/revoke_cap/set_cap_badge
 - Rights: READ=1, WRITE=2, EXEC=4, GRANT=8
 - copy/derive chỉ giảm quyền
@@ -381,8 +381,10 @@ Untyped/retype:
 - Notification: tiêu OBJ_NOTIFICATION_BYTES = 128.
 - Tcb: tiêu OBJ_TCB_BYTES = 4096 (quota accounting).
 - Hết Untyped trả OutOfMemory.
-- Mỗi object ghi `creator` = cap đã dùng để retype; revoke một bản copy
-  Untyped chỉ hủy object tạo qua cap đó hoặc cap con của nó.
+- Mỗi object ghi `creator` = CapRef { addr, id } của cap đã dùng để retype;
+  revoke chỉ khớp cả slot và id, nên slot tái sử dụng không kế thừa creator.
+  Revoke Untyped copy chỉ hủy object tạo qua cap đó hoặc cap con của nó.
+- `delete_cap` từ chối xóa Untyped cap khi còn object hoặc cap con sống.
 - Chỉ reset bump khi không còn object nào thuộc Untyped từ bất kỳ cap nào.
 - Revoke cap Untyped xoá descendant, destroy object thật (Frame unmap, TCB detach,
   Endpoint/Notification wake lỗi).
@@ -498,9 +500,8 @@ x86_64:
 - Data 64 GiB+0xa000: RW + NX + U.
 - FrameMap/FrameUnmap đi generic walk, không còn platform map riêng.
 - CR3 chuyển sang PML4 riêng trước iretq.
-- Identity map 0..1 GiB nằm ở PDPT[0]; PDPT[0] trỏ PD kernel dùng chung.
-  User range 64..128 GiB dùng PDPT[64..127] trỏ bảng user riêng.
-- PML4[0] và PDPT là riêng mỗi VSpace; không dùng chung PDPT/L1.
+- PML4[0] và PDPT là riêng mỗi VSpace; PDPT[0] trỏ PD kernel dùng chung
+  cho identity 0..1 GiB; user 64..128 GiB dùng PDPT[64..127] trỏ bảng riêng.
 - SMEP/SMAP bật nếu CPUID hỗ trợ; chưa có NX cho data kernel.
 - Chưa có AP/SMP scheduler.
 
@@ -667,7 +668,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 33 test `vifast-kernel` + 9 test `vifast-pte`:
+Host test hiện có 36 test `vifast-kernel` + 9 test `vifast-pte`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -693,9 +694,12 @@ Host test hiện có 33 test `vifast-kernel` + 9 test `vifast-pte`:
 - walk safety: user range/missing table/high leaf/valid PTE/snapshot
 - PageTableMap gán level 1/2/3, FrameMap qua bảng mới
 - PageTableMap từ chối bảng vượt user range, snapshot không đổi
-- PageTableMap không thay entry 0 dùng chung
+- PageTableMap không thay các kernel slot trong PDPT/L1
 - revoke bản copy Untyped không hủy object của cap gốc
+- root revoke thu hồi cả object của cap con
+- delete Untyped cap bị từ chối khi còn object/cap con
 - assert Untyped nằm trong kernel_accessible_range()
+- walk leaf thật cho kernel mapping, kiểm tra non-user/X/W
 - VSpace/PageTable cross-Untyped, kernel slots và retype page shortage
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
   trỏ tới trang đã free.
@@ -707,7 +711,7 @@ Host test hiện có 33 test `vifast-kernel` + 9 test `vifast-pte`:
 - index biên;
 - quyền R/W/X, RISC-V W-thiếu-R bị từ chối;
 - dải user 3 kiến trúc không giao kernel identity;
-- RISC-V < 256 GiB; x86/AArch64 entry 0 dùng chung;
+- RISC-V < 256 GiB; x86/AArch64 chỉ dùng chung PDPT[0]/L1[0..1];
 - table_span từng level và biên.
 
 QEMU test:
@@ -776,10 +780,10 @@ Exit code:
 - Revoke PageTable/VSpace xoá reverse map trong span, zero trang bảng và gỡ
   metadata của bảng con; VSpace đang là root của thread hiện tại bị từ chối hủy.
 - KERNEL_SHARED_SLOTS xác nhận AArch64 dùng L1[0..=1], không chỉ 0..1 GiB.
-- Object.creator chặn client revoke bản copy Untyped để phá object của task khác; CapCopy Untyped vẫn chia sẻ vùng nhớ, Untyped con là bước sau.
+- Object.creator/CapRef chặn client revoke bản copy Untyped để phá object của task khác; CapCopy Untyped vẫn chia sẻ vùng nhớ, Untyped con là bước sau.
 - Runtime assert Untyped nằm trong kernel_accessible_range() của platform.
-- Boot-time check trap entry, kernel stack, IST, GDT/TSS/IDT, VBAR,
-  KERNEL_STORAGE và UART/GIC/PIC nằm trong KERNEL_SHARED_SLOTS.
+- Boot-time check walk leaf thật từ root: trap entry có X, stack/IST/GDT/TSS/IDT/
+  KERNEL_STORAGE có W, tất cả non-user; kiểm tra toàn bộ kernel_accessible_range.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
 - Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (128).
 - Data Untyped 256 KiB/max64; metadata Untyped max32.
@@ -788,8 +792,9 @@ Exit code:
 - #DF/NMI/#MC dùng IST1 và luôn panic, kể cả khi CS là user.
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
-- Kernel object limits tăng 128/64/32; Kernel 396808 bytes dùng static storage.
-- Host test hiện có 33 test `vifast-kernel` + 9 test `vifast-pte`.
+- Kernel object limits tăng 128/64/32; Kernel 597616 bytes dùng static storage;
+  test harness cần stack 8 MiB (`.cargo/config.toml`).
+- Host test hiện có 36 test `vifast-kernel` + 9 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------

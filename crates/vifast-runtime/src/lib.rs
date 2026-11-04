@@ -70,7 +70,7 @@ pub trait Platform: Arch + Console {
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps;
     /// Verify that trap entry, kernel stacks, descriptor tables, kernel
     /// storage and MMIO all live in KERNEL_SHARED_SLOTS before switching roots.
-    fn check_kernel_mappings() -> bool;
+    fn check_kernel_mappings(root_pa: u64) -> bool;
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError>;
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError>;
 
@@ -130,10 +130,6 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     let kernel = A::init_kernel();
     kernel.set_page_table_ops(A::page_table_ops());
-    if !A::check_kernel_mappings() {
-        vifast_kernel::klog!(A, "KERNEL MAPPING CHECK FAILED");
-        A::exit(1);
-    }
     vifast_kernel::klog!(
         A,
         "SELFTEST PASS (ipc_tx={} ipc_rx={} ntfn={} ctx={} ticks={})",
@@ -239,6 +235,10 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     code[..image.code.len()].copy_from_slice(image.code);
     A::build_page_tables();
+    if !A::check_kernel_mappings(A::vspace_root()) {
+        vifast_kernel::klog!(A, "KERNEL MAPPING CHECK FAILED");
+        A::exit(1);
+    }
     A::prepare_user();
 
     let contexts = A::contexts();

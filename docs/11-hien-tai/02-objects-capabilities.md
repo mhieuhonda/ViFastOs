@@ -23,7 +23,7 @@ pub struct Object {
     pub gen: u32,
     pub kind: Kind,
     pub owner: Option<ObjRef>, // Untyped đã tạo object
-    pub creator: Option<SlotAddr>, // cap đã dùng để retype
+    pub creator: Option<CapRef>, // cap chính xác đã dùng để retype
 }
 ```
 
@@ -41,7 +41,7 @@ use-after-free mà không cần con trỏ thô trong lõi portable.
 | `Tcb` | Thread state, entry/stack/VSpace, cspace, fds, resume |
 | `Untyped` | Arena cấp phát vật lý |
 | `Frame` | Trang vật lý có thể map |
-| `VSpace` | Shadow mapping table + root page table |
+| `VSpace` | Reverse mapping table + root page table |
 | `PageTable` | Metadata page table page |
 
 ## 2. Capability
@@ -52,8 +52,11 @@ pub struct Cap {
     pub ty: ObjType,
     pub rights: Rights,
     pub badge: u64,
-    pub parent: Option<SlotAddr>,
+    pub id: u64,
+    pub parent: Option<CapRef>,
 }
+
+pub struct CapRef { pub addr: SlotAddr, pub id: u64 }
 ```
 
 Mỗi TCB có `cspace: [Option<Cap>; MAX_CAPS]`. Slot 0 không dùng; hợp lệ là
@@ -150,8 +153,10 @@ pub struct VSpace {
 
 - `root` là handle mờ với kernel: Sv39 root, TTBR0 root hoặc CR3.
 - `mappings` là reverse map để kiểm tra overlap/W^X/unmap; page table thật là nguồn sự thật.
-- `Object.creator` lưu cap đã dùng để retype; revoke một bản copy Untyped
-  không được hủy object tạo qua cap gốc.
+- `Cap` có `id: u64` tăng đơn điệu; `parent` là `CapRef { addr, id }`.
+- `Object.creator` lưu `CapRef`; revoke chỉ khớp cả slot và id, nên slot tái
+  sử dụng không kế thừa creator cũ.
+- `delete_cap` từ chối xoá Untyped cap khi còn object hoặc cap con sống.
 - `PageTable { root, mapped }`; level nằm trong mapping do PageTableMap gán, và không thay entry 0 dùng chung.
 - `next_va` dùng để cấp VA tuần tự trong range `[base, end)`.
 

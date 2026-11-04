@@ -1,0 +1,4 @@
+# The fixed Kernel model is ~600 KiB; host test threads need more than the
+# default 2 MiB stack while constructing it on the test thread.
+[env]
+RUST_MIN_STACK = "8388608"

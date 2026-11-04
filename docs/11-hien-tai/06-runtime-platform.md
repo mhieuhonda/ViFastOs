@@ -132,7 +132,8 @@ sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham
 
 Mọi `unsafe` copy user nằm sau `Platform::read_user`/`write_user`.
 Runtime assert metadata/data Untyped nằm trong `kernel_accessible_range()` và gọi
-`check_kernel_mappings()` trước khi chạy user.
+`check_kernel_mappings(root)` sau khi dựng bảng boot và trước khi chạy user;
+check này walk leaf thật và sẽ chạy lại trên root mới trước lần switch đầu tiên.
 
 ## 5. Timer
 

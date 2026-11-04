@@ -145,6 +145,7 @@ pub struct Kernel {
     pub(crate) fs: fs::RamFs,
     pub(crate) stats: KernelStats,
     pub(crate) page_table_ops: Option<&'static dyn PageTableOps>,
+    pub(crate) next_cap_id: u64,
 }
 
 impl Default for Kernel {
@@ -172,6 +173,7 @@ impl Kernel {
                 ticks: 0,
             },
             page_table_ops: None,
+            next_cap_id: 1,
         }
     }
 
@@ -196,6 +198,7 @@ impl Kernel {
             ticks: 0,
         };
         self.page_table_ops = None;
+        self.next_cap_id = 1;
         self.init_fs();
         if let Some(root) = self.create_tcb("root", 1) {
             self.root = Some(root);
@@ -228,7 +231,7 @@ impl Kernel {
         &mut self,
         kind: Kind,
         owner: Option<ObjRef>,
-        creator: Option<SlotAddr>,
+        creator: Option<CapRef>,
     ) -> Option<ObjRef> {
         for i in 0..MAX_OBJECTS {
             if self.objs[i].is_free() {
@@ -545,6 +548,13 @@ impl Kernel {
         ty: ObjType,
         creator: Option<SlotAddr>,
     ) -> KResult<ObjRef> {
+        let creator = match creator {
+            Some(addr) => {
+                let cap = self.cap_at(addr).ok_or(KError::InvalidCap)?;
+                Some(CapRef { addr, id: cap.id })
+            }
+            None => None,
+        };
         let (base, size, bump, page, max_objects, objects) = {
             let region = self.untyped(untyped).ok_or(KError::WrongType)?;
             (
@@ -944,12 +954,17 @@ impl Kernel {
         Ok(())
     }
 
-    pub fn install_cap(&mut self, tcb: ObjRef, slot: u8, cap: Cap) -> KResult<()> {
+    pub fn install_cap(&mut self, tcb: ObjRef, slot: u8, mut cap: Cap) -> KResult<()> {
         if slot == 0 || slot as usize >= MAX_CAPS {
             return Err(KError::InvalidArg);
         }
         if self.get(cap.obj).is_none() {
             return Err(KError::ObjectDestroyed);
+        }
+        cap.id = self.next_cap_id;
+        self.next_cap_id = self.next_cap_id.wrapping_add(1);
+        if self.next_cap_id == 0 {
+            self.next_cap_id = 1;
         }
         let table = self.tcb_mut(tcb).ok_or(KError::InvalidCap)?;
         if table.cspace[slot as usize].is_some() {
@@ -994,6 +1009,32 @@ impl Kernel {
     }
 
     pub fn delete_cap(&mut self, tcb: ObjRef, slot: u8) -> Option<Cap> {
+        let addr = SlotAddr { tcb, slot };
+        let cap = self.cap_at(addr)?;
+        if cap.ty == ObjType::Untyped {
+            let target = CapRef { addr, id: cap.id };
+            let has_live_objects = self.objs.iter().any(|object| {
+                object.owner == Some(cap.obj)
+                    && object
+                        .creator
+                        .is_some_and(|creator| self.cap_ref_is_descendant(creator, target))
+            });
+            let has_child_caps =
+                (0..MAX_OBJECTS).any(|i| {
+                    let r = ObjRef {
+                        index: i as u8,
+                        gen: self.objs[i].gen,
+                    };
+                    self.tcb(r).is_some_and(|table| {
+                        table.cspace.iter().flatten().any(|child| {
+                            child.parent.is_some() && self.is_descendant(child, target)
+                        })
+                    })
+                });
+            if has_live_objects || has_child_caps {
+                return None;
+            }
+        }
         self.tcb_mut(tcb)?.cspace.get_mut(slot as usize)?.take()
     }
 
@@ -1008,33 +1049,47 @@ impl Kernel {
     ) -> KResult<()> {
         let source = self.lookup_cap(src_tcb, src_slot, None, Rights::NONE)?;
         let mut derived = source.derive(rights, badge)?;
-        derived.parent = Some(SlotAddr {
-            tcb: src_tcb,
-            slot: src_slot,
+        derived.parent = Some(CapRef {
+            addr: SlotAddr {
+                tcb: src_tcb,
+                slot: src_slot,
+            },
+            id: source.id,
         });
         self.install_cap(dst_tcb, dst_slot, derived)
     }
 
-    fn cap_addr_is_descendant(&self, addr: SlotAddr, target: SlotAddr) -> bool {
-        if addr == target {
+    fn cap_ref_is_descendant(&self, creator: CapRef, target: CapRef) -> bool {
+        if creator == target {
             return true;
         }
-        self.cap_at(addr)
-            .is_some_and(|cap| self.is_descendant(&cap, target))
+        let Some(cap) = self.cap_at(creator.addr) else {
+            return false;
+        };
+        if cap.id != creator.id {
+            return false;
+        }
+        self.is_descendant(&cap, target)
     }
 
-    fn is_descendant(&self, cap: &Cap, target: SlotAddr) -> bool {
+    fn is_descendant(&self, cap: &Cap, target: CapRef) -> bool {
         let mut parent = cap.parent;
         let mut depth = 0usize;
-        while let Some(addr) = parent {
-            if addr == target {
+        while let Some(parent_ref) = parent {
+            if parent_ref == target {
                 return true;
+            }
+            let Some(parent_cap) = self.cap_at(parent_ref.addr) else {
+                return false;
+            };
+            if parent_cap.id != parent_ref.id {
+                return false;
             }
             depth += 1;
             if depth > MAX_OBJECTS * MAX_CAPS {
                 return false;
             }
-            parent = self.cap_at(addr).and_then(|cap| cap.parent);
+            parent = parent_cap.parent;
         }
         false
     }
@@ -1477,6 +1532,10 @@ impl Kernel {
     pub fn revoke_cap(&mut self, tcb: ObjRef, slot: u8) -> KResult<usize> {
         let target = SlotAddr { tcb, slot };
         let target_cap = self.cap_at(target).ok_or(KError::InvalidCap)?;
+        let target_ref = CapRef {
+            addr: target,
+            id: target_cap.id,
+        };
         let mut objects = [ObjRef::invalid(); MAX_OBJECTS];
         let mut object_count = 0usize;
 
@@ -1487,7 +1546,7 @@ impl Kernel {
                 }
                 let created_here = self.objs[i]
                     .creator
-                    .is_some_and(|creator| self.cap_addr_is_descendant(creator, target));
+                    .is_some_and(|creator| self.cap_ref_is_descendant(creator, target_ref));
                 if created_here {
                     let r = ObjRef {
                         index: i as u8,
@@ -1524,7 +1583,7 @@ impl Kernel {
             let Some(table) = self.tcb(r) else { continue };
             for s in 1..MAX_CAPS {
                 let Some(cap) = table.cspace[s] else { continue };
-                let remove = self.is_descendant(&cap, target)
+                let remove = self.is_descendant(&cap, target_ref)
                     || (target_cap.ty == ObjType::Untyped
                         && objects[..object_count].contains(&cap.obj));
                 if remove {
@@ -1939,9 +1998,12 @@ impl Kernel {
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
                 let mut cap = Cap::new(object, ty, Rights::READ | Rights::WRITE | Rights::GRANT);
-                cap.parent = Some(SlotAddr {
-                    tcb,
-                    slot: untyped_slot,
+                cap.parent = Some(CapRef {
+                    addr: SlotAddr {
+                        tcb,
+                        slot: untyped_slot,
+                    },
+                    id: untyped.id,
                 });
                 match self.install_cap(tcb, dest, cap) {
                     Ok(()) => UserAction::Return {
@@ -3222,6 +3284,94 @@ mod tests {
     }
 
     #[test]
+    fn root_revoke_collects_objects_created_via_child_cap() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        kernel.copy_cap(root, 1, client, 1, Rights::ALL, 0).unwrap();
+        let root_frame = kernel
+            .retype_as(
+                untyped,
+                ObjType::Frame,
+                Some(SlotAddr { tcb: root, slot: 1 }),
+            )
+            .unwrap();
+        let client_frame = kernel
+            .retype_as(
+                untyped,
+                ObjType::Frame,
+                Some(SlotAddr {
+                    tcb: client,
+                    slot: 1,
+                }),
+            )
+            .unwrap();
+
+        // Revoke the ancestor first: the child cap is still present, and its
+        // object must be collected together with the root's own object.
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(root_frame).is_none());
+        assert!(kernel.get(client_frame).is_none());
+        assert!(kernel.lookup_cap(client, 1, None, Rights::NONE).is_err());
+        assert_eq!(kernel.untyped(untyped).unwrap().objects, 0);
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, 0);
+    }
+
+    #[test]
+    fn delete_untyped_cap_is_refused_while_objects_or_children_exist() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let frame = kernel
+            .retype_as(
+                untyped,
+                ObjType::Frame,
+                Some(SlotAddr { tcb: root, slot: 1 }),
+            )
+            .unwrap();
+        assert!(kernel.delete_cap(root, 1).is_none());
+        assert!(kernel.get(frame).is_some());
+        kernel.copy_cap(root, 1, client, 1, Rights::ALL, 0).unwrap();
+        assert!(kernel.delete_cap(root, 1).is_none());
+
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(frame).is_none());
+        // After revoke there are neither objects nor child caps.
+        assert!(kernel.delete_cap(root, 1).is_some());
+    }
+
+    #[test]
+    fn cap_ids_are_not_reused_after_delete() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let first = kernel.create_endpoint().unwrap();
+        let second = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(first, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        let first_id = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().id;
+        assert!(kernel.delete_cap(root, 1).is_some());
+        kernel
+            .install_cap(root, 1, Cap::new(second, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        let second_id = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().id;
+        assert_ne!(first_id, second_id);
+        assert!(second_id > first_id);
+    }
+
+    #[test]
     fn revoking_page_table_clears_reverse_map_in_another_untyped() {
         let _guard = WALK_LOCK.lock().unwrap();
         reset_fake();
@@ -3297,10 +3447,6 @@ mod tests {
         let vs_untyped = kernel
             .create_untyped_with_limit(0x8000, 0x2000, 4096, 2)
             .unwrap();
-        let space_creator = Some(SlotAddr { tcb: root, slot: 1 });
-        let space = kernel
-            .retype_as(vs_untyped, ObjType::VSpace, space_creator)
-            .unwrap();
         let pt_untyped = kernel
             .create_untyped_with_limit(0x1000, 0x4000, 4096, 5)
             .unwrap();
@@ -3309,6 +3455,10 @@ mod tests {
             .unwrap();
         kernel
             .install_cap(root, 2, Cap::new(pt_untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let space_creator = Some(SlotAddr { tcb: root, slot: 1 });
+        let space = kernel
+            .retype_as(vs_untyped, ObjType::VSpace, space_creator)
             .unwrap();
         let pt_creator = Some(SlotAddr { tcb: root, slot: 2 });
         let pt1 = kernel
