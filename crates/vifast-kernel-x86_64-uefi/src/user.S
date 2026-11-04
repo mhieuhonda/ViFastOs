@@ -76,17 +76,16 @@ user_thread_a:
     mov rsi, 7
     int 0x80
 1:
-    mov rax, 2
+    mov rax, 4
     mov rdi, 1
     mov rsi, 4
+    mov rdx, 0x55
+    mov rcx, 42
+    xor r8, r8
+    xor r9, r9
     int 0x80
     mov rax, 5
     mov rdi, 4
-    int 0x80
-    mov rax, 3
-    xor rdi, rdi
-    mov rsi, 0x55
-    mov rdx, 42
     int 0x80
     jmp 1b
 

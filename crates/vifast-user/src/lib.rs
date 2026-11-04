@@ -255,6 +255,30 @@ pub fn wait(notification_slot: u8) -> SyscallResult {
     result(e, v)
 }
 
+pub fn reply_recv(
+    endpoint_slot: u8,
+    recv_slot: u8,
+    label: u64,
+    data0: u64,
+    data1: u64,
+    data2: u64,
+) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::ReplyRecv as u64,
+            [
+                endpoint_slot as u64,
+                recv_slot as u64,
+                label,
+                data0,
+                data1,
+                data2,
+            ],
+        )
+    };
+    result(e, v)
+}
+
 pub fn signal(notification_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

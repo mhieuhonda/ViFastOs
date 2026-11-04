@@ -2852,6 +2852,28 @@ impl Kernel {
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
+            n if n == SyscallId::ReplyRecv as u64 => {
+                let cap = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Endpoint),
+                    Rights::READ,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let endpoint = cap.obj;
+                let recv_slot = slot_arg(a1).unwrap_or(0);
+                let msg = match Message::new(a2, &[a3, a4, a5]) {
+                    Ok(msg) => msg,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.reply_recv(tcb, endpoint, recv_slot, msg) {
+                    Ok(Some(message)) => message_action(KError::Ok, 0, &message),
+                    Ok(None) => UserAction::Blocked,
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
             n if n == SyscallId::Reply as u64 => {
                 let msg = match message_from(a1, a2, a3, a4, a5) {
                     Ok(msg) => msg,
@@ -6621,6 +6643,85 @@ mod tests {
         kernel.revoke_cap(root, 1).unwrap();
         assert!(kernel.get(child).is_none());
         assert!(kernel.get(frame).is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn reply_recv_without_caller_only_receives() {
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 1).unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let reply = Message::new(0x55, &[42]).unwrap();
+        assert_eq!(kernel.reply_recv(server, endpoint, 4, reply), Ok(None));
+        assert_eq!(kernel.tcb(server).unwrap().state, ThreadState::BlockedRecv);
+
+        let call = Message::new(0x1234, &[7]).unwrap();
+        assert_eq!(kernel.send(client, endpoint, 0, call, true), Ok(true));
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::BlockedReply);
+        assert!(kernel.tcb(server).unwrap().caller.is_some());
+        assert_eq!(kernel.pick(), Some(server));
+
+        let reply = Message::new(0x55, &[42]).unwrap();
+        assert_eq!(kernel.reply_recv(server, endpoint, 4, reply), Ok(None));
+        assert_eq!(kernel.tcb(server).unwrap().state, ThreadState::BlockedRecv);
+        assert_eq!(kernel.take_resume(client).unwrap().label, 0x55);
+        assert_eq!(kernel.pick(), Some(client));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn reply_recv_replies_before_taking_next_caller() {
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 1).unwrap();
+        let first = kernel.create_tcb("first", 1).unwrap();
+        let second = kernel.create_tcb("second", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        assert_eq!(
+            kernel.reply_recv(server, endpoint, 4, Message::empty(0)),
+            Ok(None)
+        );
+        let call_a = Message::new(0xA, &[1]).unwrap();
+        assert_eq!(kernel.send(first, endpoint, 0, call_a, true), Ok(true));
+        assert_eq!(kernel.take_resume(server).unwrap().label, 0xA);
+        assert!(kernel.tcb(server).unwrap().caller.is_some());
+        assert_eq!(kernel.pick(), Some(server));
+
+        let call_b = Message::new(0xB, &[2]).unwrap();
+        assert_eq!(kernel.send(second, endpoint, 0, call_b, true), Ok(false));
+        assert_eq!(kernel.tcb(second).unwrap().state, ThreadState::BlockedSend);
+        let reply = Message::new(0x55, &[42]).unwrap();
+        let next = kernel
+            .reply_recv(server, endpoint, 4, reply)
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.label, 0xB);
+        assert_eq!(kernel.take_resume(first).unwrap().label, 0x55);
+        assert_eq!(kernel.tcb(server).unwrap().caller.unwrap().0, second);
+        assert_eq!(kernel.tcb(second).unwrap().state, ThreadState::BlockedReply);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn reply_recv_rejects_stale_caller_epoch() {
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 1).unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        assert_eq!(
+            kernel.reply_recv(server, endpoint, 4, Message::empty(0)),
+            Ok(None)
+        );
+        let call = Message::new(0xAB, &[1]).unwrap();
+        assert_eq!(kernel.send(client, endpoint, 0, call, true), Ok(true));
+        assert_eq!(kernel.take_resume(server).unwrap().label, 0xAB);
+        let (server_caller, _) = kernel.tcb(server).unwrap().caller.unwrap();
+        let stale_epoch = kernel.tcb(server).unwrap().reply_epoch;
+        kernel.tcb_mut(server).unwrap().caller = Some((server_caller, stale_epoch.wrapping_add(1)));
+        assert_eq!(
+            kernel.reply_recv(server, endpoint, 4, Message::empty(0)),
+            Err(KError::NoCaller)
+        );
         assert!(kernel.check_invariants().is_ok());
     }
 

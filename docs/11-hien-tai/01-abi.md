@@ -148,6 +148,7 @@ Số syscall là ổn định. `-` nghĩa là không dùng.
 | 1 | `Call` | như `Send` | Block đến khi server `Reply` |
 | 2 | `Recv` | a0 endpoint cap, a1 recv slot cho cap | Trả message hoặc block |
 | 3 | `Reply` | a0 bỏ qua, a1 label, a2..a5 data | Trả lời caller hiện tại |
+| 4 | `ReplyRecv` | a0 endpoint cap, a1 recv slot, a2 label, a3..a5 data | Reply caller hiện tại rồi Recv; không caller thì chỉ Recv |
 | 5 | `Signal` | a0 notification cap | Set bit, đánh thức waiter |
 | 6 | `Wait` | a0 notification cap | Trả word hoặc block |
 | 7 | `Poll` | a0 notification cap | Trả word và clear |

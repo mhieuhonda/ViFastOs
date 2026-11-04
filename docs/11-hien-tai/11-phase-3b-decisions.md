@@ -119,6 +119,16 @@ retype; 4.5 server có VSpace riêng; 7.5 client có VSpace riêng và Untyped c
 - Harness yêu cầu đúng 4 USER FAULT, gồm địa chỉ root stack; đây là mốc kết
   thúc 3b.
 
+## 5f. ReplyRecv (8.2)
+
+- Syscall 4: `a0 endpoint cap READ`, `a1 recv slot`, `a2 label`, `a3..a5` data.
+- Không có caller: chỉ thực hiện Recv.
+- Có caller: Reply caller hiện tại trước, sau đó Recv. Nếu caller stale/invalid
+  thì trả NoCaller và không queue receiver.
+- Server user.S dùng vòng ReplyRecv + Signal; initial call không caller nên chỉ
+  Recv, các vòng sau reply rồi nhận caller kế.
+- Host test: no caller, reply rồi nhận caller kế, stale epoch.
+
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
@@ -195,5 +205,5 @@ retype; 4.5 server có VSpace riêng; 7.5 client có VSpace riêng và Untyped c
    sync_icache khi map EXEC và counter checked_add (đã xong).
 7. Bước 7.2–7.5: Untyped con (7.2), BootInfo (7.3), VSpace client (7.4),
    tách client/fault4 (7.5 — hoàn tất 3b).
-8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
+8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv (đã xong 8.2), fault endpoint.
 9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

@@ -215,6 +215,25 @@ impl Kernel {
         }
     }
 
+    /// Reply to the current caller (if any), then receive the next message.
+    /// With no caller this is exactly `recv`; an invalid caller is reported
+    /// before the server is queued.
+    pub fn reply_recv(
+        &mut self,
+        server: ObjRef,
+        endpoint: ObjRef,
+        recv_slot: u8,
+        msg: Message,
+    ) -> KResult<Option<Message>> {
+        if self.endpoint(endpoint).is_none() {
+            return Err(KError::InvalidCap);
+        }
+        if self.tcb(server).ok_or(KError::InvalidCap)?.caller.is_some() {
+            self.reply(server, msg)?;
+        }
+        self.recv(server, endpoint, recv_slot)
+    }
+
     pub fn reply(&mut self, server: ObjRef, msg: Message) -> KResult<()> {
         let (client, epoch) = self
             .tcb_mut(server)

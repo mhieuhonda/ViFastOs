@@ -79,16 +79,16 @@ user_thread_a:
     mov x1, #7
     svc #0
 1:
-    mov x8, #2
+    mov x8, #4
     mov x0, #1
     mov x1, #4
+    mov x2, #0x55
+    mov x3, #42
+    mov x4, #0
+    mov x5, #0
     svc #0
     mov x8, #5
     mov x0, #4
-    svc #0
-    mov x8, #3
-    mov x1, #0x55
-    mov x2, #42
     svc #0
     b 1b
 

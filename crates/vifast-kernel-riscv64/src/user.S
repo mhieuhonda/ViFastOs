@@ -78,16 +78,16 @@ user_thread_a:
     li a1, 7
     ecall
 1:
-    li a7, 2
+    li a7, 4
     li a0, 1
     li a1, 4
+    li a2, 0x55
+    li a3, 42
+    li a4, 0
+    li a5, 0
     ecall
     li a7, 5
     li a0, 4
-    ecall
-    li a7, 3
-    li a1, 0x55
-    li a2, 42
     ecall
     j 1b
 
