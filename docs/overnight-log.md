@@ -20,6 +20,8 @@
 - `fffa7d6` — VFS STAT request.
 - `687962c` — software IOMMU domains and DMA maps.
 - `ed06f82` — SMP maintenance IPI and TLB shootdown.
+- `f216966` — AArch64 VirtIO block backend.
+- `1d4f0ea` — persistent VFS scratch on block storage.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -49,7 +51,8 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - `vifast-kernel` 83/83, PTE 11/11, ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
   `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`,
-  `IOMMU OK`; RISC-V/AArch `SMP OK (... ipi=1)`.
+  `IOMMU OK`; RISC-V/AArch `SMP OK (... ipi=1)`; AArch `BLOCK OK`,
+  `FS DISK OK`, `FS PERSIST OK`.
 - Boot Untyped: RISC-V 20/32 pages, AArch/x86 22/32; free 12/10 pages,
   12/12 objects.
 - DATA UNTYPED lúc test-exit: RISC-V 36/64 pages, AArch64 37/64 pages,
@@ -57,7 +60,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `88b51d74273261db032090d541d7ebcd5a4a4d1fd385dab7e04958a78e7c5e0a`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `d3e79c680b03697cd75f95dc3d8293cd7c7c23c3cdf878a0b3577ff65f9b718a`.
 
 ---
 
@@ -189,6 +192,21 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## 8.10 — AArch64 VirtIO block + FS scratch bền vững
+
+- Commit `f216966 feat: add aarch64 virtio block backend`.
+- Commit `1d4f0ea feat: persist vfs scratch on block storage`.
+- Thêm `vifast-virtio`: VirtIO-MMIO split queue một request, scan cửa sổ
+  `0x0a000000..0x0a004000` stride `0x200` trên QEMU AArch64 virt.
+- Kernel syscall `BlockRead`/`BlockWrite` (43/44); runtime validate/copy user
+  sector 512 byte; AArch platform dùng VirtIO queue.
+- Server VFS lưu `/scratch` vào sector 0 với magic `VF01`; lần boot sau đọc
+  lại và in `FS PERSIST OK`. RISC-V/x86 chưa có block backend nên fallback
+  `FS DISK RAM`.
+- QEMU AArch dùng disk file 4 MiB và giữ nguyên giữa các lần chạy; harness
+  yêu cầu `BLOCK OK` + `FS DISK OK`.
+- `vifast-kernel` 83/83; QEMU 3/3 PASS.
 
 ## 8.9 — SMP maintenance IPI + full TLB shootdown
 
