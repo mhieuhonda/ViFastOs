@@ -59,9 +59,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 562727d feat: add first-fit vspace range allocator
 - 395a589 feat: demo notification capability transfer over call
 - 85fe2cf feat: add user-space vfs server over ipc
+- fffa7d6 feat: add vfs stat request
 - 826efed feat: tag vspaces with asid and pcid
 
-Cập nhật code gần nhất (commit 826efed): ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit fffa7d6): VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
@@ -118,7 +119,8 @@ Output tiêu biểu:
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
-  "Client", "Cap OK", "Reply OK", "VFS OK", "PREEMPT OK", "ROOT SWITCH n>1"
+  "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "PREEMPT OK",
+  "ROOT SWITCH n>1"
 - user layout chung: boot mappings tại 0x0000_0010_0000_0000 (64 GiB);
   full user range hiện tại 64..128 GiB
 
@@ -640,9 +642,9 @@ x86_64:
 ---------------
 Kernel fallback: `crates/vifast-kernel/src/fs.rs`; user-space service:
 `crates/vifast-server/src/main.rs` + `vifast-abi::vfs`.
-- Server Rust sở hữu `/motd` và `/scratch`, trả lời OPEN/READ/WRITE/CLOSE qua
-  endpoint IPC hiện có; write dùng IPC buffer, read trả tối đa 24 byte trong
-  reply data.
+- Server Rust sở hữu `/motd` và `/scratch`, trả lời OPEN/READ/WRITE/CLOSE/STAT
+  qua endpoint IPC hiện có; write dùng IPC buffer, read trả tối đa 24 byte
+  trong reply data.
 - Client demo không còn gọi syscall Open/Read/Write/Close; kernel ramfs chỉ
   còn selftest/fallback. Server chưa tách thành module riêng và chưa có
   directory/permission/persistence.

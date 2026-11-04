@@ -17,6 +17,7 @@
 - `395a589` — notification capability transfer demo.
 - `85fe2cf` — user-space VFS server over IPC.
 - `826efed` — ASID/PCID VSpace tagging.
+- `fffa7d6` — VFS STAT request.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -53,7 +54,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 33 / 33 / 33 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565216 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `6f9f03bd134b7386a3e6ae1434193ccd60bc4f67b4798633c47dbe2aa291e781`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `3823fef95bd7bed33f30190a7c18a49823df554b7bbad083c1a64b055cd83126`.
 
 ---
 
@@ -185,6 +186,13 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## 8.7 — VFS STAT
+
+- Commit `fffa7d6 feat: add vfs stat request`.
+- Thêm `vfs::STAT`; server trả `OK` + size trong reply data0.
+- Client kiểm tra `/scratch` sau read-back; in `VFS STAT OK`.
+- Harness yêu cầu đúng một `VFS STAT OK`; QEMU 3/3 PASS.
 
 ## 8.6 — ASID/PCID cho VSpace
 
