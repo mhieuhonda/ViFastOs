@@ -9,6 +9,7 @@
 - `c5119e7` — 8.2 ReplyRecv.
 - `a18663f` — 8.3 Fault endpoint tối giản.
 - `854744a` — 8.1 IPC buffer API/core.
+- `49e7b1f` — 8.1b IPC buffer demo end-to-end.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
 ## WIP còn dở
@@ -17,8 +18,8 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## CẦN QUYẾT ĐỊNH
 
-- 8.4 server/client Rust ELF chưa triển khai; demo IPC buffer dài trong user.S
-  cũng chưa nối (API/core 8.1 đã xong).
+- 8.4 server/client Rust ELF chưa triển khai. Demo IPC buffer dài trong user.S
+  đã nối xong (8.1b).
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -143,3 +144,21 @@ follow-up `62b31f4`.
 - `vifast-kernel` 77/77; PTE 11/11; ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; ROOT SWITCH 47861 / 38447 / 15977 (lần đầu).
 - Chưa nối demo chuỗi dài trong user.S; đó là phần còn lại của 3c.
+
+## 8.1b — IPC buffer demo end-to-end
+
+- Commit `49e7b1f feat: demo ipc buffer transfer across tasks`.
+- Root cấp hai Frame IPC buffer từ data Untyped, map RW vào VSpace server/client
+  tại `IPC_BUF_SERVER_VA` / `IPC_BUF_CLIENT_VA`, rồi gọi `TcbSetIpcBuffer`.
+- Client ghi `IPC BUF OK\n` vào buffer trước vòng Send; server đọc buffer sau
+  ReplyRecv và in qua DebugWrite. Kernel copy 32 word giữa hai PA thật sự.
+- Sửa lỗi nền tảng: `copy_frame_to_frame` trước đây dùng default no-op trong cả
+  ba platform; nay copy trực tiếp PA. Host fake đã test từ trước nhưng QEMU chưa
+  đi qua implementation thật.
+- FrameMap đầu của client đổi hint 0 → `DATA_VA` để buffer root map không đẩy
+  data frame ra ngoài allowlist của DebugWrite.
+- Read/write user allowlist thêm hai IPC buffer VA cho cả ba platform.
+- `vifast-kernel` 77/77; PTE 11/11; ELF 17/17; build không warning.
+- QEMU 3/3 PASS ×3; ROOT SWITCH 23754 / 27659 / 9203 (lần đầu).
+  Boot Untyped RISC-V 19/32, AArch/x86 21/32; data test-exit 23/64 RISC-V,
+  24/64 AArch/x86, 8/48 object.
