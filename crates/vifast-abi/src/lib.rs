@@ -445,6 +445,7 @@ pub enum SyscallId {
     Stat = 39,
     Seek = 40,
     TcbSetIpcBuffer = 41,
+    FrameWrite = 42,
 }
 
 /// Generic register arguments for a syscall.  Architecture ports decode

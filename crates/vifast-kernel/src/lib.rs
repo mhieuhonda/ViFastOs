@@ -67,6 +67,13 @@ pub enum UserAction {
         ptr: u64,
         len: u64,
     },
+    /// Copy a user buffer into a Frame at a byte offset.
+    FrameWrite {
+        frame: ObjRef,
+        offset: u64,
+        ptr: u64,
+        len: u64,
+    },
     /// The syscall blocked the current TCB.  The architecture trap handler must
     /// save its context and schedule another TCB.
     Blocked,
@@ -2735,6 +2742,24 @@ impl Kernel {
             .and_then(|table| table.resume_error.take())
     }
 
+    /// Copy bytes into an existing Frame at a byte offset.  This is used by
+    /// loaders that hold a Frame capability but have no mapping of their own.
+    pub fn copy_frame_bytes(
+        &mut self,
+        frame_ref: ObjRef,
+        offset: usize,
+        bytes: &[u8],
+    ) -> KResult<()> {
+        let frame = *self.frame(frame_ref).ok_or(KError::WrongType)?;
+        let end = offset.checked_add(bytes.len()).ok_or(KError::InvalidArg)?;
+        if end > frame.size {
+            return Err(KError::InvalidArg);
+        }
+        let ops = self.page_table_ops.ok_or(KError::MissingPageTable)?;
+        ops.copy_to_frame(frame.pa as u64 + offset as u64, bytes);
+        Ok(())
+    }
+
     pub fn set_ipc_buffer(&mut self, tcb: ObjRef, frame: ObjRef, va: u64) -> KResult<()> {
         let vspace = self
             .tcb(tcb)
@@ -3122,7 +3147,12 @@ impl Kernel {
                     Ok(object) => object,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
-                let mut cap = Cap::new(object, ty, Rights::READ | Rights::WRITE | Rights::GRANT);
+                let rights = if ty == ObjType::Frame {
+                    Rights::READ | Rights::WRITE | Rights::EXEC | Rights::GRANT
+                } else {
+                    Rights::READ | Rights::WRITE | Rights::GRANT
+                };
+                let mut cap = Cap::new(object, ty, rights);
                 cap.parent = Some(CapRef {
                     addr: SlotAddr {
                         tcb,
@@ -3302,6 +3332,23 @@ impl Kernel {
                         error: KError::Ok,
                     },
                     Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::FrameWrite as u64 => {
+                let frame = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Frame),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                UserAction::FrameWrite {
+                    frame: frame.obj,
+                    offset: a1,
+                    ptr: a2,
+                    len: a3,
                 }
             }
             n if n == SyscallId::FrameMap as u64 => {
@@ -7031,6 +7078,22 @@ mod tests {
         assert!(kernel.delete_cap(faulting, 1).is_ok());
         assert_eq!(kernel.fault_endpoint(faulting), None);
         assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn frame_write_copies_bytes_and_rejects_overflow() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_pte_fake();
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(pte_ops(PteFormat::X86));
+        let frame = kernel.create_frame(0x2000, 4096).unwrap();
+        assert_eq!(kernel.copy_frame_bytes(frame, 0, b"abc"), Ok(()));
+        assert_eq!(fake_byte(0x2000, 0), b'a');
+        assert_eq!(fake_byte(0x2000, 2), b'c');
+        assert_eq!(
+            kernel.copy_frame_bytes(frame, 4095, &[1, 2]),
+            Err(KError::InvalidArg)
+        );
     }
 
     #[test]

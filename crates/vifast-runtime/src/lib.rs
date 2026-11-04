@@ -681,6 +681,23 @@ pub mod syscall {
                     }
                 }
             }
+            UserAction::FrameWrite {
+                frame,
+                offset,
+                ptr,
+                len,
+            } => {
+                let len = (len as usize).min(USER_COPY_MAX);
+                let mut buf = [0u8; USER_COPY_MAX];
+                if A::read_user(ptr, &mut buf[..len]).is_err() {
+                    A::write_result(context, KError::InvalidArg, 0, 0, [0; 4]);
+                } else {
+                    match kernel.copy_frame_bytes(frame, offset as usize, &buf[..len]) {
+                        Ok(()) => A::write_result(context, KError::Ok, 0, 0, [0; 4]),
+                        Err(error) => A::write_result(context, error, 0, 0, [0; 4]),
+                    }
+                }
+            }
             UserAction::Debug { ptr, len } => {
                 let len = (len as usize).min(USER_COPY_MAX);
                 let mut buf = [0u8; USER_COPY_MAX];

@@ -35,6 +35,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vifast-client"
+version = "0.1.0"
+dependencies = [
+ "vifast-abi",
+ "vifast-user",
+]
+
+[[package]]
 name = "vifast-elf"
 version = "0.1.0"
 
@@ -125,6 +133,7 @@ name = "vifast-root"
 version = "0.1.0"
 dependencies = [
  "vifast-abi",
+ "vifast-elf",
  "vifast-user",
 ]
 
@@ -136,6 +145,14 @@ dependencies = [
  "vifast-arch",
  "vifast-elf",
  "vifast-kernel",
+]
+
+[[package]]
+name = "vifast-server"
+version = "0.1.0"
+dependencies = [
+ "vifast-abi",
+ "vifast-user",
 ]
 
 [[package]]

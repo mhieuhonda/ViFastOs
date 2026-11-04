@@ -15,7 +15,39 @@ OBJCOPY="$(rustc --print sysroot)/lib/rustlib/${HOST}/bin/llvm-objcopy"
 ROOT_RV=target/riscv64imac-unknown-none-elf/root-task/vifast-root
 ROOT_ARM=target/aarch64-unknown-none-softfloat/root-task/vifast-root
 ROOT_X86=target/x86_64-unknown-none/root-task/vifast-root
+SERVER_RV=target/riscv64imac-unknown-none-elf/root-task/vifast-server
+CLIENT_RV=target/riscv64imac-unknown-none-elf/root-task/vifast-client
+SERVER_ARM=target/aarch64-unknown-none-softfloat/root-task/vifast-server
+CLIENT_ARM=target/aarch64-unknown-none-softfloat/root-task/vifast-client
+SERVER_X86=target/x86_64-unknown-none/root-task/vifast-server
+CLIENT_X86=target/x86_64-unknown-none/root-task/vifast-client
 
+build_modules() {
+    target="$1"
+    linker="$2"
+    shift 2
+    for pkg in vifast-server vifast-client; do
+        cargo rustc -p "$pkg" --profile root-task --target "$target" -- \
+            "$@" \
+            -C link-arg=-T -C link-arg="$linker" \
+            -C link-arg=--defsym=ROOT_ELF_BASE=0x1000010000 \
+            -C link-arg=-z -C link-arg=max-page-size=4096 \
+            -C link-arg=-z -C link-arg=separate-code
+    done
+}
+
+build_modules riscv64imac-unknown-none-elf crates/vifast-root/linkers/riscv64.ld \
+    -C code-model=medium -C relocation-model=static
+build_modules aarch64-unknown-none-softfloat crates/vifast-root/linkers/aarch64.ld \
+    -C relocation-model=static
+build_modules x86_64-unknown-none crates/vifast-root/linkers/x86_64.ld \
+    -C relocation-model=pic -C link-arg=-no-pie
+
+for elf in "$SERVER_RV" "$CLIENT_RV" "$SERVER_ARM" "$CLIENT_ARM" "$SERVER_X86" "$CLIENT_X86"; do
+    "$OBJCOPY" --strip-all "$elf" "$elf.stripped"
+done
+
+VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" \
 cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf -- \
     -C code-model=medium -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/riscv64.ld \
@@ -25,6 +57,7 @@ cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none
 "$OBJCOPY" --strip-all "$ROOT_RV" "$ROOT_RV.stripped"
 scripts/check-root-elf.sh "$ROOT_RV.stripped" riscv64imac-unknown-none-elf 243
 
+VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" \
 cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
     -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/aarch64.ld \
@@ -34,6 +67,7 @@ cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-sof
 "$OBJCOPY" --strip-all "$ROOT_ARM" "$ROOT_ARM.stripped"
 scripts/check-root-elf.sh "$ROOT_ARM.stripped" aarch64-unknown-none-softfloat 183
 
+VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" \
 cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
     -C relocation-model=pic \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/x86_64.ld \

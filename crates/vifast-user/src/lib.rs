@@ -5,7 +5,7 @@
 
 #![no_std]
 
-use vifast_abi::{KError, ObjType, SyscallId};
+use vifast_abi::{KError, ObjType, SyscallId, CAP_NONE};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SyscallResult {
@@ -33,11 +33,11 @@ pub unsafe fn syscall(number: u64, args: [u64; 6]) -> (u64, u64) {
             "int 0x80",
             inlateout("rax") number => error,
             inlateout("rdi") args[0] => value,
-            in("rsi") args[1],
-            in("rdx") args[2],
-            in("rcx") args[3],
-            in("r8") args[4],
-            in("r9") args[5],
+            inlateout("rsi") args[1] => _,
+            inlateout("rdx") args[2] => _,
+            inlateout("rcx") args[3] => _,
+            inlateout("r8") args[4] => _,
+            inlateout("r9") args[5] => _,
             lateout("r10") _,
             lateout("r11") _,
             lateout("r12") _,
@@ -56,10 +56,10 @@ pub unsafe fn syscall(number: u64, args: [u64; 6]) -> (u64, u64) {
             in("x8") number,
             inlateout("x0") args[0] => error,
             inlateout("x1") args[1] => value,
-            in("x2") args[2],
-            in("x3") args[3],
-            in("x4") args[4],
-            in("x5") args[5],
+            inlateout("x2") args[2] => _,
+            inlateout("x3") args[3] => _,
+            inlateout("x4") args[4] => _,
+            inlateout("x5") args[5] => _,
             lateout("x6") _,
             lateout("x7") _,
             lateout("x9") _,
@@ -83,10 +83,10 @@ pub unsafe fn syscall(number: u64, args: [u64; 6]) -> (u64, u64) {
             in("a7") number,
             inlateout("a0") args[0] => error,
             inlateout("a1") args[1] => value,
-            in("a2") args[2],
-            in("a3") args[3],
-            in("a4") args[4],
-            in("a5") args[5],
+            inlateout("a2") args[2] => _,
+            inlateout("a3") args[3] => _,
+            inlateout("a4") args[4] => _,
+            inlateout("a5") args[5] => _,
             lateout("a6") _,
             lateout("t0") _,
             lateout("t1") _,
@@ -335,6 +335,16 @@ pub fn frame_map(vspace_slot: u8, frame_slot: u8, va: u64, rights: u8) -> Syscal
     result(e, v)
 }
 
+pub fn frame_write(frame_slot: u8, offset: u64, ptr: u64, len: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::FrameWrite as u64,
+            [frame_slot as u64, offset, ptr, len, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn frame_unmap(vspace_slot: u8, va: u64, frame_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(
@@ -404,6 +414,63 @@ pub fn wait(notification_slot: u8) -> SyscallResult {
             [notification_slot as u64, 0, 0, 0, 0, 0],
         )
     };
+    result(e, v)
+}
+
+pub fn send(endpoint_slot: u8, label: u64, data0: u64, data1: u64, data2: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::Send as u64,
+            [endpoint_slot as u64, label, data0, data1, data2, CAP_NONE],
+        )
+    };
+    result(e, v)
+}
+
+/// Blocking Call.  The reply is delivered through the normal message
+/// registers when the server eventually replies.
+pub fn call(endpoint_slot: u8, label: u64, data0: u64, data1: u64, data2: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::Call as u64,
+            [endpoint_slot as u64, label, data0, data1, data2, CAP_NONE],
+        )
+    };
+    result(e, v)
+}
+
+pub fn poll(notification_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::Poll as u64,
+            [notification_slot as u64, 0, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn open(path: u64, len: u64, flags: u64) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::Open as u64, [path, len, flags, 0, 0, 0]) };
+    result(e, v)
+}
+
+pub fn read(fd: u64, buffer: u64, len: u64) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::Read as u64, [fd, buffer, len, 0, 0, 0]) };
+    result(e, v)
+}
+
+pub fn write(fd: u64, buffer: u64, len: u64) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::Write as u64, [fd, buffer, len, 0, 0, 0]) };
+    result(e, v)
+}
+
+pub fn close(fd: u64) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::Close as u64, [fd, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
+pub fn seek(fd: u64, offset: u64, whence: u64) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::Seek as u64, [fd, offset, whence, 0, 0, 0]) };
     result(e, v)
 }
 

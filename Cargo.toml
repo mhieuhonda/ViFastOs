@@ -28,6 +28,8 @@ members = [
     "crates/vifast-kernel-aarch64",
     "crates/vifast-kernel-riscv64",
     "crates/vifast-root",
+    "crates/vifast-server",
+    "crates/vifast-client",
 ]
 
 [workspace.package]

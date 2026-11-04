@@ -54,7 +54,7 @@ static mut USER_FRAME: DataPool = DataPool([0; 262144]);
 #[repr(align(16))]
 struct Metadata([u8; 65536]);
 static mut METADATA: Metadata = Metadata([0; 65536]);
-static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
+static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
 static mut TRAP_STACK: Stack = Stack([0; 32768]);
 static mut IST_STACK: Stack = Stack([0; 32768]);
 #[allow(dead_code)]
@@ -832,7 +832,7 @@ impl Platform for X86Platform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if !user_range(ptr, out.len(), USER_CODE_VA, 4096)
+        if !user_range(ptr, out.len(), USER_CODE_VA, 0x2_0000)
             && !user_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             && !user_range(ptr, out.len(), USER_DATA_VA, 4096)
             && !user_range(

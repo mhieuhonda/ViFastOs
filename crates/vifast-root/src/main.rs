@@ -11,8 +11,7 @@ use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
     CLIENT_STACK_BASE, CLIENT_STACK_TOP, CODE_VA, FAULT1_STACK_TOP, FAULT2_STACK_TOP,
     FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
-    SERVER_STACK_TOP, USER_ENTRY_CLIENT, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3,
-    USER_ENTRY_FAULT4, USER_ENTRY_SERVER,
+    SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
 };
 use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_user::SyscallResult;
@@ -32,6 +31,16 @@ const BOOTINFO_OK: &[u8] = b"BOOTINFO OK\n";
 const CLIENT_VSPACE_OK: &[u8] = b"CLIENT VSPACE OK\n";
 const FAULT_EP_OK: &[u8] = b"FAULT EP OK addr=0x";
 const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
+const MODULES_OK: &[u8] = b"RUST MODULES OK\n";
+static SERVER_ELF: &[u8] = include_bytes!(env!("VIFAST_SERVER_ELF"));
+static CLIENT_ELF: &[u8] = include_bytes!(env!("VIFAST_CLIENT_ELF"));
+const MODULE_WINDOW: u64 = 0x10_0000;
+#[cfg(target_arch = "riscv64")]
+const USER_ELF_MACHINE: u16 = 243;
+#[cfg(target_arch = "aarch64")]
+const USER_ELF_MACHINE: u16 = 183;
+#[cfg(target_arch = "x86_64")]
+const USER_ELF_MACHINE: u16 = 62;
 const CLIENT_UNTYPED_SIZE: usize = 0x1_0000;
 const CLIENT_UNTYPED_OBJECTS: usize = 8;
 
@@ -67,7 +76,6 @@ fn write_fault_addr(addr: u64) {
         hex.as_ptr() as u64,
         hex.len() as u64,
     ));
-    write(b"\n");
 }
 
 fn copy(src: u8, tcb: u8, dst: u8, rights: Rights) {
@@ -111,6 +119,67 @@ impl SlotAllocator {
         self.next += 1;
         slot
     }
+}
+
+fn load_module(
+    data_untyped: u8,
+    target_vspace: u8,
+    bytes: &[u8],
+    slots: &mut SlotAllocator,
+) -> u64 {
+    let image = match vifast_elf::parse(
+        bytes,
+        USER_ELF_MACHINE,
+        CODE_VA as u64,
+        CODE_VA as u64 + MODULE_WINDOW,
+    ) {
+        Ok(image) => image,
+        Err(_) => {
+            write(b"MODULE PARSE BAD\n");
+            panic!("module ELF invalid");
+        }
+    };
+    for segment in image.segments() {
+        let page_base = segment.vaddr & !0xfff;
+        let page_count = segment.page_count();
+        let mut page = 0;
+        while page < page_count {
+            let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
+            let frame = slots.alloc();
+            retype(data_untyped, ObjType::Frame, frame);
+            let copy_start = core::cmp::max(va, segment.vaddr);
+            let copy_end = core::cmp::min(
+                va + vifast_abi::DEFAULT_PAGE_SIZE,
+                segment.vaddr + segment.file_size as u64,
+            );
+            if copy_start < copy_end {
+                let source = segment.file_offset + (copy_start - segment.vaddr) as usize;
+                let frame_offset = copy_start - va;
+                let mut done = 0u64;
+                let total = copy_end - copy_start;
+                while done < total {
+                    let chunk = core::cmp::min(256, total - done);
+                    check(vifast_user::frame_write(
+                        frame,
+                        frame_offset + done,
+                        bytes.as_ptr().wrapping_add(source + done as usize) as u64,
+                        chunk,
+                    ));
+                    done += chunk;
+                }
+            }
+            let mut rights = Rights::READ;
+            if segment.writable() {
+                rights = rights | Rights::WRITE;
+            }
+            if segment.executable() {
+                rights = rights | Rights::EXEC;
+            }
+            map_with_tables(data_untyped, target_vspace, frame, va, rights, slots);
+            page += 1;
+        }
+    }
+    image.entry
 }
 
 #[no_mangle]
@@ -168,16 +237,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     retype(meta_untyped, ObjType::Tcb, fault3_tcb);
     retype(meta_untyped, ObjType::Tcb, fault4_tcb);
     retype(meta_untyped, ObjType::Endpoint, fault_endpoint_slot);
-
-    copy(endpoint_slot, server_tcb, 1, Rights::READ);
-    check(vifast_user::tcb_configure(
-        server_tcb,
-        USER_ENTRY_SERVER as u64,
-        SERVER_STACK_TOP as u64,
-        server_vspace,
-        5,
-    ));
-    check(vifast_user::tcb_resume(server_tcb));
 
     check(vifast_user::tcb_configure(
         fault1_tcb,
@@ -261,7 +320,26 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         Rights::READ | Rights::WRITE,
         &mut slots,
     );
+
+    let server_entry = load_module(data_untyped, server_vspace, SERVER_ELF, &mut slots);
+    let client_entry = load_module(data_untyped, client_vspace, CLIENT_ELF, &mut slots);
+    write(MODULES_OK);
     write(CLIENT_VSPACE_OK);
+
+    copy(endpoint_slot, server_tcb, 1, Rights::READ);
+    check(vifast_user::tcb_configure(
+        server_tcb,
+        server_entry,
+        SERVER_STACK_TOP as u64,
+        server_vspace,
+        5,
+    ));
+    check(vifast_user::tcb_set_ipc_buffer(
+        server_tcb,
+        server_buffer_frame,
+        IPC_BUF_SERVER_VA as u64,
+    ));
+    check(vifast_user::tcb_resume(server_tcb));
 
     let client_untyped = slots.alloc();
     check(vifast_user::retype_untyped(
@@ -282,15 +360,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     );
     check(vifast_user::tcb_configure(
         client_tcb,
-        USER_ENTRY_CLIENT as u64,
+        client_entry,
         CLIENT_STACK_TOP as u64,
         client_vspace,
         5,
-    ));
-    check(vifast_user::tcb_set_ipc_buffer(
-        server_tcb,
-        server_buffer_frame,
-        IPC_BUF_SERVER_VA as u64,
     ));
     check(vifast_user::tcb_set_ipc_buffer(
         client_tcb,

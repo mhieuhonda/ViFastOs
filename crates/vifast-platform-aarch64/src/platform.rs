@@ -51,7 +51,7 @@ static mut USER_DATA: DataPool = DataPool([0; 262144]);
 #[repr(align(16))]
 struct Metadata([u8; 65536]);
 static mut METADATA: Metadata = Metadata([0; 65536]);
-static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
+static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
 static mut TIMER_INTERVAL: u64 = 0;
 static mut TRAP_STACK: UserStack = UserStack([0; 32768]);
 #[allow(dead_code)]
@@ -293,7 +293,7 @@ impl vifast_kernel::PageTableOps for PageOps {
             let end = pa.saturating_add(size as u64);
             let mut addr = pa & !(dline - 1);
             while addr < end {
-                core::arch::asm!("dc cvau, {}", in(reg) addr, options(nostack));
+                core::arch::asm!("dc civac, {}", in(reg) addr, options(nostack));
                 addr = addr.saturating_add(dline);
             }
             core::arch::asm!("dsb ish", options(nostack));
@@ -487,7 +487,7 @@ impl Platform for Aarch64Platform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
+        if page_in_range(ptr, out.len(), USER_CODE_VA, 0x2_0000)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
             || page_in_range(

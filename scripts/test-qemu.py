@@ -97,6 +97,7 @@ def run_qemu(
         and 0x1000301000 in faults
         and output.count("ROOT RUST") == 1
         and output.count("BOOTINFO OK") == 1
+        and output.count("RUST MODULES OK") == 1
         and output.count("CLIENT VSPACE OK") == 1
         and output.count("FAULT EP OK") == 1
         and output.count("ROOT READY") == 1

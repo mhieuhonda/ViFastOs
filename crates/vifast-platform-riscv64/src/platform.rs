@@ -39,7 +39,7 @@ static mut USER_DATA: DataPool = DataPool([0; 262144]);
 #[repr(align(16))]
 struct Metadata([u8; 65536]);
 static mut METADATA: Metadata = Metadata([0; 65536]);
-static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
+static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct BootPool([u8; 131072]);
@@ -411,7 +411,7 @@ impl Platform for RiscvPlatform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
+        if page_in_range(ptr, out.len(), USER_CODE_VA, 0x2_0000)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
             || page_in_range(
