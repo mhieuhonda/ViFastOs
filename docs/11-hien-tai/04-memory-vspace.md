@@ -133,7 +133,9 @@ Chưa có IPI shootdown đa hart. Khi thêm SMP scheduler, cần:
 
 `PageTable` object đã có metadata `{root, mapped: {vspace, va_base, level}}` và PageTableMap.
 Retype VSpace đã cấp root + aux page, zero và gọi `install_kernel`; runtime
-root vẫn dùng bảng tĩnh cho tới khi switch root ở Bước 4. Chưa có:
+root vẫn dùng bảng tĩnh cho tới khi switch root ở Bước 4. `kernel_accessible_range()`
+assert metadata/data nằm trong identity map, và boot check xác nhận các symbol
+trap/kernel/MMIO nằm trong `KERNEL_SHARED_SLOTS`. Chưa có:
 
 - allocator page table page tổng quát;
 - range VA allocator nhiều vùng;

@@ -131,6 +131,8 @@ sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham
   - `Exit`: thoát.
 
 Mọi `unsafe` copy user nằm sau `Platform::read_user`/`write_user`.
+Runtime assert metadata/data Untyped nằm trong `kernel_accessible_range()` và gọi
+`check_kernel_mappings()` trước khi chạy user.
 
 ## 5. Timer
 

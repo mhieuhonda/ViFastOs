@@ -452,6 +452,9 @@ pub struct Object {
     pub kind: Kind,
     /// Untyped that owns this object, if it was created by retype.
     pub owner: Option<ObjRef>,
+    /// Capability slot through which retype created this object.  Revoking a
+    /// different copy of the same Untyped must not destroy it.
+    pub creator: Option<SlotAddr>,
 }
 
 impl Object {
@@ -460,6 +463,7 @@ impl Object {
             gen: 0,
             kind: Kind::Free,
             owner: None,
+            creator: None,
         }
     }
 

@@ -68,6 +68,9 @@ pub trait Platform: Arch + Console {
     fn vspace_root() -> u64;
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps;
+    /// Verify that trap entry, kernel stacks, descriptor tables, kernel
+    /// storage and MMIO all live in KERNEL_SHARED_SLOTS before switching roots.
+    fn check_kernel_mappings() -> bool;
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError>;
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError>;
 
@@ -127,6 +130,10 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     let kernel = A::init_kernel();
     kernel.set_page_table_ops(A::page_table_ops());
+    if !A::check_kernel_mappings() {
+        vifast_kernel::klog!(A, "KERNEL MAPPING CHECK FAILED");
+        A::exit(1);
+    }
     vifast_kernel::klog!(
         A,
         "SELFTEST PASS (ipc_tx={} ipc_rx={} ntfn={} ctx={} ticks={})",
@@ -164,6 +171,18 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     let data = A::data_page();
     let metadata = A::metadata_page();
+    let (accessible_lo, accessible_hi) = A::page_table_ops().kernel_accessible_range();
+    let accessible = |base: usize, len: usize| {
+        accessible_lo >= accessible_hi
+            || (base as u64 >= accessible_lo
+                && (base as u64).saturating_add(len as u64) <= accessible_hi)
+    };
+    if !accessible(metadata.as_ptr() as usize, metadata.len())
+        || !accessible(data.as_ptr() as usize, data.len())
+    {
+        vifast_kernel::klog!(A, "UNTYPED OUTSIDE KERNEL ACCESSIBLE RANGE");
+        A::exit(1);
+    }
     let Some(meta_untyped) = kernel.create_untyped_with_limit(
         metadata.as_mut_ptr() as usize,
         metadata.len(),

@@ -112,6 +112,11 @@ pub trait PageTableOps {
     /// Populate a fresh VSpace root (and optional private PDPT/L1) with the
     /// architecture's shared kernel entries.  User entries stay invalid.
     fn install_kernel(&self, _root_pa: u64, _aux_pa: u64) {}
+    /// Physical range the kernel can access through its identity map.
+    /// `(0, 0)` means the platform does not advertise a restriction.
+    fn kernel_accessible_range(&self) -> (u64, u64) {
+        (0, 0)
+    }
     fn user_va_range(&self) -> (u64, u64) {
         (0, 0)
     }
@@ -216,10 +221,15 @@ impl Kernel {
     }
 
     fn alloc(&mut self, kind: Kind) -> Option<ObjRef> {
-        self.alloc_owned(kind, None)
+        self.alloc_owned(kind, None, None)
     }
 
-    fn alloc_owned(&mut self, kind: Kind, owner: Option<ObjRef>) -> Option<ObjRef> {
+    fn alloc_owned(
+        &mut self,
+        kind: Kind,
+        owner: Option<ObjRef>,
+        creator: Option<SlotAddr>,
+    ) -> Option<ObjRef> {
         for i in 0..MAX_OBJECTS {
             if self.objs[i].is_free() {
                 let gen = self.objs[i].gen.wrapping_add(1);
@@ -227,6 +237,7 @@ impl Kernel {
                 self.objs[i].gen = gen;
                 self.objs[i].kind = kind;
                 self.objs[i].owner = owner;
+                self.objs[i].creator = creator;
                 return Some(ObjRef {
                     index: i as u8,
                     gen,
@@ -278,6 +289,13 @@ impl Kernel {
         page_size: usize,
         max_objects: usize,
     ) -> Option<ObjRef> {
+        if let Some(ops) = self.page_table_ops {
+            let (lo, hi) = ops.kernel_accessible_range();
+            let end = base.checked_add(size)?;
+            if lo < hi && ((base as u64) < lo || end as u64 > hi) {
+                return None;
+            }
+        }
         self.alloc(Kind::Untyped(Untyped {
             base,
             size,
@@ -515,6 +533,18 @@ impl Kernel {
     /// notification and TCB metadata do not consume user physical pages in
     /// this reference model; they are allocated from the fixed object table.
     pub fn retype(&mut self, untyped: ObjRef, ty: ObjType) -> KResult<ObjRef> {
+        self.retype_as(untyped, ty, None)
+    }
+
+    /// Retype with the capability that authorizes allocation.  Syscall
+    /// Retype uses this so a different copy of the same Untyped cannot destroy
+    /// objects created through this cap.
+    pub fn retype_as(
+        &mut self,
+        untyped: ObjRef,
+        ty: ObjType,
+        creator: Option<SlotAddr>,
+    ) -> KResult<ObjRef> {
         let (base, size, bump, page, max_objects, objects) = {
             let region = self.untyped(untyped).ok_or(KError::WrongType)?;
             (
@@ -607,7 +637,7 @@ impl Kernel {
             kind
         };
         let object = self
-            .alloc_owned(kind, Some(untyped))
+            .alloc_owned(kind, Some(untyped), creator)
             .ok_or(KError::OutOfMemory)?;
         let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
         region.bump = consumed;
@@ -983,6 +1013,14 @@ impl Kernel {
             slot: src_slot,
         });
         self.install_cap(dst_tcb, dst_slot, derived)
+    }
+
+    fn cap_addr_is_descendant(&self, addr: SlotAddr, target: SlotAddr) -> bool {
+        if addr == target {
+            return true;
+        }
+        self.cap_at(addr)
+            .is_some_and(|cap| self.is_descendant(&cap, target))
     }
 
     fn is_descendant(&self, cap: &Cap, target: SlotAddr) -> bool {
@@ -1427,6 +1465,7 @@ impl Kernel {
         if let Some(object) = self.get_mut(obj) {
             object.kind = Kind::Free;
             object.owner = None;
+            object.creator = None;
             let gen = object.gen.wrapping_add(1);
             object.gen = if gen == 0 { 1 } else { gen };
         }
@@ -1443,7 +1482,13 @@ impl Kernel {
 
         if target_cap.ty == ObjType::Untyped {
             for i in 0..MAX_OBJECTS {
-                if self.objs[i].owner == Some(target_cap.obj) {
+                if self.objs[i].owner != Some(target_cap.obj) {
+                    continue;
+                }
+                let created_here = self.objs[i]
+                    .creator
+                    .is_some_and(|creator| self.cap_addr_is_descendant(creator, target));
+                if created_here {
                     let r = ObjRef {
                         index: i as u8,
                         gen: self.objs[i].gen,
@@ -1508,9 +1553,16 @@ impl Kernel {
             for object in objects.iter().take(object_count) {
                 self.destroy_object(*object)?;
             }
+            let remaining = self
+                .objs
+                .iter()
+                .filter(|object| object.owner == Some(target_cap.obj))
+                .count();
             if let Some(region) = self.untyped_mut(target_cap.obj) {
-                region.bump = 0;
-                region.objects = 0;
+                region.objects = remaining;
+                if remaining == 0 {
+                    region.bump = 0;
+                }
             }
         }
         Ok(removed)
@@ -1875,7 +1927,14 @@ impl Kernel {
                         error: KError::SlotOccupied,
                     };
                 }
-                let object = match self.retype(untyped.obj, ty) {
+                let object = match self.retype_as(
+                    untyped.obj,
+                    ty,
+                    Some(SlotAddr {
+                        tcb,
+                        slot: untyped_slot,
+                    }),
+                ) {
                     Ok(object) => object,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
@@ -2423,10 +2482,11 @@ mod tests {
             }
         );
         let child = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
-        assert!(kernel.copy_cap(root, 1, child, 1, Rights::ALL, 0).is_ok());
         kernel.enqueue(child);
         assert_eq!(kernel.pick(), Some(child));
-        assert_eq!(kernel.revoke_cap(child, 1), Err(KError::IllegalOperation));
+        // The child TCB was created through root's cap; root cannot revoke
+        // that group while the child itself is the current thread.
+        assert_eq!(kernel.revoke_cap(root, 1), Err(KError::IllegalOperation));
         assert!(kernel.get(child).is_some());
     }
 
@@ -2764,6 +2824,9 @@ mod tests {
         fn vspace_pages(&self) -> usize {
             2
         }
+        fn kernel_accessible_range(&self) -> (u64, u64) {
+            (0x1000, 0x10000)
+        }
         fn install_kernel(&self, root_pa: u64, aux_pa: u64) {
             let root_base = ((root_pa >> 12) as usize) * 512;
             let aux_base = ((aux_pa >> 12) as usize) * 512;
@@ -2935,10 +2998,17 @@ mod tests {
         kernel
             .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
             .unwrap();
-        let pt1 = kernel.retype(untyped, ObjType::PageTable).unwrap();
-        let pt2 = kernel.retype(untyped, ObjType::PageTable).unwrap();
-        let pt3 = kernel.retype(untyped, ObjType::PageTable).unwrap();
-        let frame = kernel.retype(untyped, ObjType::Frame).unwrap();
+        let creator = Some(SlotAddr { tcb: root, slot: 1 });
+        let pt1 = kernel
+            .retype_as(untyped, ObjType::PageTable, creator)
+            .unwrap();
+        let pt2 = kernel
+            .retype_as(untyped, ObjType::PageTable, creator)
+            .unwrap();
+        let pt3 = kernel
+            .retype_as(untyped, ObjType::PageTable, creator)
+            .unwrap();
+        let frame = kernel.retype_as(untyped, ObjType::Frame, creator).unwrap();
         let space = kernel
             .create_vspace_with_page_size(0, 0x4000_0000, 0x4000_0000, 4096)
             .unwrap();
@@ -3105,6 +3175,53 @@ mod tests {
     }
 
     #[test]
+    fn revoke_copy_does_not_destroy_objects_of_another_cap() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        kernel.copy_cap(root, 1, client, 1, Rights::ALL, 0).unwrap();
+        let root_frame = kernel
+            .retype_as(
+                untyped,
+                ObjType::Frame,
+                Some(SlotAddr { tcb: root, slot: 1 }),
+            )
+            .unwrap();
+        let client_frame = kernel
+            .retype_as(
+                untyped,
+                ObjType::Frame,
+                Some(SlotAddr {
+                    tcb: client,
+                    slot: 1,
+                }),
+            )
+            .unwrap();
+
+        // Client revokes its copy: only its own frame dies, root's frame and
+        // the shared Untyped bump/accounting survive.
+        assert_eq!(kernel.revoke_cap(client, 1), Ok(0));
+        assert!(kernel.get(client_frame).is_none());
+        assert!(kernel.get(root_frame).is_some());
+        assert_eq!(kernel.untyped(untyped).unwrap().objects, 1);
+        assert!(kernel.untyped(untyped).unwrap().bump > 0);
+        assert!(kernel.lookup_cap(root, 1, None, Rights::NONE).is_ok());
+
+        // Root revokes the original cap: its frame is collected and only now
+        // does the empty Untyped reset its bump.
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(root_frame).is_none());
+        assert_eq!(kernel.untyped(untyped).unwrap().objects, 0);
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, 0);
+    }
+
+    #[test]
     fn revoking_page_table_clears_reverse_map_in_another_untyped() {
         let _guard = WALK_LOCK.lock().unwrap();
         reset_fake();
@@ -3132,10 +3249,20 @@ mod tests {
                 Cap::new(frame_untyped, ObjType::Untyped, Rights::ALL),
             )
             .unwrap();
-        let pt1 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
-        let pt2 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
-        let pt3 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
-        let frame = kernel.retype(frame_untyped, ObjType::Frame).unwrap();
+        let pt_creator = Some(SlotAddr { tcb: root, slot: 1 });
+        let frame_creator = Some(SlotAddr { tcb: root, slot: 2 });
+        let pt1 = kernel
+            .retype_as(pt_untyped, ObjType::PageTable, pt_creator)
+            .unwrap();
+        let pt2 = kernel
+            .retype_as(pt_untyped, ObjType::PageTable, pt_creator)
+            .unwrap();
+        let pt3 = kernel
+            .retype_as(pt_untyped, ObjType::PageTable, pt_creator)
+            .unwrap();
+        let frame = kernel
+            .retype_as(frame_untyped, ObjType::Frame, frame_creator)
+            .unwrap();
         let va = 0x4000_1000;
         kernel.map_page_table(pt1, space, va).unwrap();
         kernel.map_page_table(pt2, space, va).unwrap();
@@ -3170,7 +3297,10 @@ mod tests {
         let vs_untyped = kernel
             .create_untyped_with_limit(0x8000, 0x2000, 4096, 2)
             .unwrap();
-        let space = kernel.retype(vs_untyped, ObjType::VSpace).unwrap();
+        let space_creator = Some(SlotAddr { tcb: root, slot: 1 });
+        let space = kernel
+            .retype_as(vs_untyped, ObjType::VSpace, space_creator)
+            .unwrap();
         let pt_untyped = kernel
             .create_untyped_with_limit(0x1000, 0x4000, 4096, 5)
             .unwrap();
@@ -3180,9 +3310,16 @@ mod tests {
         kernel
             .install_cap(root, 2, Cap::new(pt_untyped, ObjType::Untyped, Rights::ALL))
             .unwrap();
-        let pt1 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
-        let pt2 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
-        let frame = kernel.retype(pt_untyped, ObjType::Frame).unwrap();
+        let pt_creator = Some(SlotAddr { tcb: root, slot: 2 });
+        let pt1 = kernel
+            .retype_as(pt_untyped, ObjType::PageTable, pt_creator)
+            .unwrap();
+        let pt2 = kernel
+            .retype_as(pt_untyped, ObjType::PageTable, pt_creator)
+            .unwrap();
+        let frame = kernel
+            .retype_as(pt_untyped, ObjType::Frame, pt_creator)
+            .unwrap();
         let va = 0x10_0000_1000;
         assert_eq!(kernel.map_page_table(pt1, space, va), Ok(2));
         assert_eq!(kernel.map_page_table(pt2, space, va), Ok(3));
@@ -3258,6 +3395,9 @@ mod tests {
             Err(KError::OutOfMemory)
         );
         assert_eq!(kernel.untyped(one_page).unwrap().bump, 0);
+        assert!(kernel
+            .create_untyped_with_limit(0x1_0000, 0x1000, 4096, 2)
+            .is_none());
     }
 
     #[test]

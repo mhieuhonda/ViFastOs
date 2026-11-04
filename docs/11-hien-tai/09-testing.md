@@ -22,7 +22,7 @@ cargo test -p vifast-runtime
 cargo test -p vifast-user
 ```
 
-Hiện có 32 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
+Hiện có 33 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -49,11 +49,14 @@ Hiện có 32 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 - walk safety: user range, thiếu bảng, leaf cấp cao, PTE valid, snapshot không đổi;
 - PageTableMap gán level 1/2/3, FrameMap qua bảng mới, từ chối bảng vượt range;
 - retype VSpace cấp root + aux page, hai VSpace độc lập;
+- revoke bản copy Untyped không chạm object của cap gốc;
+- assert Untyped nằm trong kernel_accessible_range();
 - PageTableMap không thay entry 0 dùng chung;
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
   trỏ tới trang đã free;
 - page table và VSpace thuộc hai Untyped khác nhau: revoke một bên không để
-  reverse map/metadata treo.
+  reverse map/metadata treo;
+- kernel accessible range và boot-time trap-path slot check trên cả 3 arch.
 
 `vifast-pte` có 9 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
 kiến trúc và các biên index.

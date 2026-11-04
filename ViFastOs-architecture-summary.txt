@@ -241,18 +241,18 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 491 dòng
-- AArch64: 600 dòng
-- x86_64: 721 dòng
+- RISC-V: 509 dòng
+- AArch64: 620 dòng
+- x86_64: 742 dòng
 
 runtime:
-- 407 dòng
+- 426 dòng
 
 vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 3372 dòng, không còn dependency vifast-arch
+- 3516 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 396808 bytes
@@ -328,7 +328,7 @@ Giới hạn cố định:
 - MAX_FILES = 8
 
 Object:
-- Object { gen: u32, kind: Kind, owner: Option<ObjRef> }
+- Object { gen: u32, kind: Kind, owner: Option<ObjRef>, creator: Option<SlotAddr> }
 - ObjRef { index: u8, gen: u32 }
 - Generation tăng khi slot tái sử dụng; ObjRef cũ bị từ chối.
 
@@ -377,8 +377,11 @@ Untyped/retype:
 - Notification: tiêu OBJ_NOTIFICATION_BYTES = 128.
 - Tcb: tiêu OBJ_TCB_BYTES = 4096 (quota accounting).
 - Hết Untyped trả OutOfMemory.
+- Mỗi object ghi `creator` = cap đã dùng để retype; revoke một bản copy
+  Untyped chỉ hủy object tạo qua cap đó hoặc cap con của nó.
+- Chỉ reset bump khi không còn object nào thuộc Untyped từ bất kỳ cap nào.
 - Revoke cap Untyped xoá descendant, destroy object thật (Frame unmap, TCB detach,
-  Endpoint/Notification wake lỗi), rồi reset bump/objects.
+  Endpoint/Notification wake lỗi).
 - Revoke cap không phải Untyped chỉ xoá descendant; object gốc vẫn sống.
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped.
 
@@ -618,7 +621,9 @@ Server A:
 Client B:
 - cap endpoint WRITE, VSpace WRITE, data Untyped WRITE,
   notification READ|WRITE|GRANT.
-- Retype data Untyped -> Frame slot 4.
+- Retype data Untyped -> Frame slot 4; Frame object creator = client slot 3.
+  Client CapRevoke(slot 3) chỉ hủy Frame do client tạo, không hủy object
+  root/server tạo qua cap gốc của cùng Untyped.
 - FrameMap, DebugWrite "Mapped".
 - Open /motd, Read, DebugWrite "ViFastOS ramfs".
 - Open /scratch O_CREATE|O_RDWR, Write, Seek, Read, DebugWrite, Close.
@@ -659,7 +664,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 32 test `vifast-kernel` + 9 test `vifast-pte`:
+Host test hiện có 33 test `vifast-kernel` + 9 test `vifast-pte`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -686,6 +691,9 @@ Host test hiện có 32 test `vifast-kernel` + 9 test `vifast-pte`:
 - PageTableMap gán level 1/2/3, FrameMap qua bảng mới
 - PageTableMap từ chối bảng vượt user range, snapshot không đổi
 - PageTableMap không thay entry 0 dùng chung
+- revoke bản copy Untyped không hủy object của cap gốc
+- assert Untyped nằm trong kernel_accessible_range()
+- VSpace/PageTable cross-Untyped, kernel slots và retype page shortage
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
   trỏ tới trang đã free.
 - cross-Untyped: revoke PageTable làm sạch reverse map và validate_user_range;
@@ -765,6 +773,10 @@ Exit code:
 - Revoke PageTable/VSpace xoá reverse map trong span, zero trang bảng và gỡ
   metadata của bảng con; VSpace đang là root của thread hiện tại bị từ chối hủy.
 - KERNEL_SHARED_SLOTS xác nhận AArch64 dùng L1[0..=1], không chỉ 0..1 GiB.
+- Object.creator chặn client revoke bản copy Untyped để phá object của task khác; CapCopy Untyped vẫn chia sẻ vùng nhớ, Untyped con là bước sau.
+- Runtime assert Untyped nằm trong kernel_accessible_range() của platform.
+- Boot-time check trap entry, kernel stack, IST, GDT/TSS/IDT, VBAR,
+  KERNEL_STORAGE và UART/GIC/PIC nằm trong KERNEL_SHARED_SLOTS.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
 - Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (128).
 - Data Untyped 256 KiB/max64; metadata Untyped max32.
@@ -774,14 +786,13 @@ Exit code:
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 396808 bytes dùng static storage.
-- Host test hiện có 32 test `vifast-kernel` + 9 test `vifast-pte`.
+- Host test hiện có 33 test `vifast-kernel` + 9 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
 - Scheduler một hart; SMP mới bootstrap, hart phụ idle.
 - x86_64 chưa boot AP.
-- Chưa có TLB shootdown đa hart.
-- Page table root vẫn tĩnh; chưa có page-table page allocator tổng quát.
+- VSpace root của runtime vẫn tĩnh; retype VSpace đã có nhưng chưa nối vào boot flow.
 - Chưa có range VA allocator, ASID/PCID.
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
 - Chưa có IOMMU.
@@ -802,6 +813,9 @@ Exit code:
 - Self-revoke Untyped hiện trả IllegalOperation; supervisor hủy nhóm gồm chính
   nó sẽ cần destroy-xong-rồi-pick sau này.
 - Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
+- CapCopy Untyped vẫn cho phép hai task chia sẻ vùng nhớ; creator ngăn revoke
+  chéo nhưng chưa ngăn cạn kiệt tài nguyên. Retype Untyped → Untyped con là
+  bước tiếp theo.
 - TCB/VSpace chưa tách pool riêng; TCB có quota 16 nhưng vẫn nằm trong object table.
   Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 128 object hoặc trước SMP,
   vì static Kernel đã giải quyết áp lực stack và 3b chưa cần quá 128 object.
@@ -886,8 +900,13 @@ E. Desktop / Space
 24. Mỗi PageTable chỉ gắn một vị trí {vspace, va_base, level}; revoke theo thứ
     tự Frame → PageTable sâu nhất → cha → VSpace.
 25. User VA range thật nằm trong vifast-pte: 64..128 GiB, không giao kernel
-    identity; RISC-V nằm trong nửa thấp Sv39, x86/AArch64 dùng entry 0 chung
-    nhưng không thay entry đó.
+    identity; RISC-V nằm trong nửa thấp Sv39. x86/AArch64 chỉ dùng chung các
+    slot kernel trong PDPT/L1; PML4/L0 và PDPT/L1 là riêng mỗi VSpace.
+26. Object lưu creator cap; revoke Untyped copy chỉ hủy object tạo qua cap đó
+    hoặc cap con. Chỉ reset bump khi không còn object từ bất kỳ cap nào.
+27. Runtime assert Untyped nằm trong kernel_accessible_range(); boot check
+    trap entry/stack/IST/GDT/IDT/VBAR/KERNEL_STORAGE/MMIO nằm trong
+    KERNEL_SHARED_SLOTS.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

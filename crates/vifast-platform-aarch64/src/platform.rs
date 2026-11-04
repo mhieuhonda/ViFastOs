@@ -281,6 +281,10 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn kernel_accessible_range(&self) -> (u64, u64) {
+        (0x4000_0000, 0x4080_0000)
+    }
+
     fn user_va_range(&self) -> (u64, u64) {
         (
             vifast_pte::aarch64::USER_VA_START,
@@ -407,6 +411,22 @@ impl Platform for Aarch64Platform {
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
         &PAGE_OPS
     }
+
+    fn check_kernel_mappings() -> bool {
+        let slots = vifast_pte::aarch64::KERNEL_SHARED_SLOTS;
+        let addresses = [
+            core::ptr::addr_of!(vector_table) as u64,
+            core::ptr::addr_of!(TRAP_STACK) as u64,
+            core::ptr::addr_of!(KERNEL_STORAGE) as u64,
+            GICD,
+            GICC,
+        ];
+        addresses.iter().all(|address| {
+            vifast_pte::aarch64::index(*address, 0) == 0
+                && slots.contains(&vifast_pte::aarch64::index(*address, 1))
+        })
+    }
+
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)

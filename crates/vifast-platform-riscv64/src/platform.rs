@@ -209,6 +209,10 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn kernel_accessible_range(&self) -> (u64, u64) {
+        (0x8000_0000, 0x8040_0000)
+    }
+
     fn user_va_range(&self) -> (u64, u64) {
         (
             vifast_pte::riscv::USER_VA_START,
@@ -325,6 +329,20 @@ impl Platform for RiscvPlatform {
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
         &PAGE_OPS
     }
+
+    fn check_kernel_mappings() -> bool {
+        let slots = vifast_pte::riscv::KERNEL_SHARED_SLOTS;
+        let addresses = [
+            trap_entry as *const () as u64,
+            core::ptr::addr_of!(TRAP_STACK) as u64,
+            core::ptr::addr_of!(KERNEL_STORAGE) as u64,
+            0x1000_0000u64, // UART
+        ];
+        addresses
+            .iter()
+            .all(|address| slots.contains(&vifast_pte::riscv::index(*address, 0)))
+    }
+
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)

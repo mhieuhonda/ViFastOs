@@ -453,6 +453,10 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn kernel_accessible_range(&self) -> (u64, u64) {
+        (0, 0x4000_0000)
+    }
+
     fn user_va_range(&self) -> (u64, u64) {
         (
             vifast_pte::x86_64::USER_VA_START,
@@ -554,6 +558,23 @@ impl Platform for X86Platform {
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
         &PAGE_OPS
     }
+
+    fn check_kernel_mappings() -> bool {
+        let slots = vifast_pte::x86_64::KERNEL_SHARED_SLOTS;
+        let addresses = [
+            unsafe { x86_exception_table[0] },
+            core::ptr::addr_of!(TRAP_STACK) as u64,
+            core::ptr::addr_of!(IST_STACK) as u64,
+            core::ptr::addr_of!(GDT) as u64,
+            core::ptr::addr_of!(IDT) as u64,
+            core::ptr::addr_of!(KERNEL_STORAGE) as u64,
+        ];
+        addresses.iter().all(|address| {
+            vifast_pte::x86_64::index(*address, 0) == 0
+                && slots.contains(&vifast_pte::x86_64::index(*address, 1))
+        })
+    }
+
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
         if !user_range(ptr, out.len(), USER_CODE_VA, 4096)
             && !user_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)

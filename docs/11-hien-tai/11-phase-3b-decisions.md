@@ -51,6 +51,8 @@ chung cho root/server/client.
 - `PageTableMap` đã expose: kernel chọn level, kiểm tra toàn bộ table span,
   lưu vị trí gắn và trả `AlreadyMapped` khi gắn lại.
 - Retype PageTable và VSpace từ Untyped đã có; runtime root chuyển sang VSpace mới ở bước switch root.
+- Object có `creator` để revoke Untyped copy không phá object của cap gốc;
+  CapCopy Untyped vẫn chia sẻ vùng nhớ, chưa có Untyped con.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable
   kernel.
 

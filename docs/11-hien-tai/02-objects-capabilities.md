@@ -23,6 +23,7 @@ pub struct Object {
     pub gen: u32,
     pub kind: Kind,
     pub owner: Option<ObjRef>, // Untyped đã tạo object
+    pub creator: Option<SlotAddr>, // cap đã dùng để retype
 }
 ```
 
@@ -134,6 +135,7 @@ platform map nó hoặc copy user image.
 ```rust
 pub struct VSpace {
     pub root: u64,
+    pub aux_pa: Option<u64>,
     pub page_size: u64,
     pub base: u64,
     pub next_va: u64,
@@ -148,6 +150,8 @@ pub struct VSpace {
 
 - `root` là handle mờ với kernel: Sv39 root, TTBR0 root hoặc CR3.
 - `mappings` là reverse map để kiểm tra overlap/W^X/unmap; page table thật là nguồn sự thật.
+- `Object.creator` lưu cap đã dùng để retype; revoke một bản copy Untyped
+  không được hủy object tạo qua cap gốc.
 - `PageTable { root, mapped }`; level nằm trong mapping do PageTableMap gán, và không thay entry 0 dùng chung.
 - `next_va` dùng để cấp VA tuần tự trong range `[base, end)`.
 
