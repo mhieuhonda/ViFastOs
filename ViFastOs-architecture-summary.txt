@@ -1091,7 +1091,7 @@ A. Userland / ABI trước
 2. vifast-elf parser ELF64 PT_LOAD + host test (đã có).
 3. Bước 6: root task Rust nạp từ ELF; stack 4 trang + guard — đã xong.
 4. Bước 7: BootInfo (7.3), Untyped con (7.2), VSpace client (7.4), chuyển client/fault4 (7.5) — 3b hoàn tất.
-5. Shared memory / IPC buffer.
+5. Shared memory / IPC buffer (core 8.1 đã có).
 6. Reply capability; ReplyRecv/fault endpoint tối giản đã có.
 7. Supervisor/pager tối giản.
 
@@ -1304,6 +1304,6 @@ scripts/test-qemu.py
 
 Nó chưa phải OS hoàn chỉnh. Root chạy từ ELF Rust; root, server và client mỗi
 task có VSpace riêng; client dùng Untyped con. 3b đã hoàn tất; khoảng trống
-lớn nhất hiện là IPC buffer/shared memory, ReplyRecv/fault endpoint, rồi
+lớn nhất hiện là 8.4 server/client Rust ELF, demo IPC buffer dài, rồi
 allocator/revoke hoàn chỉnh, SMP thật (x86 AP, BKL, IPI, TLB shootdown),
 driver/FS/network và compositor/ViFastKey.
