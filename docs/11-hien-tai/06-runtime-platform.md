@@ -9,6 +9,8 @@ Nguồn: `crates/vifast-runtime/src/lib.rs`.
 - boot sequence;
 - Console trait (không phụ thuộc vifast-arch);
 - tạo duy nhất root TCB và giao VSpace/Untyped;
+- Kernel được đặt trong static storage của platform, không nằm trên boot stack
+  (hiện khoảng 397 KiB với 128 object/64 cap/32 mapping);
 - copy user image;
 - syscall action dispatch;
 - quản lý context switch khi block;
@@ -39,6 +41,7 @@ User layout lấy từ `vifast-abi::user_layout`; cả 3 port dùng chung code V
 ### Kernel handoff
 
 ```rust
+fn init_kernel() -> &'static mut Kernel;
 fn set_kernel(kernel: *mut Kernel);
 fn kernel() -> &'static mut Kernel;
 ```
@@ -52,6 +55,7 @@ không nằm trong runtime.
 fn code_page() -> &'static mut [u8];
 fn data_page() -> &'static mut [u8];
 fn metadata_page() -> &'static mut [u8];
+fn page_table_ops() -> &'static dyn PageTableOps;
 fn build_page_tables();
 fn vspace_root() -> u64;
 fn map_user_page(va, pa, rights) -> KResult<()>;
@@ -120,7 +124,7 @@ sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham
   - `Return`/`Message`: ghi register;
   - `MapFrame`/`UnmapFrame`: gọi platform MMU, rollback shadow nếu lỗi;
   - `ConfigureTcb`: cài context entry/stack cho TCB con;
-  - `Revoked`: flush các VA mà kernel đã bỏ khỏi shadow mapping;
+  - `PageTableOps`: kernel gọi unmap/zero trực tiếp trong revoke/retype;
   - `Open`/`Read`/`Write`: copy user pointer qua platform, gọi ramfs;
   - `Debug`: copy buffer rồi `putc`;
   - `Blocked`: chuyển context;

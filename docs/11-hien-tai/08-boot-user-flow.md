@@ -75,7 +75,7 @@ Root task nhận cap:
 - slot 2 metadata Untyped;
 - slot 3 data Untyped.
 
-Root lần lượt Retype endpoint/2 TCB/notification/fault TCB, CapCopy cho
+Root lần lượt Retype endpoint/2 TCB/notification/2 fault TCB, CapCopy cho
 server/client, TcbConfigure entry/stack/VSpace/priority rồi TcbResume. Sau đó
 root block bằng `Wait` trên notification riêng; server/client/fault chạy theo
 scheduler.
@@ -93,12 +93,13 @@ CapCopy data Untyped → client slot 3 WRITE
 CapCopy notification → client slot 5 READ|WRITE|GRANT
 TcbConfigure server/client (entry, stack, VSpace slot 1, priority 5)
 TcbResume server/client
-Retype fault TCB; TcbConfigure/TcbResume (priority 6)
+Retype fault TCB ×2; TcbConfigure/TcbResume (priority 6)
 Retype root notification; Wait(root notification)
 ```
 
-Fault TCB cố ý load từ `0x8000_0000`; kernel log `USER FAULT`, suspend TCB và
-chạy tiếp server/client. Không panic kernel.
+Fault TCB thứ nhất cố ý load từ kernel VA; fault TCB thứ hai chạy
+`ud2`/`hlt`/illegal instruction. Cả hai log `USER FAULT`, bị suspend và
+server/client vẫn chạy. Không panic kernel.
 
 ## 5. Server A
 

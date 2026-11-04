@@ -57,6 +57,7 @@ pub trait Platform: Arch + Console {
     fn stack_b_top() -> usize;
 
     fn init_platform(info: PlatformInfo);
+    fn init_kernel() -> &'static mut Kernel;
     fn set_kernel(kernel: *mut Kernel);
     fn kernel() -> &'static mut Kernel;
 
@@ -66,16 +67,9 @@ pub trait Platform: Arch + Console {
     fn build_page_tables();
     fn vspace_root() -> u64;
 
-    fn zero_frame(pa: u64, size: usize) -> Result<(), KError>;
+    fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps;
     fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError>;
     fn unmap_user_page(va: u64) -> Result<(), KError>;
-    fn unmap_user_page_at(root: u64, va: u64) -> Result<(), KError> {
-        if root == Self::vspace_root() {
-            Self::unmap_user_page(va)
-        } else {
-            Err(KError::InvalidArg)
-        }
-    }
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError>;
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError>;
 
@@ -124,14 +118,17 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         info.dtb
     );
 
-    let mut selftest_kernel = Kernel::new();
-    if !vifast_kernel::selftest::run::<A>(&mut selftest_kernel) {
+    let (selftest_ok, stats) = {
+        let selftest_kernel = A::init_kernel();
+        let ok = vifast_kernel::selftest::run::<A>(selftest_kernel);
+        (ok, selftest_kernel.stats())
+    };
+    if !selftest_ok {
         vifast_kernel::klog!(A, "SELFTEST FAIL");
         A::exit(1);
     }
-    let stats = selftest_kernel.stats();
-    drop(selftest_kernel);
-    let mut kernel = Kernel::new();
+    let kernel = A::init_kernel();
+    kernel.set_page_table_ops(A::page_table_ops());
     vifast_kernel::klog!(
         A,
         "SELFTEST PASS (ipc_tx={} ipc_rx={} ntfn={} ctx={} ticks={})",
@@ -228,7 +225,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     contexts[root.index as usize] =
         A::context_for_user(A::user_code_base() + image.entry_root, A::stack_a_top());
 
-    A::set_kernel(&mut kernel as *mut Kernel);
+    A::set_kernel(kernel as *mut Kernel);
     kernel.enqueue(root);
     let _ = kernel.pick();
     A::start_timer();
@@ -281,35 +278,6 @@ pub mod syscall {
                 } else {
                     A::write_result(context, KError::NotMapped, 0, 0, [0; 4]);
                 }
-            }
-            UserAction::FrameRetyped { dest, pa, size } => {
-                let ok = A::zero_frame(pa, size as usize).is_ok();
-                A::write_result(
-                    context,
-                    if ok {
-                        KError::Ok
-                    } else {
-                        KError::MissingPageTable
-                    },
-                    if ok { dest } else { 0 },
-                    0,
-                    [0; 4],
-                );
-            }
-            UserAction::Revoked { unmaps, count } => {
-                let mut ok = true;
-                for unmap in unmaps.iter().take(count).flatten() {
-                    if A::unmap_user_page_at(unmap.root, unmap.va).is_err() {
-                        ok = false;
-                    }
-                }
-                A::write_result(
-                    context,
-                    if ok { KError::Ok } else { KError::NotMapped },
-                    0,
-                    0,
-                    [0; 4],
-                );
             }
             UserAction::ConfigureTcb { tcb, entry, stack } => {
                 let contexts = A::contexts();

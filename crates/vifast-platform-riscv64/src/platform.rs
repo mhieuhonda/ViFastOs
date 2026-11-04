@@ -154,6 +154,31 @@ impl vifast_kernel::console::Console for RiscvPlatform {
     }
 }
 
+struct PageOps;
+
+impl vifast_kernel::PageTableOps for PageOps {
+    fn unmap(&self, root: u64, va: u64) -> Result<(), KError> {
+        if root != <RiscvPlatform as Platform>::vspace_root() {
+            return Err(KError::InvalidArg);
+        }
+        <RiscvPlatform as Platform>::unmap_user_page(va)
+    }
+
+    fn zero_frame(&self, pa: u64, size: usize) -> Result<(), KError> {
+        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
+            return Err(KError::Alignment);
+        }
+        unsafe {
+            core::ptr::write_bytes(pa as *mut u8, 0, size);
+        }
+        Ok(())
+    }
+}
+
+static PAGE_OPS: PageOps = PageOps;
+
+static mut KERNEL_STORAGE: Kernel = Kernel::new_const();
+
 impl Platform for RiscvPlatform {
     type Context = TrapFrame;
 
@@ -168,6 +193,14 @@ impl Platform for RiscvPlatform {
     }
 
     fn init_platform(_info: PlatformInfo) {}
+
+    fn init_kernel() -> &'static mut Kernel {
+        unsafe {
+            let kernel = &mut *core::ptr::addr_of_mut!(KERNEL_STORAGE);
+            kernel.reset();
+            kernel
+        }
+    }
 
     fn set_kernel(kernel: *mut Kernel) {
         unsafe {
@@ -229,16 +262,9 @@ impl Platform for RiscvPlatform {
         table_pa(core::ptr::addr_of!(ROOT))
     }
 
-    fn zero_frame(pa: u64, size: usize) -> Result<(), KError> {
-        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
-            return Err(KError::Alignment);
-        }
-        unsafe {
-            core::ptr::write_bytes(pa as *mut u8, 0, size);
-        }
-        Ok(())
+    fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
+        &PAGE_OPS
     }
-
     fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
         if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
             return Err(KError::InvalidArg);

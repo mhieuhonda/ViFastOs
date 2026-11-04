@@ -44,11 +44,11 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 19/19 PASS
+- cargo test -p vifast-kernel: 20/20 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
-  hai TCB server/client.
+  hai TCB server/client, hai fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
 - python3 scripts/test-qemu.py: 3/3 PASS
 - Chạy lặp 3 lần liên tiếp: RISC-V, AArch64, x86_64 đều PASS
@@ -97,6 +97,7 @@ Quan hệ phụ thuộc chính:
 - vifast-runtime -> vifast-kernel + vifast-arch
 - vifast-user -> vifast-abi (syscall wrappers + layout)
 - vifast-platform-* -> vifast-runtime + vifast-kernel + vifast-arch-*
+- vifast-platform-* implement PageTableOps (unmap/zero)
 - vifast-kernel-* -> vifast-platform-* + vifast-runtime + vifast-arch
 - Không có cfg(target_arch) trong vifast-kernel hoặc vifast-runtime.
 
@@ -213,18 +214,24 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 447 dòng
-- AArch64: 526 dòng
-- x86_64: 634 dòng
+- RISC-V: 473 dòng
+- AArch64: 552 dòng
+- x86_64: 696 dòng
 
 runtime:
-- 464 dòng
+- 432 dòng
 
 vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 2368 dòng, không còn dependency vifast-arch
+- 2263 dòng, không còn dependency vifast-arch
+
+Kích thước Kernel (host test):
+- Kernel = 396808 bytes
+- Object = 3064 bytes
+- Tcb = 3048 bytes
+- Kernel nằm trong static storage per platform, không trên boot stack.
 
 arch primitive:
 - RISC-V: khoảng 86 dòng
@@ -261,10 +268,10 @@ Runtime boot sequence chi tiết:
 2. A::irq_disable()
 3. A::init_platform(info)
 4. in banner
-5. Kernel::new() cho selftest; chạy selftest trên kernel riêng
+5. A::init_kernel() static; chạy selftest
 6. in SELFTEST PASS
 7. A::start_smp()
-8. Kernel::new() sạch cho user; tạo VSpace, metadata Untyped, data Untyped
+8. A::init_kernel() reset static; tạo VSpace, metadata Untyped, data Untyped
 9. cài cap slot 1/2/3 cho root
 10. copy user image vào A::code_page()
 11. A::build_page_tables()
@@ -276,20 +283,21 @@ Runtime boot sequence chi tiết:
 17. A::enter_user(root)
 
 Root task sau đó tự:
-- Retype endpoint/2 TCB/notification từ metadata Untyped;
+- Retype endpoint/2 TCB/notification, 2 fault TCB, notification riêng;
 - CapCopy endpoint, VSpace, data Untyped, notification cho server/client;
 - TcbConfigure entry/stack/VSpace/priority;
-- TcbResume cả hai.
+- TcbResume server/client và 2 fault thread;
+- Wait trên notification riêng.
 
 7. OBJECT MODEL VÀ CAPABILITY
 -----------------------------
 Giới hạn cố định:
-- MAX_OBJECTS = 32
+- MAX_OBJECTS = 128
 - MAX_TCBS = 8
-- MAX_CAPS = 12
+- MAX_CAPS = 64
 - MAX_QUEUE = 8
 - MAX_FDS = 8
-- MAX_MAPPINGS = 8
+- MAX_MAPPINGS = 32
 - MAX_FILES = 8
 
 Object:
@@ -596,7 +604,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 19 test:
+Host test hiện có 20 test:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -616,6 +624,7 @@ Host test hiện có 19 test:
 - Yield thật qua switch_blocked
 - checked_add/overflow + buffer vắt qua hai page khác quyền
 - self-revoke Untyped bị từ chối khi TCB hiện tại là con
+- retype Frame/PageTable gọi zero_page qua PageTableOps
 
 QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
@@ -633,7 +642,7 @@ QEMU test:
 - ViFastOS ramfs
 - ViFastOS write
 - Reply OK
-- USER FAULT
+- USER FAULT ít nhất 2 lần
 - Zero OK
 - RISC-V/AArch64 phải có SMP OK
 - x86_64 chấp nhận SMP SKIP
@@ -671,11 +680,17 @@ Exit code:
 - `test-exit` là feature của binary test; runtime production không còn exit cứng
   sau 20 tick.
 - Kernel fault từ S-mode/current EL/kernel error-code panic; user fault vẫn suspend.
-- Retype Frame zero page qua Platform::zero_frame; user test ghi/revoke/retype/đọc = Zero OK.
-- Untyped revoke có preflight giới hạn 16 unmap, tránh tràn UserAction.
-- Runtime assert tổng max_objects Untyped + object runtime <= 32.
+- Retype Frame/PageTable zero page qua PageTableOps; user test ghi/revoke/retype/đọc = Zero OK.
+- PageTableOps trait: kernel gọi unmap/zero trực tiếp, không gom RevokeReport.
+- Kernel static storage per platform; runtime không tạo Kernel trên stack.
+- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (128).
 - vifast-kernel bỏ dependency vifast-arch; dùng Console trait.
-- Host test hiện có 19 test.
+- x86 page-fault/exception entry dùng efiapi rcx/rdx/r8; vector 0..31 có handler.
+- Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
+- Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
+- Kernel object limits tăng 128/64/32; Kernel 396808 bytes dùng static storage.
+- Retype Frame/PageTable zero page; QEMU test Zero OK.
+- Host test hiện có 20 test.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -684,7 +699,7 @@ Exit code:
 - Chưa có TLB shootdown đa hart.
 - Page table root vẫn tĩnh; chưa có page-table page allocator tổng quát.
 - Chưa có range VA allocator, ASID/PCID.
-- Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 32.
+- Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
 - Chưa có IOMMU.
 - Chưa có ELF loader, shared memory, IPC buffer.
 - Chưa có Reply mang capability/ReplyRecv/fault endpoint.
@@ -698,7 +713,11 @@ Exit code:
 - Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
-- Revoke Untyped chỉ mang tối đa 16 unmap trong một report; cần dynamic vector khi nhiều VSpace.
+- x86 đã có handler vector 0..31; user exception suspend, kernel panic.
+- Self-revoke Untyped bị từ chối nếu TCB hiện tại nằm trong nhóm con.
+- Self-revoke hiện trả IllegalOperation; supervisor hủy nhóm gồm chính nó sẽ cần
+  destroy-xong-rồi-pick sau này.
+- Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
 - Server fault khi client BlockedReply sẽ làm client chờ vô hạn; fault endpoint sẽ xử lý.
 
 17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
@@ -764,6 +783,11 @@ E. Desktop / Space
 15. 3b: Frame giữ nhiều mapping hoặc mỗi mapping một cap; revoke unmap mọi nơi.
 16. 3b: PageTableMap + retype VSpace/PageTable; walk generic, platform chỉ
     encode/decode PTE; revoke VSpace trả page table về Untyped.
+17. PageTableOps (unmap/zero) là đường duy nhất để kernel tác động page table;
+    bỏ RevokeReport/UserAction::Revoked.
+18. Retype VSpace/PageTable phải zero page; BootInfo định nghĩa trong vifast-abi
+    có version/size và slot ranges; root không hard-code slot 1/2/3.
+19. Self-revoke hiện từ chối; supervisor destroy-cả-nhóm là hạn chế đã ghi.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

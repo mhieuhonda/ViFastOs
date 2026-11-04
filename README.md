@@ -161,8 +161,9 @@ mode. Root task tự tạo server/client:
   IRQ0, trap stack `TSS.RSP0`.
 
 Root task nhận VSpace + metadata/data Untyped ở slot 1/2/3, tự `Retype`
-endpoint, hai TCB và notification, `CapCopy` cap cho server/client,
-`TcbConfigure` entry/stack/VSpace rồi `TcbResume`. Server có cap endpoint
+endpoint, hai TCB server/client, hai fault TCB, notification cho client và
+notification riêng, `CapCopy` cap cho server/client, `TcbConfigure`
+entry/stack/VSpace rồi `TcbResume`. Server có cap endpoint
 `READ`, gọi `Recv` rồi `Reply`; client có cap `WRITE`, gọi `Call` và nhận reply. Client còn giữ cap `Untyped`, gọi `Retype`
 để tạo frame, rồi `FrameMap`/`FrameUnmap`; user ghi `Mapped\n` vào page vừa map
 và đọc lại qua `DebugWrite`. Ở `Call` đầu tiên, client chuyển một cap
@@ -243,8 +244,9 @@ bare-metal này.
   binary duy nhất chạy x86_64 + ARM + RISC-V.
 - `vifast-kernel` là `#![forbid(unsafe_code)]` và không còn dependency
   `vifast-arch`; `unsafe` chỉ nằm trong arch/boot.
-- Fixed-capacity object table (32 object, 8 TCB, 12 cap/TCB) để chứng minh lõi
-  không cần heap. Đây là reference implementation, chưa phải allocator cuối.
+- Fixed-capacity object table (128 object, 8 TCB, 64 cap/TCB, 32 mapping/VSpace)
+  để chứng minh lõi không cần heap; `Kernel` đặt trong static storage per port
+  (khoảng 397 KiB), không đặt trên boot stack. Đây là reference implementation, chưa phải allocator cuối.
 - Stack kernel hiện đặt 256 KiB trong linker script cho RISC-V/AArch64 vì
   `Kernel` + format machinery cần nhiều hơn 64 KiB. RISC-V dùng trap stack qua
   `sscratch`; AArch64 dùng `SP_EL1`, x86_64 dùng `TSS.RSP0`. Stack per-thread vẫn là

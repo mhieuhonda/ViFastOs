@@ -33,6 +33,11 @@ user_root:
     mov rsi, 1
     mov rdx, 9
     int 0x80
+    mov rax, 9
+    mov rdi, 2
+    mov rsi, 1
+    mov rdx, 10
+    int 0x80
 
     mov rax, 10
     mov rdi, 4
@@ -95,6 +100,16 @@ user_root:
     mov rax, 16
     mov rdi, 9
     int 0x80
+    mov rax, 15
+    mov rdi, 10
+    lea rsi, [rip + user_thread_fault2]
+    movabs rdx, 0x1000005000
+    mov rcx, 1
+    mov r8, 6
+    int 0x80
+    mov rax, 16
+    mov rdi, 10
+    int 0x80
     mov rax, 6
     mov rdi, 8
     int 0x80
@@ -109,6 +124,16 @@ user_thread_fault:
     int 0x80
     mov eax, 0x80000000
     mov rax, [rax]
+1:
+    jmp 1b
+
+    .globl user_thread_fault2
+user_thread_fault2:
+    mov rax, 32
+    lea rdi, [rip + user_fault2_msg]
+    mov rsi, 7
+    int 0x80
+    ud2
 1:
     jmp 1b
 
@@ -303,6 +328,8 @@ user_cap_bad:
     .asciz "Cap BAD\n"
 user_fault_msg:
     .asciz "Fault\n"
+user_fault2_msg:
+    .asciz "Fault2\n"
 user_zero_ok:
     .asciz "Zero OK\n"
 user_zero_bad:

@@ -69,11 +69,13 @@ Files:
 
 Đặc điểm:
 
-- `init_platform` chỉ lưu thông tin; `prepare_user` mới cài GDT/TSS/IDT.
+- `init_platform` chỉ lưu thông tin; `init_kernel` dùng static `Kernel`;
+  `prepare_user` mới cài GDT/TSS/IDT.
 - `start_timer` cài PIC/PIT.
 - `build_page_tables` dựng PML4/PDPT/PD/PT 4 KiB; `enter_user` chuyển CR3
   sang bảng riêng, không sửa page table UEFI.
 - Code RX, data/stack NX, unmap thật.
+- IDT có handler chung cho vector 0..31; user exception suspend, kernel panic.
 - AP bootstrap qua UEFI MP Services đã được thử nhưng OVMF hiện tại không trả
   interface; code MP đã được gỡ khỏi build. Hướng tiếp theo là ACPI MADT +
   LAPIC/SIPI; hiện `start_smp` in `SMP SKIP`.

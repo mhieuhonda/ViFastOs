@@ -31,11 +31,16 @@ user_root:
     li a1, 3
     li a2, 8
     ecall
-    /* Fault-injection thread: must be suspended, not panic the kernel. */
+    /* Fault-injection threads: must be suspended, not panic the kernel. */
     li a7, 9
     li a0, 2
     li a1, 1
     li a2, 9
+    ecall
+    li a7, 9
+    li a0, 2
+    li a1, 1
+    li a2, 10
     ecall
 
     /* endpoint -> server slot 1 (READ), client slot 1 (WRITE) */
@@ -104,6 +109,16 @@ user_root:
     li a7, 16
     li a0, 9
     ecall
+    li a7, 15
+    li a0, 10
+    la a1, user_thread_fault2
+    li a2, 0x1000005000
+    li a3, 1
+    li a4, 6
+    ecall
+    li a7, 16
+    li a0, 10
+    ecall
     /* Root has no policy loop; block until someone signals slot 8. */
     li a7, 6
     li a0, 8
@@ -119,6 +134,16 @@ user_thread_fault:
     ecall
     li t0, 0x80000000
     ld t1, 0(t0)
+1:
+    j 1b
+
+    .globl user_thread_fault2
+user_thread_fault2:
+    li a7, 32
+    la a0, user_fault2_msg
+    li a1, 7
+    ecall
+    .word 0
 1:
     j 1b
 
@@ -322,6 +347,8 @@ user_cap_bad:
     .asciz "Cap BAD\n"
 user_fault_msg:
     .asciz "Fault\n"
+user_fault2_msg:
+    .asciz "Fault2\n"
 user_zero_ok:
     .asciz "Zero OK\n"
 user_zero_bad:

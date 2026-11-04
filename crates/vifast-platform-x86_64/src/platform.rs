@@ -338,6 +338,21 @@ unsafe fn setup_gdt_tss_idt() {
         offset_high: (handler >> 32) as u32,
         zero: 0,
     };
+    for (vector, handler) in x86_exception_table.iter().enumerate() {
+        if vector == 0x0E {
+            continue;
+        }
+        let handler = *handler;
+        (*idt)[vector] = IdtEntry {
+            offset_low: handler as u16,
+            selector: 0x08,
+            ist: 0,
+            type_attr: 0x8E,
+            offset_mid: (handler >> 16) as u16,
+            offset_high: (handler >> 32) as u32,
+            zero: 0,
+        };
+    }
     let pf = pf_entry as *const () as u64;
     (*idt)[0x0E] = IdtEntry {
         offset_low: pf as u16,
@@ -421,6 +436,31 @@ impl vifast_kernel::console::Console for X86Platform {
     }
 }
 
+struct PageOps;
+
+impl vifast_kernel::PageTableOps for PageOps {
+    fn unmap(&self, root: u64, va: u64) -> Result<(), KError> {
+        if root != <X86Platform as Platform>::vspace_root() {
+            return Err(KError::InvalidArg);
+        }
+        <X86Platform as Platform>::unmap_user_page(va)
+    }
+
+    fn zero_frame(&self, pa: u64, size: usize) -> Result<(), KError> {
+        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
+            return Err(KError::Alignment);
+        }
+        unsafe {
+            core::ptr::write_bytes(pa as *mut u8, 0, size);
+        }
+        Ok(())
+    }
+}
+
+static PAGE_OPS: PageOps = PageOps;
+
+static mut KERNEL_STORAGE: Kernel = Kernel::new_const();
+
 impl Platform for X86Platform {
     type Context = TrapFrame;
 
@@ -435,6 +475,14 @@ impl Platform for X86Platform {
     }
 
     fn init_platform(_info: PlatformInfo) {}
+
+    fn init_kernel() -> &'static mut Kernel {
+        unsafe {
+            let kernel = &mut *core::ptr::addr_of_mut!(KERNEL_STORAGE);
+            kernel.reset();
+            kernel
+        }
+    }
 
     fn prepare_user() {
         unsafe {
@@ -479,16 +527,9 @@ impl Platform for X86Platform {
         core::ptr::addr_of!(PML4) as u64
     }
 
-    fn zero_frame(pa: u64, size: usize) -> Result<(), KError> {
-        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
-            return Err(KError::Alignment);
-        }
-        unsafe {
-            core::ptr::write_bytes(pa as *mut u8, 0, size);
-        }
-        Ok(())
+    fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
+        &PAGE_OPS
     }
-
     fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
         unsafe { map_page(va, pa, rights) }
     }
@@ -589,11 +630,32 @@ impl Platform for X86Platform {
     }
 }
 
-extern "C" {
+// UEFI x86 uses the Win64 ABI: Rust entry points are `efiapi`, and trap.S
+// passes the first three arguments in rcx/rdx/r8.
+extern "efiapi" {
     fn int80_entry();
     fn irq0_entry();
     fn pf_entry();
+    static x86_exception_table: [u64; 32];
     fn x86_reload_segments();
+}
+
+#[no_mangle]
+extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: u64) -> ! {
+    let cs = unsafe { *frame.add(18) };
+    if cs & 3 == 0 {
+        vifast_kernel::klog!(
+            X86Platform,
+            "KERNEL EXCEPTION vector={} err={:#x} cs={:#x}",
+            vector,
+            error,
+            cs
+        );
+        X86Platform::exit(1);
+    }
+    let mut context = TrapFrame::empty();
+    vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, error);
+    <X86Platform as Platform>::enter_user(&context);
 }
 
 #[no_mangle]

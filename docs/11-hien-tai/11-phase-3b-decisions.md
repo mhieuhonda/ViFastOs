@@ -38,6 +38,12 @@ chung cho root/server/client.
 
 ## 6. Page table
 
+- Retype VSpace/PageTable phải zero page (không chỉ Frame).
+- `PageTableOps` là đường duy nhất kernel gọi unmap/zero; không dùng
+  `RevokeReport` hay trả danh sách VA về runtime.
+- BootInfo nằm trong `vifast-abi`, có `version`/`size` và slot ranges; root
+  không hard-code slot 1/2/3.
+
 - Expose `PageTableMap`.
 - Retype VSpace/PageTable từ Untyped.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable

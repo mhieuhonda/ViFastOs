@@ -323,36 +323,33 @@ pub fn run<A: Console>(k: &mut Kernel) -> bool {
     );
 
     // 8. Priority scheduling with round-robin tie-breaking.
-    // Use a fresh kernel so TCBs woken by the IPC tests above cannot affect
-    // the ordering under test.
-    let mut sched = Kernel::new();
-    let Some(low) = sched.create_tcb("low", 3) else {
+    // Reuse `k` so the self-test does not allocate another large Kernel on
+    // the boot stack.  Drain any TCBs made Ready by the IPC tests first.
+    while k.pick().is_some() {}
+    let Some(low) = k.create_tcb("low", 3) else {
         return fail::<A>(passed, "object table exhausted");
     };
-    let Some(high) = sched.create_tcb("high", 9) else {
+    let Some(high) = k.create_tcb("high", 9) else {
         return fail::<A>(passed, "object table exhausted");
     };
-    let Some(mid) = sched.create_tcb("mid", 5) else {
+    let Some(mid) = k.create_tcb("mid", 5) else {
         return fail::<A>(passed, "object table exhausted");
     };
-    sched.enqueue(low);
-    sched.enqueue(high);
-    sched.enqueue(mid);
-    check!(
-        sched.pick() == Some(high),
-        "scheduler picks highest priority"
-    );
-    if let Some(table) = sched.tcb_mut(high) {
+    k.enqueue(low);
+    k.enqueue(high);
+    k.enqueue(mid);
+    check!(k.pick() == Some(high), "scheduler picks highest priority");
+    if let Some(table) = k.tcb_mut(high) {
         table.priority = 0;
     }
-    let _ = sched.yield_current();
-    check!(sched.pick() == Some(mid), "scheduler picks next priority");
-    if let Some(table) = sched.tcb_mut(mid) {
+    let _ = k.yield_current();
+    check!(k.pick() == Some(mid), "scheduler picks next priority");
+    if let Some(table) = k.tcb_mut(mid) {
         table.priority = 0;
     }
-    let _ = sched.yield_current();
+    let _ = k.yield_current();
     check!(
-        sched.pick() == Some(low),
+        k.pick() == Some(low),
         "scheduler eventually runs low priority"
     );
 

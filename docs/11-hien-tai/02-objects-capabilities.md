@@ -8,12 +8,12 @@ Nguồn: `crates/vifast-kernel/src/object.rs`,
 Kernel dùng một bảng cố định:
 
 ```rust
-MAX_OBJECTS = 32
+MAX_OBJECTS = 128
 MAX_TCBS    = 8
-MAX_CAPS    = 12
+MAX_CAPS    = 64
 MAX_QUEUE   = 8
 MAX_FDS     = 8
-MAX_MAPPINGS = 8
+MAX_MAPPINGS = 32
 ```
 
 Mỗi object có:

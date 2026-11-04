@@ -32,7 +32,8 @@ Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
 
 Kernel portable hiện có:
 
-- object table cố định, generation;
+- object table cố định 128 object, 64 cap/TCB, 32 mapping/VSpace; `Kernel`
+  khoảng 397 KiB đặt trong static storage của platform;
 - capability install/copy/derive/revoke, chuyển cap qua IPC với quyền `GRANT`;
 - endpoint Send/Recv, Call/Reply một caller;
 - notification wait/signal/poll;
@@ -53,7 +54,8 @@ Kernel portable hiện có:
 - syscall user: IPC, `Retype`, `CapCopy`, `TcbConfigure`, `TcbResume`,
   `FrameMap`, `FrameUnmap`, `Open`, `Read`, `Write`, `Close`, `Seek`, `Stat`,
   `DebugWrite`, `GetTime`, `Exit`;
-- timer interrupt + preemptive scheduler một hart; root task tạo hai user thread;
+- timer interrupt + preemptive scheduler một hart; root task tạo server/client
+  và hai fault thread;
 - IPC user subset `Send/Call/Recv/Reply/Signal/Wait/Poll`.
 
 ## Chưa có

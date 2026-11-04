@@ -73,7 +73,7 @@ def run_qemu(
         and "ViFastOS ramfs" in output
         and "ViFastOS write" in output
         and "Reply OK" in output
-        and "USER FAULT" in output
+        and output.count("USER FAULT") >= 2
         and "Zero OK" in output
         and (not require_smp or "SMP OK" in output)
     )

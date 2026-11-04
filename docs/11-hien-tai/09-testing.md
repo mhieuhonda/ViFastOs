@@ -21,7 +21,7 @@ cargo test -p vifast-runtime
 cargo test -p vifast-user
 ```
 
-Hiện có 19 test trong `vifast-kernel`:
+Hiện có 20 test trong `vifast-kernel`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -41,7 +41,8 @@ Hiện có 19 test trong `vifast-kernel`:
 - TcbResume từ chối TCB chưa configure;
 - Yield thật qua switch_blocked;
 - checked_add/overflow + buffer vắt qua hai page khác quyền;
-- self-revoke Untyped bị từ chối khi TCB hiện tại là con.
+- self-revoke Untyped bị từ chối khi TCB hiện tại là con;
+- retype Frame và PageTable đều gọi zero page qua PageTableOps.
 
 `vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.
 
@@ -69,7 +70,7 @@ Script chạy:
 - `ViFastOS ramfs`;
 - `ViFastOS write`;
 - `Reply OK`;
-- `USER FAULT`;
+- `USER FAULT` ít nhất 2 lần;
 - `Zero OK`;
 - RISC-V/AArch64 phải có `SMP OK`;
 - x86_64 chấp nhận `SMP SKIP` ở giai đoạn hiện tại.

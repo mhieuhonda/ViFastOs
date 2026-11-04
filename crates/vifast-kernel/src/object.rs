@@ -6,11 +6,11 @@
 
 use vifast_abi::*;
 
-pub const MAX_OBJECTS: usize = 32;
+pub const MAX_OBJECTS: usize = 128;
 pub const MAX_TCBS: usize = 8;
-pub const MAX_CAPS: usize = 12;
+pub const MAX_CAPS: usize = 64;
 pub const MAX_QUEUE: usize = 8;
-pub const MAX_MAPPINGS: usize = 8;
+pub const MAX_MAPPINGS: usize = 32;
 pub const MAX_FDS: usize = 8;
 pub const MAX_PRIORITY: u8 = 15;
 
