@@ -99,6 +99,7 @@ user_thread_b:
     la a0, user_message_b
     li a1, 7
     ecall
+    li s0, 5
 2:
     li a7, 1
     li a0, 1
@@ -106,10 +107,11 @@ user_thread_b:
     li a2, 7
     li a3, 0
     li a4, 0
-    li a5, 5
+    mv a5, s0
     ecall
     mv t6, a0
     mv t5, a3
+    li s0, -1
     li a7, 7
     li a0, 5
     ecall

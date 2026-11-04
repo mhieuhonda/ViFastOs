@@ -13,22 +13,6 @@ impl Kernel {
         self.enqueue(tcb);
     }
 
-    fn choose_cap_slot(&self, tcb: ObjRef, hint: u8) -> KResult<u8> {
-        let table = self.tcb(tcb).ok_or(KError::InvalidCap)?;
-        if hint != 0
-            && (hint as usize) < table.cspace.len()
-            && table.cspace[hint as usize].is_none()
-        {
-            return Ok(hint);
-        }
-        for slot in 1..table.cspace.len() {
-            if table.cspace[slot].is_none() {
-                return Ok(slot as u8);
-            }
-        }
-        Err(KError::OutOfMemory)
-    }
-
     /// Install a transferred capability into the receiver's cspace.  The
     /// sender must hold GRANT on the source slot; the receiver gets a copy
     /// without GRANT, so a grant right cannot be laundered through IPC.
@@ -47,10 +31,16 @@ impl Kernel {
         if !source.rights.contains(Rights::GRANT) {
             return Err(KError::NoRights);
         }
-        let dest = self.choose_cap_slot(receiver, hint)?;
+        if hint == 0 || (hint as usize) >= MAX_CAPS {
+            return Err(KError::InvalidArg);
+        }
+        let table = self.tcb(receiver).ok_or(KError::InvalidCap)?;
+        if table.cspace[hint as usize].is_some() {
+            return Err(KError::SlotOccupied);
+        }
         let rights = source.rights.without(Rights::GRANT);
-        self.copy_cap(sender, src_slot, receiver, dest, rights, 0)?;
-        msg.cap = dest as u64;
+        self.copy_cap(sender, src_slot, receiver, hint, rights, 0)?;
+        msg.cap = hint as u64;
         Ok(())
     }
 

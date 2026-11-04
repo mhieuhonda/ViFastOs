@@ -54,7 +54,6 @@ hiện là mã nhúng tối giản, chưa phải ELF/`vifast-user`.
 | `vifast-kernel-riscv64` | Entry + linker + user image asset | có | có (entry/asset) |
 | `vifast-kernel-aarch64` | Entry + linker + user image asset | có | có (entry/asset) |
 | `vifast-kernel-x86_64-uefi` | UEFI entry + user image asset | có | có (entry/asset) |
-| `vifast-kernel-x86_64` | Multiboot legacy experiment | có | có (asm) |
 
 Nguyên tắc: `vifast-kernel` **không** biết địa chỉ UART, thanh ghi, page size
 thực tế, số cấp page table hay IRQ controller. Các chi tiết đó nằm ở
@@ -142,12 +141,13 @@ Kernel chạy self-test trong kernel mode trước khi chuyển sang user mode:
 - Scheduler ưu tiên: chọn priority cao nhất, round-robin khi cùng mức.
 - Generation của object table phát hiện `ObjRef` cũ.
 - Kiểm tra biên slot capability.
+- Negative test: cap sai type/đã revoke, W^X, slot cap đích đã dùng.
 - Invariant checker cho object/capability/runqueue/VSpace/fd.
 
 Sau đó kernel tạo **hai TCB user**, nạp timer 100 Hz và chuyển sang user mode:
 
 - **RISC-V64**: `sret` → U-mode, `ecall`; timer SBI, `stvec`, context switch qua
-  `TrapFrame`; trap hiện dùng user stack.
+  `TrapFrame`; trap dùng kernel trap stack qua `sscratch`.
 - **AArch64**: `eret` → EL0, `svc #0`; GICv2 + generic timer PPI 30, vector IRQ
   riêng, trap dùng `SP_EL1`; page table 4 cấp.
 - **x86_64**: UEFI/OVMF, GDT + TSS + IDT, `iretq` → ring3, `int 0x80`; PIC + PIT
@@ -156,9 +156,10 @@ Sau đó kernel tạo **hai TCB user**, nạp timer 100 Hz và chuyển sang use
 Server user thread có cap endpoint `READ`, gọi `Recv` rồi `Reply`; client có cap
 `WRITE`, gọi `Call` và nhận reply. Client còn giữ cap `Untyped`, gọi `Retype`
 để tạo frame, rồi `FrameMap`/`FrameUnmap`; user ghi `Mapped\n` vào page vừa map
-và đọc lại qua `DebugWrite`. Mỗi `Call`, client chuyển một cap notification có
-quyền `GRANT`; server nhận cap, `Signal`, rồi `Reply`; client `Poll` và in
-`Cap OK`. Client cũng mở `/motd`, đọc vào page vừa map, in nội dung qua
+và đọc lại qua `DebugWrite`. Ở `Call` đầu tiên, client chuyển một cap
+notification có quyền `GRANT` vào slot 4 của server; server nhận cap, `Signal`,
+rồi `Reply`; các Call sau không chuyển cap nữa để slot không bị chiếm. Client
+`Poll` và in `Cap OK`. Client cũng mở `/motd`, đọc vào page vừa map, in nội dung qua
 `DebugWrite`, tạo `/scratch`, ghi `ViFastOS write`, seek/đọc lại, rồi đóng fd
 và unmap. Khi IPC block, kernel lưu context, chọn TCB
 khác, rồi áp dụng `resume` message khi đánh thức. Timer preempts; sau 20 tick in
@@ -182,15 +183,15 @@ cargo test -p vifast-kernel
   đa hart, hay cấp phát địa chỉ ảo tự động theo range lớn.
 - Untyped/retype hiện hỗ trợ Frame, PageTable và metadata object; chưa có
   allocator vật lý đầy đủ, IOMMU, hay thu hồi object.
-- RISC-V trap hiện chạy trên user stack (chưa chuyển sang kernel trap stack bằng
-  `sscratch`); AArch64 và x86_64 đã dùng kernel trap stack.
+- RISC-V đã dùng kernel trap stack qua `sscratch`; AArch64 dùng `SP_EL1`,
+  x86_64 dùng `TSS.RSP0`.
 - SMP mới ở mức bootstrap: RISC-V/AArch64 có hart thứ hai idle; x86_64 chưa
   khởi động AP qua UEFI MP Services. Chưa có per-hart runqueue, BKL, IPI
   scheduler hay TLB shootdown đa hart.
 - Timer/scheduler vẫn chạy một hart qua SBI/GICv2/PIC.
-- x86_64 vẫn dùng page table UEFI; với leaf 2 MiB, map/unmap chỉ là best-effort
-  và code page vẫn writable+executable. RISC-V/AArch64 đã map code read-only +
-  executable và data/stack NX.
+- x86_64 đã tự dựng PML4/page table riêng: code RX, data/stack NX, unmap thật.
+  Kernel phụ thuộc identity map 0..1 GiB của platform; chưa có AP.
+- RISC-V/AArch64/x86_64 đều map code read-only + executable và data/stack NX.
 - VFS mới là ramfs phẳng trong kernel: chưa có block device, cây thư mục,
   quyền file, mount, pager hay filesystem bền vững.
 - Chưa có driver, network, GPU, compositor, ViFastKey.
@@ -230,10 +231,9 @@ bare-metal này.
   `Kernel` + format machinery cần nhiều hơn 64 KiB. RISC-V đang trap trên user
   stack; AArch64 dùng `SP_EL1`, x86_64 dùng `TSS.RSP0`. Stack per-thread vẫn là
   việc tiếp theo.
-- x86_64 dùng page table của UEFI; với leaf 2 MiB, việc bật U/S có thể mở cả
-  vùng 2 MiB chứa kernel. Đây là bring-up demo, chưa phải cách ly production.
-- x86_64 dùng UEFI/OVMF vì QEMU `-kernel` không nhận ELF64 multiboot. Crate
-  `vifast-kernel-x86_64` (multiboot) được giữ làm thí nghiệm legacy, không nằm
-  trong đường test chính.
+- x86_64 tự dựng PML4 và page table 4 KiB cho user; kernel/driver vẫn chạy
+  identity map 0..1 GiB. Chưa có AP/SMP scheduler.
+- x86_64 dùng UEFI/OVMF vì QEMU `-kernel` không nhận ELF64 multiboot. Legacy
+  multiboot crate đã được xoá khỏi workspace.
 - QEMU x86 dùng `isa-debug-exit`; kernel ghi port `0x501`, QEMU thoát với mã 3.
   RISC-V dùng SBI SRST; AArch64 dùng PSCI SYSTEM_OFF.

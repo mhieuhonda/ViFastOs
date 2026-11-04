@@ -31,7 +31,6 @@ Trình tự unmap tương tự với `FrameUnmap`.
 - page size;
 - range `[base, end)`;
 - `next_va` cho cấp phát tuần tự;
-- cờ `direct` cho x86 identity mapping;
 - tối đa 8 mapping.
 
 `Kernel::map_frame` kiểm tra:
@@ -41,7 +40,7 @@ Trình tự unmap tương tự với `FrameUnmap`.
 - PA căn page;
 - Frame đủ một page;
 - VA căn page;
-- VA nằm trong range (trừ direct);
+- VA nằm trong range;
 - không overlap mapping cũ.
 
 ## 3. RISC-V64
@@ -58,7 +57,7 @@ File: `crates/vifast-platform-riscv64/src/platform.rs`.
 - Data mapping qua `FrameMap`: `R|W|U` hoặc `R|X|U` theo quyền.
 - `sfence.vma` sau map/unmap.
 
-Hạn chế: trap entry hiện dùng user stack, chưa có `sscratch` kernel trap stack.
+Trap entry dùng kernel trap stack qua `sscratch`; user stack chỉ dùng ở U-mode.
 
 ## 4. AArch64
 
@@ -81,14 +80,16 @@ Lưu ý encoding `AP[2:1]`:
 
 File: `crates/vifast-platform-x86_64/src/platform.rs`.
 
-- Dùng page table UEFI; `vspace_root()` đọc CR3.
-- `VSpace.direct = true`: VA trả về = PA của `USER_FRAME`.
-- `make_user_page` bật U/S, RW, NX cho data; code executable nhưng vẫn RW.
-- Khi sửa page table phải tạm clear `CR0.WP`.
-- `FrameUnmap` hiện chỉ `invlpg`, không thu hồi U/S trên leaf 2 MiB để tránh
-  mất luôn code/stack trong cùng 2 MiB.
-- Vì vậy x86 chỉ là bring-up, chưa đạt W^X/isolation production.
-
+- Tự dựng PML4/PDPT/PD/PT 4 KiB, không sửa page table UEFI.
+- Identity map 0..1 GiB cho kernel/UEFI image, stack, GDT/TSS/IDT.
+- User code `0x4000_0000`, stack `0x4000_1000..0x4000_8fff`,
+  data `0x4000_a000`.
+- Code: P|US, read+execute, NX clear.
+- Stack/data: P|W|US|NX.
+- `FrameMap` map đúng VA được yêu cầu; `FrameUnmap` clear PTE + `invlpg`.
+- `VSpace.direct` đã bị xoá; x86 dùng VA cố định giống các port khác.
+- CR3 được chuyển sang PML4 riêng ngay trước `iretq`.
+- Hạn chế còn lại: chỉ identity map 0..1 GiB; chưa có AP.
 ## 6. TLB
 
 Hiện tại:
@@ -120,6 +121,6 @@ trong platform. Chưa có:
 |---|---|---|
 | RISC-V | RX + U | RW + NX |
 | AArch64 | RO + X + U | RW + NX |
-| x86_64 | RW + X (UEFI large page) | RW + NX data |
+| x86_64 | RX + U | RW + NX data/stack |
 
 Kernel từ chối mọi mapping user yêu cầu đồng thời `WRITE` và `EXEC`.

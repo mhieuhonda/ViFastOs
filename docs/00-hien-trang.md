@@ -20,7 +20,7 @@ sang bản bare-metal.
 | User `Retype` + `FrameMap/Unmap` | có | có | có |
 | ramfs VFS + file syscall | có | có | có |
 | SMP bootstrap | HSM, hart phụ idle | PSCI, hart phụ idle | UEFI MP Services chưa khởi động AP |
-| W^X user code/data | có (RX + NX stack) | có (RO+X, NX data) | một phần (UEFI large page) |
+| W^X user code/data | có (RX + NX stack) | có (RO+X, NX data) | có (RX + NX data) |
 | Chuyển capability + notification qua IPC | có | có | có |
 | User gọi `Exit` | có | có | có |
 
@@ -62,12 +62,10 @@ Kernel portable hiện có:
 
 ## Hạn chế bring-up cần nhớ
 
-- RISC-V trap đang dùng user stack; chưa chuyển sang kernel trap stack bằng
-  `sscratch`.
-- x86_64 dùng page table của UEFI; nếu leaf là 2 MiB, U/S có thể mở cả vùng
-  2 MiB chứa kernel. `FrameUnmap` chỉ flush TLB, không thu hồi quyền trên leaf
-  lớn; code page vẫn writable+executable. Đây là demo, chưa phải isolation
-  production.
+- RISC-V trap đã dùng kernel trap stack qua `sscratch`; AArch64 dùng `SP_EL1`,
+  x86_64 dùng `TSS.RSP0`.
+- x86_64 tự dựng PML4 + page table 4 KiB; code RX, data/stack NX, unmap thật.
+  Kernel chạy identity map 0..1 GiB; AP/SMP scheduler chưa có.
 - AArch64 dùng page table tĩnh 4 cấp; user code read-only+executable, stack
   read-write + NX; user code không dùng stack.
 - RISC-V và AArch64 flush TLB một hart (`sfence.vma`/`tlbi`); chưa có IPI

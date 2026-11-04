@@ -17,7 +17,7 @@ pub const MAX_PRIORITY: u8 = 15;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ObjRef {
     pub index: u8,
-    pub gen: u8,
+    pub gen: u32,
 }
 
 impl ObjRef {
@@ -199,18 +199,15 @@ pub struct VSpace {
     pub base: u64,
     pub next_va: u64,
     pub end: u64,
-    /// x86_64/UEFI can only expose identity-mapped frames in this bring-up
-    /// port.  When true the returned user VA is the frame's physical address.
-    pub direct: bool,
     pub mappings: [Option<Mapping>; MAX_MAPPINGS],
 }
 
 impl VSpace {
-    pub fn new(root: u64, base: u64, size: u64, direct: bool) -> Self {
-        Self::with_page_size(root, base, size, direct, DEFAULT_PAGE_SIZE)
+    pub fn new(root: u64, base: u64, size: u64) -> Self {
+        Self::with_page_size(root, base, size, DEFAULT_PAGE_SIZE)
     }
 
-    pub fn with_page_size(root: u64, base: u64, size: u64, direct: bool, page_size: u64) -> Self {
+    pub fn with_page_size(root: u64, base: u64, size: u64, page_size: u64) -> Self {
         let end = base.saturating_add(size);
         VSpace {
             root,
@@ -218,7 +215,6 @@ impl VSpace {
             base,
             next_va: base,
             end,
-            direct,
             mappings: [None; MAX_MAPPINGS],
         }
     }
@@ -247,11 +243,9 @@ impl VSpace {
         for slot in self.mappings.iter_mut() {
             if slot.is_none() {
                 *slot = Some(mapping);
-                if !self.direct {
-                    let next = mapping.va.saturating_add(mapping.len);
-                    if next > self.next_va {
-                        self.next_va = next;
-                    }
+                let next = mapping.va.saturating_add(mapping.len);
+                if next > self.next_va {
+                    self.next_va = next;
                 }
                 return Ok(());
             }
@@ -357,7 +351,7 @@ impl Kind {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Object {
-    pub gen: u8,
+    pub gen: u32,
     pub kind: Kind,
 }
 

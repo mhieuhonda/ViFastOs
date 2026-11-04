@@ -20,15 +20,16 @@ cargo test -p vifast-kernel
 cargo test -p vifast-runtime
 ```
 
-Hiện có 7 test trong `vifast-kernel`:
+Hiện có 8 test trong `vifast-kernel`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
 - capability rights monotonic;
 - revoke descendant;
 - VSpace W^X + overlap + unmap;
-- direct VSpace;
-- frame alignment.
+- frame alignment;
+- syscall từ chối cap sai type/đã revoke và W^X;
+- chuyển cap yêu cầu slot đích rõ ràng, không fallback.
 
 `vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.
 

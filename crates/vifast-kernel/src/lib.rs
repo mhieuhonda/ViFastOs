@@ -189,14 +189,8 @@ impl Kernel {
         self.alloc(Kind::Frame(Frame { pa, size }))
     }
 
-    pub fn create_vspace(
-        &mut self,
-        root: u64,
-        base: u64,
-        size: u64,
-        direct: bool,
-    ) -> Option<ObjRef> {
-        self.create_vspace_with_page_size(root, base, size, direct, DEFAULT_PAGE_SIZE)
+    pub fn create_vspace(&mut self, root: u64, base: u64, size: u64) -> Option<ObjRef> {
+        self.create_vspace_with_page_size(root, base, size, DEFAULT_PAGE_SIZE)
     }
 
     pub fn create_vspace_with_page_size(
@@ -204,11 +198,10 @@ impl Kernel {
         root: u64,
         base: u64,
         size: u64,
-        direct: bool,
         page_size: u64,
     ) -> Option<ObjRef> {
         self.alloc(Kind::VSpace(VSpace::with_page_size(
-            root, base, size, direct, page_size,
+            root, base, size, page_size,
         )))
     }
 
@@ -392,20 +385,12 @@ impl Kernel {
         {
             return Err(KError::Alignment);
         }
-        let va = if space.direct {
-            frame.pa as u64
-        } else if hint == 0 {
-            space.next_va
-        } else {
-            hint
-        };
+        let va = if hint == 0 { space.next_va } else { hint };
         if va % page_size != 0 {
             return Err(KError::Alignment);
         }
-        if !space.direct {
-            if va < space.base || va.saturating_add(page_size) > space.end {
-                return Err(KError::InvalidArg);
-            }
+        if va < space.base || va.saturating_add(page_size) > space.end {
+            return Err(KError::InvalidArg);
         }
         if space.contains(va, page_size) {
             return Err(KError::AlreadyMapped);
@@ -511,9 +496,8 @@ impl Kernel {
                         {
                             return Err(KError::IllegalOperation);
                         }
-                        if !space.direct
-                            && (mapping.va < space.base
-                                || mapping.va.saturating_add(mapping.len) > space.end)
+                        if mapping.va < space.base
+                            || mapping.va.saturating_add(mapping.len) > space.end
                         {
                             return Err(KError::InvalidArg);
                         }
@@ -1275,9 +1259,7 @@ mod tests {
     #[test]
     fn vspace_maps_enforce_wx_and_track_unmap() {
         let mut kernel = Kernel::new();
-        let space = kernel
-            .create_vspace(0x1000, 0x4000_a000, 0x2000, false)
-            .unwrap();
+        let space = kernel.create_vspace(0x1000, 0x4000_a000, 0x2000).unwrap();
         let frame = kernel.create_frame(0x9000, 4096).unwrap();
         let mapping = kernel
             .map_frame(space, frame, 0, Rights::READ | Rights::WRITE)
@@ -1304,21 +1286,83 @@ mod tests {
     }
 
     #[test]
-    fn direct_vspace_uses_frame_physical_address() {
+    fn syscall_rejects_bad_capability_types_and_wx() {
         let mut kernel = Kernel::new();
-        let space = kernel.create_vspace(0x2000, 0, 0, true).unwrap();
-        let frame = kernel.create_frame(0x1234_5000, 4096).unwrap();
-        let mapping = kernel
-            .map_frame(space, frame, 0xdead, Rights::READ)
+        let root = kernel.root().unwrap();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(frame, ObjType::Frame, Rights::ALL))
             .unwrap();
-        assert_eq!(mapping.va, 0x1234_5000);
-        assert_eq!(mapping.pa, 0x1234_5000);
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::Send as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::WrongType
+            }
+        );
+        assert!(kernel.delete_cap(root, 1).is_some());
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::Send as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidCap
+            }
+        );
+
+        let vspace = kernel.create_vspace(0x1000, 0x4000_a000, 4096).unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(vspace, ObjType::VSpace, Rights::WRITE))
+            .unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(frame, ObjType::Frame, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameMap as u64,
+                2,
+                3,
+                0,
+                (Rights::WRITE | Rights::EXEC).0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::NoRights
+            }
+        );
+    }
+
+    #[test]
+    fn cap_transfer_requires_an_explicit_empty_slot() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let worker = kernel.create_tcb("worker", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let notification = kernel.create_notification().unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(notification, ObjType::Notification, Rights::ALL),
+            )
+            .unwrap();
+        assert_eq!(kernel.recv(worker, endpoint, 6), Ok(None));
+        let message = Message::new(0xCAFE, &[1]).unwrap().with_cap(1);
+        assert_eq!(kernel.send(root, endpoint, 0, message, false), Ok(true));
+        assert_eq!(kernel.recv(worker, endpoint, 6), Ok(None));
+        let second = Message::new(0xBEEF, &[2]).unwrap().with_cap(1);
+        assert_eq!(
+            kernel.send(root, endpoint, 0, second, false),
+            Err(KError::SlotOccupied)
+        );
     }
 
     #[test]
     fn frame_alignment_is_checked() {
         let mut kernel = Kernel::new();
-        let space = kernel.create_vspace(1, 0x1000, 0x1000, false).unwrap();
+        let space = kernel.create_vspace(1, 0x1000, 0x1000).unwrap();
         let frame = kernel.create_frame(0x9001, 4096).unwrap();
         assert_eq!(
             kernel.map_frame(space, frame, 0, Rights::READ),

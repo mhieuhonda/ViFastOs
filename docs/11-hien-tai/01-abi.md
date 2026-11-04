@@ -87,6 +87,8 @@ pub struct Message {
 - `with_cap(slot)` đánh dấu capability cần chuyển.
 - User syscall `Send`/`Call` hiện truyền tối đa **3 data word** và dùng `a5`
   làm slot cap; `Reply` truyền 4 data word và không chuyển cap.
+- Receiver phải chỉ định slot nhận cap rõ ràng; kernel không tự chọn slot
+  fallback. Nếu slot 0/đã dùng, chuyển cap thất bại.
 
 ## 6. Bảng syscall
 

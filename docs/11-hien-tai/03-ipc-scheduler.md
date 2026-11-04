@@ -44,7 +44,8 @@ block cho đến khi server `Reply`.
   caller slot.
 - Nếu có sender đang chờ:
   - lấy `PendingSend`;
-  - chuyển cap vào `recv_slot` (hoặc slot trống đầu tiên);
+  - chuyển cap vào đúng `recv_slot` receiver đã chỉ định; slot phải trống,
+    không fallback;
   - nếu là Call, ghi caller;
   - trả message.
 - Nếu không có sender:
@@ -84,8 +85,8 @@ pub struct Notification {
 
 1. `lookup_cap(sender, slot, None, Rights::GRANT)`.
 2. Chọn slot đích của receiver:
-   - `recv_slot` nếu trống;
-   - ngược lại slot trống đầu tiên.
+   - đúng `recv_slot` receiver đã chỉ định;
+  - nếu slot 0/đã dùng, trả `InvalidArg`/`SlotOccupied`; không fallback.
 3. `copy_cap(sender, src, receiver, dest, rights.without(GRANT), 0)`.
 4. Ghi lại `message.cap = dest`.
 

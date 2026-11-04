@@ -1,0 +1,691 @@
+ViFastOs - TỔNG HỢP KIẾN TRÚC HIỆN TẠI VÀ ĐỊNH HƯỚNG PHÁT TRIỂN
+================================================================
+
+Mục đích file này
+-----------------
+Tài liệu tự chứa (self-contained) để copy/paste cho AI khác hoặc người khác
+đọc và thảo luận thiết kế. Nội dung phản ánh code hiện tại trong:
+
+    /Users/mps/dvchd/ViFastOs
+
+Đây là một microkernel viết bằng Rust, hướng tới nhiều kiến trúc:
+RISC-V64, AArch64 và x86_64. Project đang ở mức "bring-up kernel + user demo",
+không phải một hệ điều hành production hoàn chỉnh.
+
+Thư mục này KHÔNG phải git repository. Mọi thay đổi đang nằm trực tiếp trên đĩa.
+
+Cập nhật gần nhất: sau refactor tách runtime/platform/arch và bổ sung VFS
+create/write/seek/stat.
+
+1. MỤC TIÊU
+-----------
+- Một lõi kernel portable, không phụ thuộc phần cứng.
+- Nhiều port kiến trúc, dùng chung logic object/capability/IPC/scheduler/MMU/VFS.
+- Chạy được trên QEMU cho cả 3 kiến trúc.
+- Hướng tới microkernel kiểu seL4, capability-based.
+- Có user mode, syscall, timer preemption, IPC, capability transfer, memory
+  mapping, VFS tối giản.
+- Về lâu dài hướng tới desktop/space profile, driver user-space, filesystem,
+  network, compositor, ViFastKey và formal verification.
+
+2. TRẠNG THÁI HIỆN TẠI (TÓM TẮT)
+-------------------------------
+Đã chạy được trên QEMU:
+- RISC-V64 (OpenSBI, -smp 2)
+- AArch64 (QEMU virt, GICv2, -smp 2)
+- x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
+
+Test hiện tại:
+- cargo test -p vifast-kernel: 6/6 PASS
+- cargo test -p vifast-runtime: compile + 0 test
+- ./scripts/build.sh: PASS, không warning
+- python3 scripts/test-qemu.py: 3/3 PASS
+- Chạy lặp 3 lần liên tiếp: RISC-V, AArch64, x86_64 đều PASS
+
+Output tiêu biểu:
+- SELFTEST PASS
+- SMP OK (harts=2) trên RISC-V/AArch64
+- SMP SKIP (x86 AP bootstrap pending) trên x86_64
+- "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write", "Client",
+  "Cap OK", "Reply OK", "PREEMPT OK"
+
+3. KIẾN TRÚC TỔNG THỂ SAU REFACTOR
+----------------------------------
+Mục tiêu của refactor: lõi portable không biết phần cứng; phần cứng nằm trong
+platform/arch crate; binary kernel chỉ còn entry/linker/user asset.
+
+Sơ đồ lớp:
+
+    +--------------------------------------------------+
+    | user mode: ring3 / EL0 / U-mode                   |
+    +--------------------------------------------------+
+    | vifast-kernel (portable, no_std, forbid unsafe)  |
+    | object - capability - IPC - scheduler - VSpace   |
+    | shadow mapping - ramfs - ABI checks              |
+    +--------------------------------------------------+
+    | vifast-runtime (generic boot/syscall/timer)      |
+    | no_std, forbid unsafe                            |
+    +--------------------------------------------------+
+    | vifast-platform-* (BSP integration)              |
+    | trap - MMU - timer - IRQ - SMP - user entry      |
+    +--------------------------------------------------+
+    | vifast-arch-* (hardware primitives)              |
+    | UART/PL011/COM1 - clock - IRQ mask - shutdown    |
+    +--------------------------------------------------+
+    | vifast-kernel-* (entry + linker + user image)    |
+    +--------------------------------------------------+
+             |                |                |
+          RISC-V64          AArch64          x86_64
+          OpenSBI           QEMU virt        OVMF/UEFI
+
+Quan hệ phụ thuộc chính:
+- vifast-kernel -> vifast-arch (chỉ trait, không phần cứng)
+- vifast-runtime -> vifast-kernel + vifast-arch
+- vifast-platform-* -> vifast-runtime + vifast-kernel + vifast-arch-*
+- vifast-kernel-* -> vifast-platform-* + vifast-runtime + vifast-arch
+- Không có cfg(target_arch) trong vifast-kernel hoặc vifast-runtime.
+
+4. CÁC CRATE VÀ TRÁCH NHIỆM
+---------------------------
+vifast-abi
+- Wire ABI, no_std, forbid unsafe.
+- KError, Rights, ObjType, ThreadState, Message, SyscallId.
+- Hằng số page/message/cờ file.
+- File: crates/vifast-abi/src/lib.rs.
+
+vifast-arch
+- Trait Arch + BootInfo + primitive contract.
+- no_std, forbid unsafe.
+- Không biết kernel object, MMU, trap hoặc page table.
+- File: crates/vifast-arch/src/lib.rs.
+
+vifast-kernel
+- Toàn bộ logic portable:
+  - object table cố định có generation;
+  - capability install/copy/derive/revoke;
+  - endpoint send/recv/call/reply;
+  - notification signal/wait/poll;
+  - scheduler priority + round-robin;
+  - Frame/VSpace/PageTable shadow mapping;
+  - Untyped/retype;
+  - ramfs + fd table;
+  - invariant checker.
+- no_std, forbid unsafe.
+- Files:
+  - lib.rs
+  - object.rs
+  - ipc.rs
+  - fs.rs
+  - selftest.rs
+  - console.rs.
+
+vifast-runtime
+- Logic dùng chung cho mọi port:
+  - Platform trait;
+  - boot sequence;
+  - syscall action dispatch;
+  - user image copy;
+  - context switch khi block;
+  - timer tick/preemption;
+  - exit sau 20 tick.
+- no_std, forbid unsafe.
+- File: crates/vifast-runtime/src/lib.rs.
+
+vifast-arch-riscv64 / aarch64 / x86_64
+- Chỉ primitive phần cứng:
+  - UART 16550 / PL011 / COM1;
+  - clock (time CSR / cntpct_el0 / rdtsc);
+  - IRQ mask/unmask;
+  - shutdown (SBI SRST / PSCI / isa-debug-exit).
+- Có unsafe/asm/port I/O.
+- Files: crates/vifast-arch-*/src/lib.rs.
+
+vifast-platform-riscv64
+- RiscvPlatform newtype.
+- Sv39 root tĩnh.
+- Trap entry/restore + trap handler.
+- SBI timer.
+- Frame/stack/data user page.
+- HSM secondary hart + SMP bootstrap.
+- TLB: sfence.vma.
+- Files: platform.rs, trap.S, smp.S.
+
+vifast-platform-aarch64
+- Aarch64Platform newtype.
+- 4-level page table tĩnh.
+- trap vector + IRQ handler.
+- GICv2 + generic timer PPI 30.
+- user context EL0, SP_EL0/SP_EL1.
+- PSCI CPU_ON cho SMP.
+- TLB: tlbi vae1is + dsb/isb.
+- Files: platform.rs, trap.S, smp.S.
+
+vifast-platform-x86_64
+- X86Platform newtype.
+- UEFI entry phối hợp qua PlatformInfo.
+- GDT/TSS/IDT.
+- PIC + PIT 100 Hz.
+- Tự dựng PML4/PDPT/PD/PT 4 KiB; identity map 0..1 GiB.
+- User code 0x4000_0000 RX; stack/data RW+NX; unmap thật.
+- ring3 qua iretq; CR3 chuyển sang PML4 riêng.
+- AP bootstrap qua UEFI MP Services đã thử nhưng OVMF hiện tại không trả
+  interface; code MP đã gỡ khỏi build, start_smp chỉ in SMP SKIP.
+- Files: platform.rs, trap.S.
+
+vifast-kernel-riscv64 / aarch64 / x86_64-uefi
+- Binary rất mỏng, hiện khoảng 48-49 dòng main.rs.
+- Chỉ còn:
+  - global_asm boot.S (RISC-V/AArch64);
+  - global_asm user.S;
+  - user_image() tạo slice + entry offsets;
+  - gọi runtime::boot::<Platform>(...);
+  - panic handler.
+- Không còn page table, GIC, trap frame, context switch hay syscall dispatch.
+
+5. KÍCH THƯỚC / ĐỘ TÁCH LỚP HIỆN TẠI
+-------------------------------------
+main.rs binary:
+- RISC-V: 49 dòng
+- AArch64: 49 dòng
+- x86_64 UEFI: 48 dòng
+
+platform.rs:
+- RISC-V: khoảng 381 dòng
+- AArch64: khoảng 454 dòng
+- x86_64: khoảng 528 dòng
+
+runtime:
+- khoảng 366 dòng
+
+arch primitive:
+- RISC-V: khoảng 86 dòng
+- AArch64: khoảng 89 dòng
+- x86_64: khoảng 95 dòng
+
+vifast-kernel + runtime + arch là các crate không unsafe (trừ primitive arch
+có unsafe). Platform là nơi duy nhất được phép dùng asm/MMIO/trap frame.
+
+6. BOOT FLOW
+------------
+RISC-V:
+  OpenSBI -> boot.S:_start -> rust_main(hartid, dtb)
+  -> vifast_runtime::boot::<RiscvPlatform>
+  -> runtime tạo kernel/selftest/SMP/user/caps
+  -> Platform::enter_user: satp, stvec, sret.
+
+AArch64:
+  QEMU virt -> boot.S:_start
+  -> nếu EL2 thì drop xuống EL1
+  -> rust_main(dtb)
+  -> runtime boot
+  -> Platform::enter_user: TTBR0/TCR/MAIR/SCTLR, eret.
+
+x86_64:
+  OVMF -> efi_main(image, system_table)
+  -> runtime boot
+  -> Platform::prepare_user: GDT/TSS/IDT
+  -> Platform::start_timer: PIC/PIT
+  -> Platform::enter_user: chuyển CR3 sang PML4 riêng, iretq ring3.
+
+Runtime boot sequence chi tiết:
+1. A::init() (console/clock)
+2. A::irq_disable()
+3. A::init_platform(info)
+4. in banner
+5. Kernel::new()
+6. selftest::run::<A>()
+7. in SELFTEST PASS
+8. A::start_smp()
+9. tạo 2 TCB, endpoint, notification, VSpace, Untyped
+10. cài cap cho A/B
+11. copy user image vào A::code_page()
+12. A::build_page_tables()
+13. A::prepare_user()
+14. tạo context A/B
+15. A::set_kernel(&mut kernel)
+16. enqueue A/B, pick A
+17. A::start_timer()
+18. A::enter_user(context A)
+
+7. OBJECT MODEL VÀ CAPABILITY
+-----------------------------
+Giới hạn cố định:
+- MAX_OBJECTS = 32
+- MAX_TCBS = 8
+- MAX_CAPS = 12
+- MAX_QUEUE = 8
+- MAX_FDS = 8
+- MAX_MAPPINGS = 8
+- MAX_FILES = 8
+
+Object:
+- Object { gen: u32, kind: Kind }
+- ObjRef { index: u8, gen: u32 }
+- Generation tăng khi slot tái sử dụng; ObjRef cũ bị từ chối.
+
+Kind:
+- Free
+- Endpoint { send: Queue, recv: Queue }
+- Notification { word, waiter }
+- Tcb
+- Untyped { base, size, bump, page_size }
+- Frame { pa, size }
+- VSpace { root, page_size, base, next_va, end, mappings }
+- PageTable { root, level }
+
+Tcb:
+- name, state, priority
+- cspace [Option<Cap>; 12]
+- caller: Option<(ObjRef, epoch)>
+- reply_epoch
+- recv_slot
+- bound_ntfn
+- pending: Option<PendingSend>
+- resume: Option<Message>
+- fds [Option<Fd>; 8]
+- queued, queue_seq
+
+Capability:
+- Cap { obj, ty, rights, badge, parent }
+- install_cap/lookup_cap/copy_cap/delete_cap/revoke_cap/set_cap_badge
+- Rights: READ=1, WRITE=2, EXEC=4, GRANT=8
+- copy/derive chỉ giảm quyền
+- parent tạo cây để revoke descendant
+- Chỉ Endpoint/Notification mang badge
+- Chuyển capability qua IPC: sender cần GRANT; receiver nhận bản copy
+  không có GRANT.
+
+Untyped/retype:
+- Frame: cấp 1 page căn theo page_size.
+- PageTable: cấp 1 page, level=3.
+- Endpoint/Notification/Tcb: metadata, không tiêu page.
+- Chưa có free/destroy object/frame.
+
+8. IPC VÀ SCHEDULER
+-------------------
+Endpoint:
+- send queue chứa TCB BlockedSend.
+- recv queue chứa TCB BlockedRecv.
+- Queue FIFO 8 phần tử.
+
+Send:
+- Có receiver: gán resume, đưa receiver Ready.
+- Call: sender BlockedReply, lưu caller.
+- Không receiver: sender BlockedSend + PendingSend + vào send queue.
+
+Recv:
+- Nếu đã có caller: trả WouldBlock (server phải Reply trước).
+- Có sender: nhận PendingSend, chuyển cap nếu cần, trả message.
+- Không sender: block, lưu recv_slot.
+
+Reply:
+- Chỉ một caller.
+- Kiểm tra BlockedReply + reply_epoch.
+- Gán resume message, đưa client Ready.
+
+Notification:
+- word OR bit.
+- signal có waiter: đánh thức + giao word.
+- wait: trả word hoặc block.
+- poll: trả + clear.
+- Không có waiter: word tích luỹ.
+
+Chuyển cap:
+- Message.cap = slot nguồn.
+- Kiểm tra GRANT.
+- Slot nhận phải do receiver chỉ định rõ; không fallback; slot 0/đã dùng là lỗi.
+- Copy cap, bỏ GRANT.
+- Nếu lỗi, đưa sender lại queue để không mất trạng thái.
+
+Scheduler:
+- Một runqueue cố định.
+- Priority lớn hơn chạy trước.
+- Cùng priority: FIFO queue_seq.
+- pick() lấy TCB, state Running, tăng context_switches.
+- yield_current() đưa Running về Ready + enqueue.
+- Block state không nằm trong runqueue.
+- Runtime lưu/nạp Platform::Context.
+- Timer 100 Hz, sau 20 tick in PREEMPT OK và exit QEMU.
+- SMP scheduler chưa có: hart phụ chỉ idle.
+
+9. MEMORY / MMU
+---------------
+Portable shadow mapping:
+- Kernel portable chỉ giữ VSpace.mappings.
+- Map/unmap thực tế do Platform.
+- W^X: từ chối mapping vừa WRITE vừa EXEC.
+- Kiểm tra alignment, overlap, range.
+- VSpace có page_size; runtime truyền A::PAGE_SIZE.
+- x86 dùng VA cố định; VSpace.direct đã bị xoá.
+- Frame object chỉ metadata PA/size.
+- Chưa có page-table page allocator, range VA allocator, ASID/PCID.
+
+RISC-V64:
+- Sv39 root tĩnh.
+- Kernel identity 0x8000_0000..0x803f_ffff.
+- UART 0x1000_0000.
+- Code 0x4000_0000: RX U.
+- Stack 0x4000_1000..0x4000_8fff: RW U.
+- Data 0x4000_a000: RW U qua FrameMap.
+- TLB: sfence.vma.
+- Trap dùng kernel trap stack qua sscratch; user stack chỉ ở U-mode.
+
+AArch64:
+- 4-level page table tĩnh.
+- GICv2 0x0800_0000, PL011 0x0900_0000.
+- Code 0x2000_0000: EL0 RO + X.
+- Stack 0x2000_1000..0x2000_8fff: RW + NX.
+- Data 0x2000_a000: RW + NX.
+- TLB: tlbi vae1is, dsb ish, isb.
+- Trap stack SP_EL1; user stack SP_EL0.
+
+x86_64:
+- Tự dựng PML4/PDPT/PD/PT 4 KiB; identity map 0..1 GiB.
+- User code 0x4000_0000: RX + U.
+- Stack 0x4000_1000..0x4000_8fff: RW + NX + U.
+- Data 0x4000_a000: RW + NX + U.
+- FrameMap map tại VA cố định; FrameUnmap clear PTE + invlpg.
+- CR3 chuyển sang PML4 riêng trước iretq.
+- Chưa có AP/SMP scheduler; chỉ identity map 0..1 GiB.
+
+10. VFS / RAMFS
+---------------
+File: crates/vifast-kernel/src/fs.rs.
+- MAX_FILES = 8
+- MAX_FILE_NAME = 24
+- MAX_FILE_SIZE = 512
+- MAX_FDS = 8 mỗi TCB
+- MAX_PATH = 64
+
+RamFile:
+- name, data, len, used, writable.
+- format() tạo /motd và /hello.
+- create() tạo file mới.
+- find() so khớp chính xác, không path walker.
+
+Fd:
+- file index, offset, flags.
+- flags chỉ lưu access mode.
+- O_CREATE dùng lúc Open.
+
+Syscall:
+- Open(path, len, flags)
+- Read(fd, buffer, len)
+- Write(fd, buffer, len)
+- Seek(fd, offset)
+- Stat(fd)
+- Close(fd)
+
+Giới hạn:
+- chỉ flat root;
+- không directory, quyền file, uid/gid;
+- không block device, cache, pager, persistence;
+- chỉ offset riêng mỗi fd, chưa có locking nhiều TCB.
+
+11. ABI / SYSCALL HIỆN CÓ
+-------------------------
+Số syscall chính:
+0  Send
+1  Call
+2  Recv
+3  Reply
+5  Signal
+6  Wait
+7  Poll
+8  Yield (hiện chỉ trả Ok, chưa switch)
+9  Retype
+24 PageTableMap (chưa expose user)
+25 FrameMap
+26 FrameUnmap
+32 DebugWrite
+33 GetTime
+34 Exit
+35 Open
+36 Read
+37 Write
+38 Close
+39 Stat
+40 Seek
+
+Quy ước register:
+RISC-V:
+- number a7, args a0..a5
+- return a0=error, a1=value, a2=label, a3..a6=data
+- ecall
+
+AArch64:
+- number x8, args x0..x5
+- return x0=error, x1=value, x2=label, x3..x6=data
+- svc #0
+
+x86_64:
+- number rax, args rdi/rsi/rdx/rcx/r8/r9
+- return rax=error, rdi=value, rsi=label, rdx/rcx/r8/r9=data
+- int 0x80
+
+Error chính:
+Ok, InvalidCap, WrongType, NoRights, SlotOccupied, OutOfMemory,
+InvalidArg, Alignment, AlreadyMapped, NotMapped, NoCaller,
+ObjectDestroyed, MissingPageTable, IllegalOperation, NotImplemented,
+WouldBlock, NotFound.
+
+12. USER DEMO HIỆN TẠI
+---------------------
+Hai user TCB:
+
+A - server:
+- cap endpoint READ.
+- DebugWrite "Server".
+- loop:
+  - Recv(endpoint, recv_slot=4)
+  - Signal(notification cap slot 4)
+  - Reply(label=0x55, data=42)
+
+B - client:
+- cap endpoint WRITE.
+- cap VSpace WRITE (slot 2).
+- cap Untyped WRITE (slot 3).
+- cap notification READ|WRITE|GRANT (slot 5).
+- Retype Untyped -> Frame cap slot 4.
+- FrameMap -> mapped VA.
+- ghi "Mapped", DebugWrite.
+- Open /motd, Read, DebugWrite "ViFastOS ramfs".
+- Open /scratch O_CREATE|O_RDWR, Write "ViFastOS write", Seek 0, Read,
+  DebugWrite "ViFastOS write", Close.
+- FrameUnmap.
+- DebugWrite "Client".
+- loop:
+  - Call endpoint with label 0x1234, data 7, cap slot 5
+  - Poll notification slot 5
+  - in "Cap OK"/"Cap BAD"
+  - in "Reply OK"/"Reply BAD"
+
+Cap transfer:
+- Client gửi notification cap có GRANT.
+- Server nhận cap (mất GRANT), Signal.
+- Server Reply.
+- Client Poll nhận word.
+
+13. SMP HIỆN TẠI
+---------------
+- RISC-V: SBI HSM start hart 1; hart phụ chạy idle loop.
+- AArch64: PSCI CPU_ON CPU1; hart phụ idle.
+- x86_64: UEFI MP Services thử nhưng OVMF không trả interface; hiện SKIP.
+- Timer/scheduler vẫn một hart.
+- Chưa có:
+  - per-hart runqueue;
+  - BKL/spinlock;
+  - IPI;
+  - TLB shootdown đa hart;
+  - secondary hart vào scheduler.
+
+14. TEST VÀ TIÊU CHÍ PASS
+-------------------------
+Lệnh:
+    ./scripts/build.sh
+    cargo test -p vifast-kernel
+    cargo test -p vifast-runtime
+    cargo fmt --all -- --check
+    python3 scripts/test-qemu.py
+
+Host test hiện có 8 test:
+- kernel/object sizes
+- self-test
+- capability rights monotonic
+- revoke descendants
+- VSpace W^X/overlap/unmap
+- frame alignment
+- syscall từ chối cap sai type/đã revoke và W^X
+- chuyển cap yêu cầu slot đích rõ ràng, không fallback
+
+QEMU test:
+- RISC-V: -machine virt -smp 2 -bios default
+- AArch64: -machine virt,gic-version=2 -cpu cortex-a57 -smp 2
+- x86_64: OVMF + -smp 2 + isa-debug-exit
+
+Điều kiện PASS:
+- SELFTEST PASS
+- booting on
+- PREEMPT OK
+- Server
+- Client
+- Mapped
+- Cap OK
+- ViFastOS ramfs
+- ViFastOS write
+- Reply OK
+- RISC-V/AArch64 phải có SMP OK
+- x86_64 chấp nhận SMP SKIP
+
+Exit code:
+- RISC-V 0
+- AArch64 0
+- x86_64 3 (isa-debug-exit)
+
+15. CÁC THAY ĐỔI HARDENING GẦN NHẤT
+-------------------------------------
+- Đã git init và commit checkpoint đầu tiên.
+- RISC-V dùng kernel trap stack qua sscratch; user stack không còn là trap stack.
+- x86_64 tự dựng PML4/page table 4 KiB; bỏ VSpace.direct; code RX, data/stack
+  NX; unmap thật.
+- ObjRef/Object generation chuyển từ u8 sang u32.
+- Chuyển cap qua IPC yêu cầu slot đích rõ ràng; bỏ fallback slot trống đầu tiên.
+- User demo chỉ chuyển notification cap ở Call đầu tiên để slot 4 của server
+  không bị chiếm.
+- Xoá legacy multiboot crate khỏi workspace.
+- Host test hiện có 8 test, gồm negative test cho cap sai/revoked, W^X và slot cap.
+
+16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
+--------------------------------
+- Scheduler một hart; SMP mới bootstrap, hart phụ idle.
+- x86_64 chưa boot AP.
+- Chưa có TLB shootdown đa hart.
+- Page table root vẫn tĩnh; chưa có page-table page allocator tổng quát.
+- Chưa có range VA allocator, ASID/PCID.
+- Chưa có free/destroy object/frame; object table cố định 32.
+- Chưa có IOMMU.
+- Chưa có ELF loader, user library, shared memory, IPC buffer.
+- Chưa có Reply mang capability.
+- VFS chỉ ramfs phẳng 8 file x 512 byte.
+- Chưa có block device, FS bền vững, directory, permission.
+- Chưa có driver network/GPU/input.
+- Chưa có compositor, ViFastKey.
+- Chưa có formal verification/fuzz diện rộng.
+- RISC-V trap đã dùng kernel trap stack qua sscratch.
+- x86 AP/MP Services code đã gỡ khỏi build.
+- `Yield` chưa chuyển context.
+
+17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
+----------------------------------
+Thứ tự ưu tiên gợi ý:
+
+A. SMP thật
+1. x86 AP bring-up (LAPIC/SIPI hoặc UEFI MP Services nếu tìm được).
+2. Per-hart context/runqueue.
+3. BKL hoặc lock theo thành phần.
+4. IPI wakeup/reschedule.
+5. TLB shootdown đa hart.
+6. Timer đa hart.
+
+B. Bộ nhớ
+1. Physical frame allocator thật.
+2. Page-table page allocator.
+3. Range VA allocator.
+4. Free/unmap toàn VSpace, thu hồi frame/object.
+5. ASID/PCID.
+6. IOMMU.
+
+C. Userland / ABI
+1. vifast-user crate.
+2. ELF loader.
+3. Shared memory / IPC buffer.
+4. Reply capability.
+5. Fault handling: user fault không kill kernel.
+6. Supervisor/pager tối giản.
+
+D. VFS / driver
+1. VFS server ở user space hoặc VFS đầy đủ hơn trong kernel.
+2. Block driver VirtIO.
+3. FS bền vững.
+4. Network VirtIO + TCP/UDP tối giản.
+5. Console/input driver.
+
+E. Desktop / Space
+1. Compositor.
+2. ViFastKey.
+3. Name server, supervisor, pager.
+4. Security/verification.
+
+18. CÂU HỎI NÊN THẢO LUẬN VỚI AI KHÁC
+------------------------------------
+1. Với mục tiêu microkernel, nên ưu tiên SMP thật hay userland/ELF trước?
+2. Cách tách `vifast-runtime` và `vifast-platform` hiện tại có hợp lý không?
+   Có nên đưa `Platform` trait vào crate riêng `vifast-platform-api`?
+3. Có nên giữ page table tĩnh cho bring-up hay chuyển ngay sang page-table
+   allocator + VSpace động?
+4. x86_64 nên dùng UEFI MP Services, LAPIC/SIPI hay ACPI MADT để boot AP?
+5. Scheduler nên dùng BKL thô hay lock mịn theo runqueue/endpoint?
+6. Có nên giữ ramfs trong kernel hay chuyển FS thành user-space server?
+7. Thiết kế shared memory/IPC buffer nên dùng Frame capability hay VSpace
+   mapping của kernel?
+8. Làm thế nào để user fault được chuyển thành fault message thay vì panic?
+9. Có nên giữ user program dạng assembly nhúng hay chuyển ngay sang ELF?
+10. Mức độ `unsafe` trong platform có nên được cô lập thêm bằng crate
+    `vifast-platform-api` + `unsafe` wrapper?
+
+19. FILE / TÀI LIỆU LIÊN QUAN
+-----------------------------
+README.md
+docs/00-hien-trang.md
+docs/10-multi-arch.md
+docs/11-hien-tai/00-index.md
+docs/11-hien-tai/01-abi.md
+docs/11-hien-tai/02-objects-capabilities.md
+docs/11-hien-tai/03-ipc-scheduler.md
+docs/11-hien-tai/04-memory-vspace.md
+docs/11-hien-tai/05-vfs.md
+docs/11-hien-tai/06-runtime-platform.md
+docs/11-hien-tai/07-arch-ports.md
+docs/11-hien-tai/08-boot-user-flow.md
+docs/11-hien-tai/09-testing.md
+
+Mã chính:
+crates/vifast-kernel/src/
+crates/vifast-runtime/src/lib.rs
+crates/vifast-arch-*/src/lib.rs
+crates/vifast-platform-*/src/
+crates/vifast-kernel-*/src/main.rs
+scripts/build.sh
+scripts/test-qemu.py
+
+20. KẾT LUẬN NGẮN
+------------------
+Đây là một microkernel bring-up đa kiến trúc có:
+- lõi portable sạch (không unsafe/asm/hardware);
+- platform layer riêng cho MMU/trap/timer/SMP;
+- binary kernel mỏng;
+- user mode, IPC, capability transfer, page mapping, ramfs và timer preemption;
+- test QEMU 3 kiến trúc xanh.
+
+Nó chưa phải OS hoàn chỉnh. Các khoảng trống lớn nhất là SMP scheduler thật,
+x86 AP, allocator/ELF/userland, driver/FS/network và compositor/ViFastKey.

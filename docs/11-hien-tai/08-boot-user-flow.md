@@ -93,7 +93,8 @@ FrameUnmap
 
 DebugWrite "Client"
 loop:
-  Call(endpoint, label=0x1234, data=7, cap=notification slot 5)
+  Call đầu tiên: endpoint, label=0x1234, data=7, cap=notification slot 5
+  các Call sau: cùng label/data nhưng không chuyển cap
   Poll(notification slot 5)
   DebugWrite "Cap OK" / "Cap BAD"
   DebugWrite "Reply OK" / "Reply BAD"

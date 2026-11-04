@@ -47,6 +47,10 @@ static mut USER_STACK: UserStack = UserStack([0; 32768]);
 static mut USER_DATA: Page = Page([0; 4096]);
 static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
+#[allow(dead_code)]
+#[repr(align(16))]
+struct TrapStack([u8; 32768]);
+static mut TRAP_STACK: TrapStack = TrapStack([0; 32768]);
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
@@ -286,6 +290,8 @@ impl Platform for RiscvPlatform {
             core::arch::asm!("csrw sstatus, {}", in(reg) context.sstatus);
             core::arch::asm!("csrw sepc, {}", in(reg) context.sepc);
             core::arch::asm!("csrw stvec, {}", in(reg) trap_entry as *const () as usize);
+            let trap_top = core::ptr::addr_of!(TRAP_STACK) as u64 + 32768;
+            core::arch::asm!("csrw sscratch, {}", in(reg) trap_top);
             core::arch::asm!("csrs sie, {}", in(reg) 1u64 << 5);
             core::arch::asm!("mv sp, {}", in(reg) context.regs[2]);
             core::arch::asm!("sret");

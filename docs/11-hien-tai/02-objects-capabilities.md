@@ -20,7 +20,7 @@ Mỗi object có:
 
 ```rust
 pub struct Object {
-    pub gen: u8,
+    pub gen: u32,
     pub kind: Kind,
 }
 ```
@@ -120,14 +120,12 @@ pub struct VSpace {
     pub base: u64,
     pub next_va: u64,
     pub end: u64,
-    pub direct: bool,
     pub mappings: [Option<Mapping>; MAX_MAPPINGS],
 }
 ```
 
 - `root` là handle mờ với kernel: Sv39 root, TTBR0 root hoặc CR3.
 - `mappings` là shadow table để kiểm tra overlap/W^X/unmap.
-- `direct = true` dành cho x86 UEFI: VA trả về chính là PA.
 - `next_va` dùng để cấp VA tuần tự trong range `[base, end)`.
 
 ### Mapping

@@ -275,7 +275,7 @@ pub fn run<A: Arch>(k: &mut Kernel) -> bool {
     check!(k.close_fd(root, scratch).is_ok(), "ramfs closes scratch");
 
     // 7. VSpace/Frame shadow mapping and W^X enforcement.
-    let Some(vspace) = k.create_vspace(0x1000_0000, 0x4000_a000, 0x4000, false) else {
+    let Some(vspace) = k.create_vspace(0x1000_0000, 0x4000_a000, 0x4000) else {
         return fail::<A>(passed, "object table exhausted");
     };
     let Some(untyped) = k.create_untyped(0x9000_0000, 0x2000) else {

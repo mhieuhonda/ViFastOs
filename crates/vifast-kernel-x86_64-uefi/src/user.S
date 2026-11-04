@@ -98,6 +98,7 @@ user_thread_b:
     lea rdi, [rip + user_message_b]
     mov rsi, 7
     int 0x80
+    mov r10, 5
 2:
     mov rax, 1
     mov rdi, 1
@@ -105,10 +106,11 @@ user_thread_b:
     mov rdx, 7
     xor rcx, rcx
     xor r8, r8
-    mov r9, 5
+    mov r9, r10
     int 0x80
     mov r13, rax
     mov r14, rdx
+    mov r10, -1
     mov rax, 7
     mov rdi, 5
     int 0x80

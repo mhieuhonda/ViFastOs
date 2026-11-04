@@ -59,13 +59,13 @@ nếu không có VM/emulation. Vì vậy:
 | Preemption | 2 user TCB | 2 user TCB | 2 user TCB |
 | User IPC | Call/Reply | Call/Reply | Call/Reply |
 | User frame map/unmap | một page, Sv39 | một page, 4-level | một page, UEFI U/S |
-| W^X | code RX, stack NX | code RO+X, data NX | data NX; code RX chưa đảm bảo |
+| W^X | code RX, stack NX | code RO+X, data NX | code RX, data/stack NX |
 | Untyped/retype | Frame/PageTable | Frame/PageTable | Frame/PageTable |
 | Cap transfer user | Send/Call + Signal | Send/Call + Signal | Send/Call + Signal |
 | ramfs + file syscall | có | có | có |
 | SMP bootstrap | HSM | PSCI | MP Services chưa có AP |
-| User page table | Sv39 tĩnh | 4-level tĩnh | UEFI paging, bật U/S |
-| Trap stack | user stack (chưa có `sscratch`) | `SP_EL1` | TSS.RSP0 |
+| User page table | Sv39 tĩnh | 4-level tĩnh | PML4/PT 4 KiB riêng |
+| Trap stack | kernel stack qua `sscratch` | `SP_EL1` | TSS.RSP0 |
 | Stack | linker `.stack` 256 KiB | linker `.stack` 256 KiB | UEFI stack |
 | Exit code test | 0 | 0 | 3 |
 

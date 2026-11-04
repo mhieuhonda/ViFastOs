@@ -15,6 +15,16 @@ const TSS_SEL: u16 = 0x28;
 const USER_DATA_RPL3: u64 = USER_DATA_SEL | 3;
 const USER_CODE_RPL3: u64 = USER_CODE_SEL | 3;
 
+const USER_CODE_VA: usize = 0x4000_0000;
+const USER_DATA_VA: usize = 0x4000_a000;
+const USER_STACK_A_TOP: usize = 0x4000_5000;
+const USER_STACK_B_TOP: usize = 0x4000_9000;
+const PAGE_PRESENT: u64 = 1;
+const PAGE_WRITE: u64 = 2;
+const PAGE_USER: u64 = 4;
+const PAGE_LARGE: u64 = 0x80;
+const PAGE_NX: u64 = 1 << 63;
+
 core::arch::global_asm!(include_str!("trap.S"));
 
 #[allow(dead_code)]
@@ -25,6 +35,14 @@ struct Page([u8; 4096]);
 #[repr(align(4096))]
 struct Stack([u8; 32768]);
 
+#[repr(align(4096))]
+struct Table([u64; 512]);
+
+static mut PML4: Table = Table([0; 512]);
+static mut PDPT: Table = Table([0; 512]);
+static mut PD_IDENTITY: Table = Table([0; 512]);
+static mut PD_USER: Table = Table([0; 512]);
+static mut PT_USER: Table = Table([0; 512]);
 static mut USER_PAGE: Page = Page([0; 4096]);
 static mut USER_STACK: Stack = Stack([0; 32768]);
 static mut USER_FRAME: Page = Page([0; 4096]);
@@ -166,47 +184,92 @@ unsafe fn outb(port: u16, value: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") value);
 }
 
+fn table_pa(table: *const Table) -> u64 {
+    table as u64
+}
+
+unsafe fn zero_table(table: *mut Table) {
+    for entry in (*table).0.iter_mut() {
+        *entry = 0;
+    }
+}
+
+unsafe fn build_user_page_tables() {
+    let pml4 = core::ptr::addr_of_mut!(PML4) as *mut Table;
+    let pdpt = core::ptr::addr_of_mut!(PDPT) as *mut Table;
+    let identity = core::ptr::addr_of_mut!(PD_IDENTITY) as *mut Table;
+    let user_pd = core::ptr::addr_of_mut!(PD_USER) as *mut Table;
+    let user_pt = core::ptr::addr_of_mut!(PT_USER) as *mut Table;
+
+    zero_table(pml4);
+    zero_table(pdpt);
+    zero_table(identity);
+    zero_table(user_pd);
+    zero_table(user_pt);
+
+    /* PML4[0] -> PDPT; PDPT[0] covers 0..1 GiB identity for kernel/UEFI
+    code, stacks, GDT/TSS/IDT and page tables. */
+    (*pml4).0[0] = table_pa(pdpt) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    (*pdpt).0[0] = table_pa(identity) | PAGE_PRESENT | PAGE_WRITE;
+    for i in 0..512usize {
+        (*identity).0[i] = (i as u64 * 0x20_0000) | PAGE_PRESENT | PAGE_WRITE | PAGE_LARGE;
+    }
+
+    /* User region starts at 1 GiB, in PDPT[1].  Only one 2 MiB PD is used;
+    PT_USER provides 4 KiB mappings for code, stack and data. */
+    (*pdpt).0[1] = table_pa(user_pd) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    (*user_pd).0[0] = table_pa(user_pt) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+
+    let code_pa = core::ptr::addr_of!(USER_PAGE) as u64;
+    let stack_pa = core::ptr::addr_of!(USER_STACK) as u64;
+    (*user_pt).0[0] = code_pa | PAGE_PRESENT | PAGE_USER;
+    for i in 0..8usize {
+        (*user_pt).0[1 + i] =
+            (stack_pa + (i as u64) * 4096) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER | PAGE_NX;
+    }
+}
+
+fn user_range(ptr: u64, len: usize, base: usize) -> bool {
+    ptr >= base as u64 && ptr as usize + len <= base + 4096
+}
+
 unsafe fn invlpg(va: u64) {
     core::arch::asm!("invlpg [{}]", in(reg) va);
 }
 
-unsafe fn make_user_page(va: u64, executable: bool) -> bool {
-    let cr3: u64;
-    core::arch::asm!("mov {}, cr3", out(reg) cr3);
-    let mut table = cr3 & 0x000f_ffff_ffff_f000;
-    for shift in [39u32, 30, 21] {
-        let entry = (table as *mut u64).add(((va >> shift) & 0x1ff) as usize);
-        let mut value = core::ptr::read_volatile(entry);
-        if value & 1 == 0 {
-            return false;
-        }
-        if value & 0x80 != 0 {
-            value |= (1 << 2) | (1 << 1);
-            if executable {
-                value &= !(1u64 << 63);
-            }
-            core::ptr::write_volatile(entry, value);
-            invlpg(va);
-            return true;
-        }
-        value |= 1 << 2;
-        core::ptr::write_volatile(entry, value);
-        table = value & 0x000f_ffff_ffff_f000;
+unsafe fn map_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
+    if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
+        return Err(KError::InvalidArg);
     }
-    let entry = (table as *mut u64).add(((va >> 12) & 0x1ff) as usize);
-    let mut value = core::ptr::read_volatile(entry);
-    if value & 1 == 0 {
-        return false;
+    if pa % 4096 != 0 {
+        return Err(KError::Alignment);
     }
-    value |= (1 << 2) | (1 << 1);
-    if executable {
-        value &= !(1u64 << 63);
-    } else {
-        value |= 1u64 << 63;
+    if rights.contains(Rights::WRITE) && rights.contains(Rights::EXEC) {
+        return Err(KError::NoRights);
     }
-    core::ptr::write_volatile(entry, value);
+    let mut flags = PAGE_PRESENT | PAGE_USER;
+    if rights.contains(Rights::WRITE) {
+        flags |= PAGE_WRITE;
+    }
+    if !rights.contains(Rights::EXEC) {
+        flags |= PAGE_NX;
+    }
+    let user_pt = core::ptr::addr_of_mut!(PT_USER) as *mut Table;
+    let index = ((va >> 12) & 0x1ff) as usize;
+    (*user_pt).0[index] = pa | flags;
     invlpg(va);
-    true
+    Ok(())
+}
+
+unsafe fn unmap_page(va: u64) -> Result<(), KError> {
+    if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
+        return Err(KError::InvalidArg);
+    }
+    let user_pt = core::ptr::addr_of_mut!(PT_USER) as *mut Table;
+    let index = ((va >> 12) & 0x1ff) as usize;
+    (*user_pt).0[index] = 0;
+    invlpg(va);
+    Ok(())
 }
 
 unsafe fn setup_gdt_tss_idt() {
@@ -291,18 +354,6 @@ unsafe fn setup_pic_pit() {
     outb(0x40, (divisor >> 8) as u8);
 }
 
-fn user_readable(ptr: u64, len: usize) -> bool {
-    let code = core::ptr::addr_of!(USER_PAGE) as u64;
-    let data = core::ptr::addr_of!(USER_FRAME) as u64;
-    (ptr >= code && ptr as usize + len <= code as usize + 4096)
-        || (ptr >= data && ptr as usize + len <= data as usize + 4096)
-}
-
-fn user_writable(ptr: u64, len: usize) -> bool {
-    let data = core::ptr::addr_of!(USER_FRAME) as u64;
-    ptr >= data && ptr as usize + len <= data as usize + 4096
-}
-
 impl Arch for X86Platform {
     const NAME: &'static str = X86_64::NAME;
     fn init() {
@@ -334,18 +385,14 @@ impl Arch for X86Platform {
 impl Platform for X86Platform {
     type Context = TrapFrame;
 
-    const USER_CODE_VA: usize = 0;
-    const USER_DATA_VA: usize = 0;
-    const DIRECT_VSPACE: bool = true;
+    const USER_CODE_VA: usize = USER_CODE_VA;
+    const USER_DATA_VA: usize = USER_DATA_VA;
 
-    fn user_code_base() -> usize {
-        core::ptr::addr_of!(USER_PAGE) as usize
-    }
     fn stack_a_top() -> usize {
-        core::ptr::addr_of!(USER_STACK) as usize + 0x4000
+        USER_STACK_A_TOP
     }
     fn stack_b_top() -> usize {
-        core::ptr::addr_of!(USER_STACK) as usize + 0x8000
+        USER_STACK_B_TOP
     }
 
     fn init_platform(_info: PlatformInfo) {}
@@ -376,45 +423,26 @@ impl Platform for X86Platform {
         }
     }
 
-    fn build_page_tables() {}
-
-    fn vspace_root() -> u64 {
-        let cr3: u64;
+    fn build_page_tables() {
         unsafe {
-            core::arch::asm!("mov {}, cr3", out(reg) cr3);
+            build_user_page_tables();
         }
-        cr3
     }
 
-    fn map_user_page(va: u64, pa: u64, _rights: Rights) -> Result<(), KError> {
-        if va != pa {
-            return Err(KError::InvalidArg);
-        }
-        let cr0: u64;
-        unsafe {
-            core::arch::asm!("mov {}, cr0", out(reg) cr0);
-            core::arch::asm!("mov cr0, {}", in(reg) cr0 & !(1 << 16));
-        }
-        let ok = unsafe { make_user_page(pa, false) };
-        unsafe {
-            core::arch::asm!("mov cr0, {}", in(reg) cr0);
-        }
-        if ok {
-            Ok(())
-        } else {
-            Err(KError::MissingPageTable)
-        }
+    fn vspace_root() -> u64 {
+        core::ptr::addr_of!(PML4) as u64
+    }
+
+    fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
+        unsafe { map_page(va, pa, rights) }
     }
 
     fn unmap_user_page(va: u64) -> Result<(), KError> {
-        unsafe {
-            invlpg(va);
-        }
-        Ok(())
+        unsafe { unmap_page(va) }
     }
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
-        if !user_readable(ptr, out.len()) {
+        if !user_range(ptr, out.len(), USER_CODE_VA) && !user_range(ptr, out.len(), USER_DATA_VA) {
             return Err(KError::InvalidArg);
         }
         unsafe {
@@ -424,7 +452,7 @@ impl Platform for X86Platform {
     }
 
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError> {
-        if !user_writable(ptr, input.len()) {
+        if !user_range(ptr, input.len(), USER_DATA_VA) {
             return Err(KError::InvalidArg);
         }
         unsafe {
@@ -441,25 +469,8 @@ impl Platform for X86Platform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
-        let code = core::ptr::addr_of!(USER_PAGE) as u64;
-        let stack = core::ptr::addr_of!(USER_STACK) as u64;
-        let cr0: u64;
         unsafe {
-            core::arch::asm!("mov {}, cr0", out(reg) cr0);
-            core::arch::asm!("mov cr0, {}", in(reg) cr0 & !(1 << 16));
-        }
-        if !unsafe { make_user_page(code, true) } {
-            X86_64::write_str("user code page not mapped\r\n");
-            X86_64::exit(1);
-        }
-        for i in 0..8u64 {
-            if !unsafe { make_user_page(stack + i * 4096, false) } {
-                X86_64::write_str("user stack page not mapped\r\n");
-                X86_64::exit(1);
-            }
-        }
-        unsafe {
-            core::arch::asm!("mov cr0, {}", in(reg) cr0);
+            core::arch::asm!("mov cr3, {}", in(reg) core::ptr::addr_of!(PML4) as u64);
             core::arch::asm!(
                 "push {ss}", "push {rsp}", "push {rflags}", "push {cs}", "push {rip}", "iretq",
                 ss = in(reg) context.ss,

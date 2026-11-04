@@ -61,15 +61,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vifast-kernel-x86_64"
-version = "0.1.0"
-dependencies = [
- "vifast-arch",
- "vifast-kernel",
- "vifast-platform-x86_64",
-]
-
-[[package]]
 name = "vifast-kernel-x86_64-uefi"
 version = "0.1.0"
 dependencies = [

@@ -97,6 +97,7 @@ user_thread_b:
     adr x0, user_message_b
     mov x1, #7
     svc #0
+    mov x24, #5
 2:
     mov x8, #1
     mov x0, #1
@@ -104,10 +105,11 @@ user_thread_b:
     mov x2, #7
     mov x3, #0
     mov x4, #0
-    mov x5, #5
+    mov x5, x24
     svc #0
     mov x20, x0
     mov x21, x3
+    mov x24, #-1
     mov x8, #7
     mov x0, #5
     svc #0

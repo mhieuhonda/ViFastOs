@@ -33,7 +33,7 @@ Trap:
 - Timer cause `0x800...5` → `runtime::timer::on_timer`.
 - `ecall` cause `8` → lưu `sepc + 4`, dispatch syscall.
 - Cause khác → log và exit.
-- Trap hiện chạy trên user stack; chưa dùng `sscratch`.
+- Trap dùng kernel trap stack qua `sscratch`; user stack chỉ ở U-mode.
 
 ## 3. AArch64
 
@@ -60,7 +60,7 @@ Files:
 
 - `crates/vifast-arch-x86_64/src/lib.rs`: COM1, `rdtsc`, debug-exit.
 - `crates/vifast-platform-x86_64/src/platform.rs`: GDT/TSS/IDT, PIC/PIT,
-  UEFI page-table edits, ring3. AP bootstrap hiện chưa có code hoạt động.
+  PML4/page table riêng, ring3. AP bootstrap hiện chưa có code hoạt động.
 - `trap.S`: `int80_entry`, `irq0_entry`, reload segments.
 - Binary: UEFI entry + `user.S`.
 
@@ -68,9 +68,9 @@ Files:
 
 - `init_platform` chỉ lưu thông tin; `prepare_user` mới cài GDT/TSS/IDT.
 - `start_timer` cài PIC/PIT.
-- `enter_user` map code/stack, clear `CR0.WP` khi sửa page table.
-- `VSpace.direct = true`, VA trả về là PA.
-- `FrameUnmap` best effort; large-page UEFI hạn chế isolation.
+- `build_page_tables` dựng PML4/PDPT/PD/PT 4 KiB; `enter_user` chuyển CR3
+  sang bảng riêng, không sửa page table UEFI.
+- Code RX, data/stack NX, unmap thật.
 - AP bootstrap qua UEFI MP Services đã được thử nhưng OVMF hiện tại không trả
   interface; code MP đã được gỡ khỏi build để tránh làm hỏng firmware. Vì vậy
   `start_smp` chỉ in `SMP SKIP`.

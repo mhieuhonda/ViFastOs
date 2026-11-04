@@ -18,7 +18,6 @@ members = [
     "crates/vifast-platform-riscv64",
     "crates/vifast-platform-aarch64",
     "crates/vifast-platform-x86_64",
-    "crates/vifast-kernel-x86_64",
     "crates/vifast-kernel-x86_64-uefi",
     "crates/vifast-kernel-aarch64",
     "crates/vifast-kernel-riscv64",

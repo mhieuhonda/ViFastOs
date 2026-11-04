@@ -2,6 +2,8 @@
     .balign 4
     .globl trap_entry
 trap_entry:
+    /* User sp is in sscratch; switch to the kernel trap stack. */
+    csrrw sp, sscratch, sp
     addi sp, sp, -0x120
 
     sd x1, 8(sp)
@@ -35,8 +37,8 @@ trap_entry:
     sd x30, 240(sp)
     sd x31, 248(sp)
 
-    /* Original user stack pointer. */
-    addi t0, sp, 0x120
+    /* Original user stack pointer saved by csrrw. */
+    csrr t0, sscratch
     sd t0, 16(sp)
 
     csrr t0, sepc
@@ -53,6 +55,10 @@ trap_entry:
     csrw sepc, t0
     ld t0, 264(sp)
     csrw sstatus, t0
+
+    /* Restore sscratch to the kernel trap-stack top for the next trap. */
+    addi t0, sp, 0x120
+    csrw sscratch, t0
 
     ld x1, 8(sp)
     ld x3, 24(sp)

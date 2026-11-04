@@ -45,7 +45,6 @@ pub trait Platform: Arch {
 
     const USER_CODE_VA: usize;
     const USER_DATA_VA: usize;
-    const DIRECT_VSPACE: bool = false;
 
     fn user_code_base() -> usize {
         Self::USER_CODE_VA
@@ -144,7 +143,6 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         A::vspace_root(),
         A::USER_DATA_VA as u64,
         A::PAGE_SIZE as u64,
-        A::DIRECT_VSPACE,
         A::PAGE_SIZE as u64,
     ) else {
         A::exit(1);
