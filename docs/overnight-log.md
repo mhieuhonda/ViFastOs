@@ -49,3 +49,18 @@ follow-up `62b31f4`.
   7/64 trang, 5/48 object. Boot vẫn log 0/64 trước root chạy.
 - QEMU 3/3 PASS ×3; ROOT SWITCH 41561 / 39230 / 19240 (lần chạy đầu).
 - Root ELF: RISC-V 8704 B, AArch64/x86 8536 B; headroom vẫn 626672 B.
+
+## 7.5 — Client tách hẳn + fault4 (kết thúc 3b)
+
+- Commit `aeea6bc feat: isolate client vspace and add fault4`.
+- `vifast-kernel` 70/70; PTE 11/11; ELF 17/17; runtime/user compile.
+- Client nhận VSpace riêng slot 2 và Untyped con 64 KiB/8 object slot 3;
+  root VSpace bỏ client stack; client/fault4 stack nằm trong VSpace client.
+- Fault4 chạy trong VSpace client và ghi root Rust stack; sửa literal pool
+  AArch64 bằng `.ltorg` trước `user_program_end` để địa chỉ 0x1000301000 thật
+  sự được copy vào user image.
+- Harness yêu cầu đúng 4 USER FAULT (0x80000000, 0x1000002000, 0x1000301000),
+  `CLIENT VSPACE OK`, `BOOTINFO OK`; `Zero OK` vẫn chạy qua Untyped con.
+- QEMU 3/3 PASS ×3; ROOT SWITCH 39826 / 42286 / 13030 (lần chạy đầu).
+  DATA UNTYPED test-exit: RISC-V 21/64 trang, AArch/x86 22/64 trang, 6/48 object.
+- Root ELF: RISC-V 8704 B, AArch64/x86 8536 B; headroom RISC-V 626672 B.
