@@ -46,13 +46,14 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 71b83c9 feat: boot Rust root task from ELF
 - 3328169 test: bound FrameMap rights by frame cap
 - f4a9da6 fix: enforce wx per frame across aliases
-- c363e7d fix: enforce unique physical ranges and sync icache.
+- c363e7d fix: enforce unique physical ranges and sync icache
+- b0a82cb feat: add child untyped allocation and revoke.
 
-Cập nhật code gần nhất (commit c363e7d): root/server VSpace, current_root từ TCB,
+Cập nhật code gần nhất (commit b0a82cb): root/server VSpace, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF nạp vào boot, ROOT RUST/ROOT READY, jump table, FrameMap cap bound,
-W^X theo Frame, PA uniqueness, sync I-cache, 3 target link/FP
+W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, 3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
@@ -84,7 +85,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 61/61 PASS
+- cargo test -p vifast-kernel: 69/69 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
@@ -418,7 +419,7 @@ Kind:
 - Endpoint { send: Queue, recv: Queue }
 - Notification { word, waiter }
 - Tcb
-- Untyped { base, size, bump, page_size, max_objects, objects }
+- Untyped { base, size, bump, page_size, max_objects, objects, reserved }
 - Frame { pa, size, mapped_w: u16, mapped_x: u16 } số leaf W/X trên mọi VSpace
 - VSpace { root, aux_pa, page_size, base, next_va, end, mappings }
 - PageTable { root, mapped: Option<{vspace, va_base, level}> }
@@ -723,7 +724,8 @@ Root task dùng syscall:
 - Fault1 load 0x8000_0000; fault2 chạy lệnh đặc quyền; fault3 ghi vào stack
   server 0x1000002000 -> cả ba log USER FAULT.
 - Server VSpace riêng, code dùng chung Frame root, stack riêng +0x2000.
-  Client vẫn dùng root VSpace slot 1. Untyped con để Bước 7.
+  Client vẫn dùng root VSpace slot 1 và CapCopy data Untyped; chuyển sang
+  Untyped con ở 7.5.
 
 Server A:
 - cap endpoint READ.
@@ -779,7 +781,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 61 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 69 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -794,6 +796,8 @@ Host test hiện có 61 test `vifast-kernel` + 11 test `vifast-pte` +
 - revoke Untyped destroy Frame + xoá mapping cũ
 - revoke Untyped detach TCB đang BlockedRecv
 - max_objects limit
+- Untyped con: range/quota, sibling PA uniqueness, frame nằm trong dải con,
+  revoke cha/con, nested child, cap không root, reparent TCB
 - cap copy giữ parent chain
 - Test TcbConfigure cũ đã xóa; thay bằng `tcb_configuration_sets_context_and_resumes`
 - TcbResume từ chối TCB chưa configure
@@ -906,7 +910,8 @@ Exit code:
 - Revoke Untyped destroy object thật: unmap Frame, detach TCB, wake
   Endpoint/Notification bằng ObjectDestroyed, free object + tăng gen, rồi reset
   bump/objects.
-- Mỗi Untyped có `max_objects`/`objects`; retype kiểm tra cả byte lẫn số object.
+- Mỗi Untyped có `max_objects`/`objects`/`reserved`; retype kiểm tra cả byte
+  lẫn `objects + reserved + 1`; Untyped con giữ quota của con trong reserved.
 - Yield thật qua `switch_blocked`; root block bằng `Wait` trên notification riêng.
 - User fault tối giản: log `USER FAULT`, suspend TCB Faulted, chọn thread khác,
   không panic.
@@ -957,6 +962,11 @@ Exit code:
 - Frame code dùng chung root/server map RX hai lần thành công (mapped_x=2).
 - 7.1c: invariant PA duy nhất cho Frame/PageTable/VSpace root+aux và Untyped
   lồng theo owner; sync_icache khi map EXEC; counter dùng checked_add.
+- 7.2: Retype Untyped con lấy size căn trang từ bump, giữ child max_objects
+  trong `reserved`, con có bump/objects/reserved riêng; revoke cha thu hồi cây
+  con theo thứ tự Frame → PageTable → VSpace → Untyped, revoke con chỉ reset
+  con. Cap con không bao giờ root; PA uniqueness và quota được kiểm tra sau
+  từng bước.
 - RISC-V sync I-cache bằng fence.i (local hart); AArch64 dùng CTR_EL0 để lấy
   line size rồi dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
 - Chưa có SMP I-cache shootdown: RISC-V cần remote fence qua SBI/IPI, AArch64
@@ -967,7 +977,7 @@ Exit code:
 - Revoke PageTable/VSpace xoá reverse map trong span, zero trang bảng và gỡ
   metadata của bảng con; VSpace đang là root của thread hiện tại bị từ chối hủy.
 - KERNEL_SHARED_SLOTS xác nhận AArch64 dùng L1[0..=1], không chỉ 0..1 GiB.
-- Object.creator/CapRef + reparent chặn client revoke bản copy Untyped để phá object của task khác; CapCopy Untyped vẫn chia sẻ vùng nhớ, Untyped con là bước sau.
+- Object.creator/CapRef + reparent chặn client revoke bản copy Untyped để phá object của task khác. Untyped con đã có từ 7.2; CapCopy Untyped vẫn dùng cho client tới 7.5.
 - Runtime assert Untyped nằm trong kernel_accessible_range() của platform.
 - Boot-time check walk leaf thật từ root: trap entry có X, stack/IST/GDT/TSS/IDT/
   KERNEL_STORAGE có W, tất cả non-user; kiểm tra toàn bộ kernel_accessible_range.
@@ -982,7 +992,7 @@ Exit code:
   trên cả 3 arch; tổng 3 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 61 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 69 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1020,7 +1030,7 @@ Exit code:
   nó sẽ cần destroy-xong-rồi-pick sau này.
 - Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
 - CapCopy Untyped vẫn cho phép hai task chia sẻ vùng nhớ; creator ngăn revoke
-  chéo nhưng chưa ngăn cạn kiệt tài nguyên. Retype Untyped → Untyped con để Bước 7.
+  chéo. Retype Untyped → Untyped con đã có từ 7.2; client sẽ nhận con ở 7.5.
 - TCB/VSpace chưa tách pool riêng; TCB có quota 16 nhưng vẫn nằm trong object table.
   Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 128 object hoặc trước SMP,
   vì static Kernel đã giải quyết áp lực stack và 3b chưa cần quá 128 object.
@@ -1035,7 +1045,7 @@ A. Userland / ABI trước
 1. vifast-user wrappers + user layout (đã có bản đầu).
 2. vifast-elf parser ELF64 PT_LOAD + host test (đã có).
 3. Bước 6: root task Rust nạp từ ELF; stack 4 trang + guard — đã xong.
-4. Bước 7: BootInfo, Untyped con, client VSpace riêng; bỏ slot hard-code.
+4. Bước 7: BootInfo, Untyped con (đã xong 7.2), client VSpace riêng; bỏ slot hard-code.
 5. Shared memory / IPC buffer.
 6. Reply capability + ReplyRecv + fault endpoint.
 7. Supervisor/pager tối giản.
@@ -1133,7 +1143,7 @@ E. Desktop / Space
     đúng 2 leaf user (code + stack); root builder test đúng 1 leaf code.
 31. vifast-elf parse/validate ELF64 PT_LOAD (machine/user-range tham số,
     file range, congruence, overlap, W^X, entry, segment cấm) đã host-test;
-    root Rust đã nạp ELF ở 6.4; BootInfo/Untyped con/client VSpace là Bước 7.
+    root Rust đã nạp ELF ở 6.4; Untyped con xong 7.2; BootInfo/client VSpace là Bước 7.3–7.5.
 32. Root Rust ELF ở `ROOT_ELF_BASE = CODE_VA + 0x20_0000` (2 MiB kế tiếp), giữ
     user.S tại 64 GiB. Parser chỉ nhận cửa sổ
     `[ROOT_ELF_BASE, ROOT_ELF_STACK_GUARD)` 1 MiB, không dùng toàn dải user.
@@ -1174,6 +1184,12 @@ E. Desktop / Space
     RISC-V fence.i; AArch64 dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
     SMP phải mở rộng thành remote fence/IPI trước khi chạy code mới trên hart khác.
     Bộ đếm mapped_w/mapped_x dùng checked_add và trả OutOfMemory khi tràn u16.
+41. 7.2: Untyped con dùng `reserved` của cha để giữ quota object; điều kiện
+    `objects + reserved + child_max_objects + 1 <= max_objects`. Con lấy vùng
+    căn trang từ bump, không zero vùng. Revoke cha thu hồi cây con post-order
+    (Frame → PageTable sâu → VSpace → Untyped), rồi recount objects/reserved;
+    revoke con chỉ reset con. Cap con/copy luôn root=false. Invariant PA/quota
+    chạy sau mỗi bước; PA uniqueness vẫn đúng khi có nhiều con.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
@@ -1213,6 +1229,6 @@ scripts/test-qemu.py
 - test QEMU 3 kiến trúc xanh.
 
 Nó chưa phải OS hoàn chỉnh. Root chạy từ ELF Rust; root và server đã có VSpace
-riêng; client vẫn dùng root VSpace. Khoảng trống lớn nhất hiện là BootInfo +
-Untyped con + client VSpace riêng, rồi allocator/revoke hoàn chỉnh, SMP thật
+riêng; client vẫn dùng root VSpace. Khoảng trống lớn nhất hiện là BootInfo + client VSpace riêng, rồi
+allocator/revoke hoàn chỉnh, SMP thật
 (x86 AP, BKL, IPI, TLB shootdown), driver/FS/network và compositor/ViFastKey.
