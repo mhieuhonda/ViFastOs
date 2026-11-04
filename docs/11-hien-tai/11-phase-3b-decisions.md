@@ -54,8 +54,9 @@ chung cho root/server/client.
 - Object có `creator: CapRef { addr, id }` để revoke Untyped copy không phá
   object của cap gốc; `delete_cap` từ chối khi còn object/cap con.
 - Kernel mapping check dùng walk leaf thật (non-user/X/W), không chỉ kiểm tra slot.
-- Object mồ côi khi TCB bị hủy được thu hồi khi revoke owner Untyped;
+- Khi TCB bị hủy, object creator/cap con được reparent lên cap cha còn sống;
   delete Untyped cap trả IllegalOperation khi còn object/cap con.
+- x86 assert LoadedImage base/end nằm trong identity 0..1 GiB.
 - CapCopy Untyped vẫn chia sẻ vùng nhớ, chưa có Untyped con.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable
   kernel.

@@ -57,6 +57,9 @@ pub struct Cap {
     pub rights: Rights,
     pub badge: u64,
     pub id: u64,
+    /// True only for a cap originally installed without a parent (runtime
+    /// root cap). Reparented child caps with no surviving parent keep false.
+    pub root: bool,
     pub parent: Option<CapRef>,
 }
 
@@ -68,6 +71,7 @@ impl Cap {
             rights,
             badge: 0,
             id: 0,
+            root: false,
             parent: None,
         }
     }
@@ -87,6 +91,7 @@ impl Cap {
             rights: Rights(self.rights.0 & rights.0),
             badge: if badge != 0 { badge } else { self.badge },
             id: 0,
+            root: false,
             parent: None,
         })
     }

@@ -962,6 +962,7 @@ impl Kernel {
             return Err(KError::ObjectDestroyed);
         }
         cap.id = self.next_cap_id;
+        cap.root = cap.parent.is_none();
         self.next_cap_id = self.next_cap_id.wrapping_add(1);
         if self.next_cap_id == 0 {
             self.next_cap_id = 1;
@@ -1061,11 +1062,6 @@ impl Kernel {
         self.install_cap(dst_tcb, dst_slot, derived)
     }
 
-    fn creator_alive(&self, creator: CapRef) -> bool {
-        self.cap_at(creator.addr)
-            .is_some_and(|cap| cap.id == creator.id)
-    }
-
     fn cap_ref_is_descendant(&self, creator: CapRef, target: CapRef) -> bool {
         if creator == target {
             return true;
@@ -1112,6 +1108,85 @@ impl Kernel {
             table.resume_error = Some(error);
         }
         self.enqueue(tcb);
+    }
+
+    fn survivor_for(&self, cap_ref: CapRef, dying: &[CapRef]) -> Option<CapRef> {
+        let cap = self.cap_at(cap_ref.addr)?;
+        if cap.id != cap_ref.id {
+            return None;
+        }
+        let mut parent = cap.parent;
+        let mut depth = 0usize;
+        while let Some(parent_ref) = parent {
+            if !dying.contains(&parent_ref) {
+                return self
+                    .cap_at(parent_ref.addr)
+                    .is_some_and(|candidate| candidate.id == parent_ref.id)
+                    .then_some(parent_ref);
+            }
+            let parent_cap = self.cap_at(parent_ref.addr)?;
+            depth += 1;
+            if depth > MAX_OBJECTS * MAX_CAPS {
+                return None;
+            }
+            parent = parent_cap.parent;
+        }
+        None
+    }
+
+    /// A dying TCB must not take its capability subtree with it.  Reparent
+    /// every object/cap that referenced one of its caps to the nearest
+    /// surviving ancestor.  A cap whose root dies with no ancestor leaves
+    /// creator/parent as None; only a root cap can collect those objects.
+    fn reparent_tcb_caps(&mut self, obj: ObjRef) {
+        let Some(table) = self.tcb(obj) else {
+            return;
+        };
+        let mut dying = [CapRef::default(); MAX_CAPS];
+        let mut survivors = [None; MAX_CAPS];
+        let mut count = 0usize;
+        for (slot, cap) in table.cspace.iter().enumerate() {
+            if let Some(cap) = cap {
+                dying[count] = CapRef {
+                    addr: SlotAddr {
+                        tcb: obj,
+                        slot: slot as u8,
+                    },
+                    id: cap.id,
+                };
+                count += 1;
+            }
+        }
+        for i in 0..count {
+            survivors[i] = self.survivor_for(dying[i], &dying[..count]);
+        }
+
+        for object in self.objs.iter_mut() {
+            let Some(creator) = object.creator else {
+                continue;
+            };
+            if let Some(index) = dying[..count].iter().position(|c| *c == creator) {
+                object.creator = survivors[index];
+            }
+        }
+
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            let Some(table) = self.tcb_mut(r) else {
+                continue;
+            };
+            for cap in table.cspace.iter_mut().flatten() {
+                let Some(parent) = cap.parent else {
+                    continue;
+                };
+                if let Some(index) = dying[..count].iter().position(|c| *c == parent) {
+                    cap.parent = survivors[index];
+                }
+            }
+        }
     }
 
     fn detach_tcb(&mut self, obj: ObjRef) {
@@ -1501,7 +1576,10 @@ impl Kernel {
             return Err(KError::IllegalOperation);
         }
         match kind {
-            Kind::Tcb(_) => self.detach_tcb(obj),
+            Kind::Tcb(_) => {
+                self.reparent_tcb_caps(obj);
+                self.detach_tcb(obj);
+            }
             Kind::Endpoint(_) => self.destroy_endpoint(obj),
             Kind::Notification(_) => self.destroy_notification(obj),
             Kind::Frame(frame) => self.unmap_frame_everywhere(frame),
@@ -1551,9 +1629,10 @@ impl Kernel {
                 if self.objs[i].owner != Some(target_cap.obj) {
                     continue;
                 }
-                let created_here = self.objs[i].creator.is_some_and(|creator| {
-                    self.cap_ref_is_descendant(creator, target_ref) || !self.creator_alive(creator)
-                });
+                let created_here = match self.objs[i].creator {
+                    Some(creator) => self.cap_ref_is_descendant(creator, target_ref),
+                    None => target_cap.root,
+                };
                 if created_here {
                     let r = ObjRef {
                         index: i as u8,
@@ -3357,6 +3436,78 @@ mod tests {
         assert!(kernel.get(frame).is_none());
         // After revoke there are neither objects nor child caps.
         assert!(kernel.delete_cap(root, 1).is_ok());
+    }
+
+    #[test]
+    fn reparented_client_cap_cannot_revoke_surviving_object() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let server = kernel.create_tcb("server", 1).unwrap();
+        let data_untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        let meta_untyped = kernel
+            .create_untyped_with_limit(0x200_0000, 0x2000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(data_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(meta_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        let client = kernel
+            .retype_as(
+                meta_untyped,
+                ObjType::Tcb,
+                Some(SlotAddr { tcb: root, slot: 2 }),
+            )
+            .unwrap();
+        kernel.copy_cap(root, 1, client, 1, Rights::ALL, 0).unwrap();
+        // Server gets a child of the client's cap.
+        kernel
+            .copy_cap(client, 1, server, 1, Rights::ALL, 0)
+            .unwrap();
+        let frame = kernel
+            .retype_as(
+                data_untyped,
+                ObjType::Frame,
+                Some(SlotAddr {
+                    tcb: client,
+                    slot: 1,
+                }),
+            )
+            .unwrap();
+        let space = kernel
+            .create_vspace_with_page_size(0, 0x4000_0000, 0x4000_0000, 4096)
+            .unwrap();
+        let mapping = kernel
+            .map_frame(space, frame, 0x4000_1000, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert!(kernel.mapping_at(space, mapping.va).is_some());
+
+        // Destroy the client TCB; C's cap disappears.  The frame creator and
+        // server's child cap must be reparented to the root cap.
+        kernel.revoke_cap(root, 2).unwrap();
+        assert!(kernel.get(client).is_none());
+        assert!(kernel.get(frame).is_some());
+        // Server's copy of the data Untyped must not collect the object.
+        kernel.revoke_cap(server, 1).unwrap();
+        assert!(kernel.get(frame).is_some());
+        assert!(kernel.mapping_at(space, mapping.va).is_some());
+
+        // The root cap is the surviving ancestor and collects it.
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(frame).is_none());
+        assert!(kernel.mapping_at(space, mapping.va).is_none());
+        assert!(kernel.lookup_cap(server, 1, None, Rights::NONE).is_err());
     }
 
     #[test]
