@@ -126,7 +126,8 @@ notification riêng. Runtime không còn tham chiếu "Server"/"Client".
   - `Return`/`Message`: ghi register;
   - `ConfigureTcb`: cài context entry/stack (không còn window validation);
   - `PageTableMap`/`FrameMap`/`FrameUnmap`: kernel walk generic qua
-    PageTableOps, read/write PTE, flush, kiểm tra table span;
+    PageTableOps, read/write PTE, flush, kiểm tra table span; mapping EXEC
+    gọi `sync_icache` trước khi trả;
   - `Open`/`Read`/`Write`: copy user pointer qua platform, gọi ramfs;
   - `Debug`: copy buffer rồi `putc`;
   - `Blocked`: chuyển context;

@@ -40,7 +40,8 @@ Kernel portable hiện có:
 - endpoint Send/Recv, Call/Reply một caller;
 - notification wait/signal/poll;
 - scheduler ưu tiên + round-robin;
-- invariant checker cho object/capability/runqueue/VSpace/fd;
+- invariant checker cho object/capability/runqueue/VSpace/fd, W^X theo Frame và
+  PA uniqueness (Frame/PageTable/VSpace/Untyped);
 - `Frame`, `VSpace`, `PageTable` object; map/unmap, overlap check, W^X theo
   Frame (`mapped_w`/`mapped_x`), shadow mapping table;
 - chuyển capability qua `Send`/`Call`, cài vào slot receiver, kiểm tra `GRANT`

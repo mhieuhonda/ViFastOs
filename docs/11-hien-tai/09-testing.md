@@ -30,7 +30,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 58 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
+Hiện có 61 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 17 test trong `vifast-elf`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
@@ -41,6 +41,10 @@ Hiện có 58 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 - W^X theo Frame: RW ở một VA rồi RX cùng Frame ở VA/VSpace khác bị từ chối,
   snapshot page table không đổi; unmap hoặc revoke VSpace giải phóng bộ đếm;
 - mapping bắt buộc có READ (mask rỗng/W-only/X-only trả `InvalidArg`);
+- PA uniqueness: Frame-Frame và PageTable-VSpace trùng dải bị từ chối; bố cục
+  Frame/PageTable/VSpace rời nhau được chấp nhận;
+- map EXEC gọi `sync_icache`, map RW không gọi;
+- `mapped_w/mapped_x` tràn u16 trả `OutOfMemory`, không quay vòng;
 - frame alignment;
 - syscall từ chối cap sai type/đã revoke và W^X;
 - chuyển cap yêu cầu slot đích rõ ràng, không fallback;

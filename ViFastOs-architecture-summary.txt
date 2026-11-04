@@ -45,13 +45,14 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 91dfbcd feat: add Rust root ELF link scaffold
 - 71b83c9 feat: boot Rust root task from ELF
 - 3328169 test: bound FrameMap rights by frame cap
-- f4a9da6 fix: enforce wx per frame across aliases.
+- f4a9da6 fix: enforce wx per frame across aliases
+- c363e7d fix: enforce unique physical ranges and sync icache.
 
-Cập nhật code gần nhất (commit f4a9da6): root/server VSpace, current_root từ TCB,
+Cập nhật code gần nhất (commit c363e7d): root/server VSpace, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF nạp vào boot, ROOT RUST/ROOT READY, jump table, FrameMap cap bound,
-W^X theo Frame (mapped_w/mapped_x), 3 target link/FP
+W^X theo Frame, PA uniqueness, sync I-cache, 3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
@@ -83,14 +84,14 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 58/58 PASS
+- cargo test -p vifast-kernel: 61/61 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 8.672 B, AArch64/x86 8.512 B; RISC-V kernel_end
-  0x80365010, headroom 634.864 B dưới 0x80400000
+  0x80366010, headroom 630.768 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, ba fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -259,7 +260,7 @@ vifast-platform-riscv64
 - SBI timer.
 - Page/stack user do boot Untyped + builder/FrameMap tạo.
 - HSM secondary hart + SMP bootstrap.
-- TLB: sfence.vma.
+- TLB: sfence.vma. Map EXEC gọi fence.i (local hart; SMP cần remote fence).
 - Files: platform.rs, trap.S, smp.S.
 
 vifast-platform-aarch64
@@ -270,6 +271,7 @@ vifast-platform-aarch64
 - user context EL0, SP_EL0/SP_EL1.
 - PSCI CPU_ON cho SMP.
 - TLB: map/unmap `tlbi vae1is`; switch_root `tlbi vmalle1is` + `dsb ish` + `isb`.
+- Map EXEC: `dc cvau` + `dsb ish` + `ic ivau` + `dsb ish` + `isb`; line size từ CTR_EL0.
 - Files: platform.rs, trap.S, smp.S.
 
 vifast-platform-x86_64
@@ -324,7 +326,7 @@ vifast-root:
 - 145 dòng Rust + 31 dòng start asm; ELF build 3 target
 
 vifast-kernel:
-- 5343 dòng, không còn dependency vifast-arch
+- 6019 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597624 bytes
@@ -529,6 +531,13 @@ Portable generic page-table walk + reverse map:
 - W^X theo Frame: `mapped_w`/`mapped_x` đếm leaf W/X trên toàn bộ VSpace;
   Frame đã có W không nhận X và ngược lại, nên hai alias không lách được W^X.
   FrameMap/FrameUnmap, revoke VSpace/PageTable và destroy Frame cập nhật bộ đếm.
+  Bộ đếm dùng checked_add; tràn u16 trả OutOfMemory.
+- PA uniqueness: check_invariants từ chối hai Frame/PageTable/VSpace root hoặc
+  aux_pa chồng dải; Untyped chỉ được lồng nhau theo owner chain và con phải
+  nằm trọn trong cha. Đây là tiền đề để W^X theo Frame còn đúng khi có Untyped con.
+- Map EXEC gọi PageTableOps::sync_icache(pa, size) sau khi mapping thành công:
+  RISC-V fence.i; AArch64 dc cvau + dsb + ic ivau + dsb + isb; x86 no-op.
+  Map RW không gọi. Host test đếm số lần gọi.
 - Kiểm tra alignment, overlap, range.
 - VSpace có page_size, range, next_va và reverse mappings; không còn window.
 - Map thiếu bảng trung gian trả MissingPageTable; kernel không tự cấp phát.
@@ -567,7 +576,7 @@ RISC-V64:
   ROOT_ELF_STACK_BASE. Stack root assembly +0x4000 đã bị bỏ.
 - VSpace server: +0x2000 RW U, code dùng chung Frame.
 - Data 64 GiB+0xa000: để trống trong root VSpace; client FrameMap RW U.
-- TLB: sfence.vma.
+- TLB: sfence.vma. Map EXEC gọi fence.i (local hart; SMP cần remote fence).
 - Trap dùng kernel trap stack qua sscratch; sscratch=0 khi ở kernel.
 - SUM=0; read_user/write_user bật SUM tạm thời quanh copy.
 
@@ -581,6 +590,7 @@ AArch64:
 - VSpace server: +0x2000 RW + NX, code dùng chung Frame.
 - Data 64 GiB+0xa000: để trống trong root VSpace; client FrameMap RW + NX.
 - TLB: map/unmap `tlbi vae1is`; switch_root `tlbi vmalle1is` + `dsb ish` + `isb`.
+- Map EXEC: `dc cvau` + `dsb ish` + `ic ivau` + `dsb ish` + `isb`; line size từ CTR_EL0.
 - Trap stack SP_EL1; user stack SP_EL0.
 - PAN nếu CPU hỗ trợ; read/write user tạm clear PAN.
 
@@ -596,6 +606,7 @@ x86_64:
 - PML4[0] và PDPT là riêng mỗi VSpace; PDPT[0] trỏ PD kernel dùng chung
   cho identity 0..1 GiB; user 64..128 GiB dùng PDPT[64..127] trỏ bảng riêng.
 - SMEP/SMAP bật nếu CPUID hỗ trợ; chưa có NX cho data kernel.
+- I-cache và D-cache coherent; sync_icache là no-op.
 - Chưa có AP/SMP scheduler.
 
 10. VFS / RAMFS
@@ -768,7 +779,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 58 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 61 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -813,6 +824,10 @@ Host test hiện có 58 test `vifast-kernel` + 11 test `vifast-pte` +
   page table không đổi; unmap/revoke VSpace giải phóng mapped_w/mapped_x
 - mapping bắt buộc READ; mask rỗng/W-only/X-only trả InvalidArg
 - shared code RX root/server: mapped_x=2, mapped_w=0
+- PA uniqueness: Frame-Frame và PageTable-VSpace trùng dải bị từ chối;
+  bố cục Frame/PageTable/VSpace rời nhau được chấp nhận
+- FrameMap EXEC gọi sync_icache; map RW không gọi
+- mapped_w/mapped_x tràn u16 trả OutOfMemory, không quay vòng
 - PteFakeOps tách riêng RISC-V/x86_64/AArch64, chạy map/unmap,
   PageTableMap, validate, build; build không data rồi FrameMap tại +0xa000
 - validate_user_range walk leaf, user bit, R/W, cross-page, high leaf bị từ chối
@@ -932,14 +947,20 @@ Exit code:
   dựng bảng kernel-only, bảng user do retype VSpace + PageTableMap tạo.
 - Data +0xa000 không được map sẵn trong root VSpace; PT cuối đã có do code/stack
   cùng vùng 2 MiB, nên FrameMap đầu tiên của client vẫn thành công.
-- PageTableOps mở rộng read/write PTE, encode/decode, install_kernel, flush;
-  kernel walk generic, không gom RevokeReport.
+- PageTableOps mở rộng read/write PTE, encode/decode, install_kernel, flush,
+  sync_icache; kernel walk generic, không gom RevokeReport.
 - vifast-pte crate no_std chứa format 3 arch + host test; user VA constants
   và table_span() là nguồn duy nhất cho platform.
 - FrameMap/FrameUnmap đi qua generic walk; platform không còn map/unmap riêng.
 - 7.1b: W^X theo Frame; mapped_w/mapped_x cập nhật ở map/unmap/revoke/destroy,
   check_invariants đối chiếu đúng số leaf trong reverse map; mapping bắt buộc READ.
 - Frame code dùng chung root/server map RX hai lần thành công (mapped_x=2).
+- 7.1c: invariant PA duy nhất cho Frame/PageTable/VSpace root+aux và Untyped
+  lồng theo owner; sync_icache khi map EXEC; counter dùng checked_add.
+- RISC-V sync I-cache bằng fence.i (local hart); AArch64 dùng CTR_EL0 để lấy
+  line size rồi dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
+- Chưa có SMP I-cache shootdown: RISC-V cần remote fence qua SBI/IPI, AArch64
+  cần broadcast/đồng bộ các PE khác trước khi cho chạy code mới.
 - PageTableMap gắn page table ở entry invalid đầu tiên; level do kernel chọn.
 - Retype VSpace cấp root + aux page, zero và gọi install_kernel thật.
 - Revoke Untyped sắp thứ tự Frame → PageTable sâu nhất → PageTable cha → VSpace.
@@ -961,11 +982,14 @@ Exit code:
   trên cả 3 arch; tổng 3 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 58 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 61 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
 - Scheduler một hart; SMP mới bootstrap, hart phụ idle.
+- SMP I-cache shootdown chưa có: RISC-V cần remote fence qua SBI/IPI và AArch64
+  cần đồng bộ I-cache sang các PE khác trước khi cho hart khác chạy code mới.
+  Hiện `sync_icache` chỉ bảo đảm hart đang map.
 - x86_64 chưa boot AP.
 - Chưa có range VA allocator, ASID/PCID.
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
@@ -1138,7 +1162,18 @@ E. Desktop / Space
     W-only/X-only trả InvalidArg. FrameMap RW rồi RX cùng Frame ở VA/VSpace
     khác bị NoRights, snapshot page table không đổi; unmap hoặc revoke VSpace
     giải phóng bộ đếm; shared code RX vẫn map được ở hai VSpace. Bộ đếm được
-    kiểm tra khớp reverse map trong check_invariants().
+    kiểm tra khớp reverse map trong check_invariants(). Map RW → unmap → map
+    RX là chủ ý (mô hình W^X kiểu seL4), không phải lỗ hổng: tại một thời điểm
+    Frame chỉ có một loại quyền.
+39. 7.1c: PA uniqueness là invariant của check_invariants(), không chỉ test.
+    Frame/PageTable/VSpace root+aux không được chồng dải; Untyped chỉ lồng
+    nhau theo owner chain, con nằm trọn trong cha. Nhờ đó Mapping.frame vẫn
+    đúng và hai Frame cùng PA không thể lách W^X. 7.2 chạy invariant sau mỗi
+    bước tạo/revoke Untyped con.
+40. 7.1c: PageTableOps::sync_icache(pa, size) được gọi khi mapping mới có EXEC.
+    RISC-V fence.i; AArch64 dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
+    SMP phải mở rộng thành remote fence/IPI trước khi chạy code mới trên hart khác.
+    Bộ đếm mapped_w/mapped_x dùng checked_add và trả OutOfMemory khi tràn u16.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

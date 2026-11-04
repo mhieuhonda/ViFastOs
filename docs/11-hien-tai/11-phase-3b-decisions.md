@@ -54,13 +54,19 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Revoke phải unmap mọi nơi; đây là điều kiện cho IPC buffer ở 3c.
 - Revoke VSpace/PageTable, `FrameUnmap` và destroy Frame đều giảm bộ đếm.
   `check_invariants()` đối chiếu `mapped_w`/`mapped_x` với reverse map.
+- Bộ đếm dùng `checked_add`; tràn u16 trả `OutOfMemory`, không quay vòng.
+- PA uniqueness là invariant trong `check_invariants()`: Frame, PageTable,
+  VSpace root/aux không chồng dải; Untyped chỉ lồng theo owner chain và con
+  nằm trọn trong cha. Đây là tiền đề bắt buộc của W^X theo Frame.
+- Map RW → unmap → map RX là hành vi cố ý (mô hình seL4): tại mỗi thời điểm
+  Frame chỉ có một loại quyền. Nó không phải lỗ hổng.
 
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
 - `PageTableOps` là đường duy nhất kernel gọi read/write PTE, unmap, zero,
-  install_kernel và flush; không dùng `RevokeReport` hay trả danh sách VA về
-  runtime.
+  install_kernel, flush và sync_icache; không dùng `RevokeReport` hay trả danh
+  sách VA về runtime.
 - Các thao tác ghi PTE là infallible; kiểm tra nằm ở preflight.
 - BootInfo nằm trong `vifast-abi`, có `version`/`size` và slot ranges; root
   không hard-code slot 1/2/3.
@@ -76,6 +82,9 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
   READ|EXEC, không WRITE, nên không thể map code dùng chung thành RW.
 - 7.1b: W^X tính theo Frame, không theo từng mapping; đây là lớp bảo vệ bắt
   buộc trước khi root nhận Frame code dùng chung ở 7.3/7.4.
+- 7.1c: map EXEC gọi `sync_icache(pa, size)`: RISC-V `fence.i`; AArch64
+  `dc cvau` + `dsb ish` + `ic ivau` + `dsb ish` + `isb`; x86 no-op. Khi có
+  SMP, RISC-V cần remote fence qua SBI/IPI, AArch64 cần shootdown sang PE khác.
 - Object có `creator: CapRef { addr, id }` để revoke Untyped copy không phá
   object của cap gốc; `delete_cap` từ chối khi còn object/cap con.
 - Kernel mapping check dùng walk leaf thật (non-user/X/W), không chỉ kiểm tra slot.
@@ -124,7 +133,8 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 5. Bước 6: build_task_space_elf + host test, jump table user.S, vifast-root
    ELF/link 3 target, nối root ELF vào runtime 6.4 (đã xong); server/client/fault
    giữ user.S.
-6. 7.1/7.1b: FrameMap ⊆ Frame cap, rồi W^X theo Frame + bắt buộc READ (đã xong).
+6. 7.1/7.1b/7.1c: FrameMap ⊆ Frame cap, W^X theo Frame + READ, PA uniqueness,
+   sync_icache khi map EXEC và counter checked_add (đã xong).
 7. Bước 7.2–7.5: Untyped con, BootInfo, client VSpace riêng; bỏ slot hard-code.
 8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
 9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

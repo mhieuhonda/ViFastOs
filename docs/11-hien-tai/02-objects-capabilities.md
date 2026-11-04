@@ -180,9 +180,9 @@ pub struct Mapping {
 }
 ```
 
-`frame` trỏ đúng Frame object đã tạo leaf, nhờ đó bộ đếm W/X vẫn chính xác
-nếu hai Frame object cùng PA (điều này không được tạo bởi đường retype bình
-thường, nhưng invariant không phụ thuộc vào giả định đó).
+`frame` trỏ đúng Frame object đã tạo leaf, nhờ đó bộ đếm W/X vẫn chính xác.
+Invariant PA uniqueness bên dưới bảo đảm không có hai Frame sống cùng PA, nên
+mỗi trang vật lý chỉ có một bộ đếm W/X duy nhất.
 
 ## 5. Object lifecycle
 
@@ -201,6 +201,8 @@ Frame/TCB/Endpoint/Notification con, unmap Frame và tăng generation; ngoài
 - fd trỏ file còn tồn tại;
 - VSpace mapping đúng alignment, overlap, có READ và không W+X trên một leaf;
 - `Frame.mapped_w/mapped_x` khớp chính xác số leaf W/X trong toàn bộ reverse map;
+- Frame/PageTable/VSpace root+aux không chồng dải PA; Untyped chỉ lồng theo
+  owner chain và con nằm trọn trong cha;
 - Frame/PageTable alignment;
 - Untyped bump không vượt size;
 - notification waiter còn sống.

@@ -29,6 +29,9 @@ Lý do: nếu kernel tự cấp page table thì cần heap kernel, và một tas
 - R → PTE_R; W → PTE_W | PTE_R (RISC-V cấm W mà không R); X → PTE_X.
 - Không có R lẫn X: `INVALID_ARG`.
 - **W và X cùng lúc: `NO_RIGHTS`** (chính sách W^X). Một Frame không bao giờ vừa ghi vừa thực thi được, chặn lớp tấn công tiêm mã. JIT không được map hai alias W/X của cùng Frame; phải unmap bản W rồi map X (hoặc ngược lại) theo pha, và mỗi lần đổi phải flush TLB.
+- Sau khi kernel ghi code qua data path, mapping EXEC phải gọi `sync_icache`:
+  RISC-V `fence.i`; AArch64 clean D-cache tới PoU rồi invalidate I-cache;
+  x86 no-op. Khi có SMP phải broadcast sang các hart/PE khác.
 
 Test `wx_and_exec_permission`: RWX bị từ chối, RX được, Fetch trên trang RW gây fault.
 

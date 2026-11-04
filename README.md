@@ -142,7 +142,7 @@ Kernel chạy self-test trong kernel mode trước khi chuyển sang user mode:
 - Chuyển capability qua IPC: kiểm tra quyền `GRANT`, cài vào slot receiver,
   không cho chuyển tiếp quyền `GRANT`.
 - Untyped/retype: cấp frame và page-table page từ arena, kiểm tra hết arena.
-- VSpace/Frame/PageTable: generic walk, PageTableMap level động, kiểm tra overlap và **W^X theo Frame** (không thể map RW một alias rồi RX alias khác).
+- VSpace/Frame/PageTable: generic walk, PageTableMap level động, kiểm tra overlap, **W^X theo Frame** (không thể map RW một alias rồi RX alias khác), PA uniqueness và **sync I-cache khi map EXEC**.
 - ramfs: mở/đọc `/motd`, tạo/ghi/seek/stat `/scratch`, đọc lại, báo
   `NotFound`, đóng fd.
 - SMP bootstrap: RISC-V SBI HSM và AArch64 PSCI khởi động hart thứ hai; hart

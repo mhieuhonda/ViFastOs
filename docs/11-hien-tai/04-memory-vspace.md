@@ -195,4 +195,12 @@ Ngoài ra mỗi `Frame` giữ `mapped_w`/`mapped_x`; `FrameMap` từ chối W n�
 một Frame không thể tạo ra một trang vừa ghi vừa chạy được. `FrameUnmap`,
 revoke VSpace/PageTable và destroy Frame đều giảm bộ đếm này; host test và
 `check_invariants()` đối chiếu bộ đếm với reverse map. Mapping cũng bắt buộc
-có `READ` trên mọi kiến trúc.
+có `READ` trên mọi kiến trúc. `check_invariants()` còn từ chối hai object vật lý
+(Frame/PageTable/VSpace root+aux) chồng dải PA, và chỉ cho Untyped lồng nhau
+theo owner chain — đây là tiền đề để W^X theo Frame còn đúng khi có Untyped con.
+
+Sau khi map thành công một leaf `READ|EXEC`, kernel gọi
+`PageTableOps::sync_icache(pa, size)` để đồng bộ I-cache với dữ liệu vừa ghi:
+RISC-V `fence.i`; AArch64 clean D-cache tới PoU rồi invalidate I-cache;
+x86 no-op. Khi có SMP, bước này phải lan sang các hart/PE khác trước khi chạy
+code mới.

@@ -71,7 +71,7 @@ nếu không có VM/emulation. Vì vậy:
 
 ## 4. Những gì đã kiểm chứng
 
-- `cargo test -p vifast-kernel`: 58 test portable trên host.
+- `cargo test -p vifast-kernel`: 61 test portable trên host.
 - `cargo test -p vifast-pte`: 11 test host cho cả 3 format PTE.
 - `cargo test -p vifast-elf`: 17 test parser ELF64 PT_LOAD.
 - Root ELF: 3 target build + validate, ET_EXEC/segment window/soft-float.
