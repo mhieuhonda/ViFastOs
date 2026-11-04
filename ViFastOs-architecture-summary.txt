@@ -1060,7 +1060,7 @@ Exit code:
 - Kernel x86 identity map chưa đặt NX cho data.
 - Root/server/client mỗi task một VSpace; root VSpace không còn stack client.
 - Boot Untyped 128 KiB/32 object đã dùng cho root + server + BootInfo; log QEMU
-  còn 10-12 trang và 12 object (RISC-V 12/12, AArch64/x86 10/12).
+  còn 11-13 trang và 13 object (RISC-V 13/13, AArch64/x86 11/13).
 - Server VSpace cap slot 12 do runtime cài; root đọc từ BootInfo, không còn
   hard-code trong root task.
 - Shared-code builder root/server chỉ nhận một trang code; builder ELF đã hỗ trợ
