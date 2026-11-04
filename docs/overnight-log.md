@@ -75,3 +75,17 @@ follow-up `62b31f4`.
   nguyên output cũ và 4 USER FAULT.
 - QEMU 3/3 PASS ×3; ROOT SWITCH lần đầu 49450 / 37252 / 22755.
   Headroom RISC-V còn 622576 B.
+
+## 8.3 — Fault endpoint tối giản
+
+- Commit `a18663f feat: deliver user faults to endpoint`.
+- `vifast-kernel` 76/76; PTE 11/11; ELF 17/17; runtime/user compile.
+- TCB có `fault_ep: CapRef`; TcbConfigure a5 trỏ cap Endpoint trong cspace TCB
+  đích. Fault message label `LABEL_FAULT`, data `[addr,cause,0,0]`; TCB
+  `BlockedFault`; handler Recv queue/wake. Fault1/2/3 vẫn suspend.
+- Root tạo fault endpoint, copy cap cho fault4 slot 6, cấu hình a5=6; root
+  priority 15 để nhận message, in `FAULT EP OK addr=0x1000301000`.
+- Sửa x86 `enter_user` khôi phục đủ register trước iretq (cần cho resume handler
+  sau page fault); sửa AArch literal pool cho fault4.
+- QEMU 3/3 PASS ×3; ROOT SWITCH lần đầu 49945 / 32607 / 17520.
+  Data Untyped test-exit vẫn 21/22 trang, 6/48 object; headroom 618480 B.
