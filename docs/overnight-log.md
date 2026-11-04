@@ -10,6 +10,7 @@
 - `a18663f` — 8.3 Fault endpoint tối giản.
 - `854744a` — 8.1 IPC buffer API/core.
 - `49e7b1f` — 8.1b IPC buffer demo end-to-end.
+- `82c9c11` — S2 x86 kernel data NX.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
 ## WIP còn dở
@@ -19,7 +20,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 ## CẦN QUYẾT ĐỊNH
 
 - 8.4 server/client Rust ELF chưa triển khai. Demo IPC buffer dài trong user.S
-  đã nối xong (8.1b).
+  đã nối xong (8.1b); x86 kernel data NX đã bật (S2).
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -144,6 +145,18 @@ follow-up `62b31f4`.
 - `vifast-kernel` 77/77; PTE 11/11; ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; ROOT SWITCH 47861 / 38447 / 15977 (lần đầu).
 - Chưa nối demo chuỗi dài trong user.S; đó là phần còn lại của 3c.
+
+## S2 — x86 kernel data NX
+
+- Commit `82c9c11 feat: mark x86 kernel data non-executable`.
+- Bật EFER.NXE sau khi CPUID xác nhận NX; tách các leaf 2 MiB chứa static data
+  thành bảng 4 KiB, đánh dấu NX cho stack, GDT/TSS/IDT, context, boot/data/
+  metadata pool, `Kernel` storage, page table và split-table pages.
+- Text page vẫn executable; `check_kernel_mappings` kiểm tra thêm NX cho toàn bộ
+  data range nếu NX được bật. QEMU x86 in `KERNEL DATA NX OK`, harness yêu cầu
+  riêng x86.
+- `vifast-kernel` 77/77; PTE 11/11; ELF 17/17; build không warning; QEMU 3/3
+  PASS ×3. Các kiến trúc khác không đổi.
 
 ## 8.1b — IPC buffer demo end-to-end
 
