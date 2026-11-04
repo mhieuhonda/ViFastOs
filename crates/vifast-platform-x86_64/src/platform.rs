@@ -15,10 +15,12 @@ const TSS_SEL: u16 = 0x28;
 const USER_DATA_RPL3: u64 = USER_DATA_SEL | 3;
 const USER_CODE_RPL3: u64 = USER_CODE_SEL | 3;
 
-const USER_CODE_VA: usize = 0x4000_0000;
-const USER_DATA_VA: usize = 0x4000_a000;
-const USER_STACK_A_TOP: usize = 0x4000_5000;
-const USER_STACK_B_TOP: usize = 0x4000_9000;
+const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
+const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
+const USER_STACK_A_TOP: usize = vifast_abi::user_layout::STACK_A_TOP;
+const USER_STACK_B_TOP: usize = vifast_abi::user_layout::STACK_B_TOP;
+const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
+const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
 const PAGE_PRESENT: u64 = 1;
 const PAGE_WRITE: u64 = 2;
 const PAGE_USER: u64 = 4;
@@ -46,9 +48,14 @@ static mut PT_USER: Table = Table([0; 512]);
 static mut USER_PAGE: Page = Page([0; 4096]);
 static mut USER_STACK: Stack = Stack([0; 32768]);
 static mut USER_FRAME: Page = Page([0; 4096]);
+#[allow(dead_code)]
+#[repr(align(16))]
+struct Metadata([u8; 65536]);
+static mut METADATA: Metadata = Metadata([0; 65536]);
 static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
 static mut TRAP_STACK: Stack = Stack([0; 32768]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
+static mut SMAP_ENABLED: bool = false;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -194,6 +201,20 @@ unsafe fn zero_table(table: *mut Table) {
     }
 }
 
+unsafe fn enable_smep_smap() {
+    let leaf7 = core::arch::x86_64::__cpuid(7);
+    let mut cr4: u64;
+    core::arch::asm!("mov {}, cr4", out(reg) cr4);
+    if leaf7.ebx & (1 << 7) != 0 {
+        cr4 |= 1 << 20; // SMEP
+    }
+    if leaf7.ebx & (1 << 20) != 0 {
+        cr4 |= 1 << 21; // SMAP
+        SMAP_ENABLED = true;
+    }
+    core::arch::asm!("mov cr4, {}", in(reg) cr4);
+}
+
 unsafe fn build_user_page_tables() {
     let pml4 = core::ptr::addr_of_mut!(PML4) as *mut Table;
     let pdpt = core::ptr::addr_of_mut!(PDPT) as *mut Table;
@@ -215,9 +236,9 @@ unsafe fn build_user_page_tables() {
         (*identity).0[i] = (i as u64 * 0x20_0000) | PAGE_PRESENT | PAGE_WRITE | PAGE_LARGE;
     }
 
-    /* User region starts at 1 GiB, in PDPT[1].  Only one 2 MiB PD is used;
-    PT_USER provides 4 KiB mappings for code, stack and data. */
-    (*pdpt).0[1] = table_pa(user_pd) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    /* User region starts at 64 GiB, in PDPT[64], outside the kernel
+    identity map.  PT_USER provides 4 KiB mappings for code, stack and data. */
+    (*pdpt).0[64] = table_pa(user_pd) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
     (*user_pd).0[0] = table_pa(user_pt) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
 
     let code_pa = core::ptr::addr_of!(USER_PAGE) as u64;
@@ -229,8 +250,8 @@ unsafe fn build_user_page_tables() {
     }
 }
 
-fn user_range(ptr: u64, len: usize, base: usize) -> bool {
-    ptr >= base as u64 && ptr as usize + len <= base + 4096
+fn user_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
+    ptr >= base as u64 && ptr as usize + len <= base + size
 }
 
 unsafe fn invlpg(va: u64) {
@@ -317,6 +338,16 @@ unsafe fn setup_gdt_tss_idt() {
         offset_high: (handler >> 32) as u32,
         zero: 0,
     };
+    let pf = pf_entry as *const () as u64;
+    (*idt)[0x0E] = IdtEntry {
+        offset_low: pf as u16,
+        selector: 0x08,
+        ist: 0,
+        type_attr: 0x8E,
+        offset_mid: (pf >> 16) as u16,
+        offset_high: (pf >> 32) as u32,
+        zero: 0,
+    };
     let timer = irq0_entry as *const () as u64;
     (*idt)[0x20] = IdtEntry {
         offset_low: timer as u16,
@@ -400,6 +431,7 @@ impl Platform for X86Platform {
     fn prepare_user() {
         unsafe {
             setup_gdt_tss_idt();
+            enable_smep_smap();
         }
     }
 
@@ -423,6 +455,12 @@ impl Platform for X86Platform {
         }
     }
 
+    fn metadata_page() -> &'static mut [u8] {
+        unsafe {
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(METADATA) as *mut u8, 65536)
+        }
+    }
+
     fn build_page_tables() {
         unsafe {
             build_user_page_tables();
@@ -442,21 +480,38 @@ impl Platform for X86Platform {
     }
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
-        if !user_range(ptr, out.len(), USER_CODE_VA) && !user_range(ptr, out.len(), USER_DATA_VA) {
+        if !user_range(ptr, out.len(), USER_CODE_VA, 4096)
+            && !user_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
+            && !user_range(ptr, out.len(), USER_DATA_VA, 4096)
+        {
             return Err(KError::InvalidArg);
         }
         unsafe {
+            if SMAP_ENABLED {
+                core::arch::asm!("stac");
+            }
             core::ptr::copy_nonoverlapping(ptr as *const u8, out.as_mut_ptr(), out.len());
+            if SMAP_ENABLED {
+                core::arch::asm!("clac");
+            }
         }
         Ok(())
     }
 
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError> {
-        if !user_range(ptr, input.len(), USER_DATA_VA) {
+        if !user_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
+            && !user_range(ptr, input.len(), USER_DATA_VA, 4096)
+        {
             return Err(KError::InvalidArg);
         }
         unsafe {
+            if SMAP_ENABLED {
+                core::arch::asm!("stac");
+            }
             core::ptr::copy_nonoverlapping(input.as_ptr(), ptr as *mut u8, input.len());
+            if SMAP_ENABLED {
+                core::arch::asm!("clac");
+            }
         }
         Ok(())
     }
@@ -519,7 +574,26 @@ impl Platform for X86Platform {
 extern "C" {
     fn int80_entry();
     fn irq0_entry();
+    fn pf_entry();
     fn x86_reload_segments();
+}
+
+#[no_mangle]
+extern "C" fn x86_page_fault(frame: *const u64) -> ! {
+    let cr2: u64;
+    unsafe {
+        core::arch::asm!("mov {}, cr2", out(reg) cr2);
+    }
+    let error = unsafe { *frame.add(15) };
+    let rip = unsafe { *frame.add(16) };
+    vifast_kernel::klog!(
+        X86_64,
+        "PAGE FAULT cr2={:#x} err={:#x} rip={:#x}",
+        cr2,
+        error,
+        rip
+    );
+    X86_64::exit(1)
 }
 
 #[no_mangle]

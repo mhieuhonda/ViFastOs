@@ -1,6 +1,89 @@
     .section .text.userprog, "ax"
     .globl user_program_start
 user_program_start:
+    .globl user_root
+user_root:
+    mov x8, #9
+    mov x0, #2
+    mov x1, #2
+    mov x2, #4
+    svc #0
+    mov x8, #9
+    mov x0, #2
+    mov x1, #1
+    mov x2, #5
+    svc #0
+    mov x8, #9
+    mov x0, #2
+    mov x1, #1
+    mov x2, #6
+    svc #0
+    mov x8, #9
+    mov x0, #2
+    mov x1, #3
+    mov x2, #7
+    svc #0
+
+    mov x8, #10
+    mov x0, #4
+    mov x1, #5
+    mov x2, #1
+    mov x3, #1
+    svc #0
+    mov x8, #10
+    mov x0, #4
+    mov x1, #6
+    mov x2, #1
+    mov x3, #2
+    svc #0
+    mov x8, #10
+    mov x0, #1
+    mov x1, #6
+    mov x2, #2
+    mov x3, #2
+    svc #0
+    mov x8, #10
+    mov x0, #3
+    mov x1, #6
+    mov x2, #3
+    mov x3, #2
+    svc #0
+    mov x8, #10
+    mov x0, #7
+    mov x1, #6
+    mov x2, #5
+    mov x3, #11
+    svc #0
+
+    mov x8, #15
+    mov x0, #5
+    adr x1, user_thread_a
+    mov x2, #0x10
+    lsl x2, x2, #32
+    add x2, x2, #0x5000
+    mov x3, #1
+    mov x4, #5
+    svc #0
+    mov x8, #15
+    mov x0, #6
+    adr x1, user_thread_b
+    mov x2, #0x10
+    lsl x2, x2, #32
+    add x2, x2, #0x9000
+    mov x3, #1
+    mov x4, #5
+    svc #0
+    mov x8, #16
+    mov x0, #5
+    svc #0
+    mov x8, #16
+    mov x0, #6
+    svc #0
+1:
+    mov x8, #8
+    svc #0
+    b 1b
+
     .globl user_thread_a
 user_thread_a:
     mov x8, #32

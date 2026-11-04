@@ -14,17 +14,20 @@ extern "C" {
     static user_program_end: u8;
     fn user_thread_a();
     fn user_thread_b();
+    fn user_root();
 }
 
 fn user_image() -> UserImage {
     let start = core::ptr::addr_of!(user_program_start) as usize;
     let end = core::ptr::addr_of!(user_program_end) as usize;
-    let base = user_thread_a as *const () as usize - start;
+    let entry_root = user_root as *const () as usize - start;
+    let entry_a = user_thread_a as *const () as usize - start;
     let entry_b = user_thread_b as *const () as usize - start;
     UserImage {
         code: unsafe { core::slice::from_raw_parts(start as *const u8, end - start) },
-        entry_a: base,
+        entry_a,
         entry_b,
+        entry_root,
     }
 }
 

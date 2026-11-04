@@ -31,7 +31,12 @@ Trình tự unmap tương tự với `FrameUnmap`.
 - page size;
 - range `[base, end)`;
 - `next_va` cho cấp phát tuần tự;
+- `code_base/code_len`, `stack_base/stack_len`;
 - tối đa 8 mapping.
+
+`validate_user_range()` kiểm tra buffer user theo code/stack/mapping trước
+`DebugWrite`, `Open`, `Read`, `Write`. Đây là hàng rào bảo mật chính; platform
+copy chỉ là lớp thứ hai.
 
 `Kernel::map_frame` kiểm tra:
 
@@ -50,14 +55,15 @@ File: `crates/vifast-platform-riscv64/src/platform.rs`.
 - Sv39, root tĩnh `ROOT`.
 - Kernel identity map `0x8000_0000..0x803f_ffff`.
 - UART `0x1000_0000` map 2 MiB.
-- User code `0x4000_0000`, stack `0x4000_1000..0x4000_8fff`,
-  data `0x4000_a000`.
+- User code `0x0000_0010_0000_0000`, stack `+0x1000..+0x8fff`,
+  data `+0xa000`.
 - Code: `R|X|U` (không W).
 - Stack: `R|W|U` (không X).
 - Data mapping qua `FrameMap`: `R|W|U` hoặc `R|X|U` theo quyền.
 - `sfence.vma` sau map/unmap.
 
-Trap entry dùng kernel trap stack qua `sscratch`; user stack chỉ dùng ở U-mode.
+Trap entry dùng kernel trap stack qua `sscratch`; `sscratch=0` khi ở kernel
+để phát hiện trap từ S-mode. `SUM=0`; copy user bật `SUM` tạm thời.
 
 ## 4. AArch64
 
@@ -65,12 +71,13 @@ File: `crates/vifast-platform-aarch64/src/platform.rs`.
 
 - 4-level page table tĩnh.
 - GICv2 `0x0800_0000`, PL011 `0x0900_0000` map device block.
-- User code `0x2000_0000`, stack `0x2000_1000..0x2000_8fff`,
-  data `0x2000_a000`.
+- User code `0x0000_0010_0000_0000`, stack `+0x1000..+0x8fff`,
+  data `+0xa000`.
 - Code: EL0 read-only + executable (`AP_USER_RO`, UXN=0).
 - Stack: EL0 read-write + NX (`AP_USER_RW`, UXN=1).
 - Data: EL0 read-write + NX.
 - Map/unmap dùng `tlbi vae1is`, `dsb ish`, `isb`.
+- PAN nếu CPU hỗ trợ; read/write user tạm clear PAN.
 
 Lưu ý encoding `AP[2:1]`:
 - `AP_USER_RW = 0b01` (bit 6);
@@ -82,14 +89,15 @@ File: `crates/vifast-platform-x86_64/src/platform.rs`.
 
 - Tự dựng PML4/PDPT/PD/PT 4 KiB, không sửa page table UEFI.
 - Identity map 0..1 GiB cho kernel/UEFI image, stack, GDT/TSS/IDT.
-- User code `0x4000_0000`, stack `0x4000_1000..0x4000_8fff`,
-  data `0x4000_a000`.
+- User code `0x0000_0010_0000_0000`, stack `+0x1000..+0x8fff`,
+  data `+0xa000`.
 - Code: P|US, read+execute, NX clear.
 - Stack/data: P|W|US|NX.
 - `FrameMap` map đúng VA được yêu cầu; `FrameUnmap` clear PTE + `invlpg`.
-- `VSpace.direct` đã bị xoá; x86 dùng VA cố định giống các port khác.
+- `VSpace.direct` đã bị xoá; x86 dùng VA 64 GiB cố định.
+- SMEP/SMAP nếu CPUID hỗ trợ; user copy dùng STAC/CLAC.
 - CR3 được chuyển sang PML4 riêng ngay trước `iretq`.
-- Hạn chế còn lại: chỉ identity map 0..1 GiB; chưa có AP.
+- Hạn chế còn lại: identity map 0..1 GiB; chưa có AP; data kernel chưa NX.
 ## 6. TLB
 
 Hiện tại:

@@ -9,8 +9,9 @@
 | Console | 16550 UART `0x1000_0000` | PL011 `0x0900_0000` | COM1 `0x3F8` |
 | Clock | `time` CSR | `cntpct_el0` | `rdtsc` |
 | Timer | SBI timer | GICv2 PPI 30 + generic timer | PIC + PIT |
-| MMU | Sv39 tĩnh | 4-level tĩnh | UEFI page table |
+| MMU | Sv39 tĩnh | 4-level tĩnh | PML4/PT 4 KiB riêng |
 | Trap | `stvec` + `TrapFrame` | vector table + `SP_EL1` | IDT + TSS.RSP0 |
+| User VA | 64 GiB chung | 64 GiB chung | 64 GiB chung |
 | Syscall | `ecall` | `svc #0` | `int 0x80` |
 | User transition | `sret` → U | `eret` → EL0 | `iretq` → ring3 |
 | SMP bootstrap | SBI HSM | PSCI CPU_ON | `SMP SKIP` |
@@ -33,7 +34,8 @@ Trap:
 - Timer cause `0x800...5` → `runtime::timer::on_timer`.
 - `ecall` cause `8` → lưu `sepc + 4`, dispatch syscall.
 - Cause khác → log và exit.
-- Trap dùng kernel trap stack qua `sscratch`; user stack chỉ ở U-mode.
+- Trap dùng kernel trap stack qua `sscratch`; `sscratch=0` ở kernel.
+- `SUM=0`; copy user bật `SUM` tạm thời.
 
 ## 3. AArch64
 
@@ -52,6 +54,7 @@ Trap:
 - `sync_lower` → `aarch64_trap_handler`; `EC=0x15` là SVC.
 - `irq_lower` → đọc GIC IAR, xử lý timer, EOI.
 - Trap stack là `SP_EL1`; user stack là `SP_EL0`.
+- PAN nếu CPU hỗ trợ; copy user tạm clear PAN.
 - Code user read-only + executable; stack/data RW + NX.
 
 ## 4. x86_64 UEFI
@@ -72,8 +75,8 @@ Files:
   sang bảng riêng, không sửa page table UEFI.
 - Code RX, data/stack NX, unmap thật.
 - AP bootstrap qua UEFI MP Services đã được thử nhưng OVMF hiện tại không trả
-  interface; code MP đã được gỡ khỏi build để tránh làm hỏng firmware. Vì vậy
-  `start_smp` chỉ in `SMP SKIP`.
+  interface; code MP đã được gỡ khỏi build. Hướng tiếp theo là ACPI MADT +
+  LAPIC/SIPI; hiện `start_smp` in `SMP SKIP`.
 
 ## 5. Thêm kiến trúc mới
 

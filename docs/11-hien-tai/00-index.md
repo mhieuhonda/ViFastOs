@@ -21,6 +21,7 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
 8. [08-boot-user-flow.md](08-boot-user-flow.md) — luồng boot và chương trình
    user mẫu.
 9. [09-testing.md](09-testing.md) — test host, QEMU và tiêu chí PASS.
+10. [10-vifast-user.md](10-vifast-user.md) — wrapper syscall và user layout chung.
 
 ## Bản đồ crate
 
@@ -30,6 +31,7 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
 | `vifast-arch` | `crates/vifast-arch/src/lib.rs` | Trait `Arch`, primitive phần cứng |
 | `vifast-kernel` | `crates/vifast-kernel/src/` | Object, cap, IPC, scheduler, VSpace shadow, ramfs |
 | `vifast-runtime` | `crates/vifast-runtime/src/lib.rs` | Boot, syscall dispatch, timer, context switch dùng chung |
+| `vifast-user` | `crates/vifast-user/src/lib.rs` | Syscall wrapper cho 3 kiến trúc |
 | `vifast-arch-*` | `crates/vifast-arch-*/src/lib.rs` | UART/PL011/COM1, clock, IRQ mask, shutdown |
 | `vifast-platform-*` | `crates/vifast-platform-*/src/` | MMU, trap, timer, IRQ, SMP, user entry |
 | `vifast-kernel-*` | `crates/vifast-kernel-*/src/main.rs` | Entry, linker, user image asset |

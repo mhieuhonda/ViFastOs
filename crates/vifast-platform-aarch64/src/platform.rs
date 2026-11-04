@@ -11,10 +11,12 @@ use vifast_arch_aarch64::Aarch64;
 
 pub struct Aarch64Platform;
 
-pub const USER_CODE_VA: usize = 0x2000_0000;
-pub const USER_DATA_VA: usize = 0x2000_a000;
-pub const USER_STACK_A_TOP: usize = 0x2000_5000;
-pub const USER_STACK_B_TOP: usize = 0x2000_9000;
+pub const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
+pub const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
+pub const USER_STACK_A_TOP: usize = vifast_abi::user_layout::STACK_A_TOP;
+pub const USER_STACK_B_TOP: usize = vifast_abi::user_layout::STACK_B_TOP;
+const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
+const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
 const USER_SPSR: u64 = 0x340;
 const GICD: u64 = 0x0800_0000;
 const GICC: u64 = 0x0801_0000;
@@ -49,10 +51,15 @@ static mut L0: Table = Table([0; 512]);
 static mut L1: Table = Table([0; 512]);
 static mut L2_LOW: Table = Table([0; 512]);
 static mut L2_KERNEL: Table = Table([0; 512]);
+static mut L2_USER: Table = Table([0; 512]);
 static mut L3_USER: Table = Table([0; 512]);
 static mut USER_CODE: Page = Page([0; 4096]);
 static mut USER_STACK: UserStack = UserStack([0; 32768]);
 static mut USER_DATA: Page = Page([0; 4096]);
+#[allow(dead_code)]
+#[repr(align(16))]
+struct Metadata([u8; 65536]);
+static mut METADATA: Metadata = Metadata([0; 65536]);
 static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
 static mut TIMER_INTERVAL: u64 = 0;
 static mut TRAP_STACK: UserStack = UserStack([0; 32768]);
@@ -134,6 +141,14 @@ fn page_in_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
     ptr >= base as u64 && ptr as usize + len <= base + size
 }
 
+fn pan_supported() -> bool {
+    let mmfr1: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, id_aa64mmfr1_el1", out(reg) mmfr1);
+    }
+    ((mmfr1 >> 20) & 0xF) != 0
+}
+
 #[no_mangle]
 pub extern "C" fn rust_secondary(_context: u64) -> ! {
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
@@ -207,19 +222,28 @@ impl Platform for Aarch64Platform {
         }
     }
 
+    fn metadata_page() -> &'static mut [u8] {
+        unsafe {
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(METADATA) as *mut u8, 65536)
+        }
+    }
+
     fn build_page_tables() {
         unsafe {
             let l0 = core::ptr::addr_of_mut!(L0) as *mut Table;
             let l1 = core::ptr::addr_of_mut!(L1) as *mut Table;
             let low = core::ptr::addr_of_mut!(L2_LOW) as *mut Table;
             let kernel = core::ptr::addr_of_mut!(L2_KERNEL) as *mut Table;
+            let user_l2 = core::ptr::addr_of_mut!(L2_USER) as *mut Table;
             let user_l3 = core::ptr::addr_of_mut!(L3_USER) as *mut Table;
             (*l0).0[0] = table_desc(l1 as u64);
             (*l1).0[0] = table_desc(low as u64);
             (*l1).0[1] = table_desc(kernel as u64);
+            /* Shared 64 GiB user window: L1[64] -> L2_USER -> L3_USER. */
+            (*l1).0[64] = table_desc(user_l2 as u64);
+            (*user_l2).0[0] = table_desc(user_l3 as u64);
             (*low).0[64] = block_desc(0x0800_0000, ATTR_DEVICE, 0, PXN, UXN, 0);
             (*low).0[72] = block_desc(0x0900_0000, ATTR_DEVICE, 0, PXN, UXN, 0);
-            (*low).0[256] = table_desc(user_l3 as u64);
             let code_pa = core::ptr::addr_of!(USER_CODE) as u64;
             let stack_pa = core::ptr::addr_of!(USER_STACK) as u64;
             (*user_l3).0[0] = page_desc(code_pa, 0, AP_USER_RO, PXN, 0, SH_INNER);
@@ -293,10 +317,17 @@ impl Platform for Aarch64Platform {
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
+            || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
         {
             unsafe {
+                if pan_supported() {
+                    core::arch::asm!(".arch armv8.1-a", "msr pan, #0");
+                }
                 core::ptr::copy_nonoverlapping(ptr as *const u8, out.as_mut_ptr(), out.len());
+                if pan_supported() {
+                    core::arch::asm!(".arch armv8.1-a", "msr pan, #1");
+                }
             }
             Ok(())
         } else {
@@ -305,9 +336,17 @@ impl Platform for Aarch64Platform {
     }
 
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError> {
-        if page_in_range(ptr, input.len(), USER_DATA_VA, 4096) {
+        if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
+            || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
+        {
             unsafe {
+                if pan_supported() {
+                    core::arch::asm!(".arch armv8.1-a", "msr pan, #0");
+                }
                 core::ptr::copy_nonoverlapping(input.as_ptr(), ptr as *mut u8, input.len());
+                if pan_supported() {
+                    core::arch::asm!(".arch armv8.1-a", "msr pan, #1");
+                }
             }
             Ok(())
         } else {
@@ -333,7 +372,10 @@ impl Platform for Aarch64Platform {
             core::arch::asm!("msr mair_el1, {}", in(reg) mair);
             let mut sctlr: u64;
             core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr);
-            sctlr &= !((1 << 19) | (1 << 23));
+            sctlr &= !(1 << 19);
+            if pan_supported() {
+                sctlr |= 1 << 23;
+            }
             sctlr |= (1 << 0) | (1 << 2) | (1 << 12);
             core::arch::asm!("msr vbar_el1, {}", in(reg) core::ptr::addr_of!(vector_table) as u64);
             core::arch::asm!("dsb sy; isb");

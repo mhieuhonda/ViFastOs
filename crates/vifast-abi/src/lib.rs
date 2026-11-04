@@ -14,6 +14,26 @@
 
 pub const MSG_MAX_WORDS: usize = 8;
 pub const DEFAULT_PAGE_SIZE: u64 = 4096;
+
+/// Shared user-address layout for all architectures.  The high base keeps
+/// user mappings away from kernel identity maps and low MMIO.
+pub mod user_layout {
+    pub const CODE_VA: usize = 0x0000_0010_0000_0000;
+    pub const DATA_VA: usize = CODE_VA + 0xa000;
+    pub const STACK_A_TOP: usize = CODE_VA + 0x5000;
+    pub const STACK_B_TOP: usize = CODE_VA + 0x9000;
+    pub const STACK_BASE: usize = CODE_VA + 0x1000;
+    pub const STACK_LEN: usize = 0x8000;
+}
+/// Maximum bytes copied through a single user I/O syscall.
+pub const USER_IO_MAX: usize = 256;
+/// Fixed untyped-memory accounting sizes.  These make object creation
+/// deterministic even while the reference model still stores metadata in the
+/// kernel object table.
+pub const OBJ_ENDPOINT_BYTES: usize = 256;
+pub const OBJ_NOTIFICATION_BYTES: usize = 128;
+pub const OBJ_TCB_BYTES: usize = 1024;
+pub const OBJ_METADATA_ALIGN: usize = 16;
 pub const LABEL_FAULT: u64 = 0xFFFF_0001;
 pub const LABEL_NOTIFICATION: u64 = 0xFFFF_0002;
 /// Sentinel used instead of `Option<u64>` in the wire message.
@@ -54,6 +74,32 @@ pub enum KError {
 }
 
 impl KError {
+    pub const fn from_u32(value: u32) -> KError {
+        match value {
+            0 => KError::Ok,
+            1 => KError::InvalidCap,
+            2 => KError::WrongType,
+            3 => KError::NoRights,
+            4 => KError::SlotOccupied,
+            5 => KError::OutOfMemory,
+            6 => KError::InvalidArg,
+            7 => KError::Alignment,
+            8 => KError::AlreadyMapped,
+            9 => KError::NotMapped,
+            10 => KError::NoCaller,
+            11 => KError::ObjectDestroyed,
+            12 => KError::IrqInUse,
+            13 => KError::PrioTooHigh,
+            14 => KError::Cancelled,
+            15 => KError::MissingPageTable,
+            16 => KError::IllegalOperation,
+            17 => KError::NotImplemented,
+            18 => KError::WouldBlock,
+            19 => KError::NotFound,
+            _ => KError::InvalidArg,
+        }
+    }
+
     pub const fn name(self) -> &'static str {
         match self {
             KError::Ok => "OK",

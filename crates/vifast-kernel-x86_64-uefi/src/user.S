@@ -1,6 +1,85 @@
     .section .text.userprog, "ax"
     .globl user_program_start
 user_program_start:
+    .globl user_root
+user_root:
+    mov rax, 9
+    mov rdi, 2
+    mov rsi, 2
+    mov rdx, 4
+    int 0x80
+    mov rax, 9
+    mov rdi, 2
+    mov rsi, 1
+    mov rdx, 5
+    int 0x80
+    mov rax, 9
+    mov rdi, 2
+    mov rsi, 1
+    mov rdx, 6
+    int 0x80
+    mov rax, 9
+    mov rdi, 2
+    mov rsi, 3
+    mov rdx, 7
+    int 0x80
+
+    mov rax, 10
+    mov rdi, 4
+    mov rsi, 5
+    mov rdx, 1
+    mov rcx, 1
+    int 0x80
+    mov rax, 10
+    mov rdi, 4
+    mov rsi, 6
+    mov rdx, 1
+    mov rcx, 2
+    int 0x80
+    mov rax, 10
+    mov rdi, 1
+    mov rsi, 6
+    mov rdx, 2
+    mov rcx, 2
+    int 0x80
+    mov rax, 10
+    mov rdi, 3
+    mov rsi, 6
+    mov rdx, 3
+    mov rcx, 2
+    int 0x80
+    mov rax, 10
+    mov rdi, 7
+    mov rsi, 6
+    mov rdx, 5
+    mov rcx, 11
+    int 0x80
+
+    mov rax, 15
+    mov rdi, 5
+    lea rsi, [rip + user_thread_a]
+    movabs rdx, 0x1000005000
+    mov rcx, 1
+    mov r8, 5
+    int 0x80
+    mov rax, 15
+    mov rdi, 6
+    lea rsi, [rip + user_thread_b]
+    movabs rdx, 0x1000009000
+    mov rcx, 1
+    mov r8, 5
+    int 0x80
+    mov rax, 16
+    mov rdi, 5
+    int 0x80
+    mov rax, 16
+    mov rdi, 6
+    int 0x80
+1:
+    mov rax, 8
+    int 0x80
+    jmp 1b
+
     .globl user_thread_a
 user_thread_a:
     mov rax, 32

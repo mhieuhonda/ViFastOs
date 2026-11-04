@@ -19,6 +19,18 @@ Hằng số quan trọng:
 | `O_WRONLY` | 1 | Mở chỉ ghi |
 | `O_RDWR` | 2 | Mở đọc/ghi |
 | `O_CREATE` | 4 | Tạo file nếu chưa có |
+| `USER_IO_MAX` | 256 | Số byte tối đa một lần copy user |
+| `OBJ_ENDPOINT_BYTES` | 256 | Untyped charge cho Endpoint |
+| `OBJ_NOTIFICATION_BYTES` | 128 | Untyped charge cho Notification |
+| `OBJ_TCB_BYTES` | 1024 | Untyped charge cho Tcb |
+
+User layout dùng chung cho cả 3 kiến trúc:
+
+```text
+code   = 0x0000_0010_0000_0000
+data   = code + 0xa000
+stack  = code + 0x1000 .. code + 0x8fff
+```
 
 ## 2. Mã lỗi `KError`
 
@@ -89,6 +101,9 @@ pub struct Message {
   làm slot cap; `Reply` truyền 4 data word và không chuyển cap.
 - Receiver phải chỉ định slot nhận cap rõ ràng; kernel không tự chọn slot
   fallback. Nếu slot 0/đã dùng, chuyển cap thất bại.
+- `DebugWrite`, `Open`, `Read`, `Write` được kernel kiểm tra
+  `validate_user_range()` trước khi runtime copy. Địa chỉ kernel/unmapped bị
+  trả `InvalidArg`.
 
 ## 6. Bảng syscall
 
@@ -104,7 +119,10 @@ Số syscall là ổn định. `-` nghĩa là không dùng.
 | 6 | `Wait` | a0 notification cap | Trả word hoặc block |
 | 7 | `Poll` | a0 notification cap | Trả word và clear |
 | 8 | `Yield` | — | Hiện trả `Ok`, chưa chuyển context |
-| 9 | `Retype` | a0 Untyped cap, a1 ObjType, a2 dest slot | Tạo Frame/PageTable |
+| 9 | `Retype` | a0 Untyped cap, a1 ObjType, a2 dest slot | Endpoint/Notification/Tcb/Frame/PageTable |
+| 10 | `CapCopy` | a0 src slot, a1 TCB cap, a2 dst slot, a3 rights | Copy cap sang TCB khác |
+| 15 | `TcbConfigure` | a0 TCB cap, a1 entry, a2 stack, a3 VSpace cap, a4 priority | Set context |
+| 16 | `TcbResume` | a0 TCB cap | Đưa TCB vào runqueue |
 | 24 | `PageTableMap` | — | Chưa expose cho user |
 | 25 | `FrameMap` | a0 VSpace cap, a1 Frame cap, a2 VA hint, a3 rights | Map, trả VA |
 | 26 | `FrameUnmap` | a0 VSpace cap, a1 VA | Unmap + flush |

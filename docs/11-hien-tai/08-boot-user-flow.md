@@ -35,22 +35,24 @@ OVMF
 2. `irq_disable`.
 3. `Platform::init_platform`.
 4. log banner.
-5. `Kernel::new` + self-test.
+5. `Kernel::new` + self-test trên kernel riêng.
 6. `Platform::start_smp`.
-7. cấp object/cap.
-8. copy user image.
-9. build page table.
-10. `prepare_user` (x86).
-11. tạo context.
-12. set kernel pointer.
-13. enqueue 2 TCB, pick TCB A.
-14. start timer.
-15. `enter_user(A)`.
+7. `Kernel::new` sạch; tạo VSpace + metadata/data Untyped.
+8. cài cap slot 1/2/3 cho root.
+9. copy user image.
+10. build page table.
+11. `prepare_user` (x86).
+12. tạo context root.
+13. set kernel pointer.
+14. enqueue root, pick root.
+15. start timer.
+16. `enter_user(root)`.
 
 ## 3. User image
 
 Binary kernel chứa một `user.S`:
 
+- `user_root`: root task tạo TCB/endpoint/notification bằng syscall.
 - `user_thread_a`: server IPC.
 - `user_thread_b`: client.
 
@@ -59,15 +61,41 @@ Binary kernel chứa một `user.S`:
 ```rust
 pub struct UserImage {
     pub code: &'static [u8],
-    pub entry_a: usize, // offset
-    pub entry_b: usize, // offset
+    pub entry_a: usize,
+    pub entry_b: usize,
+    pub entry_root: usize,
 }
 ```
 
-Runtime copy toàn bộ code vào `Platform::code_page()`. Các message nằm ngay
-trong code page để không cần copy bảng rodata riêng.
+Runtime chỉ dùng `entry_root`; root task tự lấy địa chỉ server/client bằng
+label PC-relative. Các message nằm ngay trong code page.
 
-## 4. Server A
+Root task nhận cap:
+- slot 1 VSpace;
+- slot 2 metadata Untyped;
+- slot 3 data Untyped.
+
+Root lần lượt Retype endpoint/2 TCB/notification, CapCopy cho server/client,
+TcbConfigure entry/stack/VSpace/priority rồi TcbResume. Sau đó root Yield loop;
+timer preempt root và chạy server/client.
+
+## 4. Root task
+
+```text
+Retype metadata Untyped → Endpoint slot 4
+Retype metadata Untyped → TCB server slot 5
+Retype metadata Untyped → TCB client slot 6
+Retype metadata Untyped → Notification slot 7
+CapCopy endpoint → server slot 1 READ, client slot 1 WRITE
+CapCopy VSpace → client slot 2 WRITE
+CapCopy data Untyped → client slot 3 WRITE
+CapCopy notification → client slot 5 READ|WRITE|GRANT
+TcbConfigure server/client (entry, stack, VSpace slot 1, priority 5)
+TcbResume server/client
+Yield loop
+```
+
+## 5. Server A
 
 ```text
 DebugWrite "Server"
@@ -77,7 +105,7 @@ loop:
   Reply(label=0x55, data=42)
 ```
 
-## 5. Client B
+## 6. Client B
 
 ```text
 Retype Untyped → Frame cap
@@ -100,7 +128,7 @@ loop:
   DebugWrite "Reply OK" / "Reply BAD"
 ```
 
-## 6. Syscall flow
+## 7. Syscall flow
 
 ```text
 user instruction
@@ -114,7 +142,7 @@ user instruction
   → return to user
 ```
 
-## 7. Blocking flow
+## 8. Blocking flow
 
 ```text
 Recv không có sender
@@ -125,7 +153,7 @@ Recv không có sender
   → runtime nạp context + write_message
 ```
 
-## 8. Timer flow
+## 9. Timer flow
 
 ```text
 timer IRQ

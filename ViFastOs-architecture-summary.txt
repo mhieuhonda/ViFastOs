@@ -12,10 +12,13 @@ Tài liệu tự chứa (self-contained) để copy/paste cho AI khác hoặc ng
 RISC-V64, AArch64 và x86_64. Project đang ở mức "bring-up kernel + user demo",
 không phải một hệ điều hành production hoàn chỉnh.
 
-Thư mục này KHÔNG phải git repository. Mọi thay đổi đang nằm trực tiếp trên đĩa.
+Thư mục này LÀ git repository. Các mốc hiện tại:
+- 456d5ef checkpoint: multi-arch microkernel before hardening
+- eece7c3 harden: kernel trap stack, private x86 page tables, explicit cap slots
+- commit mới nhất: root-task + pointer validation + untyped accounting.
 
-Cập nhật gần nhất: sau refactor tách runtime/platform/arch và bổ sung VFS
-create/write/seek/stat.
+Cập nhật gần nhất: root task, kiểm tra con trỏ user, Untyped accounting,
+user layout chung 64 GiB, SMEP/SMAP/PAN/sscratch hardening và vifast-user.
 
 1. MỤC TIÊU
 -----------
@@ -36,8 +39,11 @@ create/write/seek/stat.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 6/6 PASS
+- cargo test -p vifast-kernel: 12/12 PASS
 - cargo test -p vifast-runtime: compile + 0 test
+- cargo test -p vifast-user: compile
+- vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
+  hai TCB server/client.
 - ./scripts/build.sh: PASS, không warning
 - python3 scripts/test-qemu.py: 3/3 PASS
 - Chạy lặp 3 lần liên tiếp: RISC-V, AArch64, x86_64 đều PASS
@@ -48,6 +54,7 @@ Output tiêu biểu:
 - SMP SKIP (x86 AP bootstrap pending) trên x86_64
 - "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write", "Client",
   "Cap OK", "Reply OK", "PREEMPT OK"
+- user layout chung: code 0x0000_0010_0000_0000 (64 GiB)
 
 3. KIẾN TRÚC TỔNG THỂ SAU REFACTOR
 ----------------------------------
@@ -81,6 +88,7 @@ Sơ đồ lớp:
 Quan hệ phụ thuộc chính:
 - vifast-kernel -> vifast-arch (chỉ trait, không phần cứng)
 - vifast-runtime -> vifast-kernel + vifast-arch
+- vifast-user -> vifast-abi (syscall wrappers + layout)
 - vifast-platform-* -> vifast-runtime + vifast-kernel + vifast-arch-*
 - vifast-kernel-* -> vifast-platform-* + vifast-runtime + vifast-arch
 - Không có cfg(target_arch) trong vifast-kernel hoặc vifast-runtime.
@@ -106,8 +114,9 @@ vifast-kernel
   - endpoint send/recv/call/reply;
   - notification signal/wait/poll;
   - scheduler priority + round-robin;
-  - Frame/VSpace/PageTable shadow mapping;
-  - Untyped/retype;
+  - Frame/VSpace/PageTable shadow mapping + validate_user_range;
+  - Untyped/retype có accounting metadata;
+  - root-task syscalls: Retype, CapCopy, TcbConfigure, TcbResume;
   - ramfs + fd table;
   - invariant checker.
 - no_std, forbid unsafe.
@@ -122,14 +131,19 @@ vifast-kernel
 vifast-runtime
 - Logic dùng chung cho mọi port:
   - Platform trait;
-  - boot sequence;
-  - syscall action dispatch;
+  - boot sequence chỉ tạo một root TCB;
+  - giao VSpace/Untyped cho root task;
+  - syscall action dispatch (gồm ConfigureTcb);
   - user image copy;
   - context switch khi block;
-  - timer tick/preemption;
-  - exit sau 20 tick.
+  - timer tick/preemption.
 - no_std, forbid unsafe.
 - File: crates/vifast-runtime/src/lib.rs.
+
+vifast-user
+- no_std syscall wrappers cho 3 kiến trúc.
+- Dùng SyscallId + user_layout từ vifast-abi.
+- File: crates/vifast-user/src/lib.rs.
 
 vifast-arch-riscv64 / aarch64 / x86_64
 - Chỉ primitive phần cứng:
@@ -166,10 +180,12 @@ vifast-platform-x86_64
 - GDT/TSS/IDT.
 - PIC + PIT 100 Hz.
 - Tự dựng PML4/PDPT/PD/PT 4 KiB; identity map 0..1 GiB.
-- User code 0x4000_0000 RX; stack/data RW+NX; unmap thật.
+- User window 64 GiB: code RX; stack/data RW+NX; unmap thật.
+- SMEP/SMAP nếu CPU hỗ trợ; user copy dùng STAC/CLAC.
 - ring3 qua iretq; CR3 chuyển sang PML4 riêng.
 - AP bootstrap qua UEFI MP Services đã thử nhưng OVMF hiện tại không trả
   interface; code MP đã gỡ khỏi build, start_smp chỉ in SMP SKIP.
+  Hướng triển khai là ACPI MADT + LAPIC/SIPI, không dùng MP Services.
 - Files: platform.rs, trap.S.
 
 vifast-kernel-riscv64 / aarch64 / x86_64-uefi
@@ -232,20 +248,25 @@ Runtime boot sequence chi tiết:
 2. A::irq_disable()
 3. A::init_platform(info)
 4. in banner
-5. Kernel::new()
-6. selftest::run::<A>()
-7. in SELFTEST PASS
-8. A::start_smp()
-9. tạo 2 TCB, endpoint, notification, VSpace, Untyped
-10. cài cap cho A/B
-11. copy user image vào A::code_page()
-12. A::build_page_tables()
-13. A::prepare_user()
-14. tạo context A/B
-15. A::set_kernel(&mut kernel)
-16. enqueue A/B, pick A
-17. A::start_timer()
-18. A::enter_user(context A)
+5. Kernel::new() cho selftest; chạy selftest trên kernel riêng
+6. in SELFTEST PASS
+7. A::start_smp()
+8. Kernel::new() sạch cho user; tạo VSpace, metadata Untyped, data Untyped
+9. cài cap slot 1/2/3 cho root
+10. copy user image vào A::code_page()
+11. A::build_page_tables()
+12. A::prepare_user()
+13. tạo context cho duy nhất root TCB
+14. A::set_kernel(&mut kernel)
+15. enqueue root, pick root
+16. A::start_timer()
+17. A::enter_user(root)
+
+Root task sau đó tự:
+- Retype endpoint/2 TCB/notification từ metadata Untyped;
+- CapCopy endpoint, VSpace, data Untyped, notification cho server/client;
+- TcbConfigure entry/stack/VSpace/priority;
+- TcbResume cả hai.
 
 7. OBJECT MODEL VÀ CAPABILITY
 -----------------------------
@@ -270,11 +291,13 @@ Kind:
 - Tcb
 - Untyped { base, size, bump, page_size }
 - Frame { pa, size }
-- VSpace { root, page_size, base, next_va, end, mappings }
+- VSpace { root, page_size, base, next_va, end, code_base, code_len,
+           stack_base, stack_len, mappings }
 - PageTable { root, level }
 
 Tcb:
 - name, state, priority
+- entry, stack, vspace: Option<ObjRef>
 - cspace [Option<Cap>; 12]
 - caller: Option<(ObjRef, epoch)>
 - reply_epoch
@@ -298,7 +321,11 @@ Capability:
 Untyped/retype:
 - Frame: cấp 1 page căn theo page_size.
 - PageTable: cấp 1 page, level=3.
-- Endpoint/Notification/Tcb: metadata, không tiêu page.
+- Endpoint: tiêu OBJ_ENDPOINT_BYTES = 256.
+- Notification: tiêu OBJ_NOTIFICATION_BYTES = 128.
+- Tcb: tiêu OBJ_TCB_BYTES = 1024.
+- Hết Untyped trả OutOfMemory.
+- Revoke cap Untyped xoá descendant và reset bump.
 - Chưa có free/destroy object/frame.
 
 8. IPC VÀ SCHEDULER
@@ -355,7 +382,10 @@ Portable shadow mapping:
 - Map/unmap thực tế do Platform.
 - W^X: từ chối mapping vừa WRITE vừa EXEC.
 - Kiểm tra alignment, overlap, range.
-- VSpace có page_size; runtime truyền A::PAGE_SIZE.
+- VSpace có page_size, code/stack window và shadow mappings.
+- validate_user_range() kiểm tra con trỏ user trước DebugWrite/Open/Read/Write.
+- User layout chung trong vifast-abi: code 64 GiB, data +0xa000,
+  stack 64 GiB+0x1000..+0x8fff.
 - x86 dùng VA cố định; VSpace.direct đã bị xoá.
 - Frame object chỉ metadata PA/size.
 - Chưa có page-table page allocator, range VA allocator, ASID/PCID.
@@ -364,29 +394,33 @@ RISC-V64:
 - Sv39 root tĩnh.
 - Kernel identity 0x8000_0000..0x803f_ffff.
 - UART 0x1000_0000.
-- Code 0x4000_0000: RX U.
-- Stack 0x4000_1000..0x4000_8fff: RW U.
-- Data 0x4000_a000: RW U qua FrameMap.
+- User code 64 GiB: RX U.
+- Stack 64 GiB+0x1000..+0x8fff: RW U.
+- Data 64 GiB+0xa000: RW U qua FrameMap.
 - TLB: sfence.vma.
-- Trap dùng kernel trap stack qua sscratch; user stack chỉ ở U-mode.
+- Trap dùng kernel trap stack qua sscratch; sscratch=0 khi ở kernel.
+- SUM=0; read_user/write_user bật SUM tạm thời quanh copy.
 
 AArch64:
 - 4-level page table tĩnh.
 - GICv2 0x0800_0000, PL011 0x0900_0000.
-- Code 0x2000_0000: EL0 RO + X.
-- Stack 0x2000_1000..0x2000_8fff: RW + NX.
-- Data 0x2000_a000: RW + NX.
+- User code 64 GiB: EL0 RO + X.
+- Stack 64 GiB+0x1000..+0x8fff: RW + NX.
+- Data 64 GiB+0xa000: RW + NX.
 - TLB: tlbi vae1is, dsb ish, isb.
 - Trap stack SP_EL1; user stack SP_EL0.
+- PAN nếu CPU hỗ trợ; read/write user tạm clear PAN.
 
 x86_64:
 - Tự dựng PML4/PDPT/PD/PT 4 KiB; identity map 0..1 GiB.
-- User code 0x4000_0000: RX + U.
-- Stack 0x4000_1000..0x4000_8fff: RW + NX + U.
-- Data 0x4000_a000: RW + NX + U.
+- User code 64 GiB: RX + U.
+- Stack 64 GiB+0x1000..+0x8fff: RW + NX + U.
+- Data 64 GiB+0xa000: RW + NX + U.
 - FrameMap map tại VA cố định; FrameUnmap clear PTE + invlpg.
 - CR3 chuyển sang PML4 riêng trước iretq.
-- Chưa có AP/SMP scheduler; chỉ identity map 0..1 GiB.
+- Identity map 0..1 GiB; user window 64 GiB nằm ngoài identity.
+- SMEP/SMAP bật nếu CPUID hỗ trợ; chưa có NX cho data kernel.
+- Chưa có AP/SMP scheduler.
 
 10. VFS / RAMFS
 ---------------
@@ -432,8 +466,12 @@ Số syscall chính:
 5  Signal
 6  Wait
 7  Poll
+4  ReplyRecv (chưa triển khai)
 8  Yield (hiện chỉ trả Ok, chưa switch)
-9  Retype
+9  Retype (Endpoint/Notification/Tcb/Frame/PageTable)
+10 CapCopy
+15 TcbConfigure
+16 TcbResume
 24 PageTableMap (chưa expose user)
 25 FrameMap
 26 FrameUnmap
@@ -469,55 +507,60 @@ InvalidArg, Alignment, AlreadyMapped, NotMapped, NoCaller,
 ObjectDestroyed, MissingPageTable, IllegalOperation, NotImplemented,
 WouldBlock, NotFound.
 
-12. USER DEMO HIỆN TẠI
----------------------
-Hai user TCB:
+12. ROOT TASK VÀ USER DEMO
+----------------------------
+Runtime chỉ tạo duy nhất root TCB. Root task nhận từ runtime:
+- slot 1: VSpace READ|WRITE
+- slot 2: metadata Untyped WRITE|GRANT (64 KiB)
+- slot 3: data Untyped WRITE|GRANT (4 KiB)
 
-A - server:
+Root task dùng syscall:
+- Retype(metadata Untyped) -> Endpoint slot 4
+- Retype(metadata Untyped) -> TCB server slot 5
+- Retype(metadata Untyped) -> TCB client slot 6
+- Retype(metadata Untyped) -> Notification slot 7
+- CapCopy:
+  - endpoint -> server slot 1 READ
+  - endpoint -> client slot 1 WRITE
+  - VSpace -> client slot 2 WRITE
+  - data Untyped -> client slot 3 WRITE
+  - notification -> client slot 5 READ|WRITE|GRANT
+- TcbConfigure(server, entry, stack, VSpace slot 1, priority 5)
+- TcbConfigure(client, entry, stack, VSpace slot 1, priority 5)
+- TcbResume(server), TcbResume(client)
+- sau đó Yield loop; timer preempt root.
+
+Server A:
 - cap endpoint READ.
 - DebugWrite "Server".
-- loop:
-  - Recv(endpoint, recv_slot=4)
-  - Signal(notification cap slot 4)
-  - Reply(label=0x55, data=42)
+- loop Recv(endpoint, recv_slot=4), Signal(notification slot 4), Reply.
 
-B - client:
-- cap endpoint WRITE.
-- cap VSpace WRITE (slot 2).
-- cap Untyped WRITE (slot 3).
-- cap notification READ|WRITE|GRANT (slot 5).
-- Retype Untyped -> Frame cap slot 4.
-- FrameMap -> mapped VA.
-- ghi "Mapped", DebugWrite.
+Client B:
+- cap endpoint WRITE, VSpace WRITE, data Untyped WRITE,
+  notification READ|WRITE|GRANT.
+- Retype data Untyped -> Frame slot 4.
+- FrameMap, DebugWrite "Mapped".
 - Open /motd, Read, DebugWrite "ViFastOS ramfs".
-- Open /scratch O_CREATE|O_RDWR, Write "ViFastOS write", Seek 0, Read,
-  DebugWrite "ViFastOS write", Close.
+- Open /scratch O_CREATE|O_RDWR, Write, Seek, Read, DebugWrite, Close.
 - FrameUnmap.
 - DebugWrite "Client".
-- loop:
-  - Call endpoint with label 0x1234, data 7, cap slot 5
-  - Poll notification slot 5
-  - in "Cap OK"/"Cap BAD"
-  - in "Reply OK"/"Reply BAD"
+- loop Call với cap notification ở lần đầu; các Call sau không chuyển cap.
+- Poll notification, in "Cap OK"/"Cap BAD", "Reply OK"/"Reply BAD".
 
 Cap transfer:
-- Client gửi notification cap có GRANT.
-- Server nhận cap (mất GRANT), Signal.
-- Server Reply.
+- First Call: client gửi notification cap có GRANT vào server slot 4.
+- Server nhận bản copy không GRANT, Signal, Reply.
 - Client Poll nhận word.
 
 13. SMP HIỆN TẠI
 ---------------
-- RISC-V: SBI HSM start hart 1; hart phụ chạy idle loop.
+- RISC-V: SBI HSM start hart 1; hart phụ idle.
 - AArch64: PSCI CPU_ON CPU1; hart phụ idle.
-- x86_64: UEFI MP Services thử nhưng OVMF không trả interface; hiện SKIP.
+- x86_64: chưa boot AP; SMP SKIP. Hướng tiếp theo là ACPI MADT +
+  LAPIC/SIPI, không dùng UEFI MP Services sau ExitBootServices.
 - Timer/scheduler vẫn một hart.
-- Chưa có:
-  - per-hart runqueue;
-  - BKL/spinlock;
-  - IPI;
-  - TLB shootdown đa hart;
-  - secondary hart vào scheduler.
+- Chưa có per-hart runqueue, BKL, IPI, TLB shootdown, timer đa hart.
+- Secondary hart chưa vào scheduler.
 
 14. TEST VÀ TIÊU CHÍ PASS
 -------------------------
@@ -525,10 +568,11 @@ Lệnh:
     ./scripts/build.sh
     cargo test -p vifast-kernel
     cargo test -p vifast-runtime
+    cargo test -p vifast-user
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 8 test:
+Host test hiện có 12 test:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -537,6 +581,10 @@ Host test hiện có 8 test:
 - frame alignment
 - syscall từ chối cap sai type/đã revoke và W^X
 - chuyển cap yêu cầu slot đích rõ ràng, không fallback
+- user pointer validation cho DebugWrite/Open/Read/Write
+- Untyped accounting metadata + OutOfMemory
+- revoke Untyped reset accounting + xoá cap con
+- TcbConfigure/TcbResume
 
 QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
@@ -564,16 +612,23 @@ Exit code:
 
 15. CÁC THAY ĐỔI HARDENING GẦN NHẤT
 -------------------------------------
-- Đã git init và commit checkpoint đầu tiên.
-- RISC-V dùng kernel trap stack qua sscratch; user stack không còn là trap stack.
-- x86_64 tự dựng PML4/page table 4 KiB; bỏ VSpace.direct; code RX, data/stack
-  NX; unmap thật.
-- ObjRef/Object generation chuyển từ u8 sang u32.
-- Chuyển cap qua IPC yêu cầu slot đích rõ ràng; bỏ fallback slot trống đầu tiên.
-- User demo chỉ chuyển notification cap ở Call đầu tiên để slot 4 của server
-  không bị chiếm.
-- Xoá legacy multiboot crate khỏi workspace.
-- Host test hiện có 8 test, gồm negative test cho cap sai/revoked, W^X và slot cap.
+- Git repo đã có; commit hardening và root-task.
+- RISC-V dùng kernel trap stack qua sscratch; sscratch=0 khi kernel;
+  SUM=0, chỉ bật SUM quanh copy user.
+- x86_64 tự dựng PML4/page table 4 KiB; bỏ VSpace.direct; code RX,
+  data/stack NX; unmap thật; SMEP/SMAP nếu CPU hỗ trợ.
+- AArch64 bật PAN nếu CPU hỗ trợ.
+- User layout chung 64 GiB trong vifast-abi; x86 identity map 0..1 GiB
+  không còn chồng với user code.
+- validate_user_range() trong kernel portable cho mọi syscall có con trỏ.
+- Untyped accounting cho Endpoint/Notification/Tcb; OutOfMemory khi hết.
+- Root task + Retype/CapCopy/TcbConfigure/TcbResume; runtime không còn
+  tạo TCB A/B hoặc cài cap demo.
+- User demo chỉ chuyển notification cap ở Call đầu tiên.
+- ObjRef/Object generation u32.
+- Xoá legacy multiboot crate.
+- vifast-user crate với syscall wrapper 3 kiến trúc.
+- Host test hiện có 12 test.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -584,28 +639,28 @@ Exit code:
 - Chưa có range VA allocator, ASID/PCID.
 - Chưa có free/destroy object/frame; object table cố định 32.
 - Chưa có IOMMU.
-- Chưa có ELF loader, user library, shared memory, IPC buffer.
-- Chưa có Reply mang capability.
-- VFS chỉ ramfs phẳng 8 file x 512 byte.
+- Chưa có ELF loader, shared memory, IPC buffer.
+- Chưa có Reply mang capability/ReplyRecv/fault endpoint.
+- VFS chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
 - Chưa có block device, FS bền vững, directory, permission.
 - Chưa có driver network/GPU/input.
 - Chưa có compositor, ViFastKey.
 - Chưa có formal verification/fuzz diện rộng.
-- RISC-V trap đã dùng kernel trap stack qua sscratch.
-- x86 AP/MP Services code đã gỡ khỏi build.
-- `Yield` chưa chuyển context.
+- x86 identity map 0..1 GiB; nếu OVMF/RAM vượt mốc này phải lấy memory map.
+- Kernel x86 identity map chưa đặt NX cho data.
+- Yield chưa chuyển context.
 
 17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
 ----------------------------------
-Thứ tự ưu tiên gợi ý:
+Thứ tự ưu tiên:
 
-A. SMP thật
-1. x86 AP bring-up (LAPIC/SIPI hoặc UEFI MP Services nếu tìm được).
-2. Per-hart context/runqueue.
-3. BKL hoặc lock theo thành phần.
-4. IPI wakeup/reschedule.
-5. TLB shootdown đa hart.
-6. Timer đa hart.
+A. Userland / ABI trước
+1. vifast-user wrappers + user layout (đã có bản đầu).
+2. Chuyển root task sang Rust flat binary.
+3. ELF loader.
+4. Shared memory / IPC buffer.
+5. Reply capability + ReplyRecv + fault endpoint.
+6. Supervisor/pager tối giản.
 
 B. Bộ nhớ
 1. Physical frame allocator thật.
@@ -615,16 +670,16 @@ B. Bộ nhớ
 5. ASID/PCID.
 6. IOMMU.
 
-C. Userland / ABI
-1. vifast-user crate.
-2. ELF loader.
-3. Shared memory / IPC buffer.
-4. Reply capability.
-5. Fault handling: user fault không kill kernel.
-6. Supervisor/pager tối giản.
+C. SMP
+1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI.
+2. Per-hart context/runqueue.
+3. BKL trước, lock mịn sau.
+4. IPI wakeup/reschedule.
+5. TLB shootdown đa hart.
+6. Timer đa hart.
 
 D. VFS / driver
-1. VFS server ở user space hoặc VFS đầy đủ hơn trong kernel.
+1. Chuyển VFS/FS ra user-space server khi có IPC buffer.
 2. Block driver VirtIO.
 3. FS bền vững.
 4. Network VirtIO + TCP/UDP tối giản.
@@ -636,22 +691,18 @@ E. Desktop / Space
 3. Name server, supervisor, pager.
 4. Security/verification.
 
-18. CÂU HỎI NÊN THẢO LUẬN VỚI AI KHÁC
-------------------------------------
-1. Với mục tiêu microkernel, nên ưu tiên SMP thật hay userland/ELF trước?
-2. Cách tách `vifast-runtime` và `vifast-platform` hiện tại có hợp lý không?
-   Có nên đưa `Platform` trait vào crate riêng `vifast-platform-api`?
-3. Có nên giữ page table tĩnh cho bring-up hay chuyển ngay sang page-table
-   allocator + VSpace động?
-4. x86_64 nên dùng UEFI MP Services, LAPIC/SIPI hay ACPI MADT để boot AP?
-5. Scheduler nên dùng BKL thô hay lock mịn theo runqueue/endpoint?
-6. Có nên giữ ramfs trong kernel hay chuyển FS thành user-space server?
-7. Thiết kế shared memory/IPC buffer nên dùng Frame capability hay VSpace
-   mapping của kernel?
-8. Làm thế nào để user fault được chuyển thành fault message thay vì panic?
-9. Có nên giữ user program dạng assembly nhúng hay chuyển ngay sang ELF?
-10. Mức độ `unsafe` trong platform có nên được cô lập thêm bằng crate
-    `vifast-platform-api` + `unsafe` wrapper?
+18. QUYẾT ĐỊNH ĐÃ CHỐT
+-----------------------
+1. Ưu tiên userland/ELF trước SMP.
+2. Giữ Platform trait; có thể tách vifast-platform-api sau.
+3. Chuyển VSpace động khi làm ELF loader.
+4. x86 AP đi theo ACPI MADT + LAPIC/SIPI.
+5. Dùng BKL trước, tối ưu lock mịn sau khi đo tranh chấp.
+6. FS chuyển ra user space khi có IPC buffer; ramfs kernel chỉ là tạm.
+7. Shared memory/IPC buffer dùng Frame capability.
+8. Fault endpoint gửi fault message và block thread; không panic kernel.
+9. Dùng ELF loader thay assembly nhúng sau root task.
+10. Gom unsafe vào wrapper nhỏ: MMIO, CSR/MSR, PTE.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

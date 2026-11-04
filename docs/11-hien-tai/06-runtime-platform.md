@@ -7,7 +7,7 @@ Nguồn: `crates/vifast-runtime/src/lib.rs`.
 `vifast-runtime` chứa logic dùng chung cho mọi port:
 
 - boot sequence;
-- tạo object/cap cho user demo;
+- tạo duy nhất root TCB và giao VSpace/Untyped;
 - copy user image;
 - syscall action dispatch;
 - quản lý context switch khi block;
@@ -26,14 +26,13 @@ Các nhóm phương thức:
 type Context: Copy + 'static;
 const USER_CODE_VA: usize;
 const USER_DATA_VA: usize;
-const DIRECT_VSPACE: bool = false;
 fn user_code_base() -> usize;
 fn stack_a_top() -> usize;
 fn stack_b_top() -> usize;
 ```
 
-`user_code_base()` cần thiết cho x86 UEFI vì code page nằm tại địa chỉ động
-do UEFI cấp, không phải một hằng VA cố định.
+User layout lấy từ `vifast-abi::user_layout`; cả 3 port dùng chung code VA
+64 GiB. `user_code_base()` trả VA cố định, không còn PA động của UEFI.
 
 ### Kernel handoff
 
@@ -50,6 +49,7 @@ không nằm trong runtime.
 ```rust
 fn code_page() -> &'static mut [u8];
 fn data_page() -> &'static mut [u8];
+fn metadata_page() -> &'static mut [u8];
 fn build_page_tables();
 fn vspace_root() -> u64;
 fn map_user_page(va, pa, rights) -> KResult<()>;
@@ -92,19 +92,19 @@ MP Services, tránh làm hỏng môi trường firmware.
 5. `Kernel::new()`, chạy self-test.
 6. In `SELFTEST PASS`.
 7. `A::start_smp()`.
-8. Tạo 2 TCB, endpoint, notification, VSpace, Untyped.
-9. Cài cap:
-   - A: endpoint READ;
-   - B: endpoint WRITE, VSpace WRITE, Untyped WRITE, notification
-     READ|WRITE|GRANT.
+8. Tạo VSpace, metadata Untyped, data Untyped.
+9. Cài cap cho root: VSpace slot 1, metadata Untyped slot 2, data Untyped slot 3.
 10. Copy user image vào `A::code_page()`.
 11. `A::build_page_tables()`.
 12. `A::prepare_user()`.
-13. Tạo context A/B.
+13. Tạo context duy nhất cho root.
 14. `A::set_kernel()`.
-15. Enqueue A/B, `pick()`.
+15. Enqueue root, `pick()`.
 16. `A::start_timer()`.
-17. `A::enter_user(context A)`.
+17. `A::enter_user(context root)`.
+
+Root task tự Retype/CapCopy/TcbConfigure/TcbResume server và client. Runtime
+không còn tham chiếu "Server"/"Client".
 
 ## 4. Syscall dispatch
 
@@ -116,6 +116,7 @@ MP Services, tránh làm hỏng môi trường firmware.
 - xử lý `UserAction`:
   - `Return`/`Message`: ghi register;
   - `MapFrame`/`UnmapFrame`: gọi platform MMU, rollback shadow nếu lỗi;
+  - `ConfigureTcb`: cài context entry/stack cho TCB con;
   - `Open`/`Read`/`Write`: copy user pointer qua platform, gọi ramfs;
   - `Debug`: copy buffer rồi `putc`;
   - `Blocked`: chuyển context;

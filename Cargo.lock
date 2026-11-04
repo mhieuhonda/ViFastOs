@@ -110,3 +110,10 @@ dependencies = [
  "vifast-arch",
  "vifast-kernel",
 ]
+
+[[package]]
+name = "vifast-user"
+version = "0.1.0"
+dependencies = [
+ "vifast-abi",
+]

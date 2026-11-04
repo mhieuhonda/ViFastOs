@@ -60,6 +60,12 @@ pub enum UserAction {
         root: u64,
         va: u64,
     },
+    /// Program a user context after a successful `TcbConfigure`.
+    ConfigureTcb {
+        tcb: ObjRef,
+        entry: u64,
+        stack: u64,
+    },
     /// Copy a user path into the ramfs VFS and return an fd.
     Open {
         ptr: u64,
@@ -205,6 +211,94 @@ impl Kernel {
         )))
     }
 
+    pub fn create_user_vspace(
+        &mut self,
+        root: u64,
+        data_base: u64,
+        page_size: u64,
+        code_base: u64,
+        code_len: u64,
+        stack_base: u64,
+        stack_len: u64,
+    ) -> Option<ObjRef> {
+        self.alloc(Kind::VSpace(VSpace::with_user_layout(
+            root, data_base, page_size, page_size, code_base, code_len, stack_base, stack_len,
+        )))
+    }
+
+    pub fn set_tcb_vspace(&mut self, tcb: ObjRef, vspace: ObjRef) -> KResult<()> {
+        if self.vspace(vspace).is_none() {
+            return Err(KError::WrongType);
+        }
+        let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
+        table.vspace = Some(vspace);
+        Ok(())
+    }
+
+    pub fn configure_tcb(
+        &mut self,
+        tcb: ObjRef,
+        entry: u64,
+        stack: u64,
+        vspace: ObjRef,
+        priority: u8,
+    ) -> KResult<()> {
+        let space = self.vspace(vspace).ok_or(KError::WrongType)?;
+        if space.code_len == 0
+            || entry < space.code_base
+            || entry >= space.code_base.saturating_add(space.code_len)
+        {
+            return Err(KError::InvalidArg);
+        }
+        if space.stack_len == 0
+            || stack <= space.stack_base
+            || stack > space.stack_base.saturating_add(space.stack_len)
+        {
+            return Err(KError::InvalidArg);
+        }
+        let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
+        table.entry = entry;
+        table.stack = stack;
+        table.vspace = Some(vspace);
+        table.priority = priority.min(MAX_PRIORITY);
+        Ok(())
+    }
+
+    pub fn resume_tcb(&mut self, tcb: ObjRef) -> KResult<()> {
+        let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
+        if table.entry == 0 || table.vspace.is_none() {
+            return Err(KError::IllegalOperation);
+        }
+        if table.state == ThreadState::Running {
+            return Err(KError::AlreadyMapped);
+        }
+        table.state = ThreadState::Ready;
+        self.enqueue(tcb);
+        Ok(())
+    }
+
+    /// Validate a user pointer against the TCB's VSpace layout and shadow
+    /// mappings.  Kernel addresses and unmapped pages are rejected before any
+    /// architecture copy routine sees the pointer.
+    pub fn validate_user_range(
+        &self,
+        tcb: ObjRef,
+        va: u64,
+        len: usize,
+        need_write: bool,
+    ) -> KResult<()> {
+        let space_ref = self
+            .tcb(tcb)
+            .and_then(|table| table.vspace)
+            .ok_or(KError::InvalidArg)?;
+        let space = self.vspace(space_ref).ok_or(KError::InvalidArg)?;
+        if space.validate_range(va, len, need_write) {
+            Ok(())
+        } else {
+            Err(KError::InvalidArg)
+        }
+    }
+
     pub fn create_page_table(&mut self, root: u64, level: u8) -> Option<ObjRef> {
         self.alloc(Kind::PageTable(PageTable { root, level }))
     }
@@ -324,36 +418,48 @@ impl Kernel {
         if page == 0 || !page.is_power_of_two() {
             return Err(KError::Alignment);
         }
-        let (kind, new_bump) = match ty {
-            ObjType::Endpoint => (Kind::Endpoint(Endpoint::default()), bump),
-            ObjType::Notification => (Kind::Notification(Notification::default()), bump),
-            ObjType::Tcb => (Kind::Tcb(Tcb::new("retyped", 1)), bump),
-            ObjType::Frame | ObjType::PageTable => {
-                let unaligned = base.checked_add(bump).ok_or(KError::OutOfMemory)?;
-                let pa = (unaligned + page - 1) & !(page - 1);
-                let end = base.checked_add(size).ok_or(KError::OutOfMemory)?;
-                if pa.checked_add(page).ok_or(KError::OutOfMemory)? > end {
-                    return Err(KError::OutOfMemory);
-                }
-                let consumed = pa.checked_add(page).ok_or(KError::OutOfMemory)? - base;
-                if ty == ObjType::Frame {
-                    (Kind::Frame(Frame { pa, size: page }), consumed)
-                } else {
-                    (
-                        Kind::PageTable(PageTable {
-                            root: pa as u64,
-                            level: 3,
-                        }),
-                        consumed,
-                    )
-                }
-            }
+        let (kind, charge, align) = match ty {
+            ObjType::Endpoint => (
+                Kind::Endpoint(Endpoint::default()),
+                OBJ_ENDPOINT_BYTES,
+                OBJ_METADATA_ALIGN,
+            ),
+            ObjType::Notification => (
+                Kind::Notification(Notification::default()),
+                OBJ_NOTIFICATION_BYTES,
+                OBJ_METADATA_ALIGN,
+            ),
+            ObjType::Tcb => (
+                Kind::Tcb(Tcb::new("retyped", 1)),
+                OBJ_TCB_BYTES,
+                OBJ_METADATA_ALIGN,
+            ),
+            ObjType::Frame | ObjType::PageTable => (Kind::Free, page, page),
             _ => return Err(KError::NotImplemented),
         };
+        let unaligned = base.checked_add(bump).ok_or(KError::OutOfMemory)?;
+        let pa = (unaligned + align - 1) & !(align - 1);
+        let end = base.checked_add(size).ok_or(KError::OutOfMemory)?;
+        if pa.checked_add(charge).ok_or(KError::OutOfMemory)? > end {
+            return Err(KError::OutOfMemory);
+        }
+        let consumed = pa.checked_add(charge).ok_or(KError::OutOfMemory)? - base;
+        let kind = if matches!(ty, ObjType::Frame | ObjType::PageTable) {
+            if ty == ObjType::Frame {
+                Kind::Frame(Frame { pa, size: page })
+            } else {
+                Kind::PageTable(PageTable {
+                    root: pa as u64,
+                    level: 3,
+                })
+            }
+        } else {
+            kind
+        };
         let object = self.alloc(kind).ok_or(KError::OutOfMemory)?;
-        if new_bump != bump {
+        if consumed != bump {
             let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
-            region.bump = new_bump;
+            region.bump = consumed;
         }
         Ok(object)
     }
@@ -665,6 +771,13 @@ impl Kernel {
         for victim in victims.iter().take(count) {
             let _ = self.delete_cap(victim.tcb, victim.slot);
         }
+        if let Some(cap) = self.cap_at(target) {
+            if cap.ty == ObjType::Untyped {
+                if let Some(region) = self.untyped_mut(cap.obj) {
+                    region.bump = 0;
+                }
+            }
+        }
         Ok(count)
     }
 
@@ -810,7 +923,17 @@ impl Kernel {
             };
         }
         if number == SyscallId::DebugWrite as u64 {
-            return UserAction::Debug { ptr: a0, len: a1 };
+            let len = (a1 as usize).min(USER_IO_MAX);
+            if len != 0 && self.validate_user_range(tcb, a0, len, false).is_err() {
+                return UserAction::Return {
+                    value: 0,
+                    error: KError::InvalidArg,
+                };
+            }
+            return UserAction::Debug {
+                ptr: a0,
+                len: len as u64,
+            };
         }
         if number == SyscallId::Exit as u64 {
             return UserAction::Exit;
@@ -951,16 +1074,17 @@ impl Kernel {
                 }
             }
             n if n == SyscallId::Retype as u64 => {
-                let untyped = match self.lookup_cap(
-                    tcb,
-                    slot_arg(a0).unwrap_or(0),
-                    Some(ObjType::Untyped),
-                    Rights::WRITE,
-                ) {
-                    Ok(cap) => cap,
-                    Err(error) => return UserAction::Return { value: 0, error },
-                };
+                let untyped_slot = slot_arg(a0).unwrap_or(0);
+                let untyped =
+                    match self.lookup_cap(tcb, untyped_slot, Some(ObjType::Untyped), Rights::WRITE)
+                    {
+                        Ok(cap) => cap,
+                        Err(error) => return UserAction::Return { value: 0, error },
+                    };
                 let ty = match a1 {
+                    n if n == ObjType::Endpoint as u64 => ObjType::Endpoint,
+                    n if n == ObjType::Notification as u64 => ObjType::Notification,
+                    n if n == ObjType::Tcb as u64 => ObjType::Tcb,
                     n if n == ObjType::Frame as u64 => ObjType::Frame,
                     n if n == ObjType::PageTable as u64 => ObjType::PageTable,
                     _ => {
@@ -997,10 +1121,84 @@ impl Kernel {
                     Ok(object) => object,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
-                let cap = Cap::new(object, ty, Rights::READ | Rights::WRITE);
+                let mut cap = Cap::new(object, ty, Rights::READ | Rights::WRITE | Rights::GRANT);
+                cap.parent = Some(SlotAddr {
+                    tcb,
+                    slot: untyped_slot,
+                });
                 match self.install_cap(tcb, dest, cap) {
                     Ok(()) => UserAction::Return {
                         value: dest as u64,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::CapCopy as u64 => {
+                let src_slot = slot_arg(a0).unwrap_or(0);
+                let dst_tcb_slot = slot_arg(a1).unwrap_or(0);
+                let dst_slot = slot_arg(a2).unwrap_or(0);
+                if dst_slot == 0 {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::InvalidArg,
+                    };
+                }
+                let dest =
+                    match self.lookup_cap(tcb, dst_tcb_slot, Some(ObjType::Tcb), Rights::WRITE) {
+                        Ok(cap) => cap,
+                        Err(error) => return UserAction::Return { value: 0, error },
+                    };
+                let rights = Rights((a3 as u8) & Rights::ALL.0);
+                match self.copy_cap(tcb, src_slot, dest.obj, dst_slot, rights, 0) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbConfigure as u64 => {
+                let cap = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let vspace = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a3).unwrap_or(0),
+                    Some(ObjType::VSpace),
+                    Rights::READ,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.configure_tcb(cap.obj, a1, a2, vspace.obj, a4 as u8) {
+                    Ok(()) => UserAction::ConfigureTcb {
+                        tcb: cap.obj,
+                        entry: a1,
+                        stack: a2,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbResume as u64 => {
+                let cap = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.resume_tcb(cap.obj) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
                         error: KError::Ok,
                     },
                     Err(error) => UserAction::Return { value: 0, error },
@@ -1076,21 +1274,48 @@ impl Kernel {
                     va: mapping.va,
                 }
             }
-            n if n == SyscallId::Open as u64 => UserAction::Open {
-                ptr: a0,
-                len: a1,
-                flags: a2,
-            },
-            n if n == SyscallId::Read as u64 => UserAction::Read {
-                fd: a0,
-                ptr: a1,
-                len: a2,
-            },
-            n if n == SyscallId::Write as u64 => UserAction::Write {
-                fd: a0,
-                ptr: a1,
-                len: a2,
-            },
+            n if n == SyscallId::Open as u64 => {
+                let len = (a1 as usize).min(crate::fs::MAX_PATH);
+                if self.validate_user_range(tcb, a0, len, false).is_err() {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::InvalidArg,
+                    };
+                }
+                UserAction::Open {
+                    ptr: a0,
+                    len: len as u64,
+                    flags: a2,
+                }
+            }
+            n if n == SyscallId::Read as u64 => {
+                let len = (a2 as usize).min(USER_IO_MAX);
+                if len != 0 && self.validate_user_range(tcb, a1, len, true).is_err() {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::InvalidArg,
+                    };
+                }
+                UserAction::Read {
+                    fd: a0,
+                    ptr: a1,
+                    len: len as u64,
+                }
+            }
+            n if n == SyscallId::Write as u64 => {
+                let len = (a2 as usize).min(USER_IO_MAX);
+                if len != 0 && self.validate_user_range(tcb, a1, len, false).is_err() {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::InvalidArg,
+                    };
+                }
+                UserAction::Write {
+                    fd: a0,
+                    ptr: a1,
+                    len: len as u64,
+                }
+            }
             n if n == SyscallId::Stat as u64 => match self.stat_fd(tcb, a0) {
                 Ok(size) => UserAction::Return {
                     value: size as u64,
@@ -1356,6 +1581,151 @@ mod tests {
         assert_eq!(
             kernel.send(root, endpoint, 0, second, false),
             Err(KError::SlotOccupied)
+        );
+    }
+
+    #[test]
+    fn user_pointer_validation_rejects_kernel_and_unmapped_ranges() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(
+                0x1000,
+                0x4000_a000,
+                4096,
+                0x4000_0000,
+                4096,
+                0x4000_1000,
+                0x8000,
+            )
+            .unwrap();
+        kernel.set_tcb_vspace(root, space).unwrap();
+
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::DebugWrite as u64,
+                0x8000_0000,
+                8,
+                0,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::Open as u64, 0x8000_0000, 8, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::Read as u64, 0, 0x8000_0000, 8, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::Write as u64, 0, 0x8000_0000, 8, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::DebugWrite as u64,
+                0x4000_0000,
+                8,
+                0,
+                0,
+                0,
+                0
+            ),
+            UserAction::Debug {
+                ptr: 0x4000_0000,
+                len: 8
+            }
+        );
+    }
+
+    #[test]
+    fn untyped_accounts_object_metadata() {
+        let mut kernel = Kernel::new();
+        let untyped = kernel.create_untyped(0x100_0000, 2048).unwrap();
+        assert!(matches!(kernel.retype(untyped, ObjType::Endpoint), Ok(_)));
+        assert!(matches!(kernel.retype(untyped, ObjType::Tcb), Ok(_)));
+        assert_eq!(
+            kernel.retype(untyped, ObjType::Tcb),
+            Err(KError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn revoking_untyped_resets_accounting_and_children() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let untyped = kernel.create_untyped(0x200_0000, 4096).unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(untyped, ObjType::Untyped, Rights::WRITE | Rights::GRANT),
+            )
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Endpoint as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(kernel.revoke_cap(root, 1), Ok(1));
+        assert!(kernel.lookup_cap(root, 2, None, Rights::NONE).is_err());
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, 0);
+    }
+
+    #[test]
+    fn tcb_configuration_validates_layout_and_resumes() {
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(
+                0x1000,
+                0x4000_a000,
+                4096,
+                0x4000_0000,
+                4096,
+                0x4000_1000,
+                0x8000,
+            )
+            .unwrap();
+        let child = kernel.create_tcb("child", 1).unwrap();
+        assert_eq!(
+            kernel.configure_tcb(child, 0x4000_0000, 0x4000_5000, space, 5),
+            Ok(())
+        );
+        assert_eq!(kernel.resume_tcb(child), Ok(()));
+        assert!(kernel.tcb(child).is_some_and(|tcb| tcb.queued));
+        assert_eq!(kernel.resume_tcb(child), Ok(()));
+        assert_eq!(
+            kernel.configure_tcb(child, 0x9000_0000, 0x4000_5000, space, 5),
+            Err(KError::InvalidArg)
         );
     }
 

@@ -2,8 +2,10 @@
     .balign 4
     .globl trap_entry
 trap_entry:
-    /* User sp is in sscratch; switch to the kernel trap stack. */
+    /* User sp is in sscratch and points at the kernel trap-stack top.
+       In kernel mode sscratch is zero, so a kernel trap is caught here. */
     csrrw sp, sscratch, sp
+    beqz sp, 9f
     addi sp, sp, -0x120
 
     sd x1, 8(sp)
@@ -40,6 +42,8 @@ trap_entry:
     /* Original user stack pointer saved by csrrw. */
     csrr t0, sscratch
     sd t0, 16(sp)
+    /* Mark S-mode: any nested/kernel trap must not reuse the user stack. */
+    csrw sscratch, zero
 
     csrr t0, sepc
     sd t0, 256(sp)
@@ -92,3 +96,9 @@ trap_entry:
     ld x31, 248(sp)
     ld sp, 16(sp)
     sret
+
+9:
+    /* Trap from S-mode.  Restore the interrupted kernel sp and stop. */
+    csrrw sp, sscratch, sp
+    call riscv_kernel_trap
+    j 9b

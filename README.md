@@ -5,16 +5,18 @@ chung cho nhiều kiến trúc và **lớp arch riêng** cho từng nền tảng
 
 Trạng thái hiện tại: **kernel core + 3 port QEMU đã boot được**, chạy self-test
 capability/IPC/notification/scheduler, **timer interrupt + preemptive scheduler**
-với hai user thread trên mọi kiến trúc, **IPC từ user space** (Server/Client
-Call/Reply), **Frame/VSpace map–unmap có W^X**, **untyped/retype**, chuyển
-capability + notification qua IPC end-to-end, **ramfs VFS** với syscall
-`Open`/`Read`/`Write`/`Close`/`Seek`/`Stat`, và **SMP bootstrap** (RISC-V HSM / AArch64 PSCI;
-x86_64 AP bring-up còn chờ) cùng `DebugWrite` / `GetTime` / `Exit`.
+với **root task tự tạo server/client bằng Retype/CapCopy/TcbConfigure/TcbResume**,
+**IPC từ user space**, **Frame/VSpace map–unmap có W^X**, **untyped/retype có
+accounting**, chuyển capability + notification qua IPC, **ramfs VFS** với syscall
+`Open`/`Read`/`Write`/`Close`/`Seek`/`Stat`, **kiểm tra con trỏ user** trong lõi
+portable, và **SMP bootstrap** (RISC-V HSM / AArch64 PSCI; x86_64 AP còn chờ)
+cùng `DebugWrite` / `GetTime` / `Exit`.
 
 Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: scheduler vẫn một
 hart, chưa có TLB shootdown đa hart, x86_64 chưa khởi động AP, chưa có driver,
 mạng, compositor hay ứng dụng. Chương trình user
-hiện là mã nhúng tối giản, chưa phải ELF/`vifast-user`.
+hiện vẫn là assembly nhúng; crate `vifast-user` đã có syscall wrapper nhưng
+chưa thay thế chương trình mẫu.
 
 ## Kiến trúc
 
@@ -45,12 +47,13 @@ hiện là mã nhúng tối giản, chưa phải ELF/`vifast-user`.
 | `vifast-arch` | Trait `Arch`, `BootInfo`, primitive hardware contract | có | cấm |
 | `vifast-kernel` | Object/capability/IPC/scheduler/VSpace/ramfs portable | có | cấm |
 | `vifast-runtime` | Boot sequence, syscall dispatch, timer/preemption dùng chung | có | cấm |
+| `vifast-user` | Syscall wrapper + user layout cho 3 arch | có | có (asm syscall) |
 | `vifast-arch-riscv64` | UART 16550, `rdtime`, SBI shutdown | có | có (MMIO/asm) |
 | `vifast-arch-aarch64` | PL011, `cntpct_el0`, PSCI shutdown | có | có (MMIO/asm) |
 | `vifast-arch-x86_64` | COM1, `rdtsc`, QEMU debug-exit | có | có (port I/O) |
 | `vifast-platform-riscv64` | Sv39, trap, SBI timer, HSM SMP | có | có (asm/MMIO) |
 | `vifast-platform-aarch64` | 4-level MMU, GICv2, generic timer, PSCI SMP | có | có (asm/MMIO) |
-| `vifast-platform-x86_64` | GDT/TSS/IDT, UEFI paging, PIC/PIT, ring3 | có | có (asm/MMIO) |
+| `vifast-platform-x86_64` | GDT/TSS/IDT, PML4 riêng, PIC/PIT, ring3 | có | có (asm/MMIO) |
 | `vifast-kernel-riscv64` | Entry + linker + user image asset | có | có (entry/asset) |
 | `vifast-kernel-aarch64` | Entry + linker + user image asset | có | có (entry/asset) |
 | `vifast-kernel-x86_64-uefi` | UEFI entry + user image asset | có | có (entry/asset) |
@@ -144,7 +147,8 @@ Kernel chạy self-test trong kernel mode trước khi chuyển sang user mode:
 - Negative test: cap sai type/đã revoke, W^X, slot cap đích đã dùng.
 - Invariant checker cho object/capability/runqueue/VSpace/fd.
 
-Sau đó kernel tạo **hai TCB user**, nạp timer 100 Hz và chuyển sang user mode:
+Sau đó runtime chỉ tạo **một root TCB**, nạp timer 100 Hz và chuyển sang user
+mode. Root task tự tạo server/client:
 
 - **RISC-V64**: `sret` → U-mode, `ecall`; timer SBI, `stvec`, context switch qua
   `TrapFrame`; trap dùng kernel trap stack qua `sscratch`.
@@ -153,8 +157,10 @@ Sau đó kernel tạo **hai TCB user**, nạp timer 100 Hz và chuyển sang use
 - **x86_64**: UEFI/OVMF, GDT + TSS + IDT, `iretq` → ring3, `int 0x80`; PIC + PIT
   IRQ0, trap stack `TSS.RSP0`.
 
-Server user thread có cap endpoint `READ`, gọi `Recv` rồi `Reply`; client có cap
-`WRITE`, gọi `Call` và nhận reply. Client còn giữ cap `Untyped`, gọi `Retype`
+Root task nhận VSpace + metadata/data Untyped ở slot 1/2/3, tự `Retype`
+endpoint, hai TCB và notification, `CapCopy` cap cho server/client,
+`TcbConfigure` entry/stack/VSpace rồi `TcbResume`. Server có cap endpoint
+`READ`, gọi `Recv` rồi `Reply`; client có cap `WRITE`, gọi `Call` và nhận reply. Client còn giữ cap `Untyped`, gọi `Retype`
 để tạo frame, rồi `FrameMap`/`FrameUnmap`; user ghi `Mapped\n` vào page vừa map
 và đọc lại qua `DebugWrite`. Ở `Call` đầu tiên, client chuyển một cap
 notification có quyền `GRANT` vào slot 4 của server; server nhận cap, `Signal`,
@@ -173,24 +179,28 @@ cargo test -p vifast-kernel
 
 Đây là danh sách trung thực để tránh hiểu nhầm “boot được” = “OS hoàn chỉnh”:
 
-- User mode mới là **bring-up tối giản**, chưa phải userland đầy đủ; chưa có
-  `vifast-user`, ELF loader, syscall ABI encode/decode.
+- User mode vẫn là **bring-up tối giản**, chưa phải userland đầy đủ; đã có
+  crate `vifast-user` với syscall wrapper 3 kiến trúc, nhưng chương trình mẫu
+  vẫn là assembly; chưa có ELF loader.
 - IPC user có subset `Send/Call/Recv/Reply/Signal/Wait/Poll`; chuyển cap đã có
-  end-to-end cho `Send`/`Call` (không cho `Reply`), chưa có shared memory, reply
-  object hay IPC buffer.
+  end-to-end cho `Send`/`Call` (không cho `Reply`), chưa có shared memory,
+  reply object/ReplyRecv, IPC buffer hay fault endpoint.
 - VSpace/PageTable object và map/unmap đã có, nhưng page-table root vẫn là bảng
   tĩnh của từng port; chưa có page-table page allocator tổng quát, TLB shootdown
   đa hart, hay cấp phát địa chỉ ảo tự động theo range lớn.
-- Untyped/retype hiện hỗ trợ Frame, PageTable và metadata object; chưa có
-  allocator vật lý đầy đủ, IOMMU, hay thu hồi object.
-- RISC-V đã dùng kernel trap stack qua `sscratch`; AArch64 dùng `SP_EL1`,
-  x86_64 dùng `TSS.RSP0`.
+- Untyped/retype đã tính phí Endpoint/Notification/Tcb và reset bump khi revoke
+  Untyped; chưa có allocator vật lý đầy đủ, IOMMU hay thu hồi object.
+- RISC-V dùng kernel trap stack qua `sscratch` và `sscratch=0` ở kernel;
+  AArch64 dùng `SP_EL1` + PAN nếu CPU hỗ trợ; x86_64 dùng `TSS.RSP0` +
+  SMEP/SMAP nếu CPUID hỗ trợ. Copy user bật SUM/AC/PAN tạm thời.
 - SMP mới ở mức bootstrap: RISC-V/AArch64 có hart thứ hai idle; x86_64 chưa
-  khởi động AP qua UEFI MP Services. Chưa có per-hart runqueue, BKL, IPI
-  scheduler hay TLB shootdown đa hart.
+  khởi động AP. Hướng x86 là ACPI MADT + LAPIC/SIPI, không dùng UEFI MP
+  Services sau ExitBootServices. Chưa có per-hart runqueue, BKL, IPI scheduler
+  hay TLB shootdown đa hart.
 - Timer/scheduler vẫn chạy một hart qua SBI/GICv2/PIC.
 - x86_64 đã tự dựng PML4/page table riêng: code RX, data/stack NX, unmap thật.
-  Kernel phụ thuộc identity map 0..1 GiB của platform; chưa có AP.
+  User window 64 GiB nằm ngoài identity map 0..1 GiB; chưa có AP và data kernel
+  chưa được đặt NX.
 - RISC-V/AArch64/x86_64 đều map code read-only + executable và data/stack NX.
 - VFS mới là ramfs phẳng trong kernel: chưa có block device, cây thư mục,
   quyền file, mount, pager hay filesystem bền vững.
@@ -212,9 +222,10 @@ bare-metal này.
    flush TLB một hart. Còn TLB shootdown đa hart và page-table allocator tổng quát.
 4. ~~SMP bootstrap~~ — RISC-V HSM/AArch64 PSCI đã khởi động hart phụ; còn
    x86_64 AP, BKL, per-hart runqueue, IPI scheduler và TLB shootdown.
-5. ~~Untyped/retype cơ bản~~ — đã có frame/page-table page; còn allocator vật lý
-   đầy đủ và thu hồi object.
-6. **vifast-user + ABI wire format**; ELF loader; IPC buffer/shared memory.
+5. ~~Untyped/retype cơ bản~~ — đã có frame/page-table page + accounting metadata;
+   còn allocator vật lý đầy đủ và thu hồi object.
+6. **Root task + vifast-user** — root task đã có; crate wrapper đã có; còn
+   chuyển user mẫu sang Rust, ELF loader, IPC buffer/shared memory.
 7. **Driver framework** user space: VirtIO console/block/net.
 8. **FS thật + block driver, name server, pager, supervisor, compositor,
    ViFastKey** — ramfs phẳng đã có.

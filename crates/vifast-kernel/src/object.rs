@@ -199,6 +199,12 @@ pub struct VSpace {
     pub base: u64,
     pub next_va: u64,
     pub end: u64,
+    /// Read/execute user code window, used for pointer validation.
+    pub code_base: u64,
+    pub code_len: u64,
+    /// Read/write user stack window, used for pointer validation.
+    pub stack_base: u64,
+    pub stack_len: u64,
     pub mappings: [Option<Mapping>; MAX_MAPPINGS],
 }
 
@@ -215,8 +221,30 @@ impl VSpace {
             base,
             next_va: base,
             end,
+            code_base: 0,
+            code_len: 0,
+            stack_base: 0,
+            stack_len: 0,
             mappings: [None; MAX_MAPPINGS],
         }
+    }
+
+    pub fn with_user_layout(
+        root: u64,
+        base: u64,
+        size: u64,
+        page_size: u64,
+        code_base: u64,
+        code_len: u64,
+        stack_base: u64,
+        stack_len: u64,
+    ) -> Self {
+        let mut space = Self::with_page_size(root, base, size, page_size);
+        space.code_base = code_base;
+        space.code_len = code_len;
+        space.stack_base = stack_base;
+        space.stack_len = stack_len;
+        space
     }
 
     pub fn find(&self, va: u64) -> Option<Mapping> {
@@ -253,6 +281,50 @@ impl VSpace {
         Err(KError::OutOfMemory)
     }
 
+    /// Check a user range against code, stack and explicit mappings.
+    pub fn validate_range(&self, va: u64, len: usize, need_write: bool) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let Some(end) = va.checked_add(len as u64) else {
+            return false;
+        };
+        let in_region = |base: u64, region_len: u64| -> bool {
+            region_len != 0 && va >= base && end <= base.saturating_add(region_len)
+        };
+        if !need_write && in_region(self.code_base, self.code_len) {
+            return true;
+        }
+        if in_region(self.stack_base, self.stack_len) {
+            return true;
+        }
+        // Every touched page must have a mapping with the required rights.
+        let page = self.page_size;
+        if page == 0 {
+            return false;
+        }
+        let mut cursor = va & !(page - 1);
+        while cursor < end {
+            let Some(mapping) = self.find(cursor) else {
+                return false;
+            };
+            if mapping.va != cursor || mapping.len != page {
+                return false;
+            }
+            if need_write && !mapping.rights.contains(Rights::WRITE) {
+                return false;
+            }
+            if !mapping.rights.contains(Rights::READ) {
+                return false;
+            }
+            cursor = cursor.saturating_add(page);
+            if cursor == 0 {
+                return false;
+            }
+        }
+        true
+    }
+
     pub(crate) fn contains(&self, va: u64, len: u64) -> bool {
         self.mappings.iter().flatten().any(|mapping| {
             va < mapping.va.saturating_add(mapping.len) && mapping.va < va.saturating_add(len)
@@ -280,6 +352,9 @@ pub struct Tcb {
     pub name: &'static str,
     pub state: ThreadState,
     pub priority: u8,
+    pub entry: u64,
+    pub stack: u64,
+    pub vspace: Option<ObjRef>,
     pub cspace: [Option<Cap>; MAX_CAPS],
     /// Client waiting for this TCB to reply: (client, reply epoch).
     pub caller: Option<(ObjRef, u8)>,
@@ -299,6 +374,9 @@ impl Tcb {
             name,
             state: ThreadState::Inactive,
             priority: priority.min(MAX_PRIORITY),
+            entry: 0,
+            stack: 0,
+            vspace: None,
             cspace: [None; MAX_CAPS],
             caller: None,
             reply_epoch: 0,

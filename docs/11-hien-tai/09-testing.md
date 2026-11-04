@@ -18,9 +18,10 @@ Bao gồm:
 ```bash
 cargo test -p vifast-kernel
 cargo test -p vifast-runtime
+cargo test -p vifast-user
 ```
 
-Hiện có 8 test trong `vifast-kernel`:
+Hiện có 12 test trong `vifast-kernel`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -29,7 +30,11 @@ Hiện có 8 test trong `vifast-kernel`:
 - VSpace W^X + overlap + unmap;
 - frame alignment;
 - syscall từ chối cap sai type/đã revoke và W^X;
-- chuyển cap yêu cầu slot đích rõ ràng, không fallback.
+- chuyển cap yêu cầu slot đích rõ ràng, không fallback;
+- user pointer validation cho DebugWrite/Open/Read/Write;
+- Untyped accounting metadata + OutOfMemory;
+- revoke Untyped reset accounting + xoá cap con;
+- TcbConfigure/TcbResume.
 
 `vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.
 

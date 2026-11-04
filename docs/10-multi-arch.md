@@ -56,14 +56,14 @@ nếu không có VM/emulation. Vì vậy:
 | User entry | `sret` → U-mode | `eret` → EL0 | `iretq` → ring3 |
 | Syscall | `ecall` | `svc #0` | `int 0x80` |
 | Timer | SBI timer | GICv2 + generic timer | PIC + PIT |
-| Preemption | 2 user TCB | 2 user TCB | 2 user TCB |
+| Preemption | root + 2 TCB | root + 2 TCB | root + 2 TCB |
 | User IPC | Call/Reply | Call/Reply | Call/Reply |
-| User frame map/unmap | một page, Sv39 | một page, 4-level | một page, UEFI U/S |
+| User frame map/unmap | một page, Sv39 | một page, 4-level | một page, PML4 4 KiB |
 | W^X | code RX, stack NX | code RO+X, data NX | code RX, data/stack NX |
-| Untyped/retype | Frame/PageTable | Frame/PageTable | Frame/PageTable |
+| Untyped/retype | Frame/PageTable/metadata có charge | Frame/PageTable/metadata có charge | Frame/PageTable/metadata có charge |
 | Cap transfer user | Send/Call + Signal | Send/Call + Signal | Send/Call + Signal |
 | ramfs + file syscall | có | có | có |
-| SMP bootstrap | HSM | PSCI | MP Services chưa có AP |
+| SMP bootstrap | HSM | PSCI | chưa AP; ACPI MADT + LAPIC/SIPI |
 | User page table | Sv39 tĩnh | 4-level tĩnh | PML4/PT 4 KiB riêng |
 | Trap stack | kernel stack qua `sscratch` | `SP_EL1` | TSS.RSP0 |
 | Stack | linker `.stack` 256 KiB | linker `.stack` 256 KiB | UEFI stack |
@@ -71,7 +71,8 @@ nếu không có VM/emulation. Vì vậy:
 
 ## 4. Những gì đã kiểm chứng
 
-- `cargo test -p vifast-kernel`: self-test portable trên host.
+- `cargo test -p vifast-kernel`: 12 test portable trên host.
+- `cargo test -p vifast-user`: wrapper compile.
 - QEMU RISC-V64 (`-smp 2`): self-test + U-mode IPC + frame map/unmap + SMP
   bootstrap + timer preemption.
 - QEMU AArch64 (`-smp 2`, `gic-version=2`): self-test + EL0 IPC + frame
@@ -94,7 +95,8 @@ Thứ tự đề xuất:
    spinlock/BKL và TLB shootdown.
 5. ~~Untyped/retype cơ bản~~ — đã có Frame/PageTable page; còn allocator vật lý
    đầy đủ và thu hồi object.
-6. **vifast-user + ABI wire format**; ELF loader; IPC buffer/shared memory.
+6. **vifast-user + ABI wire format** — wrapper đã có; còn root task Rust,
+   ELF loader, IPC buffer/shared memory.
 7. **VFS đầy đủ, block driver, net, compositor, ViFastKey** — ramfs đã có.
 
 Mỗi bước phải chạy cùng bộ test trên cả ba arch trước khi coi là “hỗ trợ”.

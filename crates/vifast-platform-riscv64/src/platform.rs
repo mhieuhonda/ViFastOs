@@ -11,11 +11,13 @@ use vifast_arch_riscv64::Riscv64;
 
 pub struct RiscvPlatform;
 
-pub const USER_CODE_VA: usize = 0x4000_0000;
-pub const USER_STACK_A_TOP: usize = 0x4000_5000;
-pub const USER_STACK_B_TOP: usize = 0x4000_9000;
-pub const USER_DATA_VA: usize = 0x4000_a000;
-const USER_SSTATUS: u64 = (1 << 5) | (1 << 18);
+pub const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
+pub const USER_STACK_A_TOP: usize = vifast_abi::user_layout::STACK_A_TOP;
+pub const USER_STACK_B_TOP: usize = vifast_abi::user_layout::STACK_B_TOP;
+pub const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
+pub const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
+pub const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
+const USER_SSTATUS: u64 = 1 << 5;
 const TIMER_INTERVAL: u64 = 100_000;
 const PTE_V: u64 = 1;
 const PTE_R: u64 = 2;
@@ -45,6 +47,10 @@ static mut USER_L0: Table = Table([0; 512]);
 static mut USER_CODE: Page = Page([0; 4096]);
 static mut USER_STACK: UserStack = UserStack([0; 32768]);
 static mut USER_DATA: Page = Page([0; 4096]);
+#[allow(dead_code)]
+#[repr(align(16))]
+struct Metadata([u8; 65536]);
+static mut METADATA: Metadata = Metadata([0; 65536]);
 static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 #[allow(dead_code)]
@@ -177,6 +183,12 @@ impl Platform for RiscvPlatform {
         }
     }
 
+    fn metadata_page() -> &'static mut [u8] {
+        unsafe {
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(METADATA) as *mut u8, 65536)
+        }
+    }
+
     fn build_page_tables() {
         unsafe {
             let root = core::ptr::addr_of_mut!(ROOT) as *mut Table;
@@ -186,7 +198,8 @@ impl Platform for RiscvPlatform {
             let user_l0 = core::ptr::addr_of_mut!(USER_L0) as *mut Table;
 
             (*root).0[0] = pte(table_pa(device_l1), PTE_V);
-            (*root).0[1] = pte(table_pa(user_l1), PTE_V);
+            /* 64 GiB shared user window. */
+            (*root).0[64] = pte(table_pa(user_l1), PTE_V);
             (*root).0[2] = pte(table_pa(kernel_l1), PTE_V);
             (*kernel_l1).0[0] = pte(0x8000_0000, PTE_V | PTE_R | PTE_W | PTE_X);
             (*kernel_l1).0[1] = pte(0x8020_0000, PTE_V | PTE_R | PTE_W | PTE_X);
@@ -252,10 +265,15 @@ impl Platform for RiscvPlatform {
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
+            || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
         {
             unsafe {
+                /* SUM is kept clear while in S-mode; enable it only for the
+                explicit copy window. */
+                core::arch::asm!("csrs sstatus, {}", in(reg) 1u64 << 18);
                 core::ptr::copy_nonoverlapping(ptr as *const u8, out.as_mut_ptr(), out.len());
+                core::arch::asm!("csrc sstatus, {}", in(reg) 1u64 << 18);
             }
             Ok(())
         } else {
@@ -264,9 +282,13 @@ impl Platform for RiscvPlatform {
     }
 
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError> {
-        if page_in_range(ptr, input.len(), USER_DATA_VA, 4096) {
+        if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
+            || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
+        {
             unsafe {
+                core::arch::asm!("csrs sstatus, {}", in(reg) 1u64 << 18);
                 core::ptr::copy_nonoverlapping(input.as_ptr(), ptr as *mut u8, input.len());
+                core::arch::asm!("csrc sstatus, {}", in(reg) 1u64 << 18);
             }
             Ok(())
         } else {
@@ -355,6 +377,16 @@ impl Platform for RiscvPlatform {
             vifast_kernel::klog!(Riscv64, "SMP SKIP (hsm_start={:#x})", started);
         }
     }
+}
+
+#[no_mangle]
+extern "C" fn riscv_kernel_trap() -> ! {
+    let cause: u64;
+    unsafe {
+        core::arch::asm!("csrr {}, scause", out(reg) cause);
+    }
+    vifast_kernel::klog!(Riscv64, "KERNEL TRAP cause={:#x}", cause);
+    Riscv64::exit(1)
 }
 
 extern "C" {

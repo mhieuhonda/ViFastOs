@@ -36,7 +36,7 @@ use-after-free mà không cần con trỏ thô trong lõi portable.
 | `Free` | Slot trống |
 | `Endpoint` | Send/Recv queue, Call/Reply |
 | `Notification` | Word + waiter |
-| `Tcb` | Thread state, priority, cspace, fds, resume |
+| `Tcb` | Thread state, entry/stack/VSpace, cspace, fds, resume |
 | `Untyped` | Arena cấp phát vật lý |
 | `Frame` | Trang vật lý có thể map |
 | `VSpace` | Shadow mapping table + root page table |
@@ -93,9 +93,14 @@ pub struct Untyped {
 
 - `Frame`: cấp một page, `pa` căn theo `page_size`;
 - `PageTable`: cấp một page, `root = pa`, `level = 3`;
-- `Endpoint`, `Notification`, `Tcb`: tạo metadata object, không tiêu page.
+- `Endpoint`: tiêu 256 byte Untyped;
+- `Notification`: tiêu 128 byte Untyped;
+- `Tcb`: tiêu 1024 byte Untyped.
 
-Các object vật lý tiêu `bump`; nếu không đủ chỗ trả `OutOfMemory`.
+Mỗi object đều tiêu `bump`; nếu không đủ chỗ trả `OutOfMemory`.
+Revoke capability Untyped sẽ xoá các capability con và reset `bump = 0`
+(object table chưa có free/destroy nên đây là reset accounting, không phải
+thu hồi metadata hoàn chỉnh).
 
 ## 4. Frame, VSpace, PageTable
 

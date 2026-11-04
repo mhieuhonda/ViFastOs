@@ -43,6 +43,15 @@ int80_entry:
     RESTORE_REGS
     iretq
 
+    .globl pf_entry
+pf_entry:
+    SAVE_REGS
+    mov rdi, rsp
+    call x86_page_fault
+1:
+    hlt
+    jmp 1b
+
     .globl irq0_entry
 irq0_entry:
     SAVE_REGS

@@ -33,6 +33,8 @@ pub struct UserImage {
     pub entry_a: usize,
     /// Offset of `user_thread_b` from the start of `code`.
     pub entry_b: usize,
+    /// Offset of the root task entry.
+    pub entry_root: usize,
 }
 
 /// The complete architecture/platform contract used by the shared runtime.
@@ -58,6 +60,7 @@ pub trait Platform: Arch {
 
     fn code_page() -> &'static mut [u8];
     fn data_page() -> &'static mut [u8];
+    fn metadata_page() -> &'static mut [u8];
     fn build_page_tables();
     fn vspace_root() -> u64;
 
@@ -111,12 +114,14 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         info.dtb
     );
 
-    let mut kernel = Kernel::new();
-    if !vifast_kernel::selftest::run::<A>(&mut kernel) {
+    let mut selftest_kernel = Kernel::new();
+    if !vifast_kernel::selftest::run::<A>(&mut selftest_kernel) {
         vifast_kernel::klog!(A, "SELFTEST FAIL");
         A::exit(1);
     }
-    let stats = kernel.stats();
+    let stats = selftest_kernel.stats();
+    drop(selftest_kernel);
+    let mut kernel = Kernel::new();
     vifast_kernel::klog!(
         A,
         "SELFTEST PASS (ipc_tx={} ipc_rx={} ntfn={} ctx={} ticks={})",
@@ -127,52 +132,63 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         stats.ticks
     );
     A::start_smp();
-    let Some(a) = kernel.create_tcb("user-a", 5) else {
-        A::exit(1);
-    };
-    let Some(b) = kernel.create_tcb("user-b", 5) else {
-        A::exit(1);
-    };
-    let Some(endpoint) = kernel.create_endpoint() else {
-        A::exit(1);
-    };
-    let Some(notification) = kernel.create_notification() else {
-        A::exit(1);
-    };
-    let Some(vspace) = kernel.create_vspace_with_page_size(
+    let root = kernel.root().unwrap_or_else(|| A::exit(1));
+    let stack_base = (A::stack_a_top() - 0x4000) as u64;
+    let stack_len = (A::stack_b_top() - (A::stack_a_top() - 0x4000)) as u64;
+    let Some(vspace) = kernel.create_user_vspace(
         A::vspace_root(),
         A::USER_DATA_VA as u64,
         A::PAGE_SIZE as u64,
+        A::USER_CODE_VA as u64,
         A::PAGE_SIZE as u64,
+        stack_base,
+        stack_len,
     ) else {
         A::exit(1);
     };
+    if kernel.set_tcb_vspace(root, vspace).is_err() {
+        A::exit(1);
+    }
     let data = A::data_page();
-    let Some(untyped) =
+    let metadata = A::metadata_page();
+    let Some(meta_untyped) = kernel.create_untyped_with_page_size(
+        metadata.as_mut_ptr() as usize,
+        metadata.len(),
+        A::PAGE_SIZE,
+    ) else {
+        A::exit(1);
+    };
+    let Some(data_untyped) =
         kernel.create_untyped_with_page_size(data.as_mut_ptr() as usize, data.len(), A::PAGE_SIZE)
     else {
         A::exit(1);
     };
     if kernel
-        .install_cap(a, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::READ))
+        .install_cap(
+            root,
+            1,
+            Cap::new(vspace, ObjType::VSpace, Rights::READ | Rights::WRITE),
+        )
         .is_err()
         || kernel
-            .install_cap(b, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::WRITE))
-            .is_err()
-        || kernel
-            .install_cap(b, 2, Cap::new(vspace, ObjType::VSpace, Rights::WRITE))
-            .is_err()
-        || kernel
-            .install_cap(b, 3, Cap::new(untyped, ObjType::Untyped, Rights::WRITE))
+            .install_cap(
+                root,
+                2,
+                Cap::new(
+                    meta_untyped,
+                    ObjType::Untyped,
+                    Rights::WRITE | Rights::GRANT,
+                ),
+            )
             .is_err()
         || kernel
             .install_cap(
-                b,
-                5,
+                root,
+                3,
                 Cap::new(
-                    notification,
-                    ObjType::Notification,
-                    Rights::READ | Rights::WRITE | Rights::GRANT,
+                    data_untyped,
+                    ObjType::Untyped,
+                    Rights::WRITE | Rights::GRANT,
                 ),
             )
             .is_err()
@@ -190,18 +206,15 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     A::prepare_user();
 
     let contexts = A::contexts();
-    contexts[a.index as usize] =
-        A::context_for_user(A::user_code_base() + image.entry_a, A::stack_a_top());
-    contexts[b.index as usize] =
-        A::context_for_user(A::user_code_base() + image.entry_b, A::stack_b_top());
+    contexts[root.index as usize] =
+        A::context_for_user(A::user_code_base() + image.entry_root, A::stack_a_top());
 
     A::set_kernel(&mut kernel as *mut Kernel);
-    kernel.enqueue(a);
-    kernel.enqueue(b);
+    kernel.enqueue(root);
     let _ = kernel.pick();
     A::start_timer();
     vifast_kernel::klog!(A, "entering user mode at {:#x}", A::user_code_base());
-    let first = contexts[a.index as usize];
+    let first = contexts[root.index as usize];
     A::enter_user(&first)
 }
 
@@ -248,6 +261,15 @@ pub mod syscall {
                     A::write_result(context, KError::Ok, 0, 0, [0; 4]);
                 } else {
                     A::write_result(context, KError::NotMapped, 0, 0, [0; 4]);
+                }
+            }
+            UserAction::ConfigureTcb { tcb, entry, stack } => {
+                let contexts = A::contexts();
+                if let Some(slot) = contexts.get_mut(tcb.index as usize) {
+                    *slot = A::context_for_user(entry as usize, stack as usize);
+                    A::write_result(context, KError::Ok, 0, 0, [0; 4]);
+                } else {
+                    A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
                 }
             }
             UserAction::Open { ptr, len, flags } => {

@@ -1,6 +1,92 @@
     .section .text.userprog, "ax"
     .globl user_program_start
 user_program_start:
+    .globl user_root
+user_root:
+    /* Root task: create endpoint, two TCBs and a notification from the
+       metadata Untyped passed by the runtime. */
+    li a7, 9
+    li a0, 2
+    li a1, 2
+    li a2, 4
+    ecall
+    li a7, 9
+    li a0, 2
+    li a1, 1
+    li a2, 5
+    ecall
+    li a7, 9
+    li a0, 2
+    li a1, 1
+    li a2, 6
+    ecall
+    li a7, 9
+    li a0, 2
+    li a1, 3
+    li a2, 7
+    ecall
+
+    /* endpoint -> server slot 1 (READ), client slot 1 (WRITE) */
+    li a7, 10
+    li a0, 4
+    li a1, 5
+    li a2, 1
+    li a3, 1
+    ecall
+    li a7, 10
+    li a0, 4
+    li a1, 6
+    li a2, 1
+    li a3, 2
+    ecall
+    /* VSpace + data Untyped for the client */
+    li a7, 10
+    li a0, 1
+    li a1, 6
+    li a2, 2
+    li a3, 2
+    ecall
+    li a7, 10
+    li a0, 3
+    li a1, 6
+    li a2, 3
+    li a3, 2
+    ecall
+    /* notification -> client slot 5 with GRANT; first Call transfers it
+       into server slot 4. */
+    li a7, 10
+    li a0, 7
+    li a1, 6
+    li a2, 5
+    li a3, 11
+    ecall
+
+    /* Configure and resume the two child tasks. */
+    li a7, 15
+    li a0, 5
+    la a1, user_thread_a
+    li a2, 0x1000005000
+    li a3, 1
+    li a4, 5
+    ecall
+    li a7, 15
+    li a0, 6
+    la a1, user_thread_b
+    li a2, 0x1000009000
+    li a3, 1
+    li a4, 5
+    ecall
+    li a7, 16
+    li a0, 5
+    ecall
+    li a7, 16
+    li a0, 6
+    ecall
+1:
+    li a7, 8
+    ecall
+    j 1b
+
     .globl user_thread_a
 user_thread_a:
     li a7, 32
