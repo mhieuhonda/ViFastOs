@@ -52,13 +52,14 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 39fc83c feat: build private client vspace
 - aeea6bc feat: isolate client vspace and add fault4
 - c5119e7 feat: add reply-recvsyscall and server loop
-- a18663f feat: deliver user faults to endpoint.
+- a18663f feat: deliver user faults to endpoint
+- 854744a feat: add ipc buffer binding and copy.
 
-Cập nhật code gần nhất (commit a18663f): root/server/client VSpace, current_root từ TCB,
+Cập nhật code gần nhất (commit 854744a): root/server/client VSpace, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF nạp vào boot, ROOT RUST/ROOT READY, jump table, FrameMap cap bound,
-W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, 3 target link/FP
+W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, IPC buffer, 3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
@@ -90,14 +91,14 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 76/76 PASS
+- cargo test -p vifast-kernel: 77/77 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 8.752 B, AArch64/x86 8.576 B; RISC-V kernel_end
-  0x80369010, headroom 618.480 B dưới 0x80400000
+  0x8036a010, headroom 614.384 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -341,7 +342,7 @@ vifast-root:
 - 300 dòng Rust + 31 dòng start asm; ELF build 3 target
 
 vifast-kernel:
-- 7007 dòng, không còn dependency vifast-arch
+- 7198 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597624 bytes
@@ -805,7 +806,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 76 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 77 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -1013,6 +1014,8 @@ Exit code:
 - 8.3: TCB fault endpoint (CapRef), TcbConfigure a5, message LABEL_FAULT,
   BlockedFault; handler queue/wake; root nhận fault4 và in FAULT EP OK addr=...
   x86 enter_user khôi phục đầy đủ register; 3 host test mới.
+- 8.1: TcbSetIpcBuffer (41), IPC_BUFFER_WORDS=32, copy qua PA khi hai TCB có
+  buffer; unmap/revoke xoá link. API/core host-test; demo buffer dài chưa nối.
 - PageTableMap gắn page table ở entry invalid đầu tiên; level do kernel chọn.
 - Retype VSpace cấp root + aux page, zero và gọi install_kernel thật.
 - Revoke Untyped sắp thứ tự Frame → PageTable sâu nhất → PageTable cha → VSpace.
@@ -1034,7 +1037,7 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 76 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 77 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1258,6 +1261,9 @@ E. Desktop / Space
     [addr,cause,0,0]; TCB BlockedFault; handler Recv queue/wake. Root priority
     cao nhận fault4, in FAULT EP OK addr=0x1000301000. x86 enter_user restore
     đủ register trước iretq.
+47. 8.1: TcbSetIpcBuffer yêu cầu Frame map RW đúng VA trong VSpace TCB; copy
+    32 word trực tiếp qua PA khi cả sender/receiver có buffer. Unmap/revoke
+    mapping xoá ipc_buffer. Demo user.S buffer dài để 3c.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

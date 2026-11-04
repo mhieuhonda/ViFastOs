@@ -8,6 +8,7 @@
 - `aeea6bc` — 7.5 Client tách hẳn + fault4 (kết thúc 3b).
 - `c5119e7` — 8.2 ReplyRecv.
 - `a18663f` — 8.3 Fault endpoint tối giản.
+- `854744a` — 8.1 IPC buffer API/core.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
 ## WIP còn dở
@@ -16,8 +17,8 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## CẦN QUYẾT ĐỊNH
 
-- 8.1 IPC buffer và 8.4 server/client Rust ELF chưa triển khai trong đêm;
-  không phải BLOCKED, chỉ là phần việc tiếp theo.
+- 8.4 server/client Rust ELF chưa triển khai; demo IPC buffer dài trong user.S
+  cũng chưa nối (API/core 8.1 đã xong).
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -26,16 +27,16 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## Số liệu cuối
 
-- `vifast-kernel` 76/76, PTE 11/11, ELF 17/17; runtime/user compile.
+- `vifast-kernel` 77/77, PTE 11/11, ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
   `0x1000301000`; `FAULT EP OK`.
 - Boot Untyped: RISC-V 19/32 pages, AArch/x86 21/32; free 13/11 pages,
   13/13 objects.
 - DATA UNTYPED lúc test-exit: RISC-V 21/64 pages, AArch/x86 22/64 pages,
   6/48 objects.
-- ROOT SWITCH lần chạy cuối: 49945 / 32607 / 17520.
-- Root ELF: RISC-V 8752 B, AArch64/x86 8576 B; headroom RISC-V 618480 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `5854556ffa6c1bb6fe67b9f3b77e992762fd5a927217f63e290892ba2ef8f9c6`.
+- ROOT SWITCH lần chạy cuối: 47861 / 38447 / 15977.
+- Root ELF: RISC-V 8752 B, AArch64/x86 8576 B; headroom RISC-V 614384 B.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `8d8e9fef2d03db16a1a333c92d6a5ab91f515e9f83d2aa1c4c8b5c0e5584f50e`.
 
 ---
 
@@ -130,3 +131,15 @@ follow-up `62b31f4`.
   sau page fault); sửa AArch literal pool cho fault4.
 - QEMU 3/3 PASS ×3; ROOT SWITCH lần đầu 49945 / 32607 / 17520.
   Data Untyped test-exit vẫn 21/22 trang, 6/48 object; headroom 618480 B.
+
+
+## 8.1 — IPC buffer API/core
+
+- Commit `854744a feat: add ipc buffer binding and copy`.
+- TCB có `ipc_buffer`; syscall 41 `TcbSetIpcBuffer(tcb, frame, va)` yêu cầu
+  Frame map RW đúng VA trong VSpace của TCB.
+- Khi hai TCB đều có buffer, kernel copy `IPC_BUFFER_WORDS=32` trực tiếp qua PA;
+  unmap/revoke mapping xoá liên kết.
+- `vifast-kernel` 77/77; PTE 11/11; ELF 17/17; runtime/user compile.
+- QEMU 3/3 PASS ×3; ROOT SWITCH 47861 / 38447 / 15977 (lần đầu).
+- Chưa nối demo chuỗi dài trong user.S; đó là phần còn lại của 3c.
