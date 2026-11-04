@@ -23,6 +23,8 @@ sang bản bare-metal.
 | W^X user code/data | có (RX + NX stack) | có (RO+X, NX data) | có (RX + NX data) |
 | Chuyển capability + notification qua IPC | có | có | có |
 | User fault suspend (không panic) | có | có | có |
+| Root/server/client VSpace riêng | có | có | có |
+| Untyped con + BootInfo | có | có | có |
 | Frame retype zero page | có | có | có |
 | PageTable retype zero page | có | có | có |
 | x86 vector 0..31 / IST #DF,NMI,#MC | có | — | có |
@@ -58,7 +60,7 @@ Kernel portable hiện có:
   `FrameMap`, `FrameUnmap`, `Open`, `Read`, `Write`, `Close`, `Seek`, `Stat`,
   `DebugWrite`, `GetTime`, `Exit`;
 - timer interrupt + preemptive scheduler một hart; root task tạo server/client
-  và ba fault thread;
+  và bốn fault thread;
 - IPC user subset `Send/Call/Recv/Reply/Signal/Wait/Poll`.
 
 ## Chưa có

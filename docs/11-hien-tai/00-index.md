@@ -23,7 +23,7 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
 9. [09-testing.md](09-testing.md) — test host, QEMU và tiêu chí PASS.
 10. [10-vifast-user.md](10-vifast-user.md) — wrapper syscall và user layout chung.
 11. [11-phase-3b-decisions.md](11-phase-3b-decisions.md) — quyết định VSpace riêng,
-    BootInfo; root/server đã tách VSpace, client còn dùng root VSpace.
+    BootInfo; root/server/client đã tách VSpace, client dùng Untyped con.
 12. [12-vifast-pte.md](12-vifast-pte.md) — encode/decode PTE an toàn cho 3 arch.
 13. `vifast-elf` — parser ELF64 PT_LOAD và host test. Nạp root ELF là Bước 6.
 

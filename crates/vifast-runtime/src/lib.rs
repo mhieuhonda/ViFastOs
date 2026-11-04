@@ -333,13 +333,13 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     if let Some(space) = kernel.vspace_mut(vspace) {
         space.next_va = vifast_abi::user_layout::DATA_VA as u64;
     }
-    /* Root VSpace maps only the root, client and fault-thread stacks.  The
-    page at SERVER_STACK_BASE belongs to the server VSpace and stays invalid. */
-    const ROOT_USER_STACK_BASES: [usize; 4] = [
+    /* Root VSpace maps only the fault-thread stacks.  Client and fault4
+    stacks live in the private client VSpace; server stack belongs to the
+    server VSpace. */
+    const ROOT_USER_STACK_BASES: [usize; 3] = [
         vifast_abi::user_layout::FAULT1_STACK_BASE,
         vifast_abi::user_layout::FAULT2_STACK_BASE,
         vifast_abi::user_layout::FAULT3_STACK_BASE,
-        vifast_abi::user_layout::CLIENT_STACK_BASE,
     ];
     for va in ROOT_USER_STACK_BASES {
         let Ok(frame) = kernel.retype(boot_untyped, ObjType::Frame) else {

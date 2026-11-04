@@ -21,6 +21,10 @@ user_entry_fault2:
 user_entry_fault3:
     b user_thread_fault3
     .balign 16
+    .globl user_entry_fault4
+user_entry_fault4:
+    b user_thread_fault4
+    .balign 16
 
     .globl user_thread_fault
 user_thread_fault:
@@ -53,6 +57,17 @@ user_thread_fault3:
     mov x1, #0x10
     lsl x1, x1, #32
     add x1, x1, #0x2000
+    str xzr, [x1]
+1:
+    b 1b
+
+    .globl user_thread_fault4
+user_thread_fault4:
+    mov x8, #32
+    adr x0, user_fault4_msg
+    mov x1, #7
+    svc #0
+    ldr x1, ={ROOT_ELF_STACK_BASE}
     str xzr, [x1]
 1:
     b 1b
@@ -254,6 +269,8 @@ user_zero_bad:
     .asciz "Zero BAD\n"
 user_isolation_msg:
     .asciz "Isolation\n"
+user_fault4_msg:
+    .asciz "Fault4\n"
     .balign 8
 user_mapped_text:
     .ascii "Mapped\n\0"
@@ -263,5 +280,6 @@ user_scratch_path:
     .ascii "/scratch"
 user_write_text:
     .asciz "ViFastOS write\n"
+    .ltorg
     .globl user_program_end
 user_program_end:

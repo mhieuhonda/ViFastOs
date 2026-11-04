@@ -21,6 +21,10 @@ user_entry_fault2:
 user_entry_fault3:
     j user_thread_fault3
     .balign 16
+    .globl user_entry_fault4
+user_entry_fault4:
+    j user_thread_fault4
+    .balign 16
 
     .globl user_thread_fault
 user_thread_fault:
@@ -52,6 +56,17 @@ user_thread_fault3:
     /* The server stack page is private to the server VSpace.  A root-VSpace
        thread writing here must fault instead of touching an orphan page. */
     li t0, {SERVER_STACK_BASE}
+    sw zero, 0(t0)
+1:
+    j 1b
+
+    .globl user_thread_fault4
+user_thread_fault4:
+    li a7, 32
+    la a0, user_fault4_msg
+    li a1, 7
+    ecall
+    li t0, {ROOT_ELF_STACK_BASE}
     sw zero, 0(t0)
 1:
     j 1b
@@ -266,5 +281,7 @@ user_zero_bad:
     .asciz "Zero BAD\n"
 user_isolation_msg:
     .asciz "Isolation\n"
+user_fault4_msg:
+    .asciz "Fault4\n"
     .globl user_program_end
 user_program_end:

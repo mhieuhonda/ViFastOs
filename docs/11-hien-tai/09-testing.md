@@ -36,6 +36,8 @@ Hiện có 70 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
 - BootInfo layout cố định 32 byte và offset từng field;
+- QEMU yêu cầu đúng 4 USER FAULT, gồm 0x80000000, 0x1000002000 và root Rust
+  stack 0x1000301000; client dùng VSpace/Untyped con riêng, `Zero OK` vẫn qua;
 - capability rights monotonic;
 - revoke descendant;
 - VSpace W^X + overlap + unmap;

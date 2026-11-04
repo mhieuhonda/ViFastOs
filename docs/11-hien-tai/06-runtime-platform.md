@@ -98,7 +98,7 @@ MP Services, tránh làm hỏng môi trường firmware.
 8. Tạo boot Untyped 128 KiB/32 object, metadata Untyped, data Untyped.
 9. Cài metadata/data Untyped slot 2/3.
 10. `build_task_space` dựng root VSpace: code user.S RX, không stack/data;
-    map rời 4 stack page fault/client; cài VSpace slot 1 và TCB root.
+    map 3 stack page fault1/2/3; client stack nằm trong VSpace riêng do root dựng; cài VSpace slot 1 và TCB root.
 11. Parse root ELF trong cửa sổ 1 MiB; `build_task_space_elf(Some(root))`
     thêm root ELF + stack 4 trang + guard.
 12. Dựng server VSpace từ boot Untyped, code dùng chung Frame root, stack
@@ -116,9 +116,10 @@ MP Services, tránh làm hỏng môi trường firmware.
 
 Root task Rust in `ROOT RUST`, tự Retype/CapCopy/TcbConfigure/TcbResume
 server/client/fault thread, dựng VSpace client từ data Untyped (code RX +
-stack RW, log `CLIENT VSPACE OK`), in `ROOT READY`, rồi block bằng `Wait` trên
-notification riêng. Runtime không còn tham chiếu "Server"/"Client"; data
-Untyped được log lại lúc test-exit.
+client stack RW + fault4 stack RW, log `CLIENT VSPACE OK`), cấp Untyped con
+64 KiB/8 object cho client, cấu hình client/fault4 trên VSpace riêng, in
+`ROOT READY`, rồi block bằng `Wait` trên notification riêng. Runtime không
+còn tham chiếu "Server"/"Client"; data Untyped được log lại lúc test-exit.
 
 ## 4. Syscall dispatch
 

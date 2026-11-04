@@ -163,10 +163,9 @@ mode. Root task tự tạo server/client:
 - **x86_64**: UEFI/OVMF, GDT + TSS + IDT, `iretq` → ring3, `int 0x80`; PIC + PIT
   IRQ0, trap stack `TSS.RSP0`.
 
-Root task nhận VSpace + metadata Untyped 64 KiB + data Untyped 256 KiB ở
-slot 1/2/3, tự `Retype`
-endpoint, hai TCB server/client, ba fault TCB, notification cho client và
-notification riêng, `CapCopy` cap cho server/client, `TcbConfigure`
+Root task nhận BootInfo qua arg0, tự `Retype` endpoint, hai TCB server/client,
+bốn fault TCB, notification cho client và notification riêng, dựng VSpace
+client riêng + cấp Untyped con, `CapCopy` cap cho server/client, `TcbConfigure`
 entry/stack/VSpace rồi `TcbResume`. Server có cap endpoint
 `READ`, gọi `Recv` rồi `Reply`; client có cap `WRITE`, gọi `Call` và nhận reply. Client còn giữ cap `Untyped`, gọi `Retype`
 để tạo frame, rồi `FrameMap`/`FrameUnmap`; user ghi `Mapped\n` vào page vừa map

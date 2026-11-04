@@ -40,7 +40,7 @@ OVMF
 7. `Kernel::new` sạch; tạo boot Untyped 128 KiB/32 object + metadata/data Untyped.
 8. cài metadata/data Untyped slot 2/3.
 9. `build_task_space` dựng root VSpace (code user.S RX, không stack/data);
-   map 4 stack page fault/client; parse root ELF và build_task_space_elf(Some)
+   map 3 stack page fault1/2/3; parse root ELF và build_task_space_elf(Some)
    thêm root ELF + stack Rust 4 trang + guard; cài VSpace slot 1.
 10. dựng server VSpace (code dùng chung Frame root, stack +0x2000), cài slot 12.
 11. `check_kernel_mappings` root+server; log boot Untyped sau server.
@@ -55,7 +55,7 @@ OVMF
 
 Binary kernel chứa một `user.S`:
 
-- Jump table `USER_ENTRY_*`: server/client/fault1/2/3.
+- Jump table `USER_ENTRY_*`: server/client/fault1/2/3/4.
 - `user_thread_a`: server IPC.
 - `user_thread_b`: client.
 - Root task là Rust ELF riêng (`vifast-root`), không còn trong user.S.
@@ -79,33 +79,33 @@ runtime cài (root VSpace, meta/data Untyped, server VSpace, code Frame caps)
 được đọc từ BootInfo; root cấp object mới tuần tự từ `free_slot_start`.
 BootInfo chứa Frame cap code user.S READ|EXEC, không WRITE/GRANT.
 
-Root lần lượt Retype endpoint/2 TCB/notification/3 fault TCB, CapCopy cho
-server/client, TcbConfigure entry/stack/VSpace/priority rồi TcbResume. Sau đó
-root block bằng `Wait` trên notification riêng; server/client/fault chạy theo
-scheduler. Root in `BOOTINFO OK` sau khi kiểm tra magic/version/size.
+Root lần lượt Retype endpoint/2 TCB/notification/4 fault TCB, CapCopy cho
+server/client, dựng VSpace client, cấp Untyped con, TcbConfigure entry/stack/
+VSpace/priority rồi TcbResume. Client dùng VSpace riêng và Untyped con; root
+VSpace không còn stack client. Root block bằng `Wait` trên notification riêng;
+root in `BOOTINFO OK` sau khi kiểm tra magic/version/size.
 
 ## 4. Root task
 
 ```text
 Retype metadata Untyped → Endpoint (slot kế tiếp từ BootInfo)
 Retype metadata Untyped → TCB server/client/notification
-Retype metadata Untyped → 3 fault TCB + root notification
+Retype metadata Untyped → 4 fault TCB + root notification
 CapCopy endpoint → server slot 1 READ, client slot 1 WRITE
-CapCopy root VSpace (BootInfo) → client slot 2 WRITE
-CapCopy data Untyped (BootInfo) → client slot 3 WRITE
+CapCopy client VSpace → client slot 2 WRITE
+Retype data Untyped → Untyped con 64 KiB/8 object; CapCopy → client slot 3 WRITE
 CapCopy notification → client slot 5 READ|WRITE|GRANT
 TcbConfigure server (entry, stack 0x1000003000, VSpace BootInfo.server)
-TcbConfigure client (entry, stack 0x1000009000, VSpace BootInfo.root)
-TcbResume server/client
-TcbConfigure/TcbResume fault1/2/3 (priority 6)
-Retype data Untyped → VSpace client, PageTable ×level, stack Frame
-FrameMap code BootInfo → client VSpace RX; stack RW; log CLIENT VSPACE OK
+Retype data Untyped → VSpace client, PageTable ×level, client stack, fault4 stack
+FrameMap code BootInfo → client VSpace RX; stacks RW; log CLIENT VSPACE OK
+TcbConfigure client (VSpace client, stack 0x1000009000)
+TcbConfigure/TcbResume fault1/2/3 (root VSpace), fault4 (client VSpace, priority 6)
 Wait(root notification)
 ```
 
-Fault TCB thứ nhất cố ý load từ kernel VA; fault TCB thứ hai chạy
-`ud2`/`hlt`/illegal instruction. Cả hai log `USER FAULT`, bị suspend và
-server/client vẫn chạy. Không panic kernel.
+Fault1/2/3 chạy trong root VSpace; fault4 chạy trong VSpace client và ghi vào
+root Rust stack (không map trong VSpace client). Cả bốn log `USER FAULT`, bị
+suspend và server/client vẫn chạy. Không panic kernel.
 
 ## 5. Server A
 

@@ -10,8 +10,8 @@
 use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
     CLIENT_STACK_BASE, CLIENT_STACK_TOP, CODE_VA, FAULT1_STACK_TOP, FAULT2_STACK_TOP,
-    FAULT3_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_CLIENT, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2,
-    USER_ENTRY_FAULT3, USER_ENTRY_SERVER,
+    FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_CLIENT,
+    USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, USER_ENTRY_SERVER,
 };
 use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_user::SyscallResult;
@@ -30,6 +30,8 @@ const ROOT_READY: &[u8] = b"ROOT READY\n";
 const BOOTINFO_OK: &[u8] = b"BOOTINFO OK\n";
 const CLIENT_VSPACE_OK: &[u8] = b"CLIENT VSPACE OK\n";
 const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
+const CLIENT_UNTYPED_SIZE: usize = 0x1_0000;
+const CLIENT_UNTYPED_OBJECTS: usize = 8;
 
 fn check(result: SyscallResult) {
     if result.error != KError::Ok {
@@ -133,6 +135,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let fault1_tcb = slots.alloc();
     let fault2_tcb = slots.alloc();
     let fault3_tcb = slots.alloc();
+    let fault4_tcb = slots.alloc();
 
     retype(meta_untyped, ObjType::Endpoint, endpoint_slot);
     retype(meta_untyped, ObjType::Tcb, server_tcb);
@@ -142,18 +145,9 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     retype(meta_untyped, ObjType::Tcb, fault1_tcb);
     retype(meta_untyped, ObjType::Tcb, fault2_tcb);
     retype(meta_untyped, ObjType::Tcb, fault3_tcb);
+    retype(meta_untyped, ObjType::Tcb, fault4_tcb);
 
     copy(endpoint_slot, server_tcb, 1, Rights::READ);
-    copy(endpoint_slot, client_tcb, 1, Rights::WRITE);
-    copy(root_vspace, client_tcb, 2, Rights::WRITE);
-    copy(data_untyped, client_tcb, 3, Rights::WRITE);
-    copy(
-        notification_slot,
-        client_tcb,
-        5,
-        Rights::READ | Rights::WRITE | Rights::GRANT,
-    );
-
     check(vifast_user::tcb_configure(
         server_tcb,
         USER_ENTRY_SERVER as u64,
@@ -161,15 +155,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         server_vspace,
         5,
     ));
-    check(vifast_user::tcb_configure(
-        client_tcb,
-        USER_ENTRY_CLIENT as u64,
-        CLIENT_STACK_TOP as u64,
-        root_vspace,
-        5,
-    ));
     check(vifast_user::tcb_resume(server_tcb));
-    check(vifast_user::tcb_resume(client_tcb));
 
     check(vifast_user::tcb_configure(
         fault1_tcb,
@@ -210,9 +196,9 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             &mut slots,
         );
     }
-    // CODE_VA, CLIENT_STACK_BASE and DATA_VA share one 2 MiB table.  Building
-    // the code and stack mappings therefore leaves the final-level table in
-    // place for the client's later FrameMap at DATA_VA (+0xa000).
+    // CODE_VA, CLIENT_STACK_BASE, FAULT4_STACK_BASE and DATA_VA share one
+    // 2 MiB table.  Building the code and stack mappings therefore leaves the
+    // final-level table in place for the client's later FrameMap at DATA_VA.
     let client_stack_frame = slots.alloc();
     retype(data_untyped, ObjType::Frame, client_stack_frame);
     map_with_tables(
@@ -223,7 +209,52 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         Rights::READ | Rights::WRITE,
         &mut slots,
     );
+    let fault4_stack_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, fault4_stack_frame);
+    map_with_tables(
+        data_untyped,
+        client_vspace,
+        fault4_stack_frame,
+        FAULT4_STACK_BASE as u64,
+        Rights::READ | Rights::WRITE,
+        &mut slots,
+    );
     write(CLIENT_VSPACE_OK);
+
+    let client_untyped = slots.alloc();
+    check(vifast_user::retype_untyped(
+        data_untyped,
+        CLIENT_UNTYPED_SIZE as u64,
+        CLIENT_UNTYPED_OBJECTS as u64,
+        client_untyped,
+    ));
+
+    copy(endpoint_slot, client_tcb, 1, Rights::WRITE);
+    copy(client_vspace, client_tcb, 2, Rights::WRITE);
+    copy(client_untyped, client_tcb, 3, Rights::WRITE);
+    copy(
+        notification_slot,
+        client_tcb,
+        5,
+        Rights::READ | Rights::WRITE | Rights::GRANT,
+    );
+    check(vifast_user::tcb_configure(
+        client_tcb,
+        USER_ENTRY_CLIENT as u64,
+        CLIENT_STACK_TOP as u64,
+        client_vspace,
+        5,
+    ));
+    check(vifast_user::tcb_resume(client_tcb));
+
+    check(vifast_user::tcb_configure(
+        fault4_tcb,
+        USER_ENTRY_FAULT4 as u64,
+        FAULT4_STACK_TOP as u64,
+        client_vspace,
+        6,
+    ));
+    check(vifast_user::tcb_resume(fault4_tcb));
     write(ROOT_READY);
 
     loop {

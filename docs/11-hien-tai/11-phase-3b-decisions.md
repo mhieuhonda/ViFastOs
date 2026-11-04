@@ -1,7 +1,7 @@
 # 11.11. Quyết định thiết kế cho Phase 3b (VSpace riêng)
 
 Tài liệu này chốt hướng trước khi triển khai. 4.3 root đã chạy trên VSpace
-retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
+retype; 4.5 server có VSpace riêng; 7.5 client có VSpace riêng và Untyped con.
 
 ## 1. Kernel mapping
 
@@ -40,7 +40,8 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Map từng PT_LOAD RX/RW theo quyền; không map W+X; không copy code.
 - Root stack 4 trang + một trang guard; server/client/fault tạm giữ user.S ở Bước 6.
 - 4.5 dùng `build_task_space_shared_code`: root và server map cùng Frame code.
-- Root VSpace map stack fault1/2/3 + client, root ELF + stack Rust; stack server +0x2000 chỉ nằm
+- Root VSpace map stack fault1/2/3 + root Rust; stack client/fault4 chỉ nằm
+  trong VSpace client, stack server +0x2000 chỉ nằm
   trong VSpace server. Fault3 ghi +0x2000 phải USER FAULT.
 
 ## 5. Frame map nhiều VSpace
@@ -105,6 +106,19 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Bước 7.4 chỉ log `CLIENT VSPACE OK`; TcbConfigure chuyển sang VSpace mới ở
   7.5. Data Untyped được log lúc test-exit để kiểm tra quota.
 
+## 5e. Client tách hẳn (7.5)
+
+- Client nhận VSpace riêng ở slot 2 và Untyped con 64 KiB/8 object ở slot 3;
+  không còn cap tới root VSpace hay data Untyped của root.
+- Root VSpace chỉ còn stack fault1/2/3; client stack và fault4 stack nằm trong
+  VSpace client. TcbConfigure client dùng VSpace client.
+- Fault4 là thread user.S thứ năm trong VSpace client, ghi vào
+  `ROOT_ELF_STACK_BASE` (không map trong VSpace client) để sinh fault thứ tư.
+- `Zero OK` vẫn chạy: client CapRevoke/Untyped con/retype Frame zero trong
+  VSpace client.
+- Harness yêu cầu đúng 4 USER FAULT, gồm địa chỉ root stack; đây là mốc kết
+  thúc 3b.
+
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
@@ -135,8 +149,8 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Khi TCB bị hủy, object creator/cap con được reparent lên cap cha còn sống;
   delete Untyped cap trả IllegalOperation khi còn object/cap con.
 - x86 assert LoadedImage base/end nằm trong identity 0..1 GiB.
-- Untyped con đã có từ 7.2; CapCopy Untyped vẫn tồn tại cho tới khi 7.5 chuyển
-  client sang Untyped con. 4.5 server không retype.
+- Untyped con đã có từ 7.2; từ 7.5 client nhận Untyped con, root không còn
+  CapCopy data Untyped cho client. 4.5 server không retype.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable
   kernel.
 
@@ -179,7 +193,7 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
    giữ user.S.
 6. 7.1/7.1b/7.1c: FrameMap ⊆ Frame cap, W^X theo Frame + READ, PA uniqueness,
    sync_icache khi map EXEC và counter checked_add (đã xong).
-7. Bước 7.2–7.5: Untyped con (đã xong 7.2), BootInfo (đã xong 7.3), dựng
-   VSpace client (đã xong 7.4), tách client/fault4 (7.5).
+7. Bước 7.2–7.5: Untyped con (7.2), BootInfo (7.3), VSpace client (7.4),
+   tách client/fault4 (7.5 — hoàn tất 3b).
 8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
 9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

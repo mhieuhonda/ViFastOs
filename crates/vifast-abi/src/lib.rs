@@ -36,6 +36,8 @@ pub mod user_layout {
     pub const FAULT2_STACK_TOP: usize = CODE_VA + 0x7000;
     pub const FAULT3_STACK_BASE: usize = CODE_VA + 0x7000;
     pub const FAULT3_STACK_TOP: usize = CODE_VA + 0x8000;
+    pub const FAULT4_STACK_BASE: usize = CODE_VA + 0x9000;
+    pub const FAULT4_STACK_TOP: usize = CODE_VA + 0xa000;
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one
@@ -56,6 +58,7 @@ pub mod user_layout {
     pub const USER_ENTRY_FAULT1: usize = CODE_VA + 0x20;
     pub const USER_ENTRY_FAULT2: usize = CODE_VA + 0x30;
     pub const USER_ENTRY_FAULT3: usize = CODE_VA + 0x40;
+    pub const USER_ENTRY_FAULT4: usize = CODE_VA + 0x50;
 
     /// Bootstrap capability slots.  BootInfo will replace these constants.
     pub const ROOT_VSPACE_SLOT: usize = 1;

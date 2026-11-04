@@ -30,7 +30,7 @@ retype VSpace, gắn PageTable còn thiếu, copy ảnh vào Frame, map code RX 
 Nếu lỗi thì rollback object và bump/objects của Untyped.
 
 Root dùng builder với `stack_pages=0`, rồi runtime map rời 4 stack page
-`+0x5000/+0x6000/+0x7000/+0x8000` cho fault1/2/3 và client. Root Rust ELF dùng
+`+0x5000/+0x6000/+0x7000` cho fault1/2/3, client stack ở VSpace riêng. Root Rust ELF dùng
 stack 4 trang + guard tại `ROOT_ELF_STACK_BASE`. Trang `+0x2000` dành riêng cho
 server và **không được map trong root VSpace**.
 
@@ -65,7 +65,7 @@ VSpace, để Frame còn unmap được leaf trước khi bảng cha bị gỡ.
 - `aux_pa` cho PDPT/L1 riêng của VSpace retype trên x86/AArch64;
 - tối đa 32 mapping (reverse map).
 
-Root VSpace 6.4 dùng chung cho root Rust/client/fault thread; server có VSpace riêng.
+Root VSpace 7.5 chỉ còn root Rust và fault1/2/3; server và client có VSpace riêng (client dùng Untyped con cho data).
 `validate_user_range()` walk page table thật cho từng trang trước
 `DebugWrite`, `Open`, `Read`, `Write`: leaf phải non-kernel, có R, và W nếu
 cần ghi. Code/stack window fields đã bị xoá; reverse map chỉ còn cho revoke.

@@ -90,9 +90,10 @@ def run_qemu(
         and "ViFastOS ramfs" in output
         and "ViFastOS write" in output
         and "Reply OK" in output
-        and len(faults) == 3
+        and len(faults) == 4
         and 0x8000_0000 in faults
         and 0x1000002000 in faults
+        and 0x1000301000 in faults
         and output.count("ROOT RUST") == 1
         and output.count("BOOTINFO OK") == 1
         and output.count("CLIENT VSPACE OK") == 1

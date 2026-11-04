@@ -5,7 +5,7 @@
 
 #![no_std]
 
-use vifast_abi::{KError, SyscallId};
+use vifast_abi::{KError, ObjType, SyscallId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SyscallResult {
@@ -136,6 +136,28 @@ pub fn retype(untyped_slot: u8, ty: u64, dest_slot: u8) -> SyscallResult {
         syscall(
             SyscallId::Retype as u64,
             [untyped_slot as u64, ty, dest_slot as u64, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn retype_untyped(
+    untyped_slot: u8,
+    size_bytes: u64,
+    child_max_objects: u64,
+    dest_slot: u8,
+) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::Retype as u64,
+            [
+                untyped_slot as u64,
+                ObjType::Untyped as u64,
+                dest_slot as u64,
+                size_bytes,
+                child_max_objects,
+                0,
+            ],
         )
     };
     result(e, v)

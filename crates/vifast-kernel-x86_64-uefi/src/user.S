@@ -21,6 +21,10 @@ user_entry_fault2:
 user_entry_fault3:
     jmp user_thread_fault3
     .balign 16
+    .globl user_entry_fault4
+user_entry_fault4:
+    jmp user_thread_fault4
+    .balign 16
 
     .globl user_thread_fault
 user_thread_fault:
@@ -50,6 +54,17 @@ user_thread_fault3:
     mov rsi, 10
     int 0x80
     movabs rax, {SERVER_STACK_BASE}
+    mov qword ptr [rax], 0
+1:
+    jmp 1b
+
+    .globl user_thread_fault4
+user_thread_fault4:
+    mov rax, 32
+    lea rdi, [rip + user_fault4_msg]
+    mov rsi, 7
+    int 0x80
+    movabs rax, {ROOT_ELF_STACK_BASE}
     mov qword ptr [rax], 0
 1:
     jmp 1b
@@ -255,6 +270,8 @@ user_zero_bad:
     .asciz "Zero BAD\n"
 user_isolation_msg:
     .asciz "Isolation\n"
+user_fault4_msg:
+    .asciz "Fault4\n"
     .balign 8
 user_mapped_text:
     .ascii "Mapped\n\0"

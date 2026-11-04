@@ -72,6 +72,7 @@ static ROOT_ELF: &[u8] = include_bytes!(env!("VIFAST_ROOT_ELF"));
 core::arch::global_asm!(
     include_str!("user.S"),
     DATA_VA = const vifast_abi::user_layout::DATA_VA,
+    ROOT_ELF_STACK_BASE = const vifast_abi::user_layout::ROOT_ELF_STACK_BASE,
     SERVER_STACK_BASE = const vifast_abi::user_layout::SERVER_STACK_BASE,
 );
 
@@ -85,6 +86,7 @@ extern "C" {
     fn user_entry_fault1();
     fn user_entry_fault2();
     fn user_entry_fault3();
+    fn user_entry_fault4();
 }
 
 fn user_image() -> UserImage {
@@ -111,6 +113,10 @@ fn user_image() -> UserImage {
     assert_eq!(
         user_entry_fault3 as *const () as usize - start,
         vifast_abi::user_layout::USER_ENTRY_FAULT3 - vifast_abi::user_layout::CODE_VA
+    );
+    assert_eq!(
+        user_entry_fault4 as *const () as usize - start,
+        vifast_abi::user_layout::USER_ENTRY_FAULT4 - vifast_abi::user_layout::CODE_VA
     );
     UserImage {
         code: unsafe { core::slice::from_raw_parts(start as *const u8, end - start) },
