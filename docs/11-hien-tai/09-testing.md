@@ -24,7 +24,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 45 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
+Hiện có 47 test trong `vifast-kernel` + 10 test trong `vifast-pte`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -54,8 +54,10 @@ Hiện có 45 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 - revoke bản copy Untyped không chạm object của cap gốc;
 - root revoke thu hồi cả object của cap con; delete cap bị từ chối khi còn con;
 - validate_user_range walk leaf user/R/W, cross-page/high-leaf/overflow;
-- PteFakeOps dùng encoder/decoder thật của 3 format cho map/unmap/PageTableMap/build;
-- boot Untyped 64 KiB và build_task_space host test.
+- PteFakeOps tách test RISC-V/x86_64/AArch64, dùng encoder/decoder thật cho
+  map/unmap/PageTableMap/validate/build;
+- build không data rồi FrameMap tại `DATA_VA` thành công trên cả 3 format;
+- boot Untyped 128 KiB/32 object và build_task_space host test.
 - PageTableMap không thay entry 0 dùng chung;
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
   trỏ tới trang đã free;
@@ -68,8 +70,8 @@ Boot assert:
 - RISC-V/AArch64 kernel image end + metadata/data/boot Untyped trong kernel accessible range;
 - walk leaf thật cho kernel mapping: non-user, X trap entry, W stack/storage.
 
-`vifast-pte` có 9 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
-kiến trúc và các biên index.
+`vifast-pte` có 10 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
+kiến trúc, biên index và leaf L3 AArch64 RO+X / RW+NX / EL0 / leaf_is_user.
 
 `vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.
 
@@ -89,6 +91,7 @@ Script chạy:
 
 - `SELFTEST PASS`;
 - `booting on`;
+- `BOOT UNTYPED` (log used/free pages và objects);
 - `PREEMPT OK`;
 - `Server`;
 - `Client`;

@@ -65,6 +65,7 @@ def run_qemu(
     ok = (
         "SELFTEST PASS" in output
         and "booting on" in output
+        and "BOOT UNTYPED" in output
         and "PREEMPT OK" in output
         and "Server" in output
         and "Client" in output

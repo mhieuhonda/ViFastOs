@@ -10,7 +10,7 @@ Nguồn: `crates/vifast-runtime/src/lib.rs`.
 - Console trait (không phụ thuộc vifast-arch);
 - tạo duy nhất root TCB và giao VSpace/Untyped;
 - Kernel được đặt trong static storage của platform, không nằm trên boot stack
-  (hiện khoảng 397 KiB với 128 object/64 cap/32 mapping);
+  (hiện khoảng 584 KiB với 128 object/64 cap/32 mapping);
 - copy user image;
 - syscall action dispatch;
 - quản lý context switch khi block;
@@ -52,14 +52,13 @@ không nằm trong runtime.
 ### Bộ nhớ và user
 
 ```rust
-fn code_page() -> &'static mut [u8];
 fn data_page() -> &'static mut [u8];
 fn metadata_page() -> &'static mut [u8];
+fn boot_page() -> &'static mut [u8];
 fn page_table_ops() -> &'static dyn PageTableOps;
-fn build_page_tables();
 fn vspace_root() -> u64;
-fn map_user_page(va, pa, rights) -> KResult<()>;
-fn unmap_user_page(va) -> KResult<()>;
+fn set_active_root(root_pa: u64);
+fn check_kernel_mappings(root_pa: u64) -> bool;
 fn read_user(ptr, out) -> KResult<()>;
 fn write_user(ptr, input) -> KResult<()>;
 ```
@@ -98,11 +97,12 @@ MP Services, tránh làm hỏng môi trường firmware.
 5. `Kernel::new()`, chạy self-test.
 6. In `SELFTEST PASS`.
 7. `A::start_smp()`.
-8. Tạo VSpace, metadata Untyped, data Untyped.
-9. Cài cap cho root: VSpace slot 1, metadata Untyped slot 2, data Untyped slot 3.
-10. Copy user image vào `A::code_page()`.
-11. `A::build_page_tables()`.
-12. `A::prepare_user()`.
+8. Tạo boot Untyped 128 KiB/32 object, metadata Untyped, data Untyped.
+9. Cài metadata/data Untyped slot 2/3.
+10. `build_task_space` dựng root VSpace từ boot Untyped: code RX, 8 trang stack,
+    không data; cài VSpace slot 1 và TCB root.
+11. `check_kernel_mappings(root_pa)`; log used/free pages/objects của boot Untyped.
+12. `A::set_active_root(root_pa)`, `A::prepare_user()`.
 13. Tạo context duy nhất cho root.
 14. `A::set_kernel()`.
 15. Enqueue root, `pick()`.
@@ -131,9 +131,10 @@ sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham
   - `Exit`: thoát.
 
 Mọi `unsafe` copy user nằm sau `Platform::read_user`/`write_user`.
-Runtime assert metadata/data Untyped nằm trong `kernel_accessible_range()` và gọi
-`check_kernel_mappings(root)` sau khi dựng bảng boot và trước khi chạy user;
-check này walk leaf thật và sẽ chạy lại trên root mới trước lần switch đầu tiên.
+Runtime assert metadata/data/boot Untyped nằm trong `kernel_accessible_range()`
+và gọi `check_kernel_mappings(root_pa)` trên root VSpace mới trước khi set
+active root. Check này walk leaf thật và chạy lại trên root mới trước lần
+switch đầu tiên.
 
 ## 5. Timer
 

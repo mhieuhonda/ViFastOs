@@ -140,14 +140,24 @@ pub struct KernelStats {
     pub ticks: u64,
 }
 
+/// Optional writable data segment for the reusable task-space builder.
+#[derive(Clone, Copy, Debug)]
+pub struct TaskData {
+    pub va: u64,
+    pub pages: usize,
+}
+
 /// User layout used by the reusable task-space builder.
+///
+/// `data: None` leaves the data VA unmapped.  The last-level page table is
+/// still installed by the code/stack segments when they share the same 2 MiB
+/// region, so a later `FrameMap` at `DATA_VA` only needs that table.
 #[derive(Clone, Copy, Debug)]
 pub struct TaskLayout {
     pub code_va: u64,
     pub stack_va: u64,
     pub stack_pages: usize,
-    pub data_va: u64,
-    pub data_pages: usize,
+    pub data: Option<TaskData>,
 }
 
 pub struct Kernel {
@@ -559,6 +569,12 @@ impl Kernel {
         }
     }
 
+    /// `(size, bump, objects, max_objects)` for logging and boot checks.
+    pub fn untyped_usage(&self, r: ObjRef) -> Option<(usize, usize, usize, usize)> {
+        let region = self.untyped(r)?;
+        Some((region.size, region.bump, region.objects, region.max_objects))
+    }
+
     /// Carve one object out of an untyped memory region.
     ///
     /// Frames and page tables consume one aligned physical page.  Endpoint,
@@ -800,7 +816,7 @@ impl Kernel {
         if page == 0 || !page.is_power_of_two() || self.page_table_ops.is_none() {
             return Err(KError::MissingPageTable);
         }
-        let code_pages = (image.len() + page - 1) / page;
+        let image_pages = (image.len() + page - 1) / page;
         let mut created = [ObjRef::invalid(); MAX_OBJECTS];
         let mut created_count = 0usize;
         let vspace = self.retype_as(untyped, ObjType::VSpace, None)?;
@@ -821,7 +837,7 @@ impl Kernel {
                 untyped,
                 vspace,
                 layout.code_va,
-                code_pages,
+                image_pages,
                 Rights::READ | Rights::EXEC,
                 Some(image),
                 created,
@@ -838,18 +854,20 @@ impl Kernel {
                 created,
                 count,
             )?;
-            if layout.data_pages != 0 {
-                kernel.ensure_task_tables(untyped, vspace, layout.data_va, created, count)?;
-                kernel.map_task_segment(
-                    untyped,
-                    vspace,
-                    layout.data_va,
-                    layout.data_pages,
-                    Rights::READ | Rights::WRITE,
-                    None,
-                    created,
-                    count,
-                )?;
+            if let Some(data) = layout.data {
+                if data.pages != 0 {
+                    kernel.ensure_task_tables(untyped, vspace, data.va, created, count)?;
+                    kernel.map_task_segment(
+                        untyped,
+                        vspace,
+                        data.va,
+                        data.pages,
+                        Rights::READ | Rights::WRITE,
+                        None,
+                        created,
+                        count,
+                    )?;
+                }
             }
             Ok(())
         };
@@ -2752,8 +2770,10 @@ mod tests {
                     code_va: 0x10_0000_0000,
                     stack_va: 0x10_0000_1000,
                     stack_pages: 2,
-                    data_va: 0x10_0000_a000,
-                    data_pages: 1,
+                    data: Some(TaskData {
+                        va: 0x10_0000_a000,
+                        pages: 1,
+                    }),
                 },
             )
             .unwrap();
@@ -3027,8 +3047,10 @@ mod tests {
                     code_va: 0x10_0000_0000,
                     stack_va: 0x10_0000_1000,
                     stack_pages: 2,
-                    data_va: 0x10_0000_a000,
-                    data_pages: 1,
+                    data: Some(TaskData {
+                        va: 0x10_0000_a000,
+                        pages: 1,
+                    }),
                 },
             )
             .unwrap();
@@ -4339,12 +4361,15 @@ mod tests {
         let untyped = kernel
             .create_untyped_with_limit(0x1000, 0x8000, 4096, 16)
             .unwrap();
+        let data_va = 0x10_0000_a000;
         let layout = TaskLayout {
             code_va: 0x10_0000_0000,
             stack_va: 0x10_0000_1000,
             stack_pages: 2,
-            data_va: 0x10_0000_a000,
-            data_pages: 1,
+            data: Some(TaskData {
+                va: data_va,
+                pages: 1,
+            }),
         };
         let image = b"BUILD-OK";
         let vspace = kernel.build_task_space(untyped, image, layout).unwrap();
@@ -4364,7 +4389,7 @@ mod tests {
             Rights::READ | Rights::WRITE
         );
         assert_eq!(
-            kernel.mapping_at(vspace, layout.data_va).unwrap().rights,
+            kernel.mapping_at(vspace, data_va).unwrap().rights,
             Rights::READ | Rights::WRITE
         );
         // Kernel slots in the private root/aux table remain intact.
@@ -4439,71 +4464,96 @@ mod tests {
         assert_eq!(FAKE_MEM.lock().unwrap()[4608 + 1], 0);
     }
 
-    #[test]
-    fn pte_fake_ops_cover_all_formats_and_reject_high_leaves() {
-        let _guard = WALK_LOCK.lock().unwrap();
-        for format in [PteFormat::Riscv, PteFormat::X86, PteFormat::AArch] {
-            reset_pte_fake();
-            let ops = pte_ops(format);
-            let mut kernel = Kernel::new();
-            kernel.set_page_table_ops(ops);
-            let untyped = kernel
-                .create_untyped_with_limit(0x1000, 0xa000, 4096, 16)
-                .unwrap();
-            let layout = TaskLayout {
-                code_va: 0x10_0000_0000,
-                stack_va: 0x10_0000_1000,
-                stack_pages: 2,
-                data_va: 0x10_0000_a000,
-                data_pages: 1,
-            };
-            let vspace = kernel.build_task_space(untyped, b"PTE", layout).unwrap();
-            let root = kernel.root().unwrap();
-            kernel.set_tcb_vspace(root, vspace).unwrap();
-            assert!(kernel
-                .validate_user_range(root, layout.code_va, 1, false)
-                .is_ok());
-            assert_eq!(
-                kernel.validate_user_range(root, layout.code_va, 1, true),
-                Err(KError::InvalidArg)
-            );
-            assert!(kernel
-                .validate_user_range(root, layout.stack_va, 1, true)
-                .is_ok());
-            assert!(kernel
-                .validate_user_range(root, layout.data_va, 1, true)
-                .is_ok());
-            assert_eq!(
-                kernel.validate_user_range(root, 0x8000_0000, 1, false),
-                Err(KError::InvalidArg)
-            );
-            kernel.unmap_frame(vspace, layout.code_va).unwrap();
-            assert_eq!(
-                kernel.validate_user_range(root, layout.code_va, 1, false),
-                Err(KError::InvalidArg)
-            );
+    fn pte_fake_case(format: PteFormat) {
+        reset_pte_fake();
+        let ops = pte_ops(format);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(ops);
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0xa000, 4096, 16)
+            .unwrap();
+        let data_va = 0x10_0000_a000;
+        let layout = TaskLayout {
+            code_va: 0x10_0000_0000,
+            stack_va: 0x10_0000_1000,
+            stack_pages: 2,
+            data: None,
+        };
+        let vspace = kernel.build_task_space(untyped, b"PTE", layout).unwrap();
+        let root = kernel.root().unwrap();
+        kernel.set_tcb_vspace(root, vspace).unwrap();
+        assert!(kernel
+            .validate_user_range(root, layout.code_va, 1, false)
+            .is_ok());
+        assert_eq!(
+            kernel.validate_user_range(root, layout.code_va, 1, true),
+            Err(KError::InvalidArg)
+        );
+        assert!(kernel
+            .validate_user_range(root, layout.stack_va, 1, true)
+            .is_ok());
+        assert!(kernel.mapping_at(vspace, data_va).is_none());
+        assert_eq!(
+            kernel.validate_user_range(root, data_va, 1, true),
+            Err(KError::InvalidArg)
+        );
 
-            // A user leaf above the final level is never accepted, even if
-            // it has the user bit and R/W rights.
-            reset_pte_fake();
-            let va = vifast_pte::USER_VA_START;
-            let (idx, pte) = match format {
-                PteFormat::Riscv => (
-                    vifast_pte::riscv::index(va, 0),
-                    ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE),
-                ),
-                PteFormat::X86 => (
-                    vifast_pte::x86_64::index(va, 0),
-                    ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE) | vifast_pte::x86_64::PS,
-                ),
-                PteFormat::AArch => (
-                    vifast_pte::aarch64::index(va, 0),
-                    ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE) & !0b10,
-                ),
-            };
-            ops.write_pte(0, idx, pte);
-            assert!(!Kernel::user_leaf_ok(ops, 0, va, false));
-        }
+        // The code/stack mappings already installed the final-level table for
+        // +0xa000.  The client can therefore FrameMap there without issuing
+        // PageTableMap itself.
+        let frame = kernel.retype(untyped, ObjType::Frame).unwrap();
+        assert!(kernel
+            .map_frame(vspace, frame, data_va, Rights::READ | Rights::WRITE)
+            .is_ok());
+        assert!(kernel.validate_user_range(root, data_va, 1, true).is_ok());
+        assert_eq!(
+            kernel.validate_user_range(root, 0x8000_0000, 1, false),
+            Err(KError::InvalidArg)
+        );
+        kernel.unmap_frame(vspace, layout.code_va).unwrap();
+        assert_eq!(
+            kernel.validate_user_range(root, layout.code_va, 1, false),
+            Err(KError::InvalidArg)
+        );
+
+        // A user leaf above the final level is never accepted, even if it has
+        // the user bit and R/W rights.
+        reset_pte_fake();
+        let va = vifast_pte::USER_VA_START;
+        let (idx, pte) = match format {
+            PteFormat::Riscv => (
+                vifast_pte::riscv::index(va, 0),
+                ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE),
+            ),
+            PteFormat::X86 => (
+                vifast_pte::x86_64::index(va, 0),
+                ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE) | vifast_pte::x86_64::PS,
+            ),
+            PteFormat::AArch => (
+                vifast_pte::aarch64::index(va, 0),
+                ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE) & !0b10,
+            ),
+        };
+        ops.write_pte(0, idx, pte);
+        assert!(!Kernel::user_leaf_ok(ops, 0, va, false));
+    }
+
+    #[test]
+    fn pte_fake_riscv_builds_and_validates() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        pte_fake_case(PteFormat::Riscv);
+    }
+
+    #[test]
+    fn pte_fake_x86_64_builds_and_validates() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        pte_fake_case(PteFormat::X86);
+    }
+
+    #[test]
+    fn pte_fake_aarch64_builds_and_validates() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        pte_fake_case(PteFormat::AArch);
     }
 
     #[test]

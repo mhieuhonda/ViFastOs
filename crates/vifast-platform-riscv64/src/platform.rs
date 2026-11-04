@@ -23,7 +23,6 @@ const PTE_V: u64 = 1;
 const PTE_R: u64 = 2;
 const PTE_W: u64 = 4;
 const PTE_X: u64 = 8;
-const PTE_U: u64 = 16;
 
 core::arch::global_asm!(include_str!("trap.S"));
 core::arch::global_asm!(include_str!("smp.S"));
@@ -31,21 +30,9 @@ core::arch::global_asm!(include_str!("smp.S"));
 #[repr(align(4096))]
 struct Table([u64; 512]);
 
-#[allow(dead_code)]
-#[repr(align(4096))]
-struct Page([u8; 4096]);
-
-#[allow(dead_code)]
-#[repr(align(4096))]
-struct UserStack([u8; 32768]);
-
 static mut ROOT: Table = Table([0; 512]);
 static mut KERNEL_L1: Table = Table([0; 512]);
 static mut DEVICE_L1: Table = Table([0; 512]);
-static mut USER_L1: Table = Table([0; 512]);
-static mut USER_L0: Table = Table([0; 512]);
-static mut USER_CODE: Page = Page([0; 4096]);
-static mut USER_STACK: UserStack = UserStack([0; 32768]);
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct DataPool([u8; 262144]);
@@ -57,9 +44,10 @@ static mut METADATA: Metadata = Metadata([0; 65536]);
 static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
 #[allow(dead_code)]
 #[repr(align(4096))]
-struct BootPool([u8; 65536]);
-static mut BOOT_POOL: BootPool = BootPool([0; 65536]);
+struct BootPool([u8; 131072]);
+static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
+static mut ACTIVE_ROOT: u64 = 0;
 #[allow(dead_code)]
 #[repr(align(16))]
 struct TrapStack([u8; 32768]);
@@ -123,6 +111,17 @@ pub extern "C" fn rust_secondary(_hartid: usize) -> ! {
             core::arch::asm!("wfi");
         }
     }
+}
+
+unsafe fn build_kernel_page_tables() {
+    let root = core::ptr::addr_of_mut!(ROOT) as *mut Table;
+    let kernel_l1 = core::ptr::addr_of_mut!(KERNEL_L1) as *mut Table;
+    let device_l1 = core::ptr::addr_of_mut!(DEVICE_L1) as *mut Table;
+    (*root).0[0] = pte(table_pa(device_l1), PTE_V);
+    (*root).0[2] = pte(table_pa(kernel_l1), PTE_V);
+    (*kernel_l1).0[0] = pte(0x8000_0000, PTE_V | PTE_R | PTE_W | PTE_X);
+    (*kernel_l1).0[1] = pte(0x8020_0000, PTE_V | PTE_R | PTE_W | PTE_X);
+    (*device_l1).0[128] = pte(0x1000_0000, PTE_V | PTE_R | PTE_W);
 }
 
 impl Arch for RiscvPlatform {
@@ -310,7 +309,11 @@ impl Platform for RiscvPlatform {
         USER_STACK_B_TOP
     }
 
-    fn init_platform(_info: PlatformInfo) {}
+    fn init_platform(_info: PlatformInfo) {
+        unsafe {
+            build_kernel_page_tables();
+        }
+    }
 
     fn init_kernel() -> &'static mut Kernel {
         unsafe {
@@ -332,13 +335,7 @@ impl Platform for RiscvPlatform {
 
     fn boot_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(BOOT_POOL) as *mut u8, 65536)
-        }
-    }
-
-    fn code_page() -> &'static mut [u8] {
-        unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_CODE) as *mut u8, 4096)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(BOOT_POOL) as *mut u8, 131072)
         }
     }
 
@@ -354,36 +351,14 @@ impl Platform for RiscvPlatform {
         }
     }
 
-    fn build_page_tables() {
-        unsafe {
-            let root = core::ptr::addr_of_mut!(ROOT) as *mut Table;
-            let kernel_l1 = core::ptr::addr_of_mut!(KERNEL_L1) as *mut Table;
-            let device_l1 = core::ptr::addr_of_mut!(DEVICE_L1) as *mut Table;
-            let user_l1 = core::ptr::addr_of_mut!(USER_L1) as *mut Table;
-            let user_l0 = core::ptr::addr_of_mut!(USER_L0) as *mut Table;
-
-            (*root).0[0] = pte(table_pa(device_l1), PTE_V);
-            /* 64 GiB shared user window. */
-            (*root).0[64] = pte(table_pa(user_l1), PTE_V);
-            (*root).0[2] = pte(table_pa(kernel_l1), PTE_V);
-            (*kernel_l1).0[0] = pte(0x8000_0000, PTE_V | PTE_R | PTE_W | PTE_X);
-            (*kernel_l1).0[1] = pte(0x8020_0000, PTE_V | PTE_R | PTE_W | PTE_X);
-            (*device_l1).0[128] = pte(0x1000_0000, PTE_V | PTE_R | PTE_W);
-            (*user_l1).0[0] = pte(table_pa(user_l0), PTE_V);
-
-            let code_pa = core::ptr::addr_of!(USER_CODE) as u64;
-            let stack_pa = core::ptr::addr_of!(USER_STACK) as u64;
-            /* W^X: code is RX; stack is RW+NX. */
-            (*user_l0).0[0] = pte(code_pa, PTE_V | PTE_R | PTE_X | PTE_U);
-            for i in 0..8usize {
-                (*user_l0).0[1 + i] =
-                    pte(stack_pa + (i as u64) * 4096, PTE_V | PTE_R | PTE_W | PTE_U);
-            }
-        }
-    }
-
     fn vspace_root() -> u64 {
         table_pa(core::ptr::addr_of!(ROOT))
+    }
+
+    fn set_active_root(root_pa: u64) {
+        unsafe {
+            ACTIVE_ROOT = root_pa;
+        }
     }
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
@@ -449,7 +424,14 @@ impl Platform for RiscvPlatform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
-        let satp = (8u64 << 60) | (table_pa(core::ptr::addr_of!(ROOT)) >> 12);
+        let root = unsafe {
+            if ACTIVE_ROOT != 0 {
+                ACTIVE_ROOT
+            } else {
+                table_pa(core::ptr::addr_of!(ROOT))
+            }
+        };
+        let satp = (8u64 << 60) | (root >> 12);
         unsafe {
             core::arch::asm!("csrw satp, {}", in(reg) satp);
             core::arch::asm!("sfence.vma");

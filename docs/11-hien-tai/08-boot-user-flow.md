@@ -37,11 +37,12 @@ OVMF
 4. log banner.
 5. `Kernel::new` + self-test trên kernel riêng.
 6. `Platform::start_smp`.
-7. `Kernel::new` sạch; tạo VSpace + metadata/data Untyped.
-8. cài cap slot 1/2/3 cho root.
-9. copy user image.
-10. build page table.
-11. `prepare_user` (x86).
+7. `Kernel::new` sạch; tạo boot Untyped 128 KiB/32 object + metadata/data Untyped.
+8. cài metadata/data Untyped slot 2/3.
+9. `build_task_space` dựng root VSpace (code RX, 8 trang stack, không data);
+   cài VSpace slot 1, set TCB root.
+10. `check_kernel_mappings(root_pa)`, log boot Untyped còn trống.
+11. `set_active_root`; `prepare_user` (x86).
 12. tạo context root.
 13. set kernel pointer.
 14. enqueue root, pick root.
@@ -68,7 +69,8 @@ pub struct UserImage {
 ```
 
 Runtime chỉ dùng `entry_root`; root task tự lấy địa chỉ server/client bằng
-label PC-relative. Các message nằm ngay trong code page.
+label PC-relative. Builder copy image vào Frame lấy từ boot Untyped; các
+message nằm trong code page RX.
 
 Root task nhận cap:
 - slot 1 VSpace;

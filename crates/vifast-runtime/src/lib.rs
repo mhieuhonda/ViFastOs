@@ -11,7 +11,7 @@ use vifast_abi::{KError, Message, ObjType, Rights};
 use vifast_arch::Arch;
 use vifast_kernel::console::Console;
 use vifast_kernel::fs::MAX_PATH;
-use vifast_kernel::{Cap, Kernel, UserAction};
+use vifast_kernel::{Cap, Kernel, TaskLayout, UserAction};
 
 #[cfg(feature = "test-exit")]
 pub const TIMER_TICKS: u64 = 20;
@@ -27,7 +27,7 @@ pub struct PlatformInfo {
     pub memory_size: u64,
 }
 
-/// A user image is copied into the port's executable user page.
+/// A user image is copied into a Frame owned by the root VSpace.
 #[derive(Clone, Copy)]
 pub struct UserImage {
     pub code: &'static [u8],
@@ -61,14 +61,17 @@ pub trait Platform: Arch + Console {
     fn set_kernel(kernel: *mut Kernel);
     fn kernel() -> &'static mut Kernel;
 
-    fn code_page() -> &'static mut [u8];
     fn data_page() -> &'static mut [u8];
     fn metadata_page() -> &'static mut [u8];
     /// Kernel-owned arena for boot task objects.  It is never installed into
     /// a user cspace.
     fn boot_page() -> &'static mut [u8];
-    fn build_page_tables();
+    /// The static kernel-only page tables.  Retyped VSpaces copy the shared
+    /// kernel slots from these tables before they gain user mappings.
     fn vspace_root() -> u64;
+    /// Select the root loaded by the next `enter_user`.  This remains active
+    /// across traps until a later context switch replaces it.
+    fn set_active_root(root_pa: u64);
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps;
     /// Verify that trap entry, kernel stacks, descriptor tables, kernel
@@ -147,21 +150,15 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     );
     A::start_smp();
     let root = kernel.root().unwrap_or_else(|| A::exit(1));
-    let Some(vspace) = kernel.create_user_vspace(
-        A::vspace_root(),
-        A::USER_DATA_VA as u64,
-        A::PAGE_SIZE as u64,
-    ) else {
-        A::exit(1);
-    };
-    if kernel.set_tcb_vspace(root, vspace).is_err() {
-        A::exit(1);
-    }
     /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
     const RUNTIME_OBJECTS: usize = 5;
     const META_MAX_OBJECTS: usize = 32;
-    const DATA_MAX_OBJECTS: usize = 64;
-    const BOOT_MAX_OBJECTS: usize = 16;
+    const DATA_MAX_OBJECTS: usize = 48;
+    const BOOT_MAX_OBJECTS: usize = 32;
+    /* 4.5 needs a private server VSpace: two root pages, two page tables and
+    one or two stack pages.  Keep enough in the boot arena for that. */
+    const SERVER_MIN_PAGES: usize = 6;
+    const SERVER_MIN_OBJECTS: usize = 6;
     if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS + BOOT_MAX_OBJECTS
         > vifast_kernel::MAX_OBJECTS
     {
@@ -189,7 +186,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         vifast_kernel::klog!(A, "UNTYPED OUTSIDE KERNEL ACCESSIBLE RANGE");
         A::exit(1);
     }
-    let Some(_boot_untyped) = kernel.create_untyped_with_limit(
+    let Some(boot_untyped) = kernel.create_untyped_with_limit(
         boot.as_mut_ptr() as usize,
         boot.len(),
         A::PAGE_SIZE,
@@ -216,21 +213,14 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     if kernel
         .install_cap(
             root,
-            1,
-            Cap::new(vspace, ObjType::VSpace, Rights::READ | Rights::WRITE),
+            2,
+            Cap::new(
+                meta_untyped,
+                ObjType::Untyped,
+                Rights::WRITE | Rights::GRANT,
+            ),
         )
         .is_err()
-        || kernel
-            .install_cap(
-                root,
-                2,
-                Cap::new(
-                    meta_untyped,
-                    ObjType::Untyped,
-                    Rights::WRITE | Rights::GRANT,
-                ),
-            )
-            .is_err()
         || kernel
             .install_cap(
                 root,
@@ -246,17 +236,71 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         A::exit(1);
     }
 
-    let code = A::code_page();
-    if image.code.len() > code.len() {
-        vifast_kernel::klog!(A, "USER IMAGE TOO LARGE");
+    let page_size = A::PAGE_SIZE as u64;
+    let layout = TaskLayout {
+        code_va: vifast_abi::user_layout::CODE_VA as u64,
+        stack_va: vifast_abi::user_layout::STACK_BASE as u64,
+        stack_pages: vifast_abi::user_layout::STACK_LEN / A::PAGE_SIZE,
+        /* The client owns DATA_VA and maps its own Frame there.  The builder
+        must not consume that mapping. */
+        data: None,
+    };
+    let Ok(vspace) = kernel.build_task_space(boot_untyped, image.code, layout) else {
+        vifast_kernel::klog!(A, "ROOT VSPACE BUILD FAILED");
+        A::exit(1);
+    };
+    let Some(root_pa) = kernel.vspace(vspace).map(|space| space.root) else {
+        A::exit(1);
+    };
+    /* The root task shares its VSpace with the client bootstrap.  Keep the
+    legacy hint-0 allocation point at DATA_VA without mapping a data frame;
+    the client must still FrameMap it explicitly. */
+    if let Some(space) = kernel.vspace_mut(vspace) {
+        space.next_va = vifast_abi::user_layout::DATA_VA as u64;
+    }
+    if kernel.set_tcb_vspace(root, vspace).is_err()
+        || kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(vspace, ObjType::VSpace, Rights::READ | Rights::WRITE),
+            )
+            .is_err()
+    {
         A::exit(1);
     }
-    code[..image.code.len()].copy_from_slice(image.code);
-    A::build_page_tables();
-    if !A::check_kernel_mappings(A::vspace_root()) {
-        vifast_kernel::klog!(A, "KERNEL MAPPING CHECK FAILED");
+    if !A::check_kernel_mappings(root_pa) {
+        vifast_kernel::klog!(A, "KERNEL MAPPING CHECK FAILED root={:#x}", root_pa);
         A::exit(1);
     }
+    if let Some((size, bump, objects, max_objects)) = kernel.untyped_usage(boot_untyped) {
+        let total_pages = size / page_size as usize;
+        let used_pages = bump / page_size as usize;
+        let free_pages = total_pages.saturating_sub(used_pages);
+        let free_objects = max_objects.saturating_sub(objects);
+        vifast_kernel::klog!(
+            A,
+            "BOOT UNTYPED pages={}/{} objects={}/{} free_pages={} free_objects={}",
+            used_pages,
+            total_pages,
+            objects,
+            max_objects,
+            free_pages,
+            free_objects
+        );
+        if free_pages < SERVER_MIN_PAGES || free_objects < SERVER_MIN_OBJECTS {
+            vifast_kernel::klog!(
+                A,
+                "BOOT UNTYPED TOO SMALL FOR SERVER VSPACE (need pages={} objects={})",
+                SERVER_MIN_PAGES,
+                SERVER_MIN_OBJECTS
+            );
+            A::exit(1);
+        }
+    } else {
+        A::exit(1);
+    }
+    A::set_active_root(root_pa);
     A::prepare_user();
 
     let contexts = A::contexts();

@@ -25,13 +25,8 @@ const PAGE_PRESENT: u64 = 1;
 const PAGE_WRITE: u64 = 2;
 const PAGE_USER: u64 = 4;
 const PAGE_LARGE: u64 = 0x80;
-const PAGE_NX: u64 = 1 << 63;
 
 core::arch::global_asm!(include_str!("trap.S"));
-
-#[allow(dead_code)]
-#[repr(align(4096))]
-struct Page([u8; 4096]);
 
 #[allow(dead_code)]
 #[repr(align(4096))]
@@ -43,10 +38,6 @@ struct Table([u64; 512]);
 static mut PML4: Table = Table([0; 512]);
 static mut PDPT: Table = Table([0; 512]);
 static mut PD_IDENTITY: Table = Table([0; 512]);
-static mut PD_USER: Table = Table([0; 512]);
-static mut PT_USER: Table = Table([0; 512]);
-static mut USER_PAGE: Page = Page([0; 4096]);
-static mut USER_STACK: Stack = Stack([0; 32768]);
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct DataPool([u8; 262144]);
@@ -60,10 +51,11 @@ static mut TRAP_STACK: Stack = Stack([0; 32768]);
 static mut IST_STACK: Stack = Stack([0; 32768]);
 #[allow(dead_code)]
 #[repr(align(4096))]
-struct BootPool([u8; 65536]);
-static mut BOOT_POOL: BootPool = BootPool([0; 65536]);
+struct BootPool([u8; 131072]);
+static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut SMAP_ENABLED: bool = false;
+static mut ACTIVE_ROOT: u64 = 0;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -223,18 +215,14 @@ unsafe fn enable_smep_smap() {
     core::arch::asm!("mov cr4, {}", in(reg) cr4);
 }
 
-unsafe fn build_user_page_tables() {
+unsafe fn build_kernel_page_tables() {
     let pml4 = core::ptr::addr_of_mut!(PML4) as *mut Table;
     let pdpt = core::ptr::addr_of_mut!(PDPT) as *mut Table;
     let identity = core::ptr::addr_of_mut!(PD_IDENTITY) as *mut Table;
-    let user_pd = core::ptr::addr_of_mut!(PD_USER) as *mut Table;
-    let user_pt = core::ptr::addr_of_mut!(PT_USER) as *mut Table;
 
     zero_table(pml4);
     zero_table(pdpt);
     zero_table(identity);
-    zero_table(user_pd);
-    zero_table(user_pt);
 
     /* PML4[0] -> PDPT; PDPT[0] covers 0..1 GiB identity for kernel/UEFI
     code, stacks, GDT/TSS/IDT and page tables. */
@@ -242,19 +230,6 @@ unsafe fn build_user_page_tables() {
     (*pdpt).0[0] = table_pa(identity) | PAGE_PRESENT | PAGE_WRITE;
     for i in 0..512usize {
         (*identity).0[i] = (i as u64 * 0x20_0000) | PAGE_PRESENT | PAGE_WRITE | PAGE_LARGE;
-    }
-
-    /* User region starts at 64 GiB, in PDPT[64], outside the kernel
-    identity map.  PT_USER provides 4 KiB mappings for code, stack and data. */
-    (*pdpt).0[64] = table_pa(user_pd) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
-    (*user_pd).0[0] = table_pa(user_pt) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
-
-    let code_pa = core::ptr::addr_of!(USER_PAGE) as u64;
-    let stack_pa = core::ptr::addr_of!(USER_STACK) as u64;
-    (*user_pt).0[0] = code_pa | PAGE_PRESENT | PAGE_USER;
-    for i in 0..8usize {
-        (*user_pt).0[1 + i] =
-            (stack_pa + (i as u64) * 4096) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER | PAGE_NX;
     }
 }
 
@@ -555,7 +530,11 @@ impl Platform for X86Platform {
         USER_STACK_B_TOP
     }
 
-    fn init_platform(_info: PlatformInfo) {}
+    fn init_platform(_info: PlatformInfo) {
+        unsafe {
+            build_kernel_page_tables();
+        }
+    }
 
     fn init_kernel() -> &'static mut Kernel {
         unsafe {
@@ -583,15 +562,10 @@ impl Platform for X86Platform {
 
     fn boot_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(BOOT_POOL) as *mut u8, 65536)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(BOOT_POOL) as *mut u8, 131072)
         }
     }
 
-    fn code_page() -> &'static mut [u8] {
-        unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_PAGE) as *mut u8, 4096)
-        }
-    }
     fn data_page() -> &'static mut [u8] {
         unsafe {
             core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_FRAME) as *mut u8, 262144)
@@ -604,14 +578,14 @@ impl Platform for X86Platform {
         }
     }
 
-    fn build_page_tables() {
-        unsafe {
-            build_user_page_tables();
-        }
-    }
-
     fn vspace_root() -> u64 {
         core::ptr::addr_of!(PML4) as u64
+    }
+
+    fn set_active_root(root_pa: u64) {
+        unsafe {
+            ACTIVE_ROOT = root_pa;
+        }
     }
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
@@ -684,7 +658,12 @@ impl Platform for X86Platform {
 
     fn enter_user(context: &TrapFrame) -> ! {
         unsafe {
-            core::arch::asm!("mov cr3, {}", in(reg) core::ptr::addr_of!(PML4) as u64);
+            let root = if ACTIVE_ROOT != 0 {
+                ACTIVE_ROOT
+            } else {
+                core::ptr::addr_of!(PML4) as u64
+            };
+            core::arch::asm!("mov cr3, {}", in(reg) root);
             core::arch::asm!(
                 "push {ss}", "push {rsp}", "push {rflags}", "push {cs}", "push {rip}", "iretq",
                 ss = in(reg) context.ss,

@@ -357,6 +357,32 @@ mod tests {
     }
 
     #[test]
+    fn aarch64_l3_permissions_and_el0_bit() {
+        let arm_rw = aarch64::encode_leaf(0x3000, Rights::READ | Rights::WRITE);
+        assert_eq!(
+            aarch64::decode_at(arm_rw, 3),
+            Pte::Leaf(0x3000, Rights::READ | Rights::WRITE)
+        );
+        assert!(aarch64::is_user(arm_rw));
+        assert!(arm_rw & aarch64::UXN != 0);
+
+        let arm_rx = aarch64::encode_leaf(0x4000, Rights::READ | Rights::EXEC);
+        assert_eq!(
+            aarch64::decode_at(arm_rx, 3),
+            Pte::Leaf(0x4000, Rights::READ | Rights::EXEC)
+        );
+        assert!(aarch64::is_user(arm_rx));
+        assert!(arm_rx & aarch64::UXN == 0);
+
+        let arm_kernel = arm_rw & !(0b11 << 6);
+        assert!(!aarch64::is_user(arm_kernel));
+        assert_eq!(
+            aarch64::decode_at(arm_kernel, 3),
+            Pte::Leaf(0x3000, Rights::READ)
+        );
+    }
+
+    #[test]
     fn x86_large_leaf_is_recognized() {
         let block = 0x4000_0000u64 | x86_64::P | x86_64::PS;
         match x86_64::decode_at(block, 1) {
