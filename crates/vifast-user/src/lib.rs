@@ -430,10 +430,23 @@ pub fn send(endpoint_slot: u8, label: u64, data0: u64, data1: u64, data2: u64) -
 /// Blocking Call.  The reply is delivered through the normal message
 /// registers when the server eventually replies.
 pub fn call(endpoint_slot: u8, label: u64, data0: u64, data1: u64, data2: u64) -> SyscallResult {
+    call_with_cap(endpoint_slot, label, data0, data1, data2, CAP_NONE)
+}
+
+/// Call with an attached capability slot.  `cap_slot` must be `CAP_NONE`
+/// when no capability should be transferred.
+pub fn call_with_cap(
+    endpoint_slot: u8,
+    label: u64,
+    data0: u64,
+    data1: u64,
+    data2: u64,
+    cap_slot: u64,
+) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(
             SyscallId::Call as u64,
-            [endpoint_slot as u64, label, data0, data1, data2, CAP_NONE],
+            [endpoint_slot as u64, label, data0, data1, data2, cap_slot],
         )
     };
     result(e, v)

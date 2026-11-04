@@ -26,9 +26,10 @@ fn write(bytes: &[u8]) {
 pub extern "C" fn server_main() -> ! {
     write(SERVER);
     loop {
-        let result = vifast_user::reply_recv(1, 0, 0x55, 42, 0, 0);
+        let result = vifast_user::reply_recv(1, 4, 0x55, 42, 0, 0);
         if result.error == KError::Ok {
             let _ = vifast_user::debug_write(IPC_BUF_SERVER_VA as u64, IPC_BYTES as u64);
+            let _ = vifast_user::signal(4);
         }
     }
 }

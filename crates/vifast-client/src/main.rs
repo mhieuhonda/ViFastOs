@@ -86,7 +86,19 @@ pub extern "C" fn client_main() -> ! {
     write(CLIENT);
 
     unsafe { copy_to(IPC_BUF_CLIENT_VA as u64, IPC_TEXT) };
-    for _ in 0..5 {
+    let first = vifast_user::call_with_cap(1, 0x1234, 0, 0, 5, 5);
+    let first_poll = vifast_user::poll(5);
+    write(if first_poll.error == KError::Ok {
+        CAP_OK
+    } else {
+        CAP_BAD
+    });
+    write(if first.error == KError::Ok {
+        REPLY_OK
+    } else {
+        REPLY_BAD
+    });
+    for _ in 0..4 {
         let reply = vifast_user::call(1, 0x1234, 0, 0, 5);
         let polled = vifast_user::poll(5);
         write(if polled.error == KError::Ok {
