@@ -625,7 +625,7 @@ x86_64:
 - CR3 chuyển sang PML4 riêng trước iretq.
 - PML4[0] và PDPT là riêng mỗi VSpace; PDPT[0] trỏ PD kernel dùng chung
   cho identity 0..1 GiB; user 64..128 GiB dùng PDPT[64..127] trỏ bảng riêng.
-- SMEP/SMAP bật nếu CPUID hỗ trợ; chưa có NX cho data kernel.
+- SMEP/SMAP bật nếu CPUID hỗ trợ; EFER.NXE + tách 2 MiB để đánh dấu NX cho static data kernel (S2).
 - I-cache và D-cache coherent; sync_icache là no-op.
 - Chưa có AP/SMP scheduler.
 
@@ -670,7 +670,7 @@ Số syscall chính:
 1  Call
 2  Recv
 3  Reply
-4  ReplyRecv (chưa triển khai)
+4  ReplyRecv (đã có; caller hiện tại + Recv)
 5  Signal
 6  Wait
 7  Poll
@@ -1015,7 +1015,7 @@ Exit code:
   BlockedFault; handler queue/wake; root nhận fault4 và in FAULT EP OK addr=...
   x86 enter_user khôi phục đầy đủ register; 3 host test mới.
 - 8.1: TcbSetIpcBuffer (41), IPC_BUFFER_WORDS=32, copy qua PA khi hai TCB có
-  buffer; unmap/revoke xoá link. API/core host-test; demo buffer dài chưa nối.
+  buffer; unmap/revoke xoá link. API/core + demo end-to-end 8.1b đã có.
 - PageTableMap gắn page table ở entry invalid đầu tiên; level do kernel chọn.
 - Retype VSpace cấp root + aux page, zero và gọi install_kernel thật.
 - Revoke Untyped sắp thứ tự Frame → PageTable sâu nhất → PageTable cha → VSpace.
@@ -1037,7 +1037,7 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 77 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 78 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1050,17 +1050,20 @@ Exit code:
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
 - Chưa có IOMMU.
 - vifast-elf + vifast-root ELF đã build/validate và đã nối boot flow 6.4;
-  chưa có shared memory/IPC buffer.
+  shared memory/IPC buffer core + demo end-to-end đã có (8.1/8.1b); chưa có
+  shared-memory mapping dùng chung ngoài IPC buffer.
 - Chưa có Reply mang capability; ReplyRecv và fault endpoint tối giản đã có.
 - VFS chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
 - Chưa có block device, FS bền vững, directory, permission.
 - Chưa có driver network/GPU/input.
 - Chưa có compositor, ViFastKey.
-- Chưa có formal verification/fuzz diện rộng.
+- Chưa có formal verification; đã có syscall fuzz 10.000 bước x 3 PTE format
+  (S1), chưa phải fuzz diện rộng/ngẫu nhiên độc lập.
 - RISC-V kernel accessible chỉ 4 MiB (0x8000_0000..0x8040_0000); runtime/assert
   kiểm tra kernel image + metadata/data/boot Untyped nằm trọn trong dải này.
 - x86 identity map 0..1 GiB; nếu OVMF/RAM vượt mốc này phải lấy memory map.
-- Kernel x86 identity map chưa đặt NX cho data.
+- Kernel x86 static data đã NX; text vẫn X. Chưa có NX cho toàn bộ rodata/UEFI
+  runtime pages.
 - Root/server/client mỗi task một VSpace; root VSpace không còn stack client.
 - Boot Untyped 128 KiB/32 object đã dùng cho root + server + BootInfo; log QEMU
   còn 11-13 trang và 13 object (RISC-V 13/13, AArch64/x86 11/13).
@@ -1091,7 +1094,7 @@ A. Userland / ABI trước
 2. vifast-elf parser ELF64 PT_LOAD + host test (đã có).
 3. Bước 6: root task Rust nạp từ ELF; stack 4 trang + guard — đã xong.
 4. Bước 7: BootInfo (7.3), Untyped con (7.2), VSpace client (7.4), chuyển client/fault4 (7.5) — 3b hoàn tất.
-5. Shared memory / IPC buffer (core 8.1 đã có).
+5. Shared memory / IPC buffer (core + demo 8.1/8.1b đã có).
 6. Reply capability; ReplyRecv/fault endpoint tối giản đã có.
 7. Supervisor/pager tối giản.
 
