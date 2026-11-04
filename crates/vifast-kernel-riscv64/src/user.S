@@ -42,6 +42,11 @@ user_root:
     li a1, 1
     li a2, 10
     ecall
+    li a7, 9
+    li a0, 2
+    li a1, 1
+    li a2, 11
+    ecall
 
     /* endpoint -> server slot 1 (READ), client slot 1 (WRITE) */
     li a7, 10
@@ -82,8 +87,8 @@ user_root:
     li a7, 15
     li a0, 5
     la a1, user_thread_a
-    li a2, 0x1000005000
-    li a3, 1
+    li a2, 0x1000003000
+    li a3, 12
     li a4, 5
     ecall
     li a7, 15
@@ -102,7 +107,7 @@ user_root:
     li a7, 15
     li a0, 9
     la a1, user_thread_fault
-    li a2, 0x1000005000
+    li a2, 0x1000006000
     li a3, 1
     li a4, 6
     ecall
@@ -112,12 +117,22 @@ user_root:
     li a7, 15
     li a0, 10
     la a1, user_thread_fault2
-    li a2, 0x1000005000
+    li a2, 0x1000007000
     li a3, 1
     li a4, 6
     ecall
     li a7, 16
     li a0, 10
+    ecall
+    li a7, 15
+    li a0, 11
+    la a1, user_thread_fault3
+    li a2, 0x1000008000
+    li a3, 1
+    li a4, 6
+    ecall
+    li a7, 16
+    li a0, 11
     ecall
     /* Root has no policy loop; block until someone signals slot 8. */
     li a7, 6
@@ -144,6 +159,19 @@ user_thread_fault2:
     li a1, 7
     ecall
     .word 0
+1:
+    j 1b
+
+    .globl user_thread_fault3
+user_thread_fault3:
+    li a7, 32
+    la a0, user_isolation_msg
+    li a1, 10
+    ecall
+    /* The server stack page is private to the server VSpace.  A root-VSpace
+       thread writing here must fault instead of touching an orphan page. */
+    li t0, 0x1000002000
+    sw zero, 0(t0)
 1:
     j 1b
 
@@ -244,6 +272,7 @@ user_thread_b:
     li a7, 26
     li a0, 2
     mv a1, t3
+    li a2, 4
     ecall
     li a7, 14
     li a0, 3
@@ -276,6 +305,7 @@ user_thread_b:
     li a7, 26
     li a0, 2
     mv a1, t3
+    li a2, 4
     ecall
     li a7, 32
     la a0, user_message_b
@@ -353,5 +383,7 @@ user_zero_ok:
     .asciz "Zero OK\n"
 user_zero_bad:
     .asciz "Zero BAD\n"
+user_isolation_msg:
+    .asciz "Isolation\n"
     .globl user_program_end
 user_program_end:

@@ -163,7 +163,7 @@ mode. Root task tự tạo server/client:
 
 Root task nhận VSpace + metadata Untyped 64 KiB + data Untyped 256 KiB ở
 slot 1/2/3, tự `Retype`
-endpoint, hai TCB server/client, hai fault TCB, notification cho client và
+endpoint, hai TCB server/client, ba fault TCB, notification cho client và
 notification riêng, `CapCopy` cap cho server/client, `TcbConfigure`
 entry/stack/VSpace rồi `TcbResume`. Server có cap endpoint
 `READ`, gọi `Recv` rồi `Reply`; client có cap `WRITE`, gọi `Call` và nhận reply. Client còn giữ cap `Untyped`, gọi `Retype`

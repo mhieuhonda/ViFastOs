@@ -124,6 +124,19 @@ unsafe fn build_kernel_page_tables() {
     (*device_l1).0[128] = pte(0x1000_0000, PTE_V | PTE_R | PTE_W);
 }
 
+fn active_root_matches_current() -> bool {
+    unsafe {
+        if KERNEL_PTR.is_null() || ACTIVE_ROOT == 0 {
+            return false;
+        }
+        let kernel = &*KERNEL_PTR;
+        let Some(tcb) = kernel.current() else {
+            return false;
+        };
+        kernel.current_root(tcb) == Some(ACTIVE_ROOT)
+    }
+}
+
 impl Arch for RiscvPlatform {
     const NAME: &'static str = Riscv64::NAME;
     fn init() {
@@ -355,10 +368,17 @@ impl Platform for RiscvPlatform {
         table_pa(core::ptr::addr_of!(ROOT))
     }
 
-    fn set_active_root(root_pa: u64) {
+    fn switch_root(root_pa: u64) -> bool {
         unsafe {
+            if root_pa == 0 || root_pa == ACTIVE_ROOT {
+                return false;
+            }
             ACTIVE_ROOT = root_pa;
+            let satp = (8u64 << 60) | (root_pa >> 12);
+            core::arch::asm!("csrw satp, {}", in(reg) satp);
+            core::arch::asm!("sfence.vma zero, zero");
         }
+        true
     }
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
@@ -383,6 +403,9 @@ impl Platform for RiscvPlatform {
     }
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
+        if !active_root_matches_current() {
+            return Err(KError::IllegalOperation);
+        }
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
@@ -401,6 +424,9 @@ impl Platform for RiscvPlatform {
     }
 
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError> {
+        if !active_root_matches_current() {
+            return Err(KError::IllegalOperation);
+        }
         if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
         {
@@ -424,17 +450,7 @@ impl Platform for RiscvPlatform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
-        let root = unsafe {
-            if ACTIVE_ROOT != 0 {
-                ACTIVE_ROOT
-            } else {
-                table_pa(core::ptr::addr_of!(ROOT))
-            }
-        };
-        let satp = (8u64 << 60) | (root >> 12);
         unsafe {
-            core::arch::asm!("csrw satp, {}", in(reg) satp);
-            core::arch::asm!("sfence.vma");
             core::arch::asm!("csrw sstatus, {}", in(reg) context.sstatus);
             core::arch::asm!("csrw sepc, {}", in(reg) context.sepc);
             core::arch::asm!("csrw stvec, {}", in(reg) trap_entry as *const () as usize);

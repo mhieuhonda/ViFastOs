@@ -38,6 +38,11 @@ user_root:
     mov x1, #1
     mov x2, #10
     svc #0
+    mov x8, #9
+    mov x0, #2
+    mov x1, #1
+    mov x2, #11
+    svc #0
 
     mov x8, #10
     mov x0, #4
@@ -75,8 +80,8 @@ user_root:
     adr x1, user_thread_a
     mov x2, #0x10
     lsl x2, x2, #32
-    add x2, x2, #0x5000
-    mov x3, #1
+    add x2, x2, #0x3000
+    mov x3, #12
     mov x4, #5
     svc #0
     mov x8, #15
@@ -99,7 +104,7 @@ user_root:
     adr x1, user_thread_fault
     mov x2, #0x10
     lsl x2, x2, #32
-    add x2, x2, #0x5000
+    add x2, x2, #0x6000
     mov x3, #1
     mov x4, #6
     svc #0
@@ -111,12 +116,24 @@ user_root:
     adr x1, user_thread_fault2
     mov x2, #0x10
     lsl x2, x2, #32
-    add x2, x2, #0x5000
+    add x2, x2, #0x7000
     mov x3, #1
     mov x4, #6
     svc #0
     mov x8, #16
     mov x0, #10
+    svc #0
+    mov x8, #15
+    mov x0, #11
+    adr x1, user_thread_fault3
+    mov x2, #0x10
+    lsl x2, x2, #32
+    add x2, x2, #0x8000
+    mov x3, #1
+    mov x4, #6
+    svc #0
+    mov x8, #16
+    mov x0, #11
     svc #0
     mov x8, #6
     mov x0, #8
@@ -143,6 +160,19 @@ user_thread_fault2:
     mov x1, #7
     svc #0
     hlt #0
+1:
+    b 1b
+
+    .globl user_thread_fault3
+user_thread_fault3:
+    mov x8, #32
+    adr x0, user_isolation_msg
+    mov x1, #10
+    svc #0
+    mov x1, #0x10
+    lsl x1, x1, #32
+    add x1, x1, #0x2000
+    str xzr, [x1]
 1:
     b 1b
 
@@ -239,6 +269,7 @@ user_thread_b:
     mov x8, #26
     mov x0, #2
     mov x1, x19
+    mov x2, #4
     svc #0
     mov x8, #14
     mov x0, #3
@@ -273,6 +304,7 @@ user_thread_b:
     mov x8, #26
     mov x0, #2
     mov x1, x19
+    mov x2, #4
     svc #0
     mov x8, #32
     adr x0, user_message_b
@@ -341,6 +373,8 @@ user_zero_ok:
     .asciz "Zero OK\n"
 user_zero_bad:
     .asciz "Zero BAD\n"
+user_isolation_msg:
+    .asciz "Isolation\n"
     .balign 8
 user_mapped_text:
     .ascii "Mapped\n\0"

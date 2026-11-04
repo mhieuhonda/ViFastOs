@@ -48,7 +48,7 @@ Test `tlb_shootdown_across_harts`: hai thread chung VSpace trên hai hart. Có s
 
 ## 6. Unmap và huỷ VSpace
 
-- `FrameUnmap`: xoá PTE (chỉ khi PTE vẫn trỏ đúng frame này), gỡ khỏi bản đồ ngược, shootdown trang đó.
+- `FrameUnmap`: cần VSpace cap WRITE và Frame cap khớp PA; xoá PTE (chỉ khi PTE vẫn trỏ đúng frame này), gỡ khỏi bản đồ ngược, shootdown trang đó.
 - Xoá cap frame đang map: tự unmap.
 - Huỷ PageTable đang map: xoá PTE trỏ tới nó, shootdown toàn ASID.
 - Huỷ VSpace: gỡ cờ `mapped` ở mọi cap (qua bản đồ ngược `frames`, `tables`), shootdown toàn ASID, trả ASID.

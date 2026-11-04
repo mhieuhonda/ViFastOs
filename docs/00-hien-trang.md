@@ -57,7 +57,7 @@ Kernel portable hiện có:
   `FrameMap`, `FrameUnmap`, `Open`, `Read`, `Write`, `Close`, `Seek`, `Stat`,
   `DebugWrite`, `GetTime`, `Exit`;
 - timer interrupt + preemptive scheduler một hart; root task tạo server/client
-  và hai fault thread;
+  và ba fault thread;
 - IPC user subset `Send/Call/Recv/Reply/Signal/Wait/Poll`.
 
 ## Chưa có

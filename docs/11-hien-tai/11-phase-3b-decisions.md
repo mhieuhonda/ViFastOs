@@ -1,7 +1,7 @@
 # 11.11. Quyết định thiết kế cho Phase 3b (VSpace riêng)
 
-Tài liệu này chốt hướng trước khi triển khai; code hiện tại vẫn dùng một VSpace
-chung cho root/server/client.
+Tài liệu này chốt hướng trước khi triển khai. 4.3 root đã chạy trên VSpace
+retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 
 ## 1. Kernel mapping
 
@@ -15,9 +15,14 @@ chung cho root/server/client.
 
 ## 2. Chuyển address space
 
-- `Context`/TCB lưu `root` của VSpace.
-- Runtime ghi `satp` (RISC-V), `TTBR0` (AArch64) hoặc `CR3` (x86) khi switch.
-- Chưa có ASID/PCID: flush TLB phần user khi đổi root; kernel Global giữ lại.
+- `Context` **không** cache root. Runtime đọc root từ `tcb.vspace` mỗi lần restore;
+  TcbConfigure đổi VSpace hoặc revoke làm Faulted không để lại cache treo.
+- `Kernel::current_root(tcb)` trả `Option<u64>`; None thì không vào user mà
+  fault-suspend TCB.
+- Runtime ghi `satp` (RISC-V), `TTBR0` (AArch64) hoặc `CR3` (x86) + full flush
+  khi root khác. Có counter `root_switches`, log `ROOT SWITCH n` khi test-exit.
+- `read_user`/`write_user` assert root đang nạp khớp current TCB.
+- Chưa có ASID/PCID; full flush hiện tại là đủ cho một hart.
 
 ## 3. Code/stack
 
@@ -32,6 +37,9 @@ chung cho root/server/client.
 - Runtime nhúng ảnh từng task thành boot module page-aligned.
 - Mỗi ảnh có Frame cap; danh sách nằm trong BootInfo frame map read-only.
 - Root map Frame code RX vào VSpace từng task; không copy code.
+- 4.5 dùng `build_task_space_shared_code`: root và server map cùng Frame code.
+- Root VSpace map stack root/client/fault1/2/3; stack server +0x2000 chỉ nằm
+  trong VSpace server. Fault3 ghi +0x2000 phải USER FAULT.
 
 ## 5. Frame map nhiều VSpace
 
@@ -50,7 +58,11 @@ chung cho root/server/client.
 
 - `PageTableMap` đã expose: kernel chọn level, kiểm tra toàn bộ table span,
   lưu vị trí gắn và trả `AlreadyMapped` khi gắn lại.
-- Retype PageTable và VSpace từ Untyped đã có; runtime root chuyển sang VSpace mới ở bước switch root.
+- Retype PageTable và VSpace từ Untyped đã có; 4.3 runtime root chuyển sang
+  VSpace mới, 4.5 thêm VSpace server. Cap VSpace server tạm ở root slot 12;
+  BootInfo sẽ thay hard-code ở Bước 6.
+- FrameUnmap cần VSpace WRITE + Frame cap khớp PA; chỉ VSpace cap không thể
+  unmap mapping của frame không sở hữu.
 - Object có `creator: CapRef { addr, id }` để revoke Untyped copy không phá
   object của cap gốc; `delete_cap` từ chối khi còn object/cap con.
 - Kernel mapping check dùng walk leaf thật (non-user/X/W), không chỉ kiểm tra slot.

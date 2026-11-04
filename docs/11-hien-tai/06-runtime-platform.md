@@ -57,7 +57,7 @@ fn metadata_page() -> &'static mut [u8];
 fn boot_page() -> &'static mut [u8];
 fn page_table_ops() -> &'static dyn PageTableOps;
 fn vspace_root() -> u64;
-fn set_active_root(root_pa: u64);
+fn switch_root(root_pa: u64) -> bool;
 fn check_kernel_mappings(root_pa: u64) -> bool;
 fn read_user(ptr, out) -> KResult<()>;
 fn write_user(ptr, input) -> KResult<()>;
@@ -99,15 +99,17 @@ MP Services, tránh làm hỏng môi trường firmware.
 7. `A::start_smp()`.
 8. Tạo boot Untyped 128 KiB/32 object, metadata Untyped, data Untyped.
 9. Cài metadata/data Untyped slot 2/3.
-10. `build_task_space` dựng root VSpace từ boot Untyped: code RX, 8 trang stack,
-    không data; cài VSpace slot 1 và TCB root.
-11. `check_kernel_mappings(root_pa)`; log used/free pages/objects của boot Untyped.
-12. `A::set_active_root(root_pa)`, `A::prepare_user()`.
-13. Tạo context duy nhất cho root.
-14. `A::set_kernel()`.
-15. Enqueue root, `pick()`.
-16. `A::start_timer()`.
-17. `A::enter_user(context root)`.
+10. `build_task_space` dựng root VSpace: code RX, không stack/data; map rời
+    5 stack page; cài VSpace slot 1 và TCB root.
+11. Dựng server VSpace từ boot Untyped, code dùng chung Frame root, stack
+    +0x2000; cài server VSpace slot 12.
+12. `check_kernel_mappings(root_pa/server_pa)`; log used/free pages/objects.
+13. `A::prepare_user()`.
+14. Tạo context duy nhất cho root.
+15. `A::set_kernel()`.
+16. Enqueue root, `pick()`, `ensure_current_root()` -> `ROOT SWITCH 1`.
+17. `A::start_timer()`.
+18. `A::enter_user(context root)`.
 
 Root task tự Retype/CapCopy/TcbConfigure/TcbResume server/client/fault thread,
 sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham chiếu
@@ -132,9 +134,10 @@ sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham
 
 Mọi `unsafe` copy user nằm sau `Platform::read_user`/`write_user`.
 Runtime assert metadata/data/boot Untyped nằm trong `kernel_accessible_range()`
-và gọi `check_kernel_mappings(root_pa)` trên root VSpace mới trước khi set
-active root. Check này walk leaf thật và chạy lại trên root mới trước lần
-switch đầu tiên.
+và gọi `check_kernel_mappings` trên cả root/server VSpace. Root được đọc từ
+`tcb.vspace` mỗi lần restore; `switch_root` ghi CR3/TTBR0/satp + full flush khi
+khác. `read_user`/`write_user` assert root đang nạp khớp TCB hiện tại. Counter
+`root_switches` in `ROOT SWITCH n` khi test-exit.
 
 ## 5. Timer
 

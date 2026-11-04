@@ -237,6 +237,19 @@ fn user_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
     ptr >= base as u64 && ptr as usize + len <= base + size
 }
 
+fn active_root_matches_current() -> bool {
+    unsafe {
+        if KERNEL_PTR.is_null() || ACTIVE_ROOT == 0 {
+            return false;
+        }
+        let kernel = &*KERNEL_PTR;
+        let Some(tcb) = kernel.current() else {
+            return false;
+        };
+        kernel.current_root(tcb) == Some(ACTIVE_ROOT)
+    }
+}
+
 unsafe fn setup_gdt_tss_idt() {
     let tss = core::ptr::addr_of_mut!(TSS);
     (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACK) as u64 + 16384;
@@ -582,10 +595,15 @@ impl Platform for X86Platform {
         core::ptr::addr_of!(PML4) as u64
     }
 
-    fn set_active_root(root_pa: u64) {
+    fn switch_root(root_pa: u64) -> bool {
         unsafe {
+            if root_pa == 0 || root_pa == ACTIVE_ROOT {
+                return false;
+            }
             ACTIVE_ROOT = root_pa;
+            core::arch::asm!("mov cr3, {}", in(reg) root_pa);
         }
+        true
     }
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
@@ -613,6 +631,9 @@ impl Platform for X86Platform {
     }
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
+        if !active_root_matches_current() {
+            return Err(KError::IllegalOperation);
+        }
         if !user_range(ptr, out.len(), USER_CODE_VA, 4096)
             && !user_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             && !user_range(ptr, out.len(), USER_DATA_VA, 4096)
@@ -632,6 +653,9 @@ impl Platform for X86Platform {
     }
 
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError> {
+        if !active_root_matches_current() {
+            return Err(KError::IllegalOperation);
+        }
         if !user_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
             && !user_range(ptr, input.len(), USER_DATA_VA, 4096)
         {
@@ -658,12 +682,6 @@ impl Platform for X86Platform {
 
     fn enter_user(context: &TrapFrame) -> ! {
         unsafe {
-            let root = if ACTIVE_ROOT != 0 {
-                ACTIVE_ROOT
-            } else {
-                core::ptr::addr_of!(PML4) as u64
-            };
-            core::arch::asm!("mov cr3, {}", in(reg) root);
             core::arch::asm!(
                 "push {ss}", "push {rsp}", "push {rflags}", "push {cs}", "push {rip}", "iretq",
                 ss = in(reg) context.ss,

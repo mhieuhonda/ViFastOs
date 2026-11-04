@@ -38,7 +38,7 @@ Mã nguồn: `vifast-abi/src/lib.rs`; Python `abi.py`, `ktypes.py`.
 | 23 | SchedContextBind(sc, tcb) | SchedContext(W), TCB(W) | | Không | |
 | 24 | PageTableMap(pt, vspace, vaddr) | PageTable, VSpace(W) | | Không | Trả cấp đã gắn |
 | 25 | FrameMap(frame, vspace, vaddr, rights) | Frame, VSpace(W) | | Không | W^X; có thể MISSING_PAGE_TABLE |
-| 26 | FrameUnmap(frame) | Frame | | Không | Shootdown |
+| 26 | FrameUnmap(frame) | VSpace WRITE + Frame cap | | Không | Shootdown; cap Frame phải khớp PA |
 | 27 | IoMap(frame, iospace, iova, rights) | Frame, IoSpace(W) | | Không | Không nhận frame thiết bị |
 | 28 | IoUnmap(frame) | Frame | | Không | |
 | 29 | IrqGet(control, irq, dest, dest_cnode) | IrqControl | | Không | IRQ_IN_USE nếu đã có |

@@ -38,6 +38,11 @@ user_root:
     mov rsi, 1
     mov rdx, 10
     int 0x80
+    mov rax, 9
+    mov rdi, 2
+    mov rsi, 1
+    mov rdx, 11
+    int 0x80
 
     mov rax, 10
     mov rdi, 4
@@ -73,8 +78,8 @@ user_root:
     mov rax, 15
     mov rdi, 5
     lea rsi, [rip + user_thread_a]
-    movabs rdx, 0x1000005000
-    mov rcx, 1
+    movabs rdx, 0x1000003000
+    mov rcx, 12
     mov r8, 5
     int 0x80
     mov rax, 15
@@ -93,7 +98,7 @@ user_root:
     mov rax, 15
     mov rdi, 9
     lea rsi, [rip + user_thread_fault]
-    movabs rdx, 0x1000005000
+    movabs rdx, 0x1000006000
     mov rcx, 1
     mov r8, 6
     int 0x80
@@ -103,12 +108,22 @@ user_root:
     mov rax, 15
     mov rdi, 10
     lea rsi, [rip + user_thread_fault2]
-    movabs rdx, 0x1000005000
+    movabs rdx, 0x1000007000
     mov rcx, 1
     mov r8, 6
     int 0x80
     mov rax, 16
     mov rdi, 10
+    int 0x80
+    mov rax, 15
+    mov rdi, 11
+    lea rsi, [rip + user_thread_fault3]
+    movabs rdx, 0x1000008000
+    mov rcx, 1
+    mov r8, 6
+    int 0x80
+    mov rax, 16
+    mov rdi, 11
     int 0x80
     mov rax, 6
     mov rdi, 8
@@ -134,6 +149,17 @@ user_thread_fault2:
     mov rsi, 7
     int 0x80
     ud2
+1:
+    jmp 1b
+
+    .globl user_thread_fault3
+user_thread_fault3:
+    mov rax, 32
+    lea rdi, [rip + user_isolation_msg]
+    mov rsi, 10
+    int 0x80
+    movabs rax, 0x1000002000
+    mov qword ptr [rax], 0
 1:
     jmp 1b
 
@@ -231,6 +257,7 @@ user_thread_b:
     mov rax, 26
     mov rdi, 2
     mov rsi, r12
+    mov rdx, 4
     int 0x80
     mov rax, 14
     mov rdi, 3
@@ -264,6 +291,7 @@ user_thread_b:
     mov rax, 26
     mov rdi, 2
     mov rsi, r12
+    mov rdx, 4
     int 0x80
     mov rax, 32
     lea rdi, [rip + user_message_b]
@@ -334,6 +362,8 @@ user_zero_ok:
     .asciz "Zero OK\n"
 user_zero_bad:
     .asciz "Zero BAD\n"
+user_isolation_msg:
+    .asciz "Isolation\n"
     .balign 8
 user_mapped_text:
     .ascii "Mapped\n\0"

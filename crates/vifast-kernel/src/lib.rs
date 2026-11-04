@@ -137,6 +137,7 @@ pub struct KernelStats {
     pub ipc_received: u64,
     pub notifications: u64,
     pub context_switches: u64,
+    pub root_switches: u64,
     pub ticks: u64,
 }
 
@@ -196,6 +197,7 @@ impl Kernel {
                 ipc_received: 0,
                 notifications: 0,
                 context_switches: 0,
+                root_switches: 0,
                 ticks: 0,
             },
             page_table_ops: None,
@@ -221,6 +223,7 @@ impl Kernel {
             ipc_received: 0,
             notifications: 0,
             context_switches: 0,
+            root_switches: 0,
             ticks: 0,
         };
         self.page_table_ops = None;
@@ -247,6 +250,16 @@ impl Kernel {
 
     pub fn stats(&self) -> KernelStats {
         self.stats
+    }
+
+    /// Root page-table PA currently configured for a TCB.
+    pub fn current_root(&self, tcb: ObjRef) -> Option<u64> {
+        let space = self.tcb(tcb)?.vspace?;
+        Some(self.vspace(space)?.root)
+    }
+
+    pub fn note_root_switch(&mut self) {
+        self.stats.root_switches = self.stats.root_switches.saturating_add(1);
     }
 
     fn alloc(&mut self, kind: Kind) -> Option<ObjRef> {
@@ -525,6 +538,22 @@ impl Kernel {
             Kind::Frame(ref frame) => Some(frame),
             _ => None,
         }
+    }
+
+    /// Find an existing Frame object by physical address.  Used to share the
+    /// root code page with the server VSpace without changing ownership.
+    pub fn frame_for_pa(&self, pa: u64) -> Option<ObjRef> {
+        for (index, object) in self.objs.iter().enumerate() {
+            if let Kind::Frame(frame) = object.kind {
+                if frame.pa as u64 == pa {
+                    return Some(ObjRef {
+                        index: index as u8,
+                        gen: object.gen,
+                    });
+                }
+            }
+        }
+        None
     }
 
     pub fn vspace(&self, r: ObjRef) -> Option<&VSpace> {
@@ -809,6 +838,28 @@ impl Kernel {
         image: &[u8],
         layout: TaskLayout,
     ) -> KResult<ObjRef> {
+        self.build_task_space_inner(untyped, Some(image), None, layout)
+    }
+
+    /// Build a VSpace whose one-page code segment is an already existing
+    /// Frame.  This is the 4.5 server path: the server maps the same physical
+    /// code page as the root task without retyping or copying it again.
+    pub fn build_task_space_shared_code(
+        &mut self,
+        untyped: ObjRef,
+        code_frame: ObjRef,
+        layout: TaskLayout,
+    ) -> KResult<ObjRef> {
+        self.build_task_space_inner(untyped, None, Some(code_frame), layout)
+    }
+
+    fn build_task_space_inner(
+        &mut self,
+        untyped: ObjRef,
+        image: Option<&[u8]>,
+        shared_code: Option<ObjRef>,
+        layout: TaskLayout,
+    ) -> KResult<ObjRef> {
         let (page, bump, objects) = {
             let region = self.untyped(untyped).ok_or(KError::WrongType)?;
             (region.page_size, region.bump, region.objects)
@@ -816,7 +867,17 @@ impl Kernel {
         if page == 0 || !page.is_power_of_two() || self.page_table_ops.is_none() {
             return Err(KError::MissingPageTable);
         }
-        let image_pages = (image.len() + page - 1) / page;
+        let code_pages = match (image, shared_code) {
+            (Some(image), None) => (image.len() + page - 1) / page,
+            (None, Some(frame)) => {
+                let frame = self.frame(frame).ok_or(KError::WrongType)?;
+                if frame.size < page {
+                    return Err(KError::Alignment);
+                }
+                1
+            }
+            _ => return Err(KError::InvalidArg),
+        };
         let mut created = [ObjRef::invalid(); MAX_OBJECTS];
         let mut created_count = 0usize;
         let vspace = self.retype_as(untyped, ObjType::VSpace, None)?;
@@ -833,16 +894,25 @@ impl Kernel {
                     count: &mut usize|
          -> KResult<()> {
             kernel.ensure_task_tables(untyped, vspace, layout.code_va, created, count)?;
-            kernel.map_task_segment(
-                untyped,
-                vspace,
-                layout.code_va,
-                image_pages,
-                Rights::READ | Rights::EXEC,
-                Some(image),
-                created,
-                count,
-            )?;
+            if let Some(code_frame) = shared_code {
+                kernel.map_frame(
+                    vspace,
+                    code_frame,
+                    layout.code_va,
+                    Rights::READ | Rights::EXEC,
+                )?;
+            } else if let Some(image) = image {
+                kernel.map_task_segment(
+                    untyped,
+                    vspace,
+                    layout.code_va,
+                    code_pages,
+                    Rights::READ | Rights::EXEC,
+                    Some(image),
+                    created,
+                    count,
+                )?;
+            }
             kernel.ensure_task_tables(untyped, vspace, layout.stack_va, created, count)?;
             kernel.map_task_segment(
                 untyped,
@@ -2482,6 +2552,36 @@ impl Kernel {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
+                // A VSpace capability alone must not allow a task to tear
+                // down mappings of frames it does not own.  The caller must
+                // also present a Frame cap for the exact PA being unmapped.
+                let frame = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a2).unwrap_or(0),
+                    Some(ObjType::Frame),
+                    Rights::NONE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let Some(frame_object) = self.frame(frame.obj) else {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::ObjectDestroyed,
+                    };
+                };
+                let Some(mapping) = self.mapping_at(space.obj, a1) else {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::NotMapped,
+                    };
+                };
+                if mapping.pa != frame_object.pa as u64 {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::NoRights,
+                    };
+                }
                 match self.unmap_frame(space.obj, a1) {
                     Ok(_) => UserAction::Return {
                         value: 0,
@@ -2675,6 +2775,95 @@ mod tests {
             kernel.unmap_frame(space, mapping.va),
             Err(KError::NotMapped)
         );
+    }
+
+    #[test]
+    fn frame_unmap_requires_matching_frame_cap() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0x8000, 4096, 16)
+            .unwrap();
+        let data_va = 0x10_0000_a000;
+        let space = kernel
+            .build_task_space(
+                untyped,
+                b"UNMAP",
+                TaskLayout {
+                    code_va: 0x10_0000_0000,
+                    stack_va: 0x10_0000_1000,
+                    stack_pages: 2,
+                    data: None,
+                },
+            )
+            .unwrap();
+        let frame = kernel.retype(untyped, ObjType::Frame).unwrap();
+        kernel
+            .map_frame(space, frame, data_va, Rights::READ | Rights::WRITE)
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(space, ObjType::VSpace, Rights::READ | Rights::WRITE),
+            )
+            .unwrap();
+
+        // VSpace WRITE alone is insufficient: no Frame cap is presented.
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameUnmap as u64,
+                1,
+                0x10_0000_0000,
+                0,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidCap,
+            }
+        );
+        assert!(kernel.mapping_at(space, 0x10_0000_0000).is_some());
+
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(frame, ObjType::Frame, Rights::READ | Rights::WRITE),
+            )
+            .unwrap();
+        // The Frame cap must match the PA of the mapping being removed.
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameUnmap as u64,
+                1,
+                0x10_0000_0000,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::NoRights,
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::FrameUnmap as u64, 1, data_va, 2, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok,
+            }
+        );
+        assert!(kernel.mapping_at(space, data_va).is_none());
     }
 
     #[test]
@@ -4411,6 +4600,50 @@ mod tests {
         );
         assert_eq!(kernel.untyped(small).unwrap().bump, before_bump);
         assert_eq!(kernel.untyped(small).unwrap().objects, before_objects);
+    }
+
+    #[test]
+    fn shared_code_builder_maps_the_same_frame_in_two_vspaces() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0xa000, 4096, 16)
+            .unwrap();
+        let root_layout = TaskLayout {
+            code_va: 0x10_0000_0000,
+            stack_va: 0x10_0000_1000,
+            stack_pages: 0,
+            data: None,
+        };
+        let root_space = kernel
+            .build_task_space(untyped, b"SHARED", root_layout)
+            .unwrap();
+        let code = kernel.mapping_at(root_space, root_layout.code_va).unwrap();
+        let code_frame = kernel.frame_for_pa(code.pa).unwrap();
+        let server_layout = TaskLayout {
+            code_va: 0x10_0000_0000,
+            stack_va: 0x10_0000_2000,
+            stack_pages: 1,
+            data: None,
+        };
+        let server_space = kernel
+            .build_task_space_shared_code(untyped, code_frame, server_layout)
+            .unwrap();
+        assert_eq!(
+            kernel.mapping_at(server_space, server_layout.code_va),
+            Some(code)
+        );
+        assert_eq!(
+            kernel
+                .mapping_at(server_space, server_layout.stack_va)
+                .unwrap()
+                .rights,
+            Rights::READ | Rights::WRITE
+        );
+        assert!(kernel.mapping_at(server_space, 0x10_0000_3000).is_none());
     }
 
     #[test]

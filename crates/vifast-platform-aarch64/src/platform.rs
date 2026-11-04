@@ -153,6 +153,19 @@ pub extern "C" fn rust_secondary(_context: u64) -> ! {
     }
 }
 
+fn active_root_matches_current() -> bool {
+    unsafe {
+        if KERNEL_PTR.is_null() || ACTIVE_ROOT == 0 {
+            return false;
+        }
+        let kernel = &*KERNEL_PTR;
+        let Some(tcb) = kernel.current() else {
+            return false;
+        };
+        kernel.current_root(tcb) == Some(ACTIVE_ROOT)
+    }
+}
+
 impl Arch for Aarch64Platform {
     const NAME: &'static str = Aarch64::NAME;
     fn init() {
@@ -405,10 +418,18 @@ impl Platform for Aarch64Platform {
         core::ptr::addr_of!(L0) as u64
     }
 
-    fn set_active_root(root_pa: u64) {
+    fn switch_root(root_pa: u64) -> bool {
         unsafe {
+            if root_pa == 0 || root_pa == ACTIVE_ROOT {
+                return false;
+            }
             ACTIVE_ROOT = root_pa;
+            core::arch::asm!("msr ttbr0_el1, {}", in(reg) root_pa);
+            core::arch::asm!("tlbi vmalle1is");
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
         }
+        true
     }
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
@@ -439,6 +460,9 @@ impl Platform for Aarch64Platform {
     }
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
+        if !active_root_matches_current() {
+            return Err(KError::IllegalOperation);
+        }
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
@@ -459,6 +483,9 @@ impl Platform for Aarch64Platform {
     }
 
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError> {
+        if !active_root_matches_current() {
+            return Err(KError::IllegalOperation);
+        }
         if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
         {
@@ -486,17 +513,9 @@ impl Platform for Aarch64Platform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
-        let l0_pa = unsafe {
-            if ACTIVE_ROOT != 0 {
-                ACTIVE_ROOT
-            } else {
-                core::ptr::addr_of!(L0) as u64
-            }
-        };
         let tcr: u64 = 16 | (1 << 23) | (2 << 32);
         let mair: u64 = 0xFF;
         unsafe {
-            core::arch::asm!("msr ttbr0_el1, {}", in(reg) l0_pa);
             core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);
             core::arch::asm!("msr mair_el1, {}", in(reg) mair);
             let mut sctlr: u64;

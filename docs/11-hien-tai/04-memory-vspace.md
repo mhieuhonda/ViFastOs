@@ -27,8 +27,14 @@ Unmap đi cùng walk và dừng ở leaf cấp cao.
 `Kernel::build_task_space(untyped, image, layout)` là đường mẫu cho Bước 4/7:
 retype VSpace, gắn PageTable còn thiếu, copy ảnh vào Frame, map code RX và
 `stack_pages` trang stack RW; `data: Option<TaskData>` chỉ map khi được yêu cầu.
-Nếu lỗi thì rollback object và bump/objects của Untyped. Root 4.3 dùng
-`data: None`, sau đó client `FrameMap` tại `DATA_VA`.
+Nếu lỗi thì rollback object và bump/objects của Untyped.
+
+Root dùng builder với `stack_pages=0`, rồi runtime map rời 5 stack page
+`+0x4000/+0x5000/+0x6000/+0x7000/+0x8000` cho root, fault1/2/3 và client.
+Trang `+0x2000` dành riêng cho server và **không được map trong root VSpace**.
+
+`Kernel::build_task_space_shared_code(untyped, code_frame, layout)` map cùng
+Frame code root vào VSpace server, chỉ nhận một trang code ở bring-up hiện tại.
 
 `PageTableMap(page_table_cap, vspace_cap, va)`:
 
@@ -52,7 +58,7 @@ VSpace, để Frame còn unmap được leaf trước khi bảng cha bị gỡ.
 - `aux_pa` cho PDPT/L1 riêng của VSpace retype trên x86/AArch64;
 - tối đa 32 mapping (reverse map).
 
-Root VSpace 4.3 hiện dùng chung cho server/client; VSpace server riêng là 4.5.
+Root VSpace 4.5 dùng chung cho root/client/fault thread; server có VSpace riêng.
 `validate_user_range()` walk page table thật cho từng trang trước
 `DebugWrite`, `Open`, `Read`, `Write`: leaf phải non-kernel, có R, và W nếu
 cần ghi. Code/stack window fields đã bị xoá; reverse map chỉ còn cho revoke.
@@ -76,8 +82,10 @@ File: `crates/vifast-platform-riscv64/src/platform.rs`.
 - UART `0x1000_0000` map 2 MiB.
 - Kernel accessible chỉ khoảng 4 MiB (`0x8000_0000..0x8040_0000`); kernel image
   và metadata/data Untyped phải nằm trọn trong dải này.
-- Root VSpace retyped từ boot Untyped: code +0 RX, stack +0x1000..+0x8fff RW;
-  data +0xa000 để trống cho client FrameMap.
+- Root VSpace retyped từ boot Untyped: code +0 RX, stack rời
+  +0x4000/+0x5000/+0x6000/+0x7000/+0x8000 RW; data +0xa000 để trống.
+- Server VSpace: code dùng chung Frame root, stack +0x2000 RW; root VSpace
+  không map trang này.
 - Code: `R|X|U` (không W).
 - Stack: `R|W|U` (không X).
 - Data mapping qua `FrameMap`: `R|W|U` hoặc `R|X|U` theo quyền.
@@ -93,8 +101,9 @@ File: `crates/vifast-platform-aarch64/src/platform.rs`.
 - 4-level bảng kernel-only tĩnh; root VSpace/PageTable user retyped từ boot Untyped.
 - GICv2 `0x0800_0000`, PL011 `0x0900_0000` map trong L1[0]; RAM kernel
   `0x4000_0000..` map trong L1[1]. `KERNEL_SHARED_SLOTS = [0, 1]`.
-- Root VSpace: code +0 EL0 RO+X, stack +0x1000..+0x8fff RW+NX; data +0xa000
-  để trống cho client FrameMap.
+- Root VSpace: code +0 EL0 RO+X, stack rời +0x4000/+0x5000/+0x6000/+0x7000/
+  +0x8000 RW+NX; data +0xa000 để trống cho client FrameMap.
+- Server VSpace: code dùng chung Frame root, stack +0x2000 RW+NX.
 - Code: EL0 read-only + executable (`AP_USER_RO`, UXN=0).
 - Stack: EL0 read-write + NX (`AP_USER_RW`, UXN=1).
 - Data: EL0 read-write + NX.
@@ -112,11 +121,13 @@ File: `crates/vifast-platform-x86_64/src/platform.rs`.
 - Tự dựng PML4/PDPT/PD identity 4 KiB kernel-only, không sửa page table UEFI.
 - Identity map 0..1 GiB cho kernel/UEFI image, stack, GDT/TSS/IDT; PDPT[0]
   là shared slot, PML4[0]/PDPT là private mỗi VSpace.
-- Root VSpace: code +0 P|US RX, stack +0x1000..+0x8fff RW|NX; data +0xa000
-  để trống cho client FrameMap.
+- Root VSpace: code +0 P|US RX, stack rời +0x4000/+0x5000/+0x6000/+0x7000/
+  +0x8000 RW|NX; data +0xa000 để trống cho client FrameMap.
+- Server VSpace: code dùng chung Frame root, stack +0x2000 RW|NX|US.
 - Code: P|US, read+execute, NX clear.
 - Stack/data: P|W|US|NX.
-- `FrameMap` map đúng VA được yêu cầu; `FrameUnmap` clear PTE + `invlpg`.
+- `FrameMap` map đúng VA được yêu cầu; `FrameUnmap` clear PTE + `invlpg` và
+  đòi Frame cap có PA khớp mapping, không chỉ VSpace cap.
 - `VSpace.direct` đã bị xoá; x86/AArch64 dùng chung root entry 0 nhưng tách
   bảng user; PageTableMap không thay entry 0.
 - SMEP/SMAP nếu CPUID hỗ trợ; user copy dùng STAC/CLAC.
@@ -139,8 +150,9 @@ Chưa có IPI shootdown đa hart. Khi thêm SMP scheduler, cần:
 ## 7. Page table allocator
 
 `PageTable` object đã có metadata `{root, mapped: {vspace, va_base, level}}` và PageTableMap.
-Retype VSpace cấp root + aux page, zero và gọi `install_kernel`. 4.3 đã dựng
-root VSpace từ boot Untyped, kiểm tra kernel mappings rồi set active root. `kernel_accessible_range()`
+Retype VSpace cấp root + aux page, zero và gọi `install_kernel`. 4.3 dựng root
+VSpace, 4.5 dựng server VSpace từ boot Untyped. Runtime đọc root từ TCB mỗi lần
+restore, switch CR3/TTBR0/satp và full flush nếu khác. `kernel_accessible_range()`
 assert metadata/data nằm trong identity map. Boot check walk leaf thật qua
 `read_pte`/`decode_at` cho toàn dải kernel accessible và các symbol trap/kernel/MMIO:
 leaf phải non-user, trap entry có X, stack/storage có W. Chưa có:
@@ -151,10 +163,9 @@ leaf phải non-user, trap entry có X, stack/storage có W. Chưa có:
 - ASID/PCID;
 - thu hồi frame.
 
-Hiện tại 4.5 chưa làm nên server/client/root dùng chung root VSpace và stack
-mapping. Vì vậy
-capability đã tách nhưng bộ nhớ chưa tách: client có thể ghi vào stack của
-server. Đây là lý do chính phải làm VSpace riêng khi thêm ELF loader.
+Root VSpace và server VSpace đã tách, nên client không còn ghi được vào stack
+server. Client vẫn dùng root VSpace nên có thể ghi vào stack root/fault; Bước 7
+mới tách hoàn toàn client.
 
 ## 8. W^X hiện tại
 

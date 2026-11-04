@@ -39,15 +39,16 @@ OVMF
 6. `Platform::start_smp`.
 7. `Kernel::new` sạch; tạo boot Untyped 128 KiB/32 object + metadata/data Untyped.
 8. cài metadata/data Untyped slot 2/3.
-9. `build_task_space` dựng root VSpace (code RX, 8 trang stack, không data);
-   cài VSpace slot 1, set TCB root.
-10. `check_kernel_mappings(root_pa)`, log boot Untyped còn trống.
-11. `set_active_root`; `prepare_user` (x86).
-12. tạo context root.
-13. set kernel pointer.
-14. enqueue root, pick root.
-15. start timer.
-16. `enter_user(root)`.
+9. `build_task_space` dựng root VSpace (code RX, không stack/data); map rời
+   5 stack page root/client/fault; cài VSpace slot 1, set TCB root.
+10. dựng server VSpace (code dùng chung Frame root, stack +0x2000), cài slot 12.
+11. `check_kernel_mappings` root+server; log boot Untyped sau server.
+12. `prepare_user` (x86).
+13. tạo context root.
+14. set kernel pointer.
+15. enqueue root, pick root, `ensure_current_root` -> ROOT SWITCH 1.
+16. start timer.
+17. `enter_user(root)`.
 
 ## 3. User image
 
@@ -73,11 +74,12 @@ label PC-relative. Builder copy image vào Frame lấy từ boot Untyped; các
 message nằm trong code page RX.
 
 Root task nhận cap:
-- slot 1 VSpace;
+- slot 1 root VSpace;
 - slot 2 metadata Untyped;
-- slot 3 data Untyped.
+- slot 3 data Untyped;
+- slot 12 server VSpace.
 
-Root lần lượt Retype endpoint/2 TCB/notification/2 fault TCB, CapCopy cho
+Root lần lượt Retype endpoint/2 TCB/notification/3 fault TCB, CapCopy cho
 server/client, TcbConfigure entry/stack/VSpace/priority rồi TcbResume. Sau đó
 root block bằng `Wait` trên notification riêng; server/client/fault chạy theo
 scheduler.
@@ -93,7 +95,8 @@ CapCopy endpoint → server slot 1 READ, client slot 1 WRITE
 CapCopy VSpace → client slot 2 WRITE
 CapCopy data Untyped → client slot 3 WRITE
 CapCopy notification → client slot 5 READ|WRITE|GRANT
-TcbConfigure server/client (entry, stack, VSpace slot 1, priority 5)
+TcbConfigure server (entry, stack 0x1000003000, VSpace slot 12)
+TcbConfigure client (entry, stack 0x1000009000, VSpace slot 1)
 TcbResume server/client
 Retype fault TCB ×2; TcbConfigure/TcbResume (priority 6)
 Retype root notification; Wait(root notification)
@@ -125,7 +128,7 @@ Open("/motd"), Read, DebugWrite file content
 Open("/scratch", O_CREATE|O_RDWR)
 Write("ViFastOS write\n"), Seek(0), Read, DebugWrite
 Close
-FrameUnmap
+FrameUnmap(VSpace slot 2, VA, Frame slot 4)
 
 DebugWrite "Client"
 loop:

@@ -69,9 +69,9 @@ pub trait Platform: Arch + Console {
     /// The static kernel-only page tables.  Retyped VSpaces copy the shared
     /// kernel slots from these tables before they gain user mappings.
     fn vspace_root() -> u64;
-    /// Select the root loaded by the next `enter_user`.  This remains active
-    /// across traps until a later context switch replaces it.
-    fn set_active_root(root_pa: u64);
+    /// Load `root_pa` as the current user root and perform a full TLB flush.
+    /// Returns true only when the loaded root actually changed.
+    fn switch_root(root_pa: u64) -> bool;
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps;
     /// Verify that trap entry, kernel stacks, descriptor tables, kernel
@@ -112,6 +112,22 @@ pub trait Platform: Arch + Console {
     fn reload_timer();
     fn ack_timer();
     fn start_smp();
+}
+
+/// Load the root owned by the current TCB, if it still has one.  The root is
+/// deliberately not cached in a context: TcbConfigure can replace the VSpace,
+/// and a revoked VSpace must never remain reachable through stale state.
+pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
+    let kernel = A::kernel();
+    let tcb = kernel.current().ok_or(KError::IllegalOperation)?;
+    let root = kernel.current_root(tcb).ok_or(KError::IllegalOperation)?;
+    if root == 0 {
+        return Err(KError::IllegalOperation);
+    }
+    if A::switch_root(root) {
+        kernel.note_root_switch();
+    }
+    Ok(())
 }
 
 /// Shared boot sequence: kernel self-test, capability setup, user image copy
@@ -155,10 +171,6 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     const META_MAX_OBJECTS: usize = 32;
     const DATA_MAX_OBJECTS: usize = 48;
     const BOOT_MAX_OBJECTS: usize = 32;
-    /* 4.5 needs a private server VSpace: two root pages, two page tables and
-    one or two stack pages.  Keep enough in the boot arena for that. */
-    const SERVER_MIN_PAGES: usize = 6;
-    const SERVER_MIN_OBJECTS: usize = 6;
     if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS + BOOT_MAX_OBJECTS
         > vifast_kernel::MAX_OBJECTS
     {
@@ -240,7 +252,9 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     let layout = TaskLayout {
         code_va: vifast_abi::user_layout::CODE_VA as u64,
         stack_va: vifast_abi::user_layout::STACK_BASE as u64,
-        stack_pages: vifast_abi::user_layout::STACK_LEN / A::PAGE_SIZE,
+        /* Root stacks are mapped page-by-page below.  The server stack page
+        must stay invalid in the root VSpace so the isolation fault is real. */
+        stack_pages: 0,
         /* The client owns DATA_VA and maps its own Frame there.  The builder
         must not consume that mapping. */
         data: None,
@@ -258,6 +272,62 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     if let Some(space) = kernel.vspace_mut(vspace) {
         space.next_va = vifast_abi::user_layout::DATA_VA as u64;
     }
+    /* Root VSpace maps only the root, client and fault-thread stacks.  The
+    page at +0x2000 belongs to the server VSpace and must stay invalid here. */
+    const ROOT_STACK_OFFSETS: [u64; 5] = [0x4000, 0x5000, 0x6000, 0x7000, 0x8000];
+    for offset in ROOT_STACK_OFFSETS {
+        let Ok(frame) = kernel.retype(boot_untyped, ObjType::Frame) else {
+            vifast_kernel::klog!(A, "ROOT STACK RETYPE FAILED");
+            A::exit(1);
+        };
+        if kernel
+            .map_frame(
+                vspace,
+                frame,
+                vifast_abi::user_layout::CODE_VA as u64 + offset,
+                Rights::READ | Rights::WRITE,
+            )
+            .is_err()
+        {
+            vifast_kernel::klog!(A, "ROOT STACK MAP FAILED offset={:#x}", offset);
+            A::exit(1);
+        }
+    }
+
+    if image.code.len() > A::PAGE_SIZE {
+        vifast_kernel::klog!(A, "SHARED CODE REQUIRES ONE PAGE");
+        A::exit(1);
+    }
+    let Some(code_pa) = kernel.mapping_at(vspace, layout.code_va).map(|m| m.pa) else {
+        A::exit(1);
+    };
+    let Some(code_frame) = kernel.frame_for_pa(code_pa) else {
+        A::exit(1);
+    };
+    let server_layout = TaskLayout {
+        code_va: vifast_abi::user_layout::CODE_VA as u64,
+        stack_va: vifast_abi::user_layout::CODE_VA as u64 + 0x2000,
+        stack_pages: 1,
+        data: None,
+    };
+    let Ok(server_space) =
+        kernel.build_task_space_shared_code(boot_untyped, code_frame, server_layout)
+    else {
+        vifast_kernel::klog!(A, "SERVER VSPACE BUILD FAILED");
+        A::exit(1);
+    };
+    let Some(server_pa) = kernel.vspace(server_space).map(|space| space.root) else {
+        A::exit(1);
+    };
+    if !A::check_kernel_mappings(root_pa) || !A::check_kernel_mappings(server_pa) {
+        vifast_kernel::klog!(
+            A,
+            "KERNEL MAPPING CHECK FAILED root={:#x} server={:#x}",
+            root_pa,
+            server_pa
+        );
+        A::exit(1);
+    }
     if kernel.set_tcb_vspace(root, vspace).is_err()
         || kernel
             .install_cap(
@@ -266,11 +336,14 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
                 Cap::new(vspace, ObjType::VSpace, Rights::READ | Rights::WRITE),
             )
             .is_err()
+        || kernel
+            .install_cap(
+                root,
+                12,
+                Cap::new(server_space, ObjType::VSpace, Rights::READ | Rights::WRITE),
+            )
+            .is_err()
     {
-        A::exit(1);
-    }
-    if !A::check_kernel_mappings(root_pa) {
-        vifast_kernel::klog!(A, "KERNEL MAPPING CHECK FAILED root={:#x}", root_pa);
         A::exit(1);
     }
     if let Some((size, bump, objects, max_objects)) = kernel.untyped_usage(boot_untyped) {
@@ -288,19 +361,13 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
             free_pages,
             free_objects
         );
-        if free_pages < SERVER_MIN_PAGES || free_objects < SERVER_MIN_OBJECTS {
-            vifast_kernel::klog!(
-                A,
-                "BOOT UNTYPED TOO SMALL FOR SERVER VSPACE (need pages={} objects={})",
-                SERVER_MIN_PAGES,
-                SERVER_MIN_OBJECTS
-            );
+        if free_pages == 0 || free_objects == 0 {
+            vifast_kernel::klog!(A, "BOOT UNTYPED EXHAUSTED");
             A::exit(1);
         }
     } else {
         A::exit(1);
     }
-    A::set_active_root(root_pa);
     A::prepare_user();
 
     let contexts = A::contexts();
@@ -310,6 +377,9 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     A::set_kernel(kernel as *mut Kernel);
     kernel.enqueue(root);
     let _ = kernel.pick();
+    if ensure_current_root::<A>().is_err() {
+        A::exit(1);
+    }
     A::start_timer();
     vifast_kernel::klog!(A, "entering user mode at {:#x}", A::user_code_base());
     let first = contexts[root.index as usize];
@@ -405,6 +475,9 @@ pub mod syscall {
                 A::exit(0);
             }
         }
+        if ensure_current_root::<A>().is_err() {
+            fault::suspend::<A>(context, 0, 0);
+        }
     }
 
     pub fn apply_resume<A: Platform>(context: &mut A::Context, tcb: vifast_kernel::ObjRef) {
@@ -427,6 +500,9 @@ pub mod syscall {
         };
         *context = contexts[next.index as usize];
         crate::syscall::apply_resume::<A>(context, next);
+        if ensure_current_root::<A>().is_err() {
+            fault::suspend::<A>(context, 0, 0);
+        }
     }
 }
 
@@ -445,12 +521,23 @@ pub mod fault {
             cause,
             addr
         );
-        let Some(next) = kernel.fault_current() else {
+        let Some(mut next) = kernel.fault_current() else {
             vifast_kernel::klog!(A, "no runnable thread after fault");
             A::halt();
         };
-        *context = A::contexts()[next.index as usize];
-        crate::syscall::apply_resume::<A>(context, next);
+        loop {
+            *context = A::contexts()[next.index as usize];
+            crate::syscall::apply_resume::<A>(context, next);
+            if ensure_current_root::<A>().is_ok() {
+                return;
+            }
+            vifast_kernel::klog!(A, "FAULT SUSPEND tcb={:?}: no VSpace", next);
+            let Some(candidate) = kernel.fault_current() else {
+                vifast_kernel::klog!(A, "no runnable thread with VSpace after fault");
+                A::halt();
+            };
+            next = candidate;
+        }
     }
 }
 
@@ -475,6 +562,7 @@ pub mod timer {
                 kernel.ticks(),
                 switches
             );
+            vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
             A::exit(0);
         }
         A::reload_timer();
@@ -487,5 +575,8 @@ pub mod timer {
         };
         *context = contexts[next.index as usize];
         crate::syscall::apply_resume::<A>(context, next);
+        if ensure_current_root::<A>().is_err() {
+            fault::suspend::<A>(context, 0, 0);
+        }
     }
 }

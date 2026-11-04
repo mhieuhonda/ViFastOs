@@ -24,7 +24,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 47 test trong `vifast-kernel` + 10 test trong `vifast-pte`:
+Hiện có 49 test trong `vifast-kernel` + 10 test trong `vifast-pte`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -57,6 +57,8 @@ Hiện có 47 test trong `vifast-kernel` + 10 test trong `vifast-pte`:
 - PteFakeOps tách test RISC-V/x86_64/AArch64, dùng encoder/decoder thật cho
   map/unmap/PageTableMap/validate/build;
 - build không data rồi FrameMap tại `DATA_VA` thành công trên cả 3 format;
+- build_task_space_shared_code map cùng Frame code root/server;
+- FrameUnmap đòi Frame cap đúng PA; VSpace cap đơn lẻ hoặc sai frame bị từ chối;
 - boot Untyped 128 KiB/32 object và build_task_space host test.
 - PageTableMap không thay entry 0 dùng chung;
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
@@ -74,6 +76,8 @@ Boot assert:
 kiến trúc, biên index và leaf L3 AArch64 RO+X / RW+NX / EL0 / leaf_is_user.
 
 `vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.
+QEMU kiểm tra thêm `ROOT SWITCH n`: 4.4 chỉ cần n ≥ 1, 4.5 cần n > 1 do
+server/client đổi VSpace khi IPC.
 
 ## 3. QEMU test
 
@@ -100,7 +104,9 @@ Script chạy:
 - `ViFastOS ramfs`;
 - `ViFastOS write`;
 - `Reply OK`;
-- `USER FAULT` ít nhất 2 lần;
+- `USER FAULT` ít nhất 3 lần, gồm fault3 ghi stack server;
+- `Isolation`;
+- `ROOT SWITCH n` với n > 1;
 - `Zero OK`;
 - RISC-V/AArch64 phải có `SMP OK`;
 - x86_64 chấp nhận `SMP SKIP` ở giai đoạn hiện tại.

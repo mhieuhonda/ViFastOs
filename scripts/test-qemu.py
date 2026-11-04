@@ -9,6 +9,7 @@ defined by the kernel printing its banner and SELFTEST PASS.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,11 @@ def find_ovmf_code() -> str | None:
         if path and os.path.exists(path):
             return path
     return None
+
+
+def root_switch_count(output: str) -> int:
+    match = re.search(r"ROOT SWITCH\s+(\d+)", output)
+    return int(match.group(1)) if match else -1
 
 
 def run_qemu(
@@ -67,6 +73,8 @@ def run_qemu(
         and "booting on" in output
         and "BOOT UNTYPED" in output
         and "PREEMPT OK" in output
+        and root_switch_count(output) > 1
+        and "Isolation" in output
         and "Server" in output
         and "Client" in output
         and "Mapped" in output
@@ -74,7 +82,7 @@ def run_qemu(
         and "ViFastOS ramfs" in output
         and "ViFastOS write" in output
         and "Reply OK" in output
-        and output.count("USER FAULT") >= 2
+        and output.count("USER FAULT") >= 3
         and "Zero OK" in output
         and (not require_smp or "SMP OK" in output)
     )
