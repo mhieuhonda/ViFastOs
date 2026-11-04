@@ -335,39 +335,23 @@ mod tests {
         assert!(riscv::USER_VA_END <= 1 << 38);
 
         // The whole range is inside the shared PML4/L0 entry 0 on x86 and
-        // AArch64, but not inside the low 1 GiB identity mapping.
-        for arch in [0, 1] {
-            let (start, end) = if arch == 0 {
-                (x86_64::USER_VA_START, x86_64::USER_VA_END)
-            } else {
-                (aarch64::USER_VA_START, aarch64::USER_VA_END)
-            };
-            let index0 = if arch == 0 {
-                x86_64::index(start, 0)
-            } else {
-                aarch64::index(start, 0)
-            };
-            assert_eq!(index0, 0);
-            assert!(
-                if arch == 0 {
-                    x86_64::index(start, 1)
-                } else {
-                    aarch64::index(start, 1)
-                } >= 64
-            );
-            assert!(
-                if arch == 0 {
-                    x86_64::index(end - 1, 0)
-                } else {
-                    aarch64::index(end - 1, 0)
-                } == 0
-            );
-        }
+        // AArch64, but the level-1 indices start above the low 1 GiB
+        // identity mapping.
+        assert_eq!(x86_64::index(x86_64::USER_VA_START, 0), 0);
+        assert_eq!(x86_64::index(x86_64::USER_VA_END - 1, 0), 0);
+        assert_eq!(x86_64::index(x86_64::USER_VA_START, 1), 64);
+        assert_eq!(x86_64::index(x86_64::USER_VA_END - 1, 1), 127);
+        assert_eq!(aarch64::index(aarch64::USER_VA_START, 0), 0);
+        assert_eq!(aarch64::index(aarch64::USER_VA_END - 1, 0), 0);
+        assert_eq!(aarch64::index(aarch64::USER_VA_START, 1), 64);
+        assert_eq!(aarch64::index(aarch64::USER_VA_END - 1, 1), 127);
 
         // RISC-V uses its own root entry 64..127; it never touches the
         // identity root entry 2.
         assert_eq!(riscv::index(riscv::USER_VA_START, 0), 64);
         assert_eq!(riscv::index(riscv::USER_VA_END - 1, 0), 127);
+        assert_eq!(riscv::index(riscv::USER_VA_START, 1), 0);
+        assert_eq!(riscv::index(riscv::USER_VA_END - 1, 1), 511);
     }
 
     #[test]
