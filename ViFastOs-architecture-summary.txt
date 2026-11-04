@@ -34,9 +34,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d1c42b0 fix: reclaim orphaned objects and assert kernel image range
 - c9c4591 fix: reparent dying capability subtrees
 - df9e1c1 feat: add boot untyped and task-space builder
-- eae0741 test: cover builder and shared frame unmapping.
+- eae0741 test: cover builder and shared frame unmapping
+- 24c668d feat: validate user pointers through page tables.
 
-Cập nhật code gần nhất (commit eae0741): root task, revoke Untyped thật, fault
+Cập nhật code gần nhất (commit 24c668d): root task, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
