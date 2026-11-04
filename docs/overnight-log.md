@@ -22,6 +22,7 @@
 - `ed06f82` — SMP maintenance IPI and TLB shootdown.
 - `f216966` — AArch64 VirtIO block backend.
 - `1d4f0ea` — persistent VFS scratch on block storage.
+- `fe569c1` — x86 ATA block backend for persistent VFS.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -52,7 +53,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
   `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`,
   `IOMMU OK`; RISC-V/AArch `SMP OK (... ipi=1)`; AArch `BLOCK OK`,
-  `FS DISK OK`, `FS PERSIST OK`.
+  `FS DISK OK`, `FS PERSIST OK`; x86 cũng `BLOCK OK`, `FS DISK OK`.
 - Boot Untyped: RISC-V 20/32 pages, AArch/x86 22/32; free 12/10 pages,
   12/12 objects.
 - DATA UNTYPED lúc test-exit: RISC-V 36/64 pages, AArch64 37/64 pages,
@@ -60,7 +61,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `d3e79c680b03697cd75f95dc3d8293cd7c7c23c3cdf878a0b3577ff65f9b718a`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `dcc0eb6bd7d929711d137e3c9977683f3dd9b30c64fdbba048d3dcde9d9276be`.
 
 ---
 
@@ -192,6 +193,17 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## 8.11 — x86_64 ATA block backend
+
+- Commit `fe569c1 feat: add x86 ata block backend for persistent vfs`.
+- QEMU q35 harness gắn `isa-ide` + `ide-hd` ở `bus=ide.6,unit=0`; kernel dùng
+  ATA PIO primary 0x1F0/0x3F6, LBA28, poll BSY/DRQ, flush sau write.
+- x86 cũng chạy `BLOCK OK`, `FS DISK OK`, `FS PERSIST OK` và dùng cùng sector
+  `VF01` của server VFS.
+- RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
+  mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
+- `vifast-kernel` 83/83; QEMU 3/3 PASS.
 
 ## 8.10 — AArch64 VirtIO block + FS scratch bền vững
 

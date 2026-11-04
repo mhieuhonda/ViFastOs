@@ -62,11 +62,12 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 687962c feat: add software iommu domains and dma maps
 - f216966 feat: add aarch64 virtio block backend
 - 1d4f0ea feat: persist vfs scratch on block storage
+- fe569c1 feat: add x86 ata block backend for persistent vfs
 - ed06f82 feat: add smp maintenance ipi and tlb shootdown
 - fffa7d6 feat: add vfs stat request
 - 826efed feat: tag vspaces with asid and pcid
 
-Cập nhật code gần nhất (commit 1d4f0ea): persistent AArch64 VFS scratch, VirtIO block, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit fe569c1): persistent x86/AArch64 VFS scratch, VirtIO/ATA block, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
@@ -124,7 +125,7 @@ Output tiêu biểu:
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
   "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "IOMMU OK",
-  "SMP OK (... ipi=1)", "BLOCK OK"/"FS DISK OK", "PREEMPT OK",
+  "SMP OK (... ipi=1)", "BLOCK OK"/"FS DISK OK", "FS PERSIST OK", "PREEMPT OK",
   "ROOT SWITCH n>1"
 - user layout chung: boot mappings tại 0x0000_0010_0000_0000 (64 GiB);
   full user range hiện tại 64..128 GiB
@@ -1086,8 +1087,9 @@ Exit code:
 - Kernel VFS fallback chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
   User-space VFS server đã có `/motd` + `/scratch` qua IPC, tối đa 4 file x 64 B,
   chưa có directory/permission/persistence và chưa tách module riêng.
-- AArch64 có VirtIO block + `/scratch` bền vững qua sector 0; RISC-V/x86 chưa
-  có block backend nên VFS fallback RAM. Chưa có directory/permission.
+- AArch64 có VirtIO block và x86_64 có ATA PIO; cả hai lưu `/scratch` bền vững
+  qua sector 0. RISC-V vẫn fallback RAM vì PMP/OpenSBI. Chưa có
+  directory/permission.
 - Chưa có driver network/GPU/input.
 - Chưa có compositor, ViFastKey.
 - Chưa có formal verification; đã có syscall fuzz 10.000 bước x 3 PTE format
