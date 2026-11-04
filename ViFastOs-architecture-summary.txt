@@ -50,13 +50,14 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - b0a82cb feat: add child untyped allocation and revoke
 - ba17546 feat: pass bootinfo and user code caps to root
 - 39fc83c feat: build private client vspace
-- aeea6bc feat: isolate client vspace and add fault4.
+- aeea6bc feat: isolate client vspace and add fault4
+- c5119e7 feat: add reply-recvsyscall and server loop.
 
-Cập nhật code gần nhất (commit aeea6bc): root/server/client VSpace, current_root từ TCB,
+Cập nhật code gần nhất (commit c5119e7): root/server/client VSpace, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF nạp vào boot, ROOT RUST/ROOT READY, jump table, FrameMap cap bound,
-W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, 3 target link/FP
+W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, 3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
@@ -88,14 +89,14 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 70/70 PASS
+- cargo test -p vifast-kernel: 73/73 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 8.704 B, AArch64/x86 8.536 B; RISC-V kernel_end
-  0x80367010, headroom 626.672 B dưới 0x80400000
+  0x80368010, headroom 622.576 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -339,7 +340,7 @@ vifast-root:
 - 269 dòng Rust + 31 dòng start asm; ELF build 3 target
 
 vifast-kernel:
-- 6703 dòng, không còn dependency vifast-arch
+- 6804 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597624 bytes
@@ -803,7 +804,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 70 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 73 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -1005,6 +1006,8 @@ Exit code:
   line size rồi dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
 - Chưa có SMP I-cache shootdown: RISC-V cần remote fence qua SBI/IPI, AArch64
   cần broadcast/đồng bộ các PE khác trước khi cho chạy code mới.
+- 8.2: ReplyRecv (syscall 4) reply caller hiện tại rồi Recv; không caller thì
+  chỉ Recv; server user.S chuyển sang vòng ReplyRecv + Signal; 3 host test mới.
 - PageTableMap gắn page table ở entry invalid đầu tiên; level do kernel chọn.
 - Retype VSpace cấp root + aux page, zero và gọi install_kernel thật.
 - Revoke Untyped sắp thứ tự Frame → PageTable sâu nhất → PageTable cha → VSpace.
@@ -1026,7 +1029,7 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 70 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 73 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1242,6 +1245,9 @@ E. Desktop / Space
     VSpace client. Fault4 ghi root Rust stack không map trong VSpace client.
     Harness yêu cầu đúng 4 USER FAULT, gồm 0x1000301000; `Zero OK` chạy qua
     Untyped con. Đây là mốc hoàn tất 3b.
+45. 8.2: ReplyRecv dùng a0 endpoint READ, a1 recv slot, a2 label, a3..a5 data;
+    reply caller hiện tại (nếu có) rồi Recv, không caller thì chỉ Recv. Server
+    user.S vòng ReplyRecv + Signal; host test no-caller/order/stale epoch.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

@@ -64,3 +64,14 @@ follow-up `62b31f4`.
 - QEMU 3/3 PASS ×3; ROOT SWITCH 39826 / 42286 / 13030 (lần chạy đầu).
   DATA UNTYPED test-exit: RISC-V 21/64 trang, AArch/x86 22/64 trang, 6/48 object.
 - Root ELF: RISC-V 8704 B, AArch64/x86 8536 B; headroom RISC-V 626672 B.
+
+## 8.2 — ReplyRecv
+
+- Commit `c5119e7 feat: add reply-recvsyscall and server loop`.
+- `vifast-kernel` 73/73; PTE 11/11; ELF 17/17; runtime/user compile.
+- Syscall 4: a0 endpoint READ, a1 recv slot, a2 label, a3..a5 data. Reply
+  caller hiện tại trước rồi Recv; không caller chỉ Recv; stale epoch NoCaller.
+- Server user.S cả 3 arch chuyển sang vòng ReplyRecv + Signal; harness giữ
+  nguyên output cũ và 4 USER FAULT.
+- QEMU 3/3 PASS ×3; ROOT SWITCH lần đầu 49450 / 37252 / 22755.
+  Headroom RISC-V còn 622576 B.
