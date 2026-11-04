@@ -95,6 +95,7 @@ dependencies = [
  "vifast-kernel",
  "vifast-pte",
  "vifast-runtime",
+ "vifast-virtio",
 ]
 
 [[package]]
@@ -161,3 +162,7 @@ version = "0.1.0"
 dependencies = [
  "vifast-abi",
 ]
+
+[[package]]
+name = "vifast-virtio"
+version = "0.1.0"

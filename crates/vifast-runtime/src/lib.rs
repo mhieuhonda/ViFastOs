@@ -119,6 +119,13 @@ pub trait Platform: Arch + Console {
     fn reload_timer();
     fn ack_timer();
     fn start_smp();
+    fn init_block() {}
+    fn block_read(_lba: u64, _out: &mut [u8; 512]) -> bool {
+        false
+    }
+    fn block_write(_lba: u64, _input: &[u8; 512]) -> bool {
+        false
+    }
 }
 
 fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
@@ -679,6 +686,13 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     let _ = kernel.pick();
     if ensure_current_root::<A>().is_err() {
         A::exit(1);
+    }
+    A::init_block();
+    let mut block_probe = [0u8; 512];
+    if A::block_read(0, &mut block_probe) {
+        vifast_kernel::klog!(A, "BLOCK OK");
+    } else {
+        vifast_kernel::klog!(A, "BLOCK SKIP");
     }
     A::start_timer();
     vifast_kernel::klog!(A, "entering user mode at {:#x}", A::user_code_base());

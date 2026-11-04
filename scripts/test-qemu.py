@@ -38,6 +38,14 @@ def find_ovmf_code() -> str | None:
     return None
 
 
+def make_disk(name: str) -> str:
+    path = os.path.join(tempfile.gettempdir(), f"vifast-{name}.disk")
+    if not os.path.exists(path) or os.path.getsize(path) < 4 * 1024 * 1024:
+        with open(path, "wb") as disk:
+            disk.truncate(4 * 1024 * 1024)
+    return path
+
+
 def root_switch_count(output: str) -> int:
     match = re.search(r"ROOT SWITCH\s+(\d+)", output)
     return int(match.group(1)) if match else -1
@@ -54,6 +62,7 @@ def run_qemu(
     timeout: int,
     ok_codes: set[int],
     require_smp: bool = False,
+    require_block: bool = False,
 ) -> bool:
     if os.path.exists(serial):
         os.unlink(serial)
@@ -113,6 +122,7 @@ def run_qemu(
         and "Zero OK" in output
         and (name != "x86_64" or "KERNEL DATA NX OK" in output)
         and (not require_smp or ("SMP OK" in output and "ipi=1" in output))
+        and (not require_block or "BLOCK OK" in output)
     )
     if timed_out:
         print("FAIL: timeout")
@@ -151,6 +161,7 @@ def test_aarch64() -> bool:
         ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64"
     )
     serial = os.path.join(tempfile.gettempdir(), "vifast-aarch64.serial")
+    disk = make_disk("aarch64")
     cmd = [
         QEMU_ARM,
         "-machine", "virt,gic-version=2",
@@ -160,9 +171,14 @@ def test_aarch64() -> bool:
         "-display", "none",
         "-monitor", "none",
         "-serial", f"file:{serial}",
+        "-global", "virtio-mmio.force-legacy=false",
+        "-drive", f"if=none,id=vd0,file={disk},format=raw",
+        "-device", "virtio-blk-device,drive=vd0",
         "-kernel", kernel,
     ]
-    return run_qemu("aarch64", cmd, serial, 20, {0}, require_smp=True)
+    return run_qemu(
+        "aarch64", cmd, serial, 20, {0}, require_smp=True, require_block=True
+    )
 
 
 def test_x86_64() -> bool:

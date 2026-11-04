@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+vifast-virtio = { path = "../vifast-virtio" }
 vifast-abi = { path = "../vifast-abi" }
 vifast-pte = { path = "../vifast-pte" }
 vifast-arch = { path = "../vifast-arch" }

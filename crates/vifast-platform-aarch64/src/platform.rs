@@ -404,6 +404,7 @@ unsafe fn build_kernel_page_tables() {
     (*l1).0[1] = table_desc(kernel as u64);
     (*low).0[64] = block_desc(0x0800_0000, ATTR_DEVICE, 0, PXN, UXN, 0);
     (*low).0[72] = block_desc(0x0900_0000, ATTR_DEVICE, 0, PXN, UXN, 0);
+    (*low).0[80] = block_desc(0x0a00_0000, ATTR_DEVICE, 0, PXN, UXN, 0);
     for i in 0..4usize {
         let pa = 0x4000_0000u64 + i as u64 * 2 * 1024 * 1024;
         (*kernel).0[i] = block_desc(pa, 0, 0, 0, UXN, SH_INNER);
@@ -679,6 +680,38 @@ impl Platform for Aarch64Platform {
 
     fn ack_timer() {
         write32(GICC + 0x010, TIMER_IRQ);
+    }
+
+    fn init_block() {
+        if vifast_virtio::init() {
+            let (base, magic, version, device) = vifast_virtio::probe_info();
+            vifast_kernel::klog!(
+                Aarch64Platform,
+                "VIRTIO OK base={:#x} magic={:#x} version={} device={}",
+                base,
+                magic,
+                version,
+                device
+            );
+        } else {
+            let (base, magic, version, device) = vifast_virtio::probe_info();
+            vifast_kernel::klog!(
+                Aarch64Platform,
+                "VIRTIO SKIP base={:#x} magic={:#x} version={} device={}",
+                base,
+                magic,
+                version,
+                device
+            );
+        }
+    }
+
+    fn block_read(lba: u64, out: &mut [u8; 512]) -> bool {
+        vifast_virtio::read_sector(lba, out)
+    }
+
+    fn block_write(lba: u64, input: &[u8; 512]) -> bool {
+        vifast_virtio::write_sector(lba, input)
     }
 
     fn start_smp() {
