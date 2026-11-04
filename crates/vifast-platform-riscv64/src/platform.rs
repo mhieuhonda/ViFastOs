@@ -236,6 +236,10 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn leaf_is_user(&self, pte: u64) -> bool {
+        vifast_pte::riscv::is_user(pte)
+    }
+
     fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {
         unsafe {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), pa as *mut u8, bytes.len());

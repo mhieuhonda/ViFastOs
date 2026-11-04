@@ -42,7 +42,7 @@ PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
 range + table_span), PageTableMap level động, retype VSpace/install_kernel,
 creator CapRef id + reparent, delete cap KResult, boot Untyped,
-build_task_space, KERNEL_SHARED_SLOTS,
+build_task_space, validate_user_range walk leaf, AArch64 leaf rights decode, KERNEL_SHARED_SLOTS,
 kernel accessible range, x86 LoadedImage assert, thứ tự revoke
 Frame → PageTable sâu → VSpace, vifast-pte host test, SMEP/SMAP/PAN/sscratch
 hardening và vifast-user.
@@ -66,7 +66,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 43/43 PASS
+- cargo test -p vifast-kernel: 44/44 PASS
 - cargo test -p vifast-pte: 9/9 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
@@ -82,7 +82,7 @@ Output tiêu biểu:
 - SMP SKIP (x86 AP bootstrap pending) trên x86_64
 - "Fault", "USER FAULT", "Zero OK", "Server", "Mapped", "ViFastOS ramfs",
   "ViFastOS write", "Client", "Cap OK", "Reply OK", "PREEMPT OK"
-- user layout chung: initial boot window tại 0x0000_0010_0000_0000 (64 GiB);
+- user layout chung: boot mappings tại 0x0000_0010_0000_0000 (64 GiB);
   full user range hiện tại 64..128 GiB
 
 3. KIẾN TRÚC TỔNG THỂ SAU REFACTOR
@@ -150,7 +150,7 @@ vifast-kernel
   - scheduler priority + round-robin;
   - Frame/VSpace/PageTable generic page-table walk + reverse map;
   - PageTableMap: kernel chọn level, kiểm tra toàn dải bảng;
-  - validate_user_range() dựa trên code/stack window + reverse map (tạm thời);
+  - validate_user_range() walk page table leaf thật; kiểm tra user bit, R, W;
   - Untyped/retype có accounting metadata;
   - root-task syscalls: Retype, CapCopy, TcbConfigure, TcbResume, PageTableMap;
   - ramfs + fd table;
@@ -225,7 +225,7 @@ vifast-platform-x86_64
 - PIC + PIT 100 Hz.
 - Tự dựng PML4/PDPT/PD/PT boot 4 KiB; identity map 0..1 GiB.
 - VSpace retype tạo PML4 + PDPT riêng, chỉ PDPT[0] dùng chung PD kernel.
-- User range 64..128 GiB: boot code/stack window tạm thời ở 64 GiB;
+- User range 64..128 GiB: boot code/stack mappings ở 64 GiB;
   code RX; stack/data RW+NX; unmap thật.
 - SMEP/SMAP nếu CPU hỗ trợ; user copy dùng STAC/CLAC.
 - ring3 qua iretq; CR3 chuyển sang PML4 riêng.
@@ -252,18 +252,18 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 570 dòng
-- AArch64: 685 dòng
-- x86_64: 801 dòng
+- RISC-V: 574 dòng
+- AArch64: 670 dòng
+- x86_64: 805 dòng
 
 runtime:
-- 453 dòng
+- 447 dòng
 
 vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 4330 dòng, không còn dependency vifast-arch
+- 4413 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597616 bytes
@@ -350,8 +350,7 @@ Kind:
 - Tcb
 - Untyped { base, size, bump, page_size, max_objects, objects }
 - Frame { pa, size }
-- VSpace { root, aux_pa, page_size, base, next_va, end, code_base,
-           code_len, stack_base, stack_len, mappings }
+- VSpace { root, aux_pa, page_size, base, next_va, end, mappings }
 - PageTable { root, mapped: Option<{vspace, va_base, level}> }
   // level chỉ nằm trong mapping do PageTableMap gán; mỗi bảng gắn một lần
 
@@ -370,7 +369,7 @@ Tcb:
 
 Capability:
 - Cap { obj, ty, rights, badge, id: u64, root: bool, parent: Option<CapRef> }
-  // root chỉ được set bởi install_cap khi parent=None (runtime boot);
+  // root chỉ được set bởi install_cap cho Untyped khi parent=None (runtime boot);
   // CapCopy/IPC/reparent không bao giờ set root=true.
 - install_cap/lookup_cap/copy_cap/delete_cap/revoke_cap/set_cap_badge
 - Rights: READ=1, WRITE=2, EXEC=4, GRANT=8
@@ -460,7 +459,7 @@ Portable generic page-table walk + reverse map:
   sự thật của phần cứng.
 - W^X: từ chối mapping vừa WRITE vừa EXEC; Sv39 từ chối W thiếu R.
 - Kiểm tra alignment, overlap, range.
-- VSpace có page_size, range, next_va, code/stack window tạm thời và mappings.
+- VSpace có page_size, range, next_va và reverse mappings; không còn window.
 - Map thiếu bảng trung gian trả MissingPageTable; kernel không tự cấp phát.
 - PageTableMap(page_table_cap, vspace_cap, va):
   kernel walk tới entry invalid đầu tiên, tự chọn level, kiểm tra toàn bộ
@@ -476,11 +475,11 @@ Portable generic page-table walk + reverse map:
   root[2] (kernel RAM); x86 copy PDPT[0] (identity 0..1 GiB).
 - Revoke Untyped: Frame trước (unmap leaf), PageTable sâu nhất trước
   (xoá entry cha + flush), cuối cùng VSpace.
-- validate_user_range() kiểm tra con trỏ user trước DebugWrite/Open/Read/Write
-  dựa trên window/mapping; sẽ chuyển sang walk leaf khi bỏ window ở 3b.
+- validate_user_range() walk page table thật cho từng trang: leaf phải non-kernel,
+  có R, và W nếu cần ghi. Reverse map không còn dùng để validation.
 - User layout chung trong vifast-abi: initial code 64 GiB, data +0xa000,
   stack 64 GiB+0x1000..+0x8fff; user range đầy đủ 64..128 GiB.
-  Code/stack window hiện là tạm thời, sẽ bỏ khi mỗi task có VSpace riêng.
+  Code/stack là mapping thường; TcbConfigure không kiểm tra entry/stack.
 - x86 dùng VA cố định; VSpace.direct đã bị xoá.
 - Frame object chỉ metadata PA/size; retype Frame/PageTable zero page.
 - Chưa có page-table page allocator, range VA allocator, ASID/PCID.
@@ -683,7 +682,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 43 test `vifast-kernel` + 9 test `vifast-pte`:
+Host test hiện có 44 test `vifast-kernel` + 9 test `vifast-pte`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -698,7 +697,7 @@ Host test hiện có 43 test `vifast-kernel` + 9 test `vifast-pte`:
 - revoke Untyped detach TCB đang BlockedRecv
 - max_objects limit
 - cap copy giữ parent chain
-- TcbConfigure entry/stack validation (sẽ bỏ ở 3b khi code/stack là mapping thường)
+- TcbConfigure/entry-stack không còn validation window
 - TcbResume từ chối TCB chưa configure
 - Yield thật qua switch_blocked
 - checked_add/overflow + buffer vắt qua hai page khác quyền
@@ -716,6 +715,7 @@ Host test hiện có 43 test `vifast-kernel` + 9 test `vifast-pte`:
 - delete Untyped cap bị từ chối khi còn object/cap con; delete trả KResult
 - x86 assert LoadedImage base/end trong 0..1 GiB
 - build_task_space map code RX/stack RW/data RW, rollback khi thiếu trang
+- validate_user_range walk leaf, user bit, R/W, cross-page
 - hai VSpace dùng chung Frame: revoke Frame xoá leaf ở cả hai
 - assert Untyped nằm trong kernel_accessible_range()
 - walk leaf thật cho kernel mapping, kiểm tra non-user/X/W
@@ -813,7 +813,7 @@ Exit code:
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 597616 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 43 test `vifast-kernel` + 9 test `vifast-pte`.
+- Host test hiện có 44 test `vifast-kernel` + 9 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -834,12 +834,11 @@ Exit code:
   kiểm tra kernel image + metadata/data Untyped nằm trọn trong dải này.
 - x86 identity map 0..1 GiB; nếu OVMF/RAM vượt mốc này phải lấy memory map.
 - Kernel x86 identity map chưa đặt NX cho data.
-- Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
+- Tất cả task hiện dùng chung một VSpace; stack mapping RW dùng chung, nên
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
 - Boot Untyped 64 KiB đã có trong runtime nhưng chưa dùng để dựng root/server.
 - Runtime root vẫn dùng VSpace tĩnh cho tới khi context switch root (Bước 4).
 - Root TCB bị cấm destroy; nếu vi phạm sẽ làm mất root cap của Untyped.
-- validate_user_range() vẫn dùng window/reverse map, chưa walk leaf thật.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
 - Self-revoke Untyped hiện trả IllegalOperation; supervisor hủy nhóm gồm chính
   nó sẽ cần destroy-xong-rồi-pick sau này.
@@ -910,8 +909,8 @@ E. Desktop / Space
     PDPT/L1 riêng cho từng VSpace; chỉ PDPT[0]/L1[0..=1] trỏ PD/L2 kernel
     dùng chung. User dùng entry riêng 64..127. TTBR1 để sau.
 12. 3b: context giữ VSpace root; switch satp/TTBR0/CR3; flush TLB user.
-13. 3b: bỏ code/stack window; code/stack là mapping thường; TcbConfigure không
-    kiểm tra entry/stack, fault sẽ suspend.
+13. 3b: code/stack là mapping thường; TcbConfigure không kiểm tra entry/stack;
+    entry sai sẽ fault và suspend. Window fields đã bị xoá ở Bước 5.
 14. 3b: ảnh task là boot module page-aligned + Frame cap; BootInfo frame map
     read-only.
 15. 3b: Frame giữ nhiều mapping hoặc mỗi mapping một cap; revoke unmap mọi nơi.

@@ -47,14 +47,12 @@ VSpace, để Frame còn unmap được leaf trước khi bảng cha bị gỡ.
 - page size;
 - range `[base, end)`;
 - `next_va` cho cấp phát tuần tự;
-- `code_base/code_len`, `stack_base/stack_len`;
 - `aux_pa` cho PDPT/L1 riêng của VSpace retype trên x86/AArch64;
 - tối đa 32 mapping (reverse map).
 
-`validate_user_range()` kiểm tra buffer user theo code/stack/mapping trước
-`DebugWrite`, `Open`, `Read`, `Write`. Đây là hàng rào bảo mật chính; platform
-copy chỉ là lớp thứ hai. Đây vẫn là mô hình tạm thời: khi bỏ code/stack window
-ở 3b, hàm này sẽ walk leaf thật qua `vifast-pte` và chỉ dựa vào page table.
+`validate_user_range()` walk page table thật cho từng trang trước
+`DebugWrite`, `Open`, `Read`, `Write`: leaf phải non-kernel, có R, và W nếu
+cần ghi. Code/stack window fields đã bị xoá; reverse map chỉ còn cho revoke.
 
 `Kernel::map_frame` kiểm tra:
 
@@ -76,7 +74,7 @@ File: `crates/vifast-platform-riscv64/src/platform.rs`.
 - Kernel accessible chỉ khoảng 4 MiB (`0x8000_0000..0x8040_0000`); kernel image
   và metadata/data Untyped phải nằm trọn trong dải này.
 - User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
-  boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
+  boot mappings code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000`.
 - Code: `R|X|U` (không W).
 - Stack: `R|W|U` (không X).
 - Data mapping qua `FrameMap`: `R|W|U` hoặc `R|X|U` theo quyền.
@@ -93,7 +91,7 @@ File: `crates/vifast-platform-aarch64/src/platform.rs`.
 - GICv2 `0x0800_0000`, PL011 `0x0900_0000` map trong L1[0]; RAM kernel
   `0x4000_0000..` map trong L1[1]. `KERNEL_SHARED_SLOTS = [0, 1]`.
 - User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
-  boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
+  boot mappings code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000`.
 - Code: EL0 read-only + executable (`AP_USER_RO`, UXN=0).
 - Stack: EL0 read-write + NX (`AP_USER_RW`, UXN=1).
 - Data: EL0 read-write + NX.
@@ -112,7 +110,7 @@ File: `crates/vifast-platform-x86_64/src/platform.rs`.
 - Identity map 0..1 GiB cho kernel/UEFI image, stack, GDT/TSS/IDT; PDPT[0]
   là shared slot, PML4[0]/PDPT là private mỗi VSpace.
 - User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
-  boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
+  boot mappings code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000`.
 - Code: P|US, read+execute, NX clear.
 - Stack/data: P|W|US|NX.
 - `FrameMap` map đúng VA được yêu cầu; `FrameUnmap` clear PTE + `invlpg`.
@@ -150,7 +148,7 @@ leaf phải non-user, trap entry có X, stack/storage có W. Chưa có:
 - ASID/PCID;
 - thu hồi frame.
 
-Hiện tại server/client/root dùng chung một VSpace và cùng stack window. Vì vậy
+Hiện tại server/client/root dùng chung một VSpace và stack mapping. Vì vậy
 capability đã tách nhưng bộ nhớ chưa tách: client có thể ghi vào stack của
 server. Đây là lý do chính phải làm VSpace riêng khi thêm ELF loader.
 

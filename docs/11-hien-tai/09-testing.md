@@ -24,7 +24,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 43 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
+Hiện có 44 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -40,7 +40,7 @@ Hiện có 43 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 - revoke Untyped detach TCB đang BlockedRecv;
 - max_objects limit;
 - cap copy giữ parent chain;
-- TcbConfigure entry/stack validation (sẽ bỏ ở 3b khi code/stack là mapping thường);
+- TcbConfigure không còn validation entry/stack;
 - TcbResume từ chối TCB chưa configure;
 - Yield thật qua switch_blocked;
 - checked_add/overflow + buffer vắt qua hai page khác quyền;
@@ -55,6 +55,7 @@ Hiện có 43 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 - root revoke thu hồi cả object của cap con; delete cap bị từ chối khi còn con;
 - assert Untyped nằm trong kernel_accessible_range();
 - walk leaf thật cho kernel mapping: non-user, X cho trap entry, W cho stack/storage;
+- validate_user_range walk leaf user/R/W, cross-page và overflow;
 - assert kernel image end + metadata/data nằm trong kernel accessible range;
 - x86 assert LoadedImage base/end trong 0..1 GiB;
 - boot Untyped 64 KiB và build_task_space host test.

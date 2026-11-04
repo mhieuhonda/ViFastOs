@@ -107,6 +107,10 @@ pub trait PageTableOps {
     }
     /// Copy bytes into a physical frame through the platform identity map.
     fn copy_to_frame(&self, _pa: u64, _bytes: &[u8]) {}
+    /// True when a leaf PTE has the architecture user bit.
+    fn leaf_is_user(&self, _pte: u64) -> bool {
+        false
+    }
     /// Number of physical pages needed by a retyped VSpace root.
     fn vspace_pages(&self) -> usize {
         1
@@ -341,19 +345,8 @@ impl Kernel {
         )))
     }
 
-    pub fn create_user_vspace(
-        &mut self,
-        root: u64,
-        data_base: u64,
-        page_size: u64,
-        code_base: u64,
-        code_len: u64,
-        stack_base: u64,
-        stack_len: u64,
-    ) -> Option<ObjRef> {
-        self.alloc(Kind::VSpace(VSpace::with_user_layout(
-            root, data_base, page_size, page_size, code_base, code_len, stack_base, stack_len,
-        )))
+    pub fn create_user_vspace(&mut self, root: u64, base: u64, page_size: u64) -> Option<ObjRef> {
+        self.create_vspace_with_page_size(root, base, page_size, page_size)
     }
 
     pub fn set_tcb_vspace(&mut self, tcb: ObjRef, vspace: ObjRef) -> KResult<()> {
@@ -373,18 +366,8 @@ impl Kernel {
         vspace: ObjRef,
         priority: u8,
     ) -> KResult<()> {
-        let space = self.vspace(vspace).ok_or(KError::WrongType)?;
-        if space.code_len == 0
-            || entry < space.code_base
-            || entry >= space.code_base.saturating_add(space.code_len)
-        {
-            return Err(KError::InvalidArg);
-        }
-        if space.stack_len == 0
-            || stack <= space.stack_base
-            || stack > space.stack_base.saturating_add(space.stack_len)
-        {
-            return Err(KError::InvalidArg);
+        if self.vspace(vspace).is_none() {
+            return Err(KError::WrongType);
         }
         let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
         table.entry = entry;
@@ -407,9 +390,30 @@ impl Kernel {
         Ok(())
     }
 
-    /// Validate a user pointer against the TCB's VSpace layout and shadow
-    /// mappings.  Kernel addresses and unmapped pages are rejected before any
-    /// architecture copy routine sees the pointer.
+    fn user_leaf_ok(ops: &dyn PageTableOps, root: u64, va: u64, need_write: bool) -> bool {
+        let levels = ops.levels();
+        if levels == 0 {
+            return false;
+        }
+        let mut table = root;
+        for level in 0..levels {
+            let idx = ops.index(va, level);
+            let pte = ops.read_pte(table, idx);
+            match ops.decode_at(pte, level) {
+                Pte::Table(next) if level + 1 < levels => table = next,
+                Pte::Leaf(_, rights) => {
+                    return ops.leaf_is_user(pte)
+                        && rights.contains(Rights::READ)
+                        && (!need_write || rights.contains(Rights::WRITE));
+                }
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Validate every page touched by a user range against the real page
+    /// tables.  The reverse map is no longer part of pointer validation.
     pub fn validate_user_range(
         &self,
         tcb: ObjRef,
@@ -422,11 +426,21 @@ impl Kernel {
             .and_then(|table| table.vspace)
             .ok_or(KError::InvalidArg)?;
         let space = self.vspace(space_ref).ok_or(KError::InvalidArg)?;
-        if space.validate_range(va, len, need_write) {
-            Ok(())
-        } else {
-            Err(KError::InvalidArg)
+        let ops = self.page_table_ops.ok_or(KError::MissingPageTable)?;
+        if len == 0 || space.page_size == 0 || !space.page_size.is_power_of_two() {
+            return Err(KError::InvalidArg);
         }
+        let end = va.checked_add(len as u64).ok_or(KError::InvalidArg)?;
+        let mut cursor = va & !(space.page_size - 1);
+        while cursor < end {
+            if !Self::user_leaf_ok(ops, space.root, cursor, need_write) {
+                return Err(KError::InvalidArg);
+            }
+            cursor = cursor
+                .checked_add(space.page_size)
+                .ok_or(KError::InvalidArg)?;
+        }
+        Ok(())
     }
 
     pub fn create_page_table(&mut self, root: u64, _level: u8) -> Option<ObjRef> {
@@ -841,12 +855,6 @@ impl Kernel {
             return Err(error);
         }
 
-        if let Some(space) = self.vspace_mut(vspace) {
-            space.code_base = layout.code_va;
-            space.code_len = (code_pages * page) as u64;
-            space.stack_base = layout.stack_va;
-            space.stack_len = (layout.stack_pages * page) as u64;
-        }
         Ok(vspace)
     }
 
@@ -1156,8 +1164,11 @@ impl Kernel {
         if self.get(cap.obj).is_none() {
             return Err(KError::ObjectDestroyed);
         }
+        if cap.root && cap.ty != ObjType::Untyped {
+            return Err(KError::InvalidArg);
+        }
         cap.id = self.next_cap_id;
-        cap.root = cap.parent.is_none();
+        cap.root = cap.parent.is_none() && cap.ty == ObjType::Untyped;
         self.next_cap_id = self.next_cap_id.wrapping_add(1);
         if self.next_cap_id == 0 {
             self.next_cap_id = 1;
@@ -2721,17 +2732,26 @@ mod tests {
 
     #[test]
     fn user_pointer_validation_rejects_kernel_and_unmapped_ranges() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
         let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
         let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0x8000, 4096, 16)
+            .unwrap();
         let space = kernel
-            .create_user_vspace(
-                0x1000,
-                0x4000_a000,
-                4096,
-                0x4000_0000,
-                4096,
-                0x4000_1000,
-                0x8000,
+            .build_task_space(
+                untyped,
+                b"HELLO",
+                TaskLayout {
+                    code_va: 0x10_0000_0000,
+                    stack_va: 0x10_0000_1000,
+                    stack_pages: 2,
+                    data_va: 0x10_0000_a000,
+                    data_pages: 1,
+                },
             )
             .unwrap();
         kernel.set_tcb_vspace(root, space).unwrap();
@@ -2760,24 +2780,33 @@ mod tests {
             }
         );
         assert_eq!(
-            kernel.user_syscall(root, SyscallId::Read as u64, 0, 0x8000_0000, 8, 0, 0, 0),
+            kernel.user_syscall(root, SyscallId::Read as u64, 0, 0x10_0000_1000, 8, 0, 0, 0),
+            UserAction::Read {
+                fd: 0,
+                ptr: 0x10_0000_1000,
+                len: 8
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::Read as u64, 0, 0x10_0000_0000, 8, 0, 0, 0),
             UserAction::Return {
                 value: 0,
                 error: KError::InvalidArg
             }
         );
         assert_eq!(
-            kernel.user_syscall(root, SyscallId::Write as u64, 0, 0x8000_0000, 8, 0, 0, 0),
-            UserAction::Return {
-                value: 0,
-                error: KError::InvalidArg
+            kernel.user_syscall(root, SyscallId::Write as u64, 0, 0x10_0000_0000, 8, 0, 0, 0),
+            UserAction::Write {
+                fd: 0,
+                ptr: 0x10_0000_0000,
+                len: 8
             }
         );
         assert_eq!(
             kernel.user_syscall(
                 root,
                 SyscallId::DebugWrite as u64,
-                0x4000_0000,
+                0x10_0000_0000,
                 8,
                 0,
                 0,
@@ -2785,7 +2814,7 @@ mod tests {
                 0
             ),
             UserAction::Debug {
-                ptr: 0x4000_0000,
+                ptr: 0x10_0000_0000,
                 len: 8
             }
         );
@@ -2902,15 +2931,7 @@ mod tests {
         let frame = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
         let old_pa = kernel.frame(frame).unwrap().pa;
         let space = kernel
-            .create_user_vspace(
-                0x1000,
-                0x4000_a000,
-                4096,
-                0x4000_0000,
-                4096,
-                0x4000_1000,
-                0x8000,
-            )
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
             .unwrap();
         let space2 = kernel
             .create_vspace_with_page_size(0x2000, 0x5000_a000, 0x1000, 0x1000)
@@ -2986,23 +3007,47 @@ mod tests {
 
     #[test]
     fn user_range_rejects_overflow_and_cross_page_write() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
         let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0x8000, 4096, 16)
+            .unwrap();
         let space = kernel
-            .create_vspace_with_page_size(0x1000, 0x4000_a000, 0x2000, 0x1000)
+            .build_task_space(
+                untyped,
+                b"X",
+                TaskLayout {
+                    code_va: 0x10_0000_0000,
+                    stack_va: 0x10_0000_1000,
+                    stack_pages: 2,
+                    data_va: 0x10_0000_a000,
+                    data_pages: 1,
+                },
+            )
             .unwrap();
-        let first = kernel.create_frame(0x9000, 4096).unwrap();
-        let second = kernel.create_frame(0xa000, 4096).unwrap();
-        kernel
-            .map_frame(space, first, 0, Rights::READ | Rights::WRITE)
-            .unwrap();
-        kernel.map_frame(space, second, 0, Rights::READ).unwrap();
-        assert!(space_validate(space, &kernel, 0x4000_a000, 0x1800, false));
-        assert!(!space_validate(space, &kernel, 0x4000_a000, 0x1800, true));
-        assert!(!space_validate(space, &kernel, u64::MAX - 1, 4, false));
-    }
-
-    fn space_validate(space: ObjRef, kernel: &Kernel, va: u64, len: usize, write: bool) -> bool {
-        kernel.vspace(space).unwrap().validate_range(va, len, write)
+        kernel.set_tcb_vspace(root, space).unwrap();
+        assert!(kernel
+            .validate_user_range(root, 0x10_0000_0000, 1, false)
+            .is_ok());
+        assert_eq!(
+            kernel.validate_user_range(root, 0x10_0000_0000, 1, true),
+            Err(KError::InvalidArg)
+        );
+        assert!(kernel
+            .validate_user_range(root, 0x10_0000_1000, 1, true)
+            .is_ok());
+        assert_eq!(
+            kernel.validate_user_range(root, 0x10_0000_afff, 2, true),
+            Err(KError::InvalidArg)
+        );
+        assert_eq!(
+            kernel.validate_user_range(root, u64::MAX - 1, 4, false),
+            Err(KError::InvalidArg)
+        );
     }
 
     struct ZeroOps;
@@ -3072,8 +3117,15 @@ mod tests {
                 *slot = pte;
             }
         }
-        fn encode_leaf(&self, pa: u64, _rights: Rights) -> u64 {
-            (pa & !0xfff) | 0b10
+        fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
+            let mut pte = (pa & !0xfff) | 0b10;
+            if rights.contains(Rights::WRITE) {
+                pte |= 0b100;
+            }
+            if rights.contains(Rights::EXEC) {
+                pte |= 0b1000;
+            }
+            pte
         }
         fn encode_table(&self, pa: u64) -> u64 {
             (pa & !0xfff) | 0b01
@@ -3082,10 +3134,20 @@ mod tests {
             if pte == 0 {
                 Pte::Invalid
             } else if pte & 0b10 != 0 {
-                Pte::Leaf(pte & !0xfff, Rights::READ | Rights::WRITE)
+                let mut rights = Rights::READ;
+                if pte & 0b100 != 0 {
+                    rights = rights | Rights::WRITE;
+                }
+                if pte & 0b1000 != 0 {
+                    rights = rights | Rights::EXEC;
+                }
+                Pte::Leaf(pte & !0xfff, rights)
             } else {
                 Pte::Table(pte & !0xfff)
             }
+        }
+        fn leaf_is_user(&self, pte: u64) -> bool {
+            pte & 0b10 != 0
         }
         fn user_va_range(&self) -> (u64, u64) {
             (0x1000, 0x3000)
@@ -3145,8 +3207,15 @@ mod tests {
                 *slot = pte;
             }
         }
-        fn encode_leaf(&self, pa: u64, _rights: Rights) -> u64 {
-            (pa & !0xfff) | 0b10
+        fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
+            let mut pte = (pa & !0xfff) | 0b10;
+            if rights.contains(Rights::WRITE) {
+                pte |= 0b100;
+            }
+            if rights.contains(Rights::EXEC) {
+                pte |= 0b1000;
+            }
+            pte
         }
         fn encode_table(&self, pa: u64) -> u64 {
             (pa & !0xfff) | 0b01
@@ -3155,13 +3224,23 @@ mod tests {
             if pte == 0 {
                 Pte::Invalid
             } else if pte & 0b10 != 0 {
-                Pte::Leaf(pte & !0xfff, Rights::READ | Rights::WRITE)
+                let mut rights = Rights::READ;
+                if pte & 0b100 != 0 {
+                    rights = rights | Rights::WRITE;
+                }
+                if pte & 0b1000 != 0 {
+                    rights = rights | Rights::EXEC;
+                }
+                Pte::Leaf(pte & !0xfff, rights)
             } else {
                 Pte::Table(pte & !0xfff)
             }
         }
         fn decode_at(&self, pte: u64, _level: usize) -> Pte {
             self.decode(pte)
+        }
+        fn leaf_is_user(&self, pte: u64) -> bool {
+            pte & 0b10 != 0
         }
         fn user_va_range(&self) -> (u64, u64) {
             (
@@ -3253,7 +3332,7 @@ mod tests {
         assert_eq!(FAKE_MEM.lock().unwrap()[0], 0x1001);
         assert_eq!(FAKE_MEM.lock().unwrap()[512 + 1], 0x2001);
         assert_eq!(FAKE_MEM.lock().unwrap()[1024], 0x3001);
-        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0x4002);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0x4006);
 
         let before = fake_snapshot();
         assert_eq!(
@@ -3380,7 +3459,7 @@ mod tests {
         kernel
             .map_frame(space, frame, va, Rights::READ | Rights::WRITE)
             .unwrap();
-        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0x4002);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0x4006);
 
         kernel.revoke_cap(root, 1).unwrap();
         assert!(kernel.page_table(pt1).is_none());
@@ -3793,6 +3872,28 @@ mod tests {
     }
 
     #[test]
+    fn boot_creator_none_objects_are_not_collected_by_data_cap() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let boot = kernel
+            .create_untyped_with_limit(0x1000, 0x1000, 4096, 2)
+            .unwrap();
+        let data = kernel
+            .create_untyped_with_limit(0x2000, 0x1000, 4096, 2)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(data, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let boot_frame = kernel.retype(boot, ObjType::Frame).unwrap();
+        let data_frame = kernel
+            .retype_as(data, ObjType::Frame, Some(SlotAddr { tcb: root, slot: 1 }))
+            .unwrap();
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(boot_frame).is_some());
+        assert!(kernel.get(data_frame).is_none());
+    }
+
+    #[test]
     fn root_flag_does_not_propagate_to_copies_or_ipc() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
@@ -3973,7 +4074,7 @@ mod tests {
             .map_frame(space, frame, va, Rights::READ | Rights::WRITE)
             .unwrap();
         assert!(kernel.validate_user_range(root, va, 4, false).is_ok());
-        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0x4002);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0x4006);
 
         kernel.revoke_cap(root, 1).unwrap();
         assert!(kernel.frame(frame).is_some());
@@ -4140,8 +4241,6 @@ mod tests {
             kernel.mapping_at(vspace, layout.data_va).unwrap().rights,
             Rights::READ | Rights::WRITE
         );
-        assert_eq!(kernel.vspace(vspace).unwrap().code_len, 4096);
-        assert_eq!(kernel.vspace(vspace).unwrap().stack_len, 8192);
         // Kernel slots in the private root/aux table remain intact.
         assert_eq!(FAKE_MEM.lock().unwrap()[512], 0x2001);
         assert_eq!(FAKE_MEM.lock().unwrap()[1024], 0x9001);
@@ -4203,8 +4302,8 @@ mod tests {
                 .map_frame(space, frame, va, Rights::READ | Rights::EXEC)
                 .unwrap();
         }
-        assert_eq!(FAKE_MEM.lock().unwrap()[4096 + 1], 0x1002);
-        assert_eq!(FAKE_MEM.lock().unwrap()[4608 + 1], 0x1002);
+        assert_eq!(FAKE_MEM.lock().unwrap()[4096 + 1], 0x100a);
+        assert_eq!(FAKE_MEM.lock().unwrap()[4608 + 1], 0x100a);
 
         kernel.revoke_cap(root, 1).unwrap();
         assert!(kernel.get(frame).is_none());
@@ -4269,18 +4368,10 @@ mod tests {
     }
 
     #[test]
-    fn tcb_configuration_validates_layout_and_resumes() {
+    fn tcb_configuration_sets_context_and_resumes() {
         let mut kernel = Kernel::new();
         let space = kernel
-            .create_user_vspace(
-                0x1000,
-                0x4000_a000,
-                4096,
-                0x4000_0000,
-                4096,
-                0x4000_1000,
-                0x8000,
-            )
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
             .unwrap();
         let child = kernel.create_tcb("child", 1).unwrap();
         assert_eq!(
@@ -4290,14 +4381,6 @@ mod tests {
         assert_eq!(kernel.resume_tcb(child), Ok(()));
         assert!(kernel.tcb(child).is_some_and(|tcb| tcb.queued));
         assert_eq!(kernel.resume_tcb(child), Ok(()));
-        assert_eq!(
-            kernel.configure_tcb(child, 0x9000_0000, 0x4000_5000, space, 5),
-            Err(KError::InvalidArg)
-        );
-        assert_eq!(
-            kernel.configure_tcb(child, 0x4000_0000, 0x9000_0000, space, 5),
-            Err(KError::InvalidArg)
-        );
     }
 
     #[test]

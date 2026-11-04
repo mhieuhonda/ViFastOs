@@ -243,30 +243,11 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn decode(&self, entry: u64) -> vifast_kernel::Pte {
-        if entry & 0b11 == 0 {
-            return vifast_kernel::Pte::Invalid;
-        }
-        let pa = entry & 0x0000_ffff_ffff_f000;
-        if entry & 0b11 == 0b11 {
-            vifast_kernel::Pte::Table(pa)
-        } else {
-            vifast_kernel::Pte::Leaf(pa, Rights::READ)
-        }
+        vifast_pte::aarch64::decode(entry)
     }
 
     fn decode_at(&self, entry: u64, level: usize) -> vifast_kernel::Pte {
-        if entry & 0b11 == 0 {
-            return vifast_kernel::Pte::Invalid;
-        }
-        let pa = entry & 0x0000_ffff_ffff_f000;
-        if level == 3 {
-            return vifast_kernel::Pte::Leaf(pa, Rights::READ);
-        }
-        if entry & 0b11 == 0b01 {
-            vifast_kernel::Pte::Leaf(pa, Rights::READ)
-        } else {
-            vifast_kernel::Pte::Table(pa)
-        }
+        vifast_pte::aarch64::decode_at(entry, level)
     }
 
     fn vspace_pages(&self) -> usize {
@@ -310,6 +291,10 @@ impl vifast_kernel::PageTableOps for PageOps {
             core::arch::asm!("dsb ish");
             core::arch::asm!("isb");
         }
+    }
+
+    fn leaf_is_user(&self, pte: u64) -> bool {
+        vifast_pte::aarch64::is_user(pte)
     }
 
     fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {

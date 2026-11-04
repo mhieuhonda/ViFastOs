@@ -147,16 +147,10 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     );
     A::start_smp();
     let root = kernel.root().unwrap_or_else(|| A::exit(1));
-    let stack_base = (A::stack_a_top() - 0x4000) as u64;
-    let stack_len = (A::stack_b_top() - (A::stack_a_top() - 0x4000)) as u64;
     let Some(vspace) = kernel.create_user_vspace(
         A::vspace_root(),
         A::USER_DATA_VA as u64,
         A::PAGE_SIZE as u64,
-        A::USER_CODE_VA as u64,
-        A::PAGE_SIZE as u64,
-        stack_base,
-        stack_len,
     ) else {
         A::exit(1);
     };

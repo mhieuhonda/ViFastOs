@@ -196,7 +196,7 @@ cargo test -p vifast-pte
   reply object/ReplyRecv, IPC buffer hay fault endpoint.
 - VSpace/PageTable object, generic map/unmap và PageTableMap đã có, nhưng
   page-table root vẫn là bảng tĩnh của từng port; retype VSpace/install_kernel
-  chưa làm; root/server/client hiện dùng chung VSpace và stack window, nên chưa
+  chưa làm; root/server/client hiện dùng chung VSpace và stack mapping, nên chưa
   cách ly bộ nhớ giữa các task; chưa có page-table page allocator tổng quát,
   TLB shootdown đa hart, hay cấp phát địa chỉ ảo tự động theo range lớn.
 - Untyped/retype đã tính phí Endpoint/Notification/Tcb và reset bump khi revoke
@@ -210,7 +210,7 @@ cargo test -p vifast-pte
   hay TLB shootdown đa hart.
 - Timer/scheduler vẫn chạy một hart qua SBI/GICv2/PIC.
 - x86_64 đã tự dựng PML4/page table riêng: code RX, data/stack NX, unmap thật.
-  User range 64..128 GiB nằm ngoài identity map 0..1 GiB; boot window ở 64 GiB
+  User range 64..128 GiB nằm ngoài identity map 0..1 GiB; boot mappings ở 64 GiB
   chỉ là tạm thời; chưa có AP và data kernel chưa được đặt NX.
 - RISC-V/AArch64/x86_64 đều map code read-only + executable và data/stack NX.
 - VFS mới là ramfs phẳng trong kernel: chưa có block device, cây thư mục,
