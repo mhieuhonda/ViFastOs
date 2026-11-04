@@ -59,10 +59,11 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 562727d feat: add first-fit vspace range allocator
 - 395a589 feat: demo notification capability transfer over call
 - 85fe2cf feat: add user-space vfs server over ipc
+- 687962c feat: add software iommu domains and dma maps
 - fffa7d6 feat: add vfs stat request
 - 826efed feat: tag vspaces with asid and pcid
 
-Cập nhật code gần nhất (commit fffa7d6): VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit 687962c): software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
@@ -98,14 +99,14 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 81/81 PASS
+- cargo test -p vifast-kernel: 83/83 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
-  headroom 565.216 B dưới 0x80400000
+  headroom 561.120 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -119,8 +120,8 @@ Output tiêu biểu:
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
-  "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "PREEMPT OK",
-  "ROOT SWITCH n>1"
+  "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "IOMMU OK",
+  "PREEMPT OK", "ROOT SWITCH n>1"
 - user layout chung: boot mappings tại 0x0000_0010_0000_0000 (64 GiB);
   full user range hiện tại 64..128 GiB
 
@@ -828,7 +829,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 81 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 83 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -1059,7 +1060,7 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 81 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 83 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1071,7 +1072,8 @@ Exit code:
 - Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
   chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
-- Chưa có IOMMU.
+- IOMMU mới có mô hình phần mềm (domain + reverse map + IoMap/IoUnmap);
+  chưa có hardware IOMMU/VT-d/SMMU.
 - vifast-elf + vifast-root ELF đã build/validate; server/client cũng là Rust ELF
   do runtime cấp qua BootInfo staging, root nạp vào VSpace riêng. IPC buffer
   core + demo end-to-end đã có (8.1/8.1b); chưa có shared-memory mapping dùng
@@ -1130,7 +1132,7 @@ B. Bộ nhớ
 3. Range VA allocator.
 4. Free/unmap toàn VSpace, thu hồi frame/object.
 5. ASID/PCID — đã tag ASID/PCID theo VSpace (x86 conditional).
-6. IOMMU.
+6. IOMMU — mô hình phần mềm đã có; hardware IOMMU/VT-d/SMMU còn thiếu.
 
 C. SMP
 1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI.

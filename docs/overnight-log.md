@@ -18,6 +18,7 @@
 - `85fe2cf` — user-space VFS server over IPC.
 - `826efed` — ASID/PCID VSpace tagging.
 - `fffa7d6` — VFS STAT request.
+- `687962c` — software IOMMU domains and DMA maps.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -44,17 +45,18 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## Số liệu cuối
 
-- `vifast-kernel` 81/81, PTE 11/11, ELF 17/17; runtime/user compile.
+- `vifast-kernel` 83/83, PTE 11/11, ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
-  `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`.
+  `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`,
+  `IOMMU OK`.
 - Boot Untyped: RISC-V 20/32 pages, AArch/x86 22/32; free 12/10 pages,
   12/12 objects.
 - DATA UNTYPED lúc test-exit: RISC-V 35/64 pages, AArch/x86 36/64 pages,
   x86 40/64 pages; 20/48 object (x86 24/48).
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
-  565216 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `3823fef95bd7bed33f30190a7c18a49823df554b7bbad083c1a64b055cd83126`.
+  561120 B.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `f9ac1437a2bf7555a8f5c857fa4e974645ea345df51bcc964ccb0b959f2519ec`.
 
 ---
 
@@ -186,6 +188,18 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## 8.8 — Software IOMMU domains
+
+- Commit `687962c feat: add software iommu domains and dma maps`.
+- Thêm object `ObjType::Iommu` + `IommuDomain` reverse map, tối đa 32 DMA
+  mapping/domain; IOVA chỉ nhận vùng 4 GiB tại `IOMMU_IOVA_BASE`.
+- Syscall `IoMap`/`IoUnmap`: map Frame vào domain, chỉ READ/WRITE, cấm EXEC,
+  kiểm tra alignment/overlap; Frame bị destroy sẽ tự xoá DMA mapping.
+- Root tạo domain từ data Untyped, map/unmap server IPC buffer và in
+  `IOMMU OK`; harness yêu cầu đúng một chuỗi.
+- Đây là mô hình IOMMU phần mềm; hardware IOMMU/VT-d/SMMU/IOMMU driver vẫn là
+  phase riêng. `vifast-kernel` 83/83; QEMU 3/3 PASS.
 
 ## 8.7 — VFS STAT
 
