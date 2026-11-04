@@ -55,6 +55,10 @@ static mut USER_DATA: DataPool = DataPool([0; 262144]);
 struct Metadata([u8; 65536]);
 static mut METADATA: Metadata = Metadata([0; 65536]);
 static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
+#[allow(dead_code)]
+#[repr(align(4096))]
+struct BootPool([u8; 65536]);
+static mut BOOT_POOL: BootPool = BootPool([0; 65536]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 #[allow(dead_code)]
 #[repr(align(16))]
@@ -232,6 +236,12 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), pa as *mut u8, bytes.len());
+        }
+    }
+
     fn zero_frame(&self, pa: u64, size: usize) {
         unsafe {
             core::ptr::write_bytes(pa as *mut u8, 0, size);
@@ -314,6 +324,12 @@ impl Platform for RiscvPlatform {
 
     fn kernel() -> &'static mut Kernel {
         unsafe { &mut *KERNEL_PTR }
+    }
+
+    fn boot_page() -> &'static mut [u8] {
+        unsafe {
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(BOOT_POOL) as *mut u8, 65536)
+        }
     }
 
     fn code_page() -> &'static mut [u8] {

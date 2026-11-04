@@ -39,7 +39,8 @@ suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTabl
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
 range + table_span), PageTableMap level động, retype VSpace/install_kernel,
-creator CapRef id + reparent, delete cap KResult, KERNEL_SHARED_SLOTS,
+creator CapRef id + reparent, delete cap KResult, boot Untyped,
+build_task_space, KERNEL_SHARED_SLOTS,
 kernel accessible range, x86 LoadedImage assert, thứ tự revoke
 Frame → PageTable sâu → VSpace, vifast-pte host test, SMEP/SMAP/PAN/sscratch
 hardening và vifast-user.
@@ -63,7 +64,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 38/38 PASS
+- cargo test -p vifast-kernel: 42/42 PASS
 - cargo test -p vifast-pte: 9/9 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
@@ -249,18 +250,18 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 554 dòng
-- AArch64: 669 dòng
-- x86_64: 785 dòng
+- RISC-V: 570 dòng
+- AArch64: 685 dòng
+- x86_64: 801 dòng
 
 runtime:
-- 437 dòng
+- 453 dòng
 
 vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 3880 dòng, không còn dependency vifast-arch
+- 4279 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597616 bytes
@@ -623,6 +624,8 @@ Root task dùng syscall:
 - TcbResume(fault1/fault2), rồi Wait trên notification slot 8.
 - Fault1 load 0x8000_0000; fault2 chạy lệnh đặc quyền; cả hai log USER FAULT.
 - Server/client hiện vẫn dùng chung VSpace slot 1 cho đến 3b.
+- Bước 4.5 sẽ dùng Untyped con cho server nếu cần retype; hiện CapCopy Untyped
+  vẫn chia sẻ vùng nhớ và được ghi là nợ tài nguyên ở mục 16.
 
 Server A:
 - cap endpoint READ.
@@ -675,7 +678,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 38 test `vifast-kernel` + 9 test `vifast-pte`:
+Host test hiện có 42 test `vifast-kernel` + 9 test `vifast-pte`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -707,6 +710,7 @@ Host test hiện có 38 test `vifast-kernel` + 9 test `vifast-pte`:
 - TCB bị hủy: creator/cap con được reparent; client copy không revoke object server
 - delete Untyped cap bị từ chối khi còn object/cap con; delete trả KResult
 - x86 assert LoadedImage base/end trong 0..1 GiB
+- build_task_space map code RX/stack RW/data RW, rollback khi thiếu trang
 - assert Untyped nằm trong kernel_accessible_range()
 - walk leaf thật cho kernel mapping, kiểm tra non-user/X/W
 - VSpace/PageTable cross-Untyped, kernel slots và retype page shortage
@@ -803,7 +807,7 @@ Exit code:
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 597616 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 38 test `vifast-kernel` + 9 test `vifast-pte`.
+- Host test hiện có 42 test `vifast-kernel` + 9 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -826,6 +830,7 @@ Exit code:
 - Kernel x86 identity map chưa đặt NX cho data.
 - Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
+- Boot Untyped 64 KiB đã có trong runtime nhưng chưa dùng để dựng root/server.
 - Runtime root vẫn dùng VSpace tĩnh cho tới khi context switch root (Bước 4).
 - validate_user_range() vẫn dùng window/reverse map, chưa walk leaf thật.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.

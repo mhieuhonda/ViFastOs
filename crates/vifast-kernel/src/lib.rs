@@ -105,6 +105,8 @@ pub trait PageTableOps {
     fn decode_at(&self, pte: u64, _level: usize) -> Pte {
         self.decode(pte)
     }
+    /// Copy bytes into a physical frame through the platform identity map.
+    fn copy_to_frame(&self, _pa: u64, _bytes: &[u8]) {}
     /// Number of physical pages needed by a retyped VSpace root.
     fn vspace_pages(&self) -> usize {
         1
@@ -132,6 +134,16 @@ pub struct KernelStats {
     pub notifications: u64,
     pub context_switches: u64,
     pub ticks: u64,
+}
+
+/// User layout used by the reusable task-space builder.
+#[derive(Clone, Copy, Debug)]
+pub struct TaskLayout {
+    pub code_va: u64,
+    pub stack_va: u64,
+    pub stack_pages: usize,
+    pub data_va: u64,
+    pub data_pages: usize,
 }
 
 pub struct Kernel {
@@ -653,6 +665,189 @@ impl Kernel {
         region.bump = consumed;
         region.objects = objects + 1;
         Ok(object)
+    }
+
+    fn missing_table_level(&self, vspace: ObjRef, va: u64) -> Option<u8> {
+        let space = self.vspace(vspace)?;
+        let ops = self.page_table_ops?;
+        let levels = ops.levels();
+        if levels < 2 {
+            return None;
+        }
+        let mut table = space.root;
+        for level in 0..levels - 1 {
+            let idx = ops.index(va, level);
+            match ops.decode_at(ops.read_pte(table, idx), level) {
+                Pte::Invalid => return Some((level + 1) as u8),
+                Pte::Table(next) => table = next,
+                Pte::Leaf(_, _) => return None,
+            }
+        }
+        None
+    }
+
+    fn rollback_task_space(
+        &mut self,
+        created: &[ObjRef],
+        untyped: ObjRef,
+        bump: usize,
+        objects: usize,
+    ) {
+        for object in created.iter().rev() {
+            if object.is_valid() {
+                let _ = self.destroy_object(*object);
+            }
+        }
+        if let Some(region) = self.untyped_mut(untyped) {
+            region.bump = bump;
+            region.objects = objects;
+        }
+    }
+
+    fn ensure_task_tables(
+        &mut self,
+        untyped: ObjRef,
+        vspace: ObjRef,
+        va: u64,
+        created: &mut [ObjRef; MAX_OBJECTS],
+        count: &mut usize,
+    ) -> KResult<()> {
+        loop {
+            let Some(level) = self.missing_table_level(vspace, va) else {
+                return Ok(());
+            };
+            if *count >= created.len() {
+                return Err(KError::OutOfMemory);
+            }
+            let table = self.retype_as(untyped, ObjType::PageTable, None)?;
+            created[*count] = table;
+            *count += 1;
+            let attached = self.map_page_table(table, vspace, va)?;
+            if attached != level {
+                return Err(KError::IllegalOperation);
+            }
+        }
+    }
+
+    fn map_task_segment(
+        &mut self,
+        untyped: ObjRef,
+        vspace: ObjRef,
+        va: u64,
+        pages: usize,
+        rights: Rights,
+        copy: Option<&[u8]>,
+        created: &mut [ObjRef; MAX_OBJECTS],
+        count: &mut usize,
+    ) -> KResult<()> {
+        let page = self.untyped(untyped).ok_or(KError::WrongType)?.page_size;
+        for page_index in 0..pages {
+            if *count >= created.len() {
+                return Err(KError::OutOfMemory);
+            }
+            let frame = self.retype_as(untyped, ObjType::Frame, None)?;
+            created[*count] = frame;
+            *count += 1;
+            if let Some(bytes) = copy {
+                let start = page_index * page;
+                if start < bytes.len() {
+                    let end = (start + page).min(bytes.len());
+                    let pa = self.frame(frame).ok_or(KError::WrongType)?.pa as u64;
+                    self.page_table_ops
+                        .ok_or(KError::MissingPageTable)?
+                        .copy_to_frame(pa, &bytes[start..end]);
+                }
+            }
+            let target = va
+                .checked_add((page_index * page) as u64)
+                .ok_or(KError::InvalidArg)?;
+            self.map_frame(vspace, frame, target, rights)?;
+        }
+        Ok(())
+    }
+
+    /// Build a complete task VSpace from an Untyped arena.  This is the
+    /// reusable host-testable path that the root task will later use through
+    /// syscalls.  On error the created objects are destroyed and the arena
+    /// snapshot is restored.
+    pub fn build_task_space(
+        &mut self,
+        untyped: ObjRef,
+        image: &[u8],
+        layout: TaskLayout,
+    ) -> KResult<ObjRef> {
+        let (page, bump, objects) = {
+            let region = self.untyped(untyped).ok_or(KError::WrongType)?;
+            (region.page_size, region.bump, region.objects)
+        };
+        if page == 0 || !page.is_power_of_two() || self.page_table_ops.is_none() {
+            return Err(KError::MissingPageTable);
+        }
+        let code_pages = (image.len() + page - 1) / page;
+        let mut created = [ObjRef::invalid(); MAX_OBJECTS];
+        let mut created_count = 0usize;
+        let vspace = self.retype_as(untyped, ObjType::VSpace, None)?;
+        if created_count < created.len() {
+            created[created_count] = vspace;
+            created_count += 1;
+        } else {
+            let _ = self.destroy_object(vspace);
+            return Err(KError::OutOfMemory);
+        }
+
+        let step = |kernel: &mut Kernel,
+                    created: &mut [ObjRef; MAX_OBJECTS],
+                    count: &mut usize|
+         -> KResult<()> {
+            kernel.ensure_task_tables(untyped, vspace, layout.code_va, created, count)?;
+            kernel.map_task_segment(
+                untyped,
+                vspace,
+                layout.code_va,
+                code_pages,
+                Rights::READ | Rights::EXEC,
+                Some(image),
+                created,
+                count,
+            )?;
+            kernel.ensure_task_tables(untyped, vspace, layout.stack_va, created, count)?;
+            kernel.map_task_segment(
+                untyped,
+                vspace,
+                layout.stack_va,
+                layout.stack_pages,
+                Rights::READ | Rights::WRITE,
+                None,
+                created,
+                count,
+            )?;
+            if layout.data_pages != 0 {
+                kernel.ensure_task_tables(untyped, vspace, layout.data_va, created, count)?;
+                kernel.map_task_segment(
+                    untyped,
+                    vspace,
+                    layout.data_va,
+                    layout.data_pages,
+                    Rights::READ | Rights::WRITE,
+                    None,
+                    created,
+                    count,
+                )?;
+            }
+            Ok(())
+        };
+        if let Err(error) = step(self, &mut created, &mut created_count) {
+            self.rollback_task_space(&created[..created_count], untyped, bump, objects);
+            return Err(error);
+        }
+
+        if let Some(space) = self.vspace_mut(vspace) {
+            space.code_base = layout.code_va;
+            space.code_len = (code_pages * page) as u64;
+            space.stack_base = layout.stack_va;
+            space.stack_len = (layout.stack_pages * page) as u64;
+        }
+        Ok(vspace)
     }
 
     /// Attach a retyped PageTable object at the first empty entry on the path
@@ -1564,6 +1759,9 @@ impl Kernel {
             return Ok(());
         };
         if self.current == Some(obj) {
+            return Err(KError::IllegalOperation);
+        }
+        if self.root == Some(obj) {
             return Err(KError::IllegalOperation);
         }
         if matches!(kind, Kind::VSpace(_))
@@ -2991,6 +3189,19 @@ mod tests {
         fn flush_va(&self, _va: u64) {
             FAKE_FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
+        fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {
+            let base = ((pa >> 12) as usize) * 512;
+            let mut mem = FAKE_MEM.lock().unwrap();
+            for (index, byte) in bytes.iter().enumerate() {
+                let byte_index = base * 8 + index;
+                let word = byte_index / 8;
+                let shift = (byte_index % 8) * 8;
+                if let Some(slot) = mem.get_mut(word) {
+                    *slot = (*slot & !(0xffu64 << shift)) | ((*byte as u64) << shift);
+                }
+            }
+        }
+
         fn zero_frame(&self, pa: u64, size: usize) {
             let base = ((pa >> 12) as usize) * 512;
             let words = (size + 7) / 8;
@@ -3500,6 +3711,15 @@ mod tests {
         kernel.revoke_cap(root, 2).unwrap();
         assert!(kernel.get(client).is_none());
         assert!(kernel.get(frame).is_some());
+        assert!(
+            !kernel
+                .cap_at(SlotAddr {
+                    tcb: server,
+                    slot: 1
+                })
+                .unwrap()
+                .root
+        );
         // Server's copy of the data Untyped must not collect the object.
         kernel.revoke_cap(server, 1).unwrap();
         assert!(kernel.get(frame).is_some());
@@ -3510,6 +3730,122 @@ mod tests {
         assert!(kernel.get(frame).is_none());
         assert!(kernel.mapping_at(space, mapping.va).is_none());
         assert!(kernel.lookup_cap(server, 1, None, Rights::NONE).is_err());
+    }
+
+    #[test]
+    fn multiple_dying_tcbs_reparent_through_dead_intermediate_cap() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let data_untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        let meta_untyped = kernel
+            .create_untyped_with_limit(0x200_0000, 0x2000, 4096, 4)
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(data_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(meta_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        let tcb1 = kernel
+            .retype_as(
+                meta_untyped,
+                ObjType::Tcb,
+                Some(SlotAddr { tcb: root, slot: 2 }),
+            )
+            .unwrap();
+        let tcb2 = kernel
+            .retype_as(
+                meta_untyped,
+                ObjType::Tcb,
+                Some(SlotAddr { tcb: root, slot: 2 }),
+            )
+            .unwrap();
+        kernel.copy_cap(root, 1, tcb1, 1, Rights::ALL, 0).unwrap();
+        kernel.copy_cap(tcb1, 1, tcb2, 1, Rights::ALL, 0).unwrap();
+        let frame = kernel
+            .retype_as(
+                data_untyped,
+                ObjType::Frame,
+                Some(SlotAddr { tcb: tcb2, slot: 1 }),
+            )
+            .unwrap();
+
+        // One revocation kills both TCBs.  The intermediate cap is dying too,
+        // so the frame creator must land on the root cap, not on tcb1's cap.
+        kernel.revoke_cap(root, 2).unwrap();
+        assert!(kernel.get(tcb1).is_none());
+        assert!(kernel.get(tcb2).is_none());
+        assert!(kernel.get(frame).is_some());
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(frame).is_none());
+        assert_eq!(kernel.untyped(data_untyped).unwrap().objects, 0);
+        assert_eq!(kernel.untyped(data_untyped).unwrap().bump, 0);
+    }
+
+    #[test]
+    fn root_flag_does_not_propagate_to_copies_or_ipc() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert!(kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().root);
+        kernel.copy_cap(root, 1, client, 1, Rights::ALL, 0).unwrap();
+        assert!(
+            !kernel
+                .cap_at(SlotAddr {
+                    tcb: client,
+                    slot: 1
+                })
+                .unwrap()
+                .root
+        );
+        kernel
+            .install_cap(root, 2, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        assert_eq!(kernel.recv(client, endpoint, 3), Ok(None));
+        let msg = Message::new(0x51, &[1]).unwrap().with_cap(1);
+        assert_eq!(kernel.send(root, endpoint, 0, msg, false), Ok(true));
+        assert!(
+            !kernel
+                .cap_at(SlotAddr {
+                    tcb: client,
+                    slot: 3
+                })
+                .unwrap()
+                .root
+        );
+    }
+
+    #[test]
+    fn root_tcb_cannot_be_destroyed_by_untyped_revoke() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x1000, 4096, 2)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        // Test the otherwise-unreachable ownership path explicitly.
+        kernel.objs[root.index as usize].owner = Some(untyped);
+        assert_eq!(kernel.revoke_cap(root, 1), Err(KError::IllegalOperation));
+        assert!(kernel.get(root).is_some());
     }
 
     #[test]
@@ -3764,6 +4100,67 @@ mod tests {
         assert!(kernel
             .create_untyped_with_limit(0x1_0000, 0x1000, 4096, 2)
             .is_none());
+    }
+
+    #[test]
+    fn build_task_space_maps_code_stack_and_rolls_back() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0x8000, 4096, 16)
+            .unwrap();
+        let layout = TaskLayout {
+            code_va: 0x10_0000_0000,
+            stack_va: 0x10_0000_1000,
+            stack_pages: 2,
+            data_va: 0x10_0000_a000,
+            data_pages: 1,
+        };
+        let image = b"BUILD-OK";
+        let vspace = kernel.build_task_space(untyped, image, layout).unwrap();
+        assert_eq!(
+            kernel.mapping_at(vspace, layout.code_va).unwrap().rights,
+            Rights::READ | Rights::EXEC
+        );
+        assert_eq!(
+            kernel.mapping_at(vspace, layout.stack_va).unwrap().rights,
+            Rights::READ | Rights::WRITE
+        );
+        assert_eq!(
+            kernel
+                .mapping_at(vspace, layout.stack_va + 4096)
+                .unwrap()
+                .rights,
+            Rights::READ | Rights::WRITE
+        );
+        assert_eq!(
+            kernel.mapping_at(vspace, layout.data_va).unwrap().rights,
+            Rights::READ | Rights::WRITE
+        );
+        assert_eq!(kernel.vspace(vspace).unwrap().code_len, 4096);
+        assert_eq!(kernel.vspace(vspace).unwrap().stack_len, 8192);
+        // Kernel slots in the private root/aux table remain intact.
+        assert_eq!(FAKE_MEM.lock().unwrap()[512], 0x2001);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1024], 0x9001);
+        let code_pa = kernel.mapping_at(vspace, layout.code_va).unwrap().pa;
+        let code_base = ((code_pa >> 12) as usize) * 512;
+        assert_eq!(FAKE_MEM.lock().unwrap()[code_base] & 0xff, b'B' as u64);
+
+        // An arena with exactly one page too few must roll back completely.
+        let small = kernel
+            .create_untyped_with_limit(0x9000, 0x7000, 4096, 16)
+            .unwrap();
+        let before_bump = kernel.untyped(small).unwrap().bump;
+        let before_objects = kernel.untyped(small).unwrap().objects;
+        assert_eq!(
+            kernel.build_task_space(small, image, layout),
+            Err(KError::OutOfMemory)
+        );
+        assert_eq!(kernel.untyped(small).unwrap().bump, before_bump);
+        assert_eq!(kernel.untyped(small).unwrap().objects, before_objects);
     }
 
     #[test]

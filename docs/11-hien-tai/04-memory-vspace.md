@@ -24,6 +24,10 @@ FrameMap syscall
 Thiếu bảng trung gian trả `MissingPageTable`; kernel không tự cấp phát bảng.
 Unmap đi cùng walk và dừng ở leaf cấp cao.
 
+`Kernel::build_task_space(untyped, image, layout)` là đường mẫu cho Bước 4/7:
+retype VSpace, gắn PageTable còn thiếu, copy ảnh vào Frame, map code RX, stack/data
+RW; nếu lỗi thì rollback object và bump/objects của Untyped.
+
 `PageTableMap(page_table_cap, vspace_cap, va)`:
 
 - kernel walk từ root tới entry invalid đầu tiên trên đường tới `va`;

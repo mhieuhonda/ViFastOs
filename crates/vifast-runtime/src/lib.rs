@@ -64,6 +64,9 @@ pub trait Platform: Arch + Console {
     fn code_page() -> &'static mut [u8];
     fn data_page() -> &'static mut [u8];
     fn metadata_page() -> &'static mut [u8];
+    /// Kernel-owned arena for boot task objects.  It is never installed into
+    /// a user cspace.
+    fn boot_page() -> &'static mut [u8];
     fn build_page_tables();
     fn vspace_root() -> u64;
 
@@ -161,15 +164,19 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         A::exit(1);
     }
     /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
-    const RUNTIME_OBJECTS: usize = 4;
+    const RUNTIME_OBJECTS: usize = 5;
     const META_MAX_OBJECTS: usize = 32;
     const DATA_MAX_OBJECTS: usize = 64;
-    if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS > vifast_kernel::MAX_OBJECTS {
+    const BOOT_MAX_OBJECTS: usize = 16;
+    if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS + BOOT_MAX_OBJECTS
+        > vifast_kernel::MAX_OBJECTS
+    {
         vifast_kernel::klog!(A, "UNTYPED LIMIT EXCEEDS OBJECT TABLE");
         A::exit(1);
     }
     let data = A::data_page();
     let metadata = A::metadata_page();
+    let boot = A::boot_page();
     let (accessible_lo, accessible_hi) = A::page_table_ops().kernel_accessible_range();
     let image_end = A::kernel_image_end();
     if image_end != 0 && (image_end < accessible_lo || image_end > accessible_hi) {
@@ -183,10 +190,19 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     };
     if !accessible(metadata.as_ptr() as usize, metadata.len())
         || !accessible(data.as_ptr() as usize, data.len())
+        || !accessible(boot.as_ptr() as usize, boot.len())
     {
         vifast_kernel::klog!(A, "UNTYPED OUTSIDE KERNEL ACCESSIBLE RANGE");
         A::exit(1);
     }
+    let Some(_boot_untyped) = kernel.create_untyped_with_limit(
+        boot.as_mut_ptr() as usize,
+        boot.len(),
+        A::PAGE_SIZE,
+        BOOT_MAX_OBJECTS,
+    ) else {
+        A::exit(1);
+    };
     let Some(meta_untyped) = kernel.create_untyped_with_limit(
         metadata.as_mut_ptr() as usize,
         metadata.len(),
