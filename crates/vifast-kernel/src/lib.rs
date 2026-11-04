@@ -3532,7 +3532,7 @@ mod tests {
     }
 
     #[test]
-    fn revoke_owner_collects_orphaned_creator_objects() {
+    fn revoke_owner_collects_reparented_creator_objects() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
         let data_untyped = kernel
