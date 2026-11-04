@@ -195,7 +195,19 @@ impl vifast_kernel::PageTableOps for PageOps {
         vifast_pte::riscv::decode_at(entry, level)
     }
 
-    fn install_kernel(&self, _root_pa: u64) {}
+    fn vspace_pages(&self) -> usize {
+        1
+    }
+
+    fn install_kernel(&self, root_pa: u64, _aux_pa: u64) {
+        unsafe {
+            let dst = root_pa as *mut u64;
+            let src = core::ptr::addr_of!(ROOT) as *const u64;
+            for slot in vifast_pte::riscv::KERNEL_SHARED_SLOTS {
+                *dst.add(*slot) = *src.add(*slot);
+            }
+        }
+    }
 
     fn user_va_range(&self) -> (u64, u64) {
         (

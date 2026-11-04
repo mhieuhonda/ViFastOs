@@ -439,7 +439,19 @@ impl vifast_kernel::PageTableOps for PageOps {
         vifast_pte::x86_64::decode_at(entry, level)
     }
 
-    fn install_kernel(&self, _root_pa: u64) {}
+    fn vspace_pages(&self) -> usize {
+        2
+    }
+
+    fn install_kernel(&self, root_pa: u64, aux_pa: u64) {
+        unsafe {
+            let root = root_pa as *mut u64;
+            let aux = aux_pa as *mut u64;
+            let shared_pdpt = core::ptr::addr_of!(PDPT) as *const u64;
+            *root = aux_pa | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+            *aux = *shared_pdpt;
+        }
+    }
 
     fn user_va_range(&self) -> (u64, u64) {
         (

@@ -295,9 +295,8 @@ pub fn run<A: Console>(k: &mut Kernel) -> bool {
         "untyped retype carves an aligned frame"
     );
     check!(
-        k.page_table(page_table).is_some_and(|table| {
-            table.root == 0x9000_1000 && table.level == 0 && table.mapped.is_none()
-        }),
+        k.page_table(page_table)
+            .is_some_and(|table| table.root == 0x9000_1000 && table.mapped.is_none()),
         "untyped retype carves a page table"
     );
     check!(

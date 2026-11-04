@@ -265,7 +265,21 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
-    fn install_kernel(&self, _root_pa: u64) {}
+    fn vspace_pages(&self) -> usize {
+        2
+    }
+
+    fn install_kernel(&self, root_pa: u64, aux_pa: u64) {
+        unsafe {
+            let root = root_pa as *mut u64;
+            let aux = aux_pa as *mut u64;
+            *root = table_desc(aux_pa);
+            let shared_l1 = core::ptr::addr_of!(L1) as *const u64;
+            for slot in vifast_pte::aarch64::KERNEL_SHARED_SLOTS {
+                *aux.add(*slot) = *shared_l1.add(*slot);
+            }
+        }
+    }
 
     fn user_va_range(&self) -> (u64, u64) {
         (

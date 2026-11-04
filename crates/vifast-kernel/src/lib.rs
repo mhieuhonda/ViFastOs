@@ -105,7 +105,13 @@ pub trait PageTableOps {
     fn decode_at(&self, pte: u64, _level: usize) -> Pte {
         self.decode(pte)
     }
-    fn install_kernel(&self, _root_pa: u64) {}
+    /// Number of physical pages needed by a retyped VSpace root.
+    fn vspace_pages(&self) -> usize {
+        1
+    }
+    /// Populate a fresh VSpace root (and optional private PDPT/L1) with the
+    /// architecture's shared kernel entries.  User entries stay invalid.
+    fn install_kernel(&self, _root_pa: u64, _aux_pa: u64) {}
     fn user_va_range(&self) -> (u64, u64) {
         (0, 0)
     }
@@ -390,12 +396,8 @@ impl Kernel {
         }
     }
 
-    pub fn create_page_table(&mut self, root: u64, level: u8) -> Option<ObjRef> {
-        self.alloc(Kind::PageTable(PageTable {
-            root,
-            level,
-            mapped: None,
-        }))
+    pub fn create_page_table(&mut self, root: u64, _level: u8) -> Option<ObjRef> {
+        self.alloc(Kind::PageTable(PageTable { root, mapped: None }))
     }
 
     pub fn get(&self, r: ObjRef) -> Option<&Object> {
@@ -533,6 +535,14 @@ impl Kernel {
         if ty == ObjType::Tcb && self.tcb_count() >= MAX_TCBS {
             return Err(KError::OutOfMemory);
         }
+        let vspace_pages = if ty == ObjType::VSpace {
+            self.page_table_ops
+                .map(|ops| ops.vspace_pages())
+                .unwrap_or(1)
+                .max(1)
+        } else {
+            0
+        };
         let (kind, charge, align) = match ty {
             ObjType::Endpoint => (
                 Kind::Endpoint(Endpoint::default()),
@@ -550,6 +560,10 @@ impl Kernel {
                 OBJ_METADATA_ALIGN,
             ),
             ObjType::Frame | ObjType::PageTable => (Kind::Free, page, page),
+            ObjType::VSpace => {
+                let charge = page.checked_mul(vspace_pages).ok_or(KError::OutOfMemory)?;
+                (Kind::Free, charge, page)
+            }
             _ => return Err(KError::NotImplemented),
         };
         let unaligned = base.checked_add(bump).ok_or(KError::OutOfMemory)?;
@@ -559,9 +573,11 @@ impl Kernel {
             return Err(KError::OutOfMemory);
         }
         let consumed = pa.checked_add(charge).ok_or(KError::OutOfMemory)? - base;
-        if matches!(ty, ObjType::Frame | ObjType::PageTable) {
+        if matches!(ty, ObjType::Frame | ObjType::PageTable | ObjType::VSpace) {
             if let Some(ops) = self.page_table_ops {
-                ops.zero_frame(pa as u64, page);
+                for i in 0..vspace_pages.max(1) {
+                    ops.zero_frame(pa as u64 + i as u64 * page as u64, page);
+                }
             }
         }
         let kind = if matches!(ty, ObjType::Frame | ObjType::PageTable) {
@@ -570,10 +586,23 @@ impl Kernel {
             } else {
                 Kind::PageTable(PageTable {
                     root: pa as u64,
-                    level: 0,
                     mapped: None,
                 })
             }
+        } else if ty == ObjType::VSpace {
+            let aux_pa = (vspace_pages > 1).then_some(pa as u64 + page as u64);
+            if let Some(ops) = self.page_table_ops {
+                ops.install_kernel(pa as u64, aux_pa.unwrap_or(0));
+            }
+            let mut space = VSpace::with_page_size(
+                pa as u64,
+                vifast_abi::user_layout::USER_VA_START as u64,
+                (vifast_abi::user_layout::USER_VA_END - vifast_abi::user_layout::USER_VA_START)
+                    as u64,
+                page as u64,
+            );
+            space.aux_pa = aux_pa;
+            Kind::VSpace(space)
         } else {
             kind
         };
@@ -645,7 +674,6 @@ impl Kernel {
                     ops.write_pte(current, idx, ops.encode_table(table.root));
                     ops.flush_va(va);
                     let table = self.page_table_mut(page_table).ok_or(KError::WrongType)?;
-                    table.level = child_level as u8;
                     table.mapped = Some(PageTableMapping {
                         vspace,
                         va_base,
@@ -1176,9 +1204,70 @@ impl Kernel {
         }
     }
 
-    /// Remove the parent entry that points at `obj` and flush the TLB.  This
-    /// never walks through the table being removed; child tables must be
-    /// destroyed first, which is why revoke sorts tables deepest-first.
+    fn table_span_for(&self, vspace: ObjRef, level: u8) -> Option<(u64, u64)> {
+        let space = self.vspace(vspace)?;
+        let ops = self.page_table_ops?;
+        let span = vifast_pte::table_span(ops.levels(), level as usize, space.page_size);
+        (span != 0).then_some((space.page_size, span))
+    }
+
+    /// Drop reverse mappings that lie inside a page-table span.  The leaf
+    /// unmaps happen before the parent entry is removed, so the generic walk
+    /// can still reach them and flush their TLB entries.
+    fn forget_mappings_in_span(&mut self, vspace: ObjRef, start: u64, end: u64) {
+        let ops = self.page_table_ops;
+        let Some(space) = self.vspace_mut(vspace) else {
+            return;
+        };
+        for slot in space.mappings.iter_mut() {
+            if let Some(mapping) = *slot {
+                let mapping_end = mapping.va.saturating_add(mapping.len);
+                if mapping.va < end && start < mapping_end {
+                    if let Some(ops) = ops {
+                        let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+                    }
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    /// When a parent table dies, child tables below it are unreachable even if
+    /// their objects live in another Untyped.  Detach and zero them so they
+    /// cannot be reattached full of stale PTEs.
+    fn orphan_child_tables(&mut self, vspace: ObjRef, start: u64, end: u64, parent_level: u8) {
+        let page_size = self.vspace(vspace).map(|space| space.page_size);
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            let (root, mapped) = match self.page_table(r) {
+                Some(table) => (table.root, table.mapped),
+                None => continue,
+            };
+            let Some(location) = mapped else {
+                continue;
+            };
+            if location.vspace == vspace
+                && location.va_base >= start
+                && location.va_base < end
+                && location.level > parent_level
+            {
+                if let Some(table) = self.page_table_mut(r) {
+                    table.mapped = None;
+                }
+                if let (Some(ops), Some(size)) = (self.page_table_ops, page_size) {
+                    ops.zero_frame(root, size as usize);
+                }
+            }
+        }
+    }
+
+    /// Remove the parent entry that points at `obj`, drop reverse mappings in
+    /// its span, and flush the TLB.  This never walks through the table being
+    /// removed; child tables must be destroyed first, which is why revoke
+    /// sorts tables deepest-first.
     fn detach_page_table(&mut self, obj: ObjRef) {
         let (root, mapped) = match self.page_table(obj) {
             Some(table) => (table.root, table.mapped),
@@ -1187,38 +1276,78 @@ impl Kernel {
         let Some(location) = mapped else {
             return;
         };
-        if location.level == 0 {
-            return;
+        let page_and_span = self.table_span_for(location.vspace, location.level);
+        if let Some((_, span)) = page_and_span {
+            let Some(end) = location.va_base.checked_add(span) else {
+                return;
+            };
+            self.forget_mappings_in_span(location.vspace, location.va_base, end);
+            self.orphan_child_tables(location.vspace, location.va_base, end, location.level);
         }
-        if let Some(ops) = self.page_table_ops {
-            if let Some(space) = self.vspace(location.vspace) {
-                let mut current = space.root;
-                let parent_level = location.level as usize - 1;
-                let mut walk_ok = true;
-                for level in 0..parent_level {
-                    let idx = ops.index(location.va_base, level);
-                    match ops.decode_at(ops.read_pte(current, idx), level) {
-                        Pte::Table(next) => current = next,
-                        _ => {
-                            walk_ok = false;
-                            break;
+        if location.level > 0 {
+            if let Some(ops) = self.page_table_ops {
+                if let Some(space) = self.vspace(location.vspace) {
+                    let mut current = space.root;
+                    let parent_level = location.level as usize - 1;
+                    let mut walk_ok = true;
+                    for level in 0..parent_level {
+                        let idx = ops.index(location.va_base, level);
+                        match ops.decode_at(ops.read_pte(current, idx), level) {
+                            Pte::Table(next) => current = next,
+                            _ => {
+                                walk_ok = false;
+                                break;
+                            }
                         }
                     }
-                }
-                if walk_ok {
-                    let idx = ops.index(location.va_base, parent_level);
-                    let pte = ops.read_pte(current, idx);
-                    if let Pte::Table(pa) = ops.decode_at(pte, parent_level) {
-                        if pa == root {
-                            ops.write_pte(current, idx, 0);
-                            ops.flush_va(location.va_base);
+                    if walk_ok {
+                        let idx = ops.index(location.va_base, parent_level);
+                        let pte = ops.read_pte(current, idx);
+                        if let Pte::Table(pa) = ops.decode_at(pte, parent_level) {
+                            if pa == root {
+                                ops.write_pte(current, idx, 0);
+                                ops.flush_va(location.va_base);
+                            }
                         }
                     }
                 }
             }
         }
+        if let Some((page_size, _)) = page_and_span {
+            if let Some(ops) = self.page_table_ops {
+                ops.zero_frame(root, page_size as usize);
+                ops.flush_all_user();
+            }
+        }
         if let Some(table) = self.page_table_mut(obj) {
             table.mapped = None;
+        }
+    }
+
+    fn destroy_vspace_page_tables(&mut self, obj: ObjRef) {
+        let page_size = self.vspace(obj).map(|space| space.page_size);
+        // The reverse map is still able to walk through every table here.
+        self.unmap_space(obj);
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            let (root, mapped) = match self.page_table(r) {
+                Some(table) => (table.root, table.mapped),
+                None => continue,
+            };
+            if mapped.is_some_and(|location| location.vspace == obj) {
+                if let Some(table) = self.page_table_mut(r) {
+                    table.mapped = None;
+                }
+                if let (Some(ops), Some(size)) = (self.page_table_ops, page_size) {
+                    ops.zero_frame(root, size as usize);
+                }
+            }
+        }
+        if let Some(ops) = self.page_table_ops {
+            ops.flush_all_user();
         }
     }
 
@@ -1240,8 +1369,16 @@ impl Kernel {
             return rank_a < rank_b;
         }
         if rank_a == 1 {
-            let level_a = self.page_table(a).map(|table| table.level).unwrap_or(0);
-            let level_b = self.page_table(b).map(|table| table.level).unwrap_or(0);
+            let level_a = self
+                .page_table(a)
+                .and_then(|table| table.mapped)
+                .map(|mapping| mapping.level)
+                .unwrap_or(0);
+            let level_b = self
+                .page_table(b)
+                .and_then(|table| table.mapped)
+                .map(|mapping| mapping.level)
+                .unwrap_or(0);
             return level_a > level_b;
         }
         false
@@ -1254,6 +1391,15 @@ impl Kernel {
         if self.current == Some(obj) {
             return Err(KError::IllegalOperation);
         }
+        if matches!(kind, Kind::VSpace(_))
+            && self
+                .current
+                .and_then(|current| self.tcb(current))
+                .and_then(|tcb| tcb.vspace)
+                == Some(obj)
+        {
+            return Err(KError::IllegalOperation);
+        }
         match kind {
             Kind::Tcb(_) => self.detach_tcb(obj),
             Kind::Endpoint(_) => self.destroy_endpoint(obj),
@@ -1261,7 +1407,7 @@ impl Kernel {
             Kind::Frame(frame) => self.unmap_frame_everywhere(frame),
             Kind::PageTable(_) => self.detach_page_table(obj),
             Kind::VSpace(_) => {
-                self.unmap_space(obj);
+                self.destroy_vspace_page_tables(obj);
                 for i in 0..MAX_OBJECTS {
                     let r = ObjRef {
                         index: i as u8,
@@ -1698,6 +1844,7 @@ impl Kernel {
                     n if n == ObjType::Tcb as u64 => ObjType::Tcb,
                     n if n == ObjType::Frame as u64 => ObjType::Frame,
                     n if n == ObjType::PageTable as u64 => ObjType::PageTable,
+                    n if n == ObjType::VSpace as u64 => ObjType::VSpace,
                     _ => {
                         return UserAction::Return {
                             value: 0,
@@ -2543,7 +2690,7 @@ mod tests {
     fn reset_fake() {
         let mut mem = FAKE_MEM.lock().unwrap();
         mem.clear();
-        mem.resize(4096, 0);
+        mem.resize(8192, 0);
         FAKE_FLUSHES.store(0, std::sync::atomic::Ordering::SeqCst);
     }
 
@@ -2614,6 +2761,20 @@ mod tests {
                 MAP_USER_END.load(std::sync::atomic::Ordering::SeqCst),
             )
         }
+        fn vspace_pages(&self) -> usize {
+            2
+        }
+        fn install_kernel(&self, root_pa: u64, aux_pa: u64) {
+            let root_base = ((root_pa >> 12) as usize) * 512;
+            let aux_base = ((aux_pa >> 12) as usize) * 512;
+            let mut mem = FAKE_MEM.lock().unwrap();
+            if let Some(slot) = mem.get_mut(root_base) {
+                *slot = (aux_pa & !0xfff) | 0b01;
+            }
+            if let Some(slot) = mem.get_mut(aux_base) {
+                *slot = 0x9001;
+            }
+        }
         fn flush_va(&self, _va: u64) {
             FAKE_FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -2651,7 +2812,6 @@ mod tests {
         assert_eq!(kernel.map_page_table(pt2, space, va), Ok(2));
         assert_eq!(kernel.map_page_table(pt3, space, va), Ok(3));
         let table = kernel.page_table(pt1).unwrap();
-        assert_eq!(table.level, 1);
         assert_eq!(
             table.mapped,
             Some(PageTableMapping {
@@ -2942,6 +3102,158 @@ mod tests {
             .create_vspace_with_page_size(F_ROOT_B, 0, 0x10000, 4096)
             .unwrap();
         assert!(kernel.mapping_at(space_b, 0x1000).is_none());
+    }
+
+    #[test]
+    fn revoking_page_table_clears_reverse_map_in_another_untyped() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x4000_0000, 0x8000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_vspace_with_page_size(0, 0x4000_0000, 0x4000_0000, 4096)
+            .unwrap();
+        kernel.set_tcb_vspace(root, space).unwrap();
+        let pt_untyped = kernel
+            .create_untyped_with_limit(0x1000, 0x3000, 4096, 4)
+            .unwrap();
+        let frame_untyped = kernel
+            .create_untyped_with_limit(0x4000, 0x1000, 4096, 2)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(pt_untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(frame_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        let pt1 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
+        let pt2 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
+        let pt3 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
+        let frame = kernel.retype(frame_untyped, ObjType::Frame).unwrap();
+        let va = 0x4000_1000;
+        kernel.map_page_table(pt1, space, va).unwrap();
+        kernel.map_page_table(pt2, space, va).unwrap();
+        kernel.map_page_table(pt3, space, va).unwrap();
+        kernel
+            .map_frame(space, frame, va, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert!(kernel.validate_user_range(root, va, 4, false).is_ok());
+        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0x4002);
+
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.frame(frame).is_some());
+        assert!(kernel.mapping_at(space, va).is_none());
+        assert_eq!(
+            kernel.validate_user_range(root, va, 4, false),
+            Err(KError::InvalidArg)
+        );
+        assert_eq!(FAKE_MEM.lock().unwrap()[0], 0);
+        assert_eq!(FAKE_MEM.lock().unwrap()[512 + 1], 0);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1024], 0);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0);
+    }
+
+    #[test]
+    fn revoking_vspace_detaches_tables_from_another_untyped() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let root = kernel.root().unwrap();
+        let vs_untyped = kernel
+            .create_untyped_with_limit(0x8000, 0x2000, 4096, 2)
+            .unwrap();
+        let space = kernel.retype(vs_untyped, ObjType::VSpace).unwrap();
+        let pt_untyped = kernel
+            .create_untyped_with_limit(0x1000, 0x4000, 4096, 5)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(vs_untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(pt_untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let pt1 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
+        let pt2 = kernel.retype(pt_untyped, ObjType::PageTable).unwrap();
+        let frame = kernel.retype(pt_untyped, ObjType::Frame).unwrap();
+        let va = 0x10_0000_1000;
+        assert_eq!(kernel.map_page_table(pt1, space, va), Ok(2));
+        assert_eq!(kernel.map_page_table(pt2, space, va), Ok(3));
+        kernel
+            .map_frame(space, frame, va, Rights::READ | Rights::WRITE)
+            .unwrap();
+        kernel.set_tcb_vspace(root, space).unwrap();
+
+        // The loaded VSpace is protected just like the current TCB in revoke.
+        kernel.current = Some(root);
+        assert_eq!(kernel.revoke_cap(root, 1), Err(KError::IllegalOperation));
+        kernel.current = None;
+
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.vspace(space).is_none());
+        assert!(kernel.tcb(root).unwrap().vspace.is_none());
+        assert!(kernel.page_table(pt1).unwrap().mapped.is_none());
+        assert!(kernel.page_table(pt2).unwrap().mapped.is_none());
+        assert_eq!(FAKE_MEM.lock().unwrap()[512], 0);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1024], 0);
+
+        // The surviving table object is zeroed and can be attached again to a
+        // fresh root (the old VSpace root page is not ours to modify).
+        let space2 = kernel
+            .create_vspace_with_page_size(0x6000, 0x10_0000_0000, 0x10_0000_0000, 4096)
+            .unwrap();
+        assert_eq!(kernel.map_page_table(pt1, space2, va), Ok(1));
+        assert_eq!(FAKE_MEM.lock().unwrap()[3072], 0x1001);
+    }
+
+    #[test]
+    fn retype_vspace_allocates_private_root_and_aux() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0x4000, 4096, 8)
+            .unwrap();
+        let space_a = kernel.retype(untyped, ObjType::VSpace).unwrap();
+        let space_b = kernel.retype(untyped, ObjType::VSpace).unwrap();
+        let a = kernel.vspace(space_a).unwrap();
+        let b = kernel.vspace(space_b).unwrap();
+        assert_eq!(a.root, 0x1000);
+        assert_eq!(a.aux_pa, Some(0x2000));
+        assert_eq!(b.root, 0x3000);
+        assert_eq!(b.aux_pa, Some(0x4000));
+        assert_eq!(a.base, 0x10_0000_0000);
+        assert_eq!(a.end, 0x20_0000_0000);
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, 0x4000);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1024], 0x9001);
+        assert_eq!(FAKE_MEM.lock().unwrap()[2048], 0x9001);
+
+        // The two roots share only the kernel slot; user PageTableMap goes to
+        // A's private aux table and is invisible from B.
+        let pt = kernel.create_page_table(0x5000, 0).unwrap();
+        let va = 0x10_0000_1000;
+        assert_eq!(kernel.map_page_table(pt, space_a, va), Ok(2));
+        assert_eq!(FAKE_MEM.lock().unwrap()[1024 + 64], 0x5001);
+        assert_eq!(FAKE_MEM.lock().unwrap()[2048 + 64], 0);
+        assert!(kernel.mapping_at(space_b, va).is_none());
+
+        let one_page = kernel
+            .create_untyped_with_limit(0x8000, 0x1000, 4096, 2)
+            .unwrap();
+        assert_eq!(
+            kernel.retype(one_page, ObjType::VSpace),
+            Err(KError::OutOfMemory)
+        );
+        assert_eq!(kernel.untyped(one_page).unwrap().bump, 0);
     }
 
     #[test]

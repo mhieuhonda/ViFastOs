@@ -61,6 +61,9 @@ pub mod riscv {
     pub const LEVELS: usize = 3;
     pub const USER_VA_START: u64 = crate::USER_VA_START;
     pub const USER_VA_END: u64 = crate::USER_VA_END;
+    /// Root entries copied from the kernel root into a retyped VSpace:
+    /// entry 0 is the low device map, entry 2 is the 0x8000_0000 kernel RAM.
+    pub const KERNEL_SHARED_SLOTS: &[usize] = &[0, 2];
 
     pub const fn table_span(level: usize) -> u64 {
         crate::table_span(LEVELS, level, DEFAULT_PAGE_SIZE)
@@ -125,6 +128,9 @@ pub mod x86_64 {
     pub const LEVELS: usize = 4;
     pub const USER_VA_START: u64 = crate::USER_VA_START;
     pub const USER_VA_END: u64 = crate::USER_VA_END;
+    /// PDPT[0] points at the shared 0..1 GiB kernel PD.  PML4[0] itself is
+    /// private to each VSpace and points at the private PDPT.
+    pub const KERNEL_SHARED_SLOTS: &[usize] = &[0];
 
     pub const fn table_span(level: usize) -> u64 {
         crate::table_span(LEVELS, level, DEFAULT_PAGE_SIZE)
@@ -178,6 +184,9 @@ pub mod aarch64 {
     pub const LEVELS: usize = 4;
     pub const USER_VA_START: u64 = crate::USER_VA_START;
     pub const USER_VA_END: u64 = crate::USER_VA_END;
+    /// L1[0] contains the low MMIO blocks (GIC/PL011); L1[1] contains the
+    /// 0x4000_0000 kernel RAM blocks.  Both tables are shared kernel tables.
+    pub const KERNEL_SHARED_SLOTS: &[usize] = &[0, 1];
 
     pub const fn table_span(level: usize) -> u64 {
         crate::table_span(LEVELS, level, DEFAULT_PAGE_SIZE)
@@ -352,6 +361,28 @@ mod tests {
         assert_eq!(riscv::index(riscv::USER_VA_END - 1, 0), 127);
         assert_eq!(riscv::index(riscv::USER_VA_START, 1), 0);
         assert_eq!(riscv::index(riscv::USER_VA_END - 1, 1), 511);
+    }
+
+    #[test]
+    fn kernel_shared_slots_do_not_intersect_user_entries() {
+        assert_eq!(riscv::index(0x1000_0000, 0), 0);
+        assert_eq!(riscv::index(0x8000_0000, 0), 2);
+        assert_eq!(riscv::KERNEL_SHARED_SLOTS, &[0, 2]);
+        assert_eq!(riscv::index(riscv::USER_VA_START, 0), 64);
+
+        assert_eq!(x86_64::index(0, 1), 0);
+        assert_eq!(x86_64::KERNEL_SHARED_SLOTS, &[0]);
+        assert_eq!(x86_64::index(x86_64::USER_VA_START, 1), 64);
+
+        // AArch64 virt maps low MMIO in L1[0] and RAM at 0x4000_0000 in
+        // L1[1]; both must remain kernel slots.
+        assert_eq!(aarch64::index(0x0800_0000, 1), 0);
+        assert_eq!(aarch64::index(0x4000_0000, 1), 1);
+        assert_eq!(aarch64::KERNEL_SHARED_SLOTS, &[0, 1]);
+        assert_eq!(aarch64::index(aarch64::USER_VA_START, 1), 64);
+        for slot in aarch64::KERNEL_SHARED_SLOTS {
+            assert!(*slot < aarch64::index(aarch64::USER_VA_START, 1));
+        }
     }
 
     #[test]

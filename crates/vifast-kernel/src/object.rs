@@ -192,11 +192,13 @@ impl Default for Mapping {
 }
 
 /// A user address space.  `root` is interpreted by the architecture port
-/// (Sv39 root, TTBR0 root, CR3).  `mappings` is the portable shadow table used
-/// for validation, W^X enforcement and unmap bookkeeping.
+/// (Sv39 root, TTBR0 root, CR3).  `mappings` is the reverse map used for
+/// validation, W^X enforcement and unmap bookkeeping.
 #[derive(Clone, Copy, Debug)]
 pub struct VSpace {
     pub root: u64,
+    /// Private PDPT/L1 page used by x86/AArch64 retyped roots.
+    pub aux_pa: Option<u64>,
     pub page_size: u64,
     pub base: u64,
     pub next_va: u64,
@@ -219,6 +221,7 @@ impl VSpace {
         let end = base.saturating_add(size);
         VSpace {
             root,
+            aux_pa: None,
             page_size,
             base,
             next_va: base,
@@ -349,7 +352,6 @@ pub struct PageTableMapping {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PageTable {
     pub root: u64,
-    pub level: u8,
     pub mapped: Option<PageTableMapping>,
 }
 
