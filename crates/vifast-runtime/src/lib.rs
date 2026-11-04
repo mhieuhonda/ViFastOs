@@ -191,9 +191,12 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     ) else {
         A::exit(1);
     };
-    let Some(data_untyped) =
-        kernel.create_untyped_with_limit(data.as_mut_ptr() as usize, data.len(), A::PAGE_SIZE, 1)
-    else {
+    let Some(data_untyped) = kernel.create_untyped_with_limit(
+        data.as_mut_ptr() as usize,
+        data.len(),
+        A::PAGE_SIZE,
+        DATA_MAX_OBJECTS,
+    ) else {
         A::exit(1);
     };
     if kernel

@@ -191,7 +191,7 @@ vifast-arch-riscv64 / aarch64 / x86_64
 
 vifast-platform-riscv64
 - RiscvPlatform newtype.
-- Sv39 root tĩnh.
+- Sv39 root tĩnh cho boot/kernel; VSpace retype copy các kernel slot.
 - Trap entry/restore + trap handler.
 - SBI timer.
 - Frame/stack/data user page.
@@ -201,7 +201,7 @@ vifast-platform-riscv64
 
 vifast-platform-aarch64
 - Aarch64Platform newtype.
-- 4-level page table tĩnh.
+- 4-level page table tĩnh cho boot/kernel; VSpace retype tạo L0/L1 riêng.
 - trap vector + IRQ handler.
 - GICv2 + generic timer PPI 30.
 - user context EL0, SP_EL0/SP_EL1.
@@ -214,7 +214,8 @@ vifast-platform-x86_64
 - UEFI entry phối hợp qua PlatformInfo.
 - GDT/TSS/IDT.
 - PIC + PIT 100 Hz.
-- Tự dựng PML4/PDPT/PD/PT 4 KiB; identity map 0..1 GiB.
+- Tự dựng PML4/PDPT/PD/PT boot 4 KiB; identity map 0..1 GiB.
+- VSpace retype tạo PML4 + PDPT riêng, chỉ PDPT[0] dùng chung PD kernel.
 - User range 64..128 GiB: boot code/stack window tạm thời ở 64 GiB;
   code RX; stack/data RW+NX; unmap thật.
 - SMEP/SMAP nếu CPU hỗ trợ; user copy dùng STAC/CLAC.
@@ -247,7 +248,7 @@ platform.rs:
 - x86_64: 742 dòng
 
 runtime:
-- 426 dòng
+- 429 dòng
 
 vifast-user:
 - khoảng 208 dòng
@@ -468,8 +469,7 @@ Portable generic page-table walk + reverse map:
 - Chưa có page-table page allocator, range VA allocator, ASID/PCID.
 
 RISC-V64:
-- Sv39 root tĩnh.
-- Kernel identity 0x8000_0000..0x803f_ffff; UART 0x1000_0000.
+- Sv39 root boot tĩnh; kernel identity 0x8000_0000..0x803f_ffff; UART 0x1000_0000.
 - KERNEL_SHARED_SLOTS = root[0] (UART/device) và root[2] (kernel RAM).
 - User code 64 GiB: RX U.
 - Stack 64 GiB+0x1000..+0x8fff: RW U.
@@ -479,7 +479,7 @@ RISC-V64:
 - SUM=0; read_user/write_user bật SUM tạm thời quanh copy.
 
 AArch64:
-- 4-level page table tĩnh.
+- 4-level page table boot tĩnh; VSpace retype tạo L0/L1 riêng.
 - Identity/MMIO dùng L1[0] (GIC 0x0800_0000, PL011 0x0900_0000) và L1[1]
   (RAM kernel 0x4000_0000..); KERNEL_SHARED_SLOTS = [0, 1].
 - User code 64 GiB: EL0 RO + X.
@@ -490,7 +490,7 @@ AArch64:
 - PAN nếu CPU hỗ trợ; read/write user tạm clear PAN.
 
 x86_64:
-- Tự dựng PML4/PDPT/PD/PT 4 KiB; identity map 0..1 GiB.
+- Tự dựng PML4/PDPT/PD/PT boot 4 KiB; identity map 0..1 GiB.
 - User code 64 GiB: RX + U.
 - Stack 64 GiB+0x1000..+0x8fff: RW + NX + U.
 - Data 64 GiB+0xa000: RW + NX + U.
@@ -548,7 +548,7 @@ Số syscall chính:
 6  Wait
 7  Poll
 8  Yield (đã chuyển context qua switch_blocked)
-9  Retype (Endpoint/Notification/Tcb/Frame/PageTable)
+9  Retype (Endpoint/Notification/Tcb/Frame/PageTable/VSpace)
 10 CapCopy
 14 CapRevoke
 15 TcbConfigure
