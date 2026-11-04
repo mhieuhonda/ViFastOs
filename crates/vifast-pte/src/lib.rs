@@ -81,6 +81,10 @@ pub mod riscv {
     pub fn decode(entry: u64) -> Pte {
         decode_at(entry, LEVELS - 1)
     }
+
+    pub fn valid_rights(access: Rights) -> bool {
+        !access.contains(Rights::WRITE) || access.contains(Rights::READ)
+    }
 }
 
 pub mod x86_64 {
@@ -252,6 +256,8 @@ mod tests {
 
     #[test]
     fn permission_bits_are_encoded() {
+        assert!(!riscv::valid_rights(Rights::WRITE));
+        assert!(riscv::valid_rights(Rights::READ | Rights::WRITE));
         let riscv_w = riscv::encode_leaf(0x1000, Rights::WRITE);
         assert!(riscv_w & riscv::PTE_R != 0);
         assert!(riscv_w & riscv::PTE_W != 0);

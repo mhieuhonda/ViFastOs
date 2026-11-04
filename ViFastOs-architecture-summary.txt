@@ -48,7 +48,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 22/22 PASS
+- cargo test -p vifast-kernel: 25/25 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -619,7 +619,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 22 test:
+Host test hiện có 25 test:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -642,6 +642,7 @@ Host test hiện có 22 test:
 - retype Frame/PageTable gọi zero_page qua PageTableOps
 - generic page-table walk xoá leaf trên bảng giả lập host
 - TCB quota 16 đầy trả OutOfMemory
+- walk safety: user range/missing table/high leaf/valid PTE/snapshot
 
 QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
@@ -711,7 +712,7 @@ Exit code:
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 396808 bytes dùng static storage.
-- Host test hiện có 22 test `vifast-kernel` + 6 test `vifast-pte`.
+- Host test hiện có 25 test `vifast-kernel` + 6 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------

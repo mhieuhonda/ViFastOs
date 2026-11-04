@@ -591,6 +591,9 @@ impl Kernel {
         if rights.contains(Rights::WRITE) && rights.contains(Rights::EXEC) {
             return Err(KError::NoRights); // W^X
         }
+        if rights.contains(Rights::WRITE) && !rights.contains(Rights::READ) {
+            return Err(KError::InvalidArg); // Sv39 reserves W without R
+        }
         let frame = *self.frame(frame).ok_or(KError::WrongType)?;
         let (root, page_size, base, end, next_va) = {
             let space = self.vspace(vspace).ok_or(KError::WrongType)?;
@@ -2288,51 +2291,221 @@ mod tests {
 
     struct FakeTableOps;
 
-    static FAKE_PTES: std::sync::Mutex<[u64; 2]> = std::sync::Mutex::new([0; 2]);
+    static FAKE_MEM: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
     static FAKE_FLUSHES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     static FAKE_OPS: FakeTableOps = FakeTableOps;
 
+    const F_ROOT: u64 = 0x0000;
+    const F_T1: u64 = 0x1000;
+    const F_T2: u64 = 0x2000;
+    const F_T3: u64 = 0x3000;
+    const F_ROOT_B: u64 = 0x4000;
+
     impl PageTableOps for FakeTableOps {
         fn levels(&self) -> usize {
-            1
+            4
         }
-        fn index(&self, va: u64, _level: usize) -> usize {
-            ((va >> 12) & 1) as usize
+        fn index(&self, va: u64, level: usize) -> usize {
+            ((va >> (12 + 9 * (3 - level))) & 0x1ff) as usize
         }
-        fn read_pte(&self, _table_pa: u64, idx: usize) -> u64 {
-            FAKE_PTES.lock().unwrap()[idx]
+        fn read_pte(&self, table_pa: u64, idx: usize) -> u64 {
+            let base = ((table_pa >> 12) as usize) * 512;
+            FAKE_MEM
+                .lock()
+                .unwrap()
+                .get(base + idx)
+                .copied()
+                .unwrap_or(0)
         }
-        fn write_pte(&self, _table_pa: u64, idx: usize, pte: u64) {
-            FAKE_PTES.lock().unwrap()[idx] = pte;
+        fn write_pte(&self, table_pa: u64, idx: usize, pte: u64) {
+            let base = ((table_pa >> 12) as usize) * 512;
+            if let Some(slot) = FAKE_MEM.lock().unwrap().get_mut(base + idx) {
+                *slot = pte;
+            }
+        }
+        fn encode_leaf(&self, pa: u64, _rights: Rights) -> u64 {
+            (pa & !0xfff) | 0b10
+        }
+        fn encode_table(&self, pa: u64) -> u64 {
+            (pa & !0xfff) | 0b01
         }
         fn decode(&self, pte: u64) -> Pte {
             if pte == 0 {
                 Pte::Invalid
-            } else {
+            } else if pte & 0b10 != 0 {
                 Pte::Leaf(pte & !0xfff, Rights::READ | Rights::WRITE)
+            } else {
+                Pte::Table(pte & !0xfff)
             }
+        }
+        fn user_va_range(&self) -> (u64, u64) {
+            (0x1000, 0x3000)
         }
         fn flush_va(&self, _va: u64) {
             FAKE_FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        fn user_va_range(&self) -> (u64, u64) {
-            (0, u64::MAX)
+    }
+
+    fn reset_fake() {
+        let mut mem = FAKE_MEM.lock().unwrap();
+        mem.clear();
+        mem.resize(4096, 0);
+        FAKE_FLUSHES.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn fake_chain(root: u64, t1: u64, t2: u64, t3: u64) {
+        let mut mem = FAKE_MEM.lock().unwrap();
+        mem[((root >> 12) as usize) * 512] = (t1 & !0xfff) | 0b01;
+        mem[((t1 >> 12) as usize) * 512] = (t2 & !0xfff) | 0b01;
+        mem[((t2 >> 12) as usize) * 512] = (t3 & !0xfff) | 0b01;
+    }
+
+    fn fake_snapshot() -> Vec<u64> {
+        FAKE_MEM.lock().unwrap().clone()
+    }
+
+    static WALK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn walk_rejects_va_outside_user_range_without_writing() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&FAKE_OPS);
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let space = kernel
+            .create_vspace_with_page_size(0, 0, 0x10000, 4096)
+            .unwrap();
+        reset_fake();
+        fake_chain(F_ROOT, F_T1, F_T2, F_T3);
+        let before = fake_snapshot();
+        for va in [0, 0x8000, 0x3000] {
+            assert_eq!(
+                kernel.map_frame(space, frame, va, Rights::READ | Rights::WRITE),
+                Err(KError::InvalidArg)
+            );
+            assert_eq!(fake_snapshot(), before);
         }
     }
 
     #[test]
-    fn generic_page_table_walk_clears_leaf() {
+    fn walk_missing_table_does_not_write() {
+        let _guard = WALK_LOCK.lock().unwrap();
         let mut kernel = Kernel::new();
         kernel.set_page_table_ops(&FAKE_OPS);
-        {
-            let mut table = FAKE_PTES.lock().unwrap();
-            table[0] = 0x9000 | 0x3;
-            table[1] = 0;
-        }
-        FAKE_FLUSHES.store(0, std::sync::atomic::Ordering::SeqCst);
-        kernel.unmap_page_table(0x1000, 0x4000).unwrap();
-        assert_eq!(FAKE_PTES.lock().unwrap()[0], 0);
-        assert_eq!(FAKE_FLUSHES.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let space = kernel
+            .create_vspace_with_page_size(0, 0, 0x10000, 4096)
+            .unwrap();
+        reset_fake();
+        let before = fake_snapshot();
+        assert_eq!(
+            kernel.map_frame(space, frame, 0x1000, Rights::READ | Rights::WRITE),
+            Err(KError::MissingPageTable)
+        );
+        assert_eq!(fake_snapshot(), before);
+    }
+
+    #[test]
+    fn walk_stops_at_high_level_leaf_and_keeps_valid_leaf() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&FAKE_OPS);
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let space = kernel
+            .create_vspace_with_page_size(0, 0, 0x10000, 4096)
+            .unwrap();
+
+        reset_fake();
+        fake_chain(F_ROOT, F_T1, F_T2, F_T3);
+        FAKE_MEM.lock().unwrap()[512] = 0x8000 | 0b10;
+        let before = fake_snapshot();
+        assert_eq!(
+            kernel.map_frame(space, frame, 0x1000, Rights::READ | Rights::WRITE),
+            Err(KError::AlreadyMapped)
+        );
+        assert_eq!(fake_snapshot(), before);
+
+        reset_fake();
+        fake_chain(F_ROOT, F_T1, F_T2, F_T3);
+        FAKE_MEM.lock().unwrap()[1536 + 1] = 0x9000 | 0b10;
+        let before = fake_snapshot();
+        assert_eq!(
+            kernel.map_frame(space, frame, 0x1000, Rights::READ | Rights::WRITE),
+            Err(KError::AlreadyMapped)
+        );
+        assert_eq!(fake_snapshot(), before);
+    }
+
+    #[test]
+    fn generic_walk_safety_rules() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&FAKE_OPS);
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let space = kernel
+            .create_vspace_with_page_size(0, 0, 0x10000, 4096)
+            .unwrap();
+
+        // Missing intermediate table -> MissingPageTable and no writes.
+        reset_fake();
+        let before = fake_snapshot();
+        assert_eq!(
+            kernel.map_frame(space, frame, 0x1000, Rights::READ | Rights::WRITE),
+            Err(KError::MissingPageTable)
+        );
+        assert_eq!(fake_snapshot(), before);
+
+        // VA outside user_va_range -> InvalidArg and no writes.
+        reset_fake();
+        fake_chain(F_ROOT, F_T1, F_T2, F_T3);
+        let before = fake_snapshot();
+        assert_eq!(
+            kernel.map_frame(space, frame, 0x8000, Rights::READ | Rights::WRITE),
+            Err(KError::InvalidArg)
+        );
+        assert_eq!(fake_snapshot(), before);
+
+        // Higher-level leaf is not interpreted as a table.
+        reset_fake();
+        fake_chain(F_ROOT, F_T1, F_T2, F_T3);
+        FAKE_MEM.lock().unwrap()[512] = 0x8000 | 0b10; // leaf at level 1
+        let before = fake_snapshot();
+        assert_eq!(
+            kernel.map_frame(space, frame, 0x1000, Rights::READ | Rights::WRITE),
+            Err(KError::AlreadyMapped)
+        );
+        assert_eq!(fake_snapshot(), before);
+
+        // Existing valid leaf is not overwritten.
+        reset_fake();
+        fake_chain(F_ROOT, F_T1, F_T2, F_T3);
+        FAKE_MEM.lock().unwrap()[1536 + 1] = 0x9000 | 0b10;
+        let before = fake_snapshot();
+        assert_eq!(
+            kernel.map_frame(space, frame, 0x1000, Rights::READ | Rights::WRITE),
+            Err(KError::AlreadyMapped)
+        );
+        assert_eq!(fake_snapshot(), before);
+
+        // Valid map -> unmap -> map again, with flushes.
+        reset_fake();
+        fake_chain(F_ROOT, F_T1, F_T2, F_T3);
+        let mapping = kernel
+            .map_frame(space, frame, 0x1000, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert_eq!(mapping.va, 0x1000);
+        assert!(FAKE_FLUSHES.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+        kernel.unmap_frame(space, 0x1000).unwrap();
+        assert_eq!(FAKE_MEM.lock().unwrap()[1536 + 1], 0);
+        kernel
+            .map_frame(space, frame, 0x1000, Rights::READ | Rights::WRITE)
+            .unwrap();
+
+        // VSpace B does not observe A's mapping.
+        let space_b = kernel
+            .create_vspace_with_page_size(F_ROOT_B, 0, 0x10000, 4096)
+            .unwrap();
+        assert!(kernel.mapping_at(space_b, 0x1000).is_none());
     }
 
     #[test]
