@@ -629,8 +629,8 @@ Root task dùng syscall:
 - TcbResume(fault1/fault2), rồi Wait trên notification slot 8.
 - Fault1 load 0x8000_0000; fault2 chạy lệnh đặc quyền; cả hai log USER FAULT.
 - Server/client hiện vẫn dùng chung VSpace slot 1 cho đến 3b.
-- Bước 4.5 sẽ dùng Untyped con cho server nếu cần retype; hiện CapCopy Untyped
-  vẫn chia sẻ vùng nhớ và được ghi là nợ tài nguyên ở mục 16.
+- 4.5 server không retype; VSpace server do runtime dựng từ boot Untyped, chỉ
+  client retype Frame. Untyped con để Bước 6 khi root phát tài nguyên cho task.
 
 Server A:
 - cap endpoint READ.
@@ -845,8 +845,7 @@ Exit code:
   nó sẽ cần destroy-xong-rồi-pick sau này.
 - Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
 - CapCopy Untyped vẫn cho phép hai task chia sẻ vùng nhớ; creator ngăn revoke
-  chéo nhưng chưa ngăn cạn kiệt tài nguyên. Retype Untyped → Untyped con là
-  bước tiếp theo.
+  chéo nhưng chưa ngăn cạn kiệt tài nguyên. Retype Untyped → Untyped con để Bước 6.
 - TCB/VSpace chưa tách pool riêng; TCB có quota 16 nhưng vẫn nằm trong object table.
   Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 128 object hoặc trước SMP,
   vì static Kernel đã giải quyết áp lực stack và 3b chưa cần quá 128 object.

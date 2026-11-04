@@ -57,7 +57,8 @@ chung cho root/server/client.
 - Khi TCB bị hủy, object creator/cap con được reparent lên cap cha còn sống;
   delete Untyped cap trả IllegalOperation khi còn object/cap con.
 - x86 assert LoadedImage base/end nằm trong identity 0..1 GiB.
-- CapCopy Untyped vẫn chia sẻ vùng nhớ, chưa có Untyped con.
+- CapCopy Untyped vẫn chia sẻ vùng nhớ, chưa có Untyped con; Untyped con để Bước 6,
+  khi root phát tài nguyên cho task. 4.5 server không retype.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable
   kernel.
 
