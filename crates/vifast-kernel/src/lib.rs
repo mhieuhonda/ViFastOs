@@ -363,7 +363,12 @@ impl Kernel {
     }
 
     pub fn create_frame(&mut self, pa: usize, size: usize) -> Option<ObjRef> {
-        self.alloc(Kind::Frame(Frame { pa, size }))
+        self.alloc(Kind::Frame(Frame {
+            pa,
+            size,
+            mapped_w: 0,
+            mapped_x: 0,
+        }))
     }
 
     pub fn create_vspace(&mut self, root: u64, base: u64, size: u64) -> Option<ObjRef> {
@@ -710,7 +715,12 @@ impl Kernel {
         }
         let kind = if matches!(ty, ObjType::Frame | ObjType::PageTable) {
             if ty == ObjType::Frame {
-                Kind::Frame(Frame { pa, size: page })
+                Kind::Frame(Frame {
+                    pa,
+                    size: page,
+                    mapped_w: 0,
+                    mapped_x: 0,
+                })
             } else {
                 Kind::PageTable(PageTable {
                     root: pa as u64,
@@ -1169,13 +1179,43 @@ impl Kernel {
         Err(KError::AlreadyMapped)
     }
 
+    fn note_frame_mapping(&mut self, frame_obj: ObjRef, rights: Rights) {
+        if let Some(object) = self.get_mut(frame_obj) {
+            if let Kind::Frame(ref mut frame) = object.kind {
+                if rights.contains(Rights::WRITE) {
+                    frame.mapped_w += 1;
+                }
+                if rights.contains(Rights::EXEC) {
+                    frame.mapped_x += 1;
+                }
+            }
+        }
+    }
+
+    fn note_frame_unmapping(&mut self, mapping: Mapping) {
+        if let Some(object) = self.get_mut(mapping.frame) {
+            if let Kind::Frame(ref mut frame) = object.kind {
+                if mapping.rights.contains(Rights::WRITE) {
+                    frame.mapped_w = frame.mapped_w.saturating_sub(1);
+                }
+                if mapping.rights.contains(Rights::EXEC) {
+                    frame.mapped_x = frame.mapped_x.saturating_sub(1);
+                }
+            }
+        }
+    }
+
     /// Validate and install a user mapping through the generic page-table
     /// walk.  No platform-specific map function is used.  Intermediate page
     /// tables must already exist; otherwise `MissingPageTable` is returned.
+    ///
+    /// Rights must contain READ.  W^X is checked both on this leaf and against
+    /// the Frame's live `mapped_w`/`mapped_x`, so aliases cannot combine a
+    /// writable mapping and an executable mapping of the same physical frame.
     pub fn map_frame(
         &mut self,
         vspace: ObjRef,
-        frame: ObjRef,
+        frame_obj: ObjRef,
         hint: u64,
         rights: Rights,
     ) -> KResult<Mapping> {
@@ -1184,12 +1224,15 @@ impl Kernel {
             return Err(KError::InvalidArg);
         }
         if rights.contains(Rights::WRITE) && rights.contains(Rights::EXEC) {
-            return Err(KError::NoRights); // W^X
+            return Err(KError::NoRights); // W^X within one mapping
         }
-        if rights.contains(Rights::WRITE) && !rights.contains(Rights::READ) {
-            return Err(KError::InvalidArg); // Sv39 reserves W without R
+        if !rights.contains(Rights::READ) {
+            // All three ports expose a readable page; W-only is not portable.
+            return Err(KError::InvalidArg);
         }
-        let frame = *self.frame(frame).ok_or(KError::WrongType)?;
+        let frame = *self.frame(frame_obj).ok_or(KError::WrongType)?;
+        let wants_w = rights.contains(Rights::WRITE);
+        let wants_x = rights.contains(Rights::EXEC);
         let (root, page_size, base, end, next_va) = {
             let space = self.vspace(vspace).ok_or(KError::WrongType)?;
             (
@@ -1220,6 +1263,12 @@ impl Kernel {
         {
             return Err(KError::AlreadyMapped);
         }
+        if (wants_w && frame.mapped_x != 0) || (wants_x && frame.mapped_w != 0) {
+            return Err(KError::NoRights); // W^X over every mapping of this Frame
+        }
+        if (wants_w && frame.mapped_w == u16::MAX) || (wants_x && frame.mapped_x == u16::MAX) {
+            return Err(KError::OutOfMemory);
+        }
         if self.page_table_ops.is_some() {
             self.map_leaf(root, va, frame.pa as u64, rights)?;
         }
@@ -1228,6 +1277,7 @@ impl Kernel {
             pa: frame.pa as u64,
             len: page_size,
             rights,
+            frame: frame_obj,
         };
         let space = self.vspace_mut(vspace).ok_or(KError::WrongType)?;
         if let Err(error) = space.insert(mapping) {
@@ -1236,6 +1286,7 @@ impl Kernel {
             }
             return Err(error);
         }
+        self.note_frame_mapping(frame_obj, rights);
         Ok(mapping)
     }
 
@@ -1253,8 +1304,12 @@ impl Kernel {
         if self.page_table_ops.is_some() {
             self.unmap_page_table(root, va)?;
         }
-        let space = self.vspace_mut(vspace).ok_or(KError::WrongType)?;
-        space.mappings[index].take().ok_or(KError::NotMapped)
+        let mapping = {
+            let space = self.vspace_mut(vspace).ok_or(KError::WrongType)?;
+            space.mappings[index].take().ok_or(KError::NotMapped)?
+        };
+        self.note_frame_unmapping(mapping);
+        Ok(mapping)
     }
 
     /// True if `va` is currently mapped in the shadow table.
@@ -1269,6 +1324,8 @@ impl Kernel {
         if self.runq_len > MAX_TCBS {
             return Err(KError::IllegalOperation);
         }
+        let mut frame_w = [0u16; MAX_OBJECTS];
+        let mut frame_x = [0u16; MAX_OBJECTS];
         for i in 0..MAX_OBJECTS {
             let object = &self.objs[i];
             if object.is_free() {
@@ -1328,6 +1385,9 @@ impl Kernel {
                     {
                         return Err(KError::Alignment);
                     }
+                    if frame.mapped_w != 0 && frame.mapped_x != 0 {
+                        return Err(KError::NoRights);
+                    }
                 }
                 Kind::VSpace(ref space) => {
                     let page = space.page_size;
@@ -1338,7 +1398,7 @@ impl Kernel {
                             || mapping.va % page != 0
                             || mapping.pa % page != 0
                             || mapping.len != page
-                            || mapping.rights.is_empty()
+                            || !mapping.rights.contains(Rights::READ)
                             || (mapping.rights.contains(Rights::WRITE)
                                 && mapping.rights.contains(Rights::EXEC))
                         {
@@ -1348,6 +1408,30 @@ impl Kernel {
                             || mapping.va.saturating_add(mapping.len) > space.end
                         {
                             return Err(KError::InvalidArg);
+                        }
+                        let frame_index = mapping.frame.index as usize;
+                        if frame_index >= MAX_OBJECTS {
+                            return Err(KError::ObjectDestroyed);
+                        }
+                        let frame_object = &self.objs[frame_index];
+                        if frame_object.is_free() || frame_object.gen != mapping.frame.gen {
+                            return Err(KError::ObjectDestroyed);
+                        }
+                        let Kind::Frame(ref frame) = frame_object.kind else {
+                            return Err(KError::WrongType);
+                        };
+                        if frame.pa as u64 != mapping.pa || frame.size < mapping.len as usize {
+                            return Err(KError::WrongType);
+                        }
+                        if mapping.rights.contains(Rights::WRITE) {
+                            frame_w[frame_index] = frame_w[frame_index]
+                                .checked_add(1)
+                                .ok_or(KError::IllegalOperation)?;
+                        }
+                        if mapping.rights.contains(Rights::EXEC) {
+                            frame_x[frame_index] = frame_x[frame_index]
+                                .checked_add(1)
+                                .ok_or(KError::IllegalOperation)?;
                         }
                         for other in space.mappings.iter().skip(i + 1).flatten() {
                             if mapping.va < other.va.saturating_add(other.len)
@@ -1369,6 +1453,15 @@ impl Kernel {
                     }
                 }
                 Kind::Free => {}
+            }
+        }
+        // Counters are derived from the reverse map and checked after every
+        // VSpace has contributed its leaves, independent of object order.
+        for i in 0..MAX_OBJECTS {
+            if let Kind::Frame(ref frame) = self.objs[i].kind {
+                if frame_w[i] != frame.mapped_w || frame_x[i] != frame.mapped_x {
+                    return Err(KError::IllegalOperation);
+                }
             }
         }
         if let Some(current) = self.current {
@@ -1776,34 +1869,52 @@ impl Kernel {
                 index: i as u8,
                 gen: self.objs[i].gen,
             };
-            let Some(space) = self.vspace_mut(r) else {
-                continue;
-            };
-            for slot in space.mappings.iter_mut() {
-                if let Some(mapping) = *slot {
-                    if mapping.pa >= start && mapping.pa < end {
-                        if let Some(ops) = ops {
-                            let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+            let mut removed = [None; MAX_MAPPINGS];
+            let mut removed_count = 0;
+            {
+                let Some(space) = self.vspace_mut(r) else {
+                    continue;
+                };
+                for slot in space.mappings.iter_mut() {
+                    if let Some(mapping) = *slot {
+                        if mapping.pa >= start && mapping.pa < end {
+                            if let Some(ops) = ops {
+                                let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+                            }
+                            *slot = None;
+                            removed[removed_count] = Some(mapping);
+                            removed_count += 1;
                         }
-                        *slot = None;
                     }
                 }
+            }
+            for mapping in removed.iter().take(removed_count).flatten() {
+                self.note_frame_unmapping(*mapping);
             }
         }
     }
 
     fn unmap_space(&mut self, obj: ObjRef) {
         let ops = self.page_table_ops;
-        let Some(space) = self.vspace_mut(obj) else {
-            return;
-        };
-        for slot in space.mappings.iter_mut() {
-            if let Some(mapping) = *slot {
-                if let Some(ops) = ops {
-                    let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+        let mut removed = [None; MAX_MAPPINGS];
+        let mut removed_count = 0;
+        {
+            let Some(space) = self.vspace_mut(obj) else {
+                return;
+            };
+            for slot in space.mappings.iter_mut() {
+                if let Some(mapping) = *slot {
+                    if let Some(ops) = ops {
+                        let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+                    }
+                    *slot = None;
+                    removed[removed_count] = Some(mapping);
+                    removed_count += 1;
                 }
-                *slot = None;
             }
+        }
+        for mapping in removed.iter().take(removed_count).flatten() {
+            self.note_frame_unmapping(*mapping);
         }
     }
 
@@ -1835,19 +1946,28 @@ impl Kernel {
     /// can still reach them and flush their TLB entries.
     fn forget_mappings_in_span(&mut self, vspace: ObjRef, start: u64, end: u64) {
         let ops = self.page_table_ops;
-        let Some(space) = self.vspace_mut(vspace) else {
-            return;
-        };
-        for slot in space.mappings.iter_mut() {
-            if let Some(mapping) = *slot {
-                let mapping_end = mapping.va.saturating_add(mapping.len);
-                if mapping.va < end && start < mapping_end {
-                    if let Some(ops) = ops {
-                        let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+        let mut removed = [None; MAX_MAPPINGS];
+        let mut removed_count = 0;
+        {
+            let Some(space) = self.vspace_mut(vspace) else {
+                return;
+            };
+            for slot in space.mappings.iter_mut() {
+                if let Some(mapping) = *slot {
+                    let mapping_end = mapping.va.saturating_add(mapping.len);
+                    if mapping.va < end && start < mapping_end {
+                        if let Some(ops) = ops {
+                            let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+                        }
+                        *slot = None;
+                        removed[removed_count] = Some(mapping);
+                        removed_count += 1;
                     }
-                    *slot = None;
                 }
             }
+        }
+        for mapping in removed.iter().take(removed_count).flatten() {
+            self.note_frame_unmapping(*mapping);
         }
     }
 
@@ -2925,6 +3045,145 @@ mod tests {
     }
 
     #[test]
+    fn frame_wx_is_enforced_across_aliases_and_vspaces() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let va = 0x10_0000_0000;
+        let space_a = kernel
+            .create_vspace_with_page_size(0x1000, va, 0x10_0000, 4096)
+            .unwrap();
+        let space_b = kernel
+            .create_vspace_with_page_size(0x2000, va, 0x10_0000, 4096)
+            .unwrap();
+        for (space, tables) in [
+            (space_a, [0x3000, 0x4000, 0x5000]),
+            (space_b, [0x6000, 0x7000, 0x8000]),
+        ] {
+            for table in tables {
+                let pt = kernel.create_page_table(table, 0).unwrap();
+                assert!(kernel.map_page_table(pt, space, va).is_ok());
+            }
+        }
+
+        // READ is mandatory even on architectures whose PTEs encode a
+        // writable page without a separate readable bit.
+        let before = table_snapshot(&MAP_OPS, 0x1000, 0);
+        for rights in [Rights::NONE, Rights::WRITE, Rights::EXEC] {
+            assert_eq!(
+                kernel.map_frame(space_a, frame, va, rights),
+                Err(KError::InvalidArg)
+            );
+            assert_eq!(table_snapshot(&MAP_OPS, 0x1000, 0), before);
+        }
+
+        let mapping = kernel
+            .map_frame(space_a, frame, va, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 1);
+        assert_eq!(kernel.frame(frame).unwrap().mapped_x, 0);
+        assert!(kernel.check_invariants().is_ok());
+
+        let before_a = table_snapshot(&MAP_OPS, 0x1000, 0);
+        let before_b = table_snapshot(&MAP_OPS, 0x2000, 0);
+        // A different VA in the same VSpace and the same VA in another
+        // VSpace must both fail before any PTE is written.
+        assert_eq!(
+            kernel.map_frame(space_a, frame, va + 0x1000, Rights::READ | Rights::EXEC),
+            Err(KError::NoRights)
+        );
+        assert_eq!(
+            kernel.map_frame(space_b, frame, va, Rights::READ | Rights::EXEC),
+            Err(KError::NoRights)
+        );
+        assert_eq!(table_snapshot(&MAP_OPS, 0x1000, 0), before_a);
+        assert_eq!(table_snapshot(&MAP_OPS, 0x2000, 0), before_b);
+        assert!(kernel.mapping_at(space_a, va + 0x1000).is_none());
+        assert!(kernel.mapping_at(space_b, va).is_none());
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 1);
+        assert_eq!(kernel.frame(frame).unwrap().mapped_x, 0);
+
+        // Removing the writable leaf releases the counter; the same Frame can
+        // then be mapped executable.
+        assert_eq!(kernel.unmap_frame(space_a, mapping.va), Ok(mapping));
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 0);
+        assert_eq!(kernel.frame(frame).unwrap().mapped_x, 0);
+        assert!(kernel
+            .map_frame(space_a, frame, va, Rights::READ | Rights::EXEC)
+            .is_ok());
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 0);
+        assert_eq!(kernel.frame(frame).unwrap().mapped_x, 1);
+        assert_eq!(
+            kernel.map_frame(space_a, frame, va + 0x1000, Rights::READ | Rights::WRITE),
+            Err(KError::NoRights)
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn revoking_vspace_releases_frame_wx_counters() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space_untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 0x2000, 4096, 4)
+            .unwrap();
+        let frame_untyped = kernel
+            .create_untyped_with_limit(0x200_0000, 0x1000, 4096, 2)
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(space_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(frame_untyped, ObjType::Untyped, Rights::ALL),
+            )
+            .unwrap();
+        let space = kernel
+            .retype_as(
+                space_untyped,
+                ObjType::VSpace,
+                Some(SlotAddr { tcb: root, slot: 1 }),
+            )
+            .unwrap();
+        let frame = kernel
+            .retype_as(
+                frame_untyped,
+                ObjType::Frame,
+                Some(SlotAddr { tcb: root, slot: 2 }),
+            )
+            .unwrap();
+        let va = 0x10_0000_a000;
+        kernel
+            .map_frame(space, frame, va, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 1);
+        assert!(kernel.check_invariants().is_ok());
+
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.vspace(space).is_none());
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 0);
+        assert_eq!(kernel.frame(frame).unwrap().mapped_x, 0);
+        assert!(kernel.check_invariants().is_ok());
+
+        let replacement = kernel.create_vspace(0x3000, 0x5000_a000, 0x1000).unwrap();
+        assert!(kernel
+            .map_frame(replacement, frame, 0x5000_a000, Rights::READ | Rights::EXEC)
+            .is_ok());
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 0);
+        assert_eq!(kernel.frame(frame).unwrap().mapped_x, 1);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn frame_unmap_requires_matching_frame_cap() {
         let _guard = WALK_LOCK.lock().unwrap();
         reset_fake();
@@ -3097,6 +3356,115 @@ mod tests {
             }
         );
         assert!(kernel.mapping_at(vspace, 0x10_0000_0000).is_none());
+
+        kernel
+            .install_cap(
+                root,
+                4,
+                Cap::new(
+                    frame,
+                    ObjType::Frame,
+                    Rights::READ | Rights::WRITE | Rights::EXEC,
+                ),
+            )
+            .unwrap();
+        for rights in [Rights::NONE, Rights::WRITE, Rights::EXEC] {
+            assert_eq!(
+                kernel.user_syscall(
+                    root,
+                    SyscallId::FrameMap as u64,
+                    1,
+                    4,
+                    0x10_0000_0000,
+                    rights.0 as u64,
+                    0,
+                    0
+                ),
+                UserAction::Return {
+                    value: 0,
+                    error: KError::InvalidArg,
+                }
+            );
+        }
+        assert!(kernel.mapping_at(vspace, 0x10_0000_0000).is_none());
+    }
+
+    #[test]
+    fn frame_map_cannot_alias_wx_through_syscall() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let vspace = kernel
+            .create_vspace(0x1000, 0x10_0000_0000, 0x2000)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(vspace, ObjType::VSpace, Rights::WRITE))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(frame, ObjType::Frame, Rights::ALL))
+            .unwrap();
+        let va = 0x10_0000_0000;
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameMap as u64,
+                1,
+                2,
+                va,
+                (Rights::READ | Rights::WRITE).0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: va,
+                error: KError::Ok,
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameMap as u64,
+                1,
+                2,
+                va + 0x1000,
+                (Rights::READ | Rights::EXEC).0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::NoRights,
+            }
+        );
+        assert!(kernel.mapping_at(vspace, va + 0x1000).is_none());
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 1);
+
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::FrameUnmap as u64, 1, va, 2, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok,
+            }
+        );
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 0);
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameMap as u64,
+                1,
+                2,
+                va,
+                (Rights::READ | Rights::EXEC).0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: va,
+                error: KError::Ok,
+            }
+        );
+        assert_eq!(kernel.frame(frame).unwrap().mapped_x, 1);
+        assert!(kernel.check_invariants().is_ok());
     }
 
     #[test]
@@ -4598,6 +4966,9 @@ mod tests {
         kernel.revoke_cap(root, 1).unwrap();
         assert!(kernel.frame(frame).is_some());
         assert!(kernel.mapping_at(space, va).is_none());
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 0);
+        assert_eq!(kernel.frame(frame).unwrap().mapped_x, 0);
+        assert!(kernel.check_invariants().is_ok());
         assert_eq!(
             kernel.validate_user_range(root, va, 4, false),
             Err(KError::InvalidArg)
@@ -5120,6 +5491,8 @@ mod tests {
             kernel.mapping_at(server_space, server_layout.code_va),
             Some(code)
         );
+        assert_eq!(kernel.frame(code_frame).unwrap().mapped_w, 0);
+        assert_eq!(kernel.frame(code_frame).unwrap().mapped_x, 2);
         assert_eq!(
             kernel
                 .mapping_at(server_space, server_layout.stack_va)

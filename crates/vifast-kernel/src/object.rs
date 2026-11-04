@@ -182,10 +182,18 @@ pub struct Notification {
 /// A physical memory frame that can be mapped into a virtual address space.
 /// The portable core only records the physical address and size; the
 /// architecture port owns the actual page-table entry.
+///
+/// `mapped_w`/`mapped_x` are the number of live mappings of this exact Frame
+/// object carrying WRITE/EXEC.  W^X is enforced over these counters, not only
+/// over one mapping's rights, so the same Frame cannot be RW at one VA and RX
+/// at another.  They are derived state: `check_invariants` compares them with
+/// the VSpace reverse maps.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Frame {
     pub pa: usize,
     pub size: usize,
+    pub mapped_w: u16,
+    pub mapped_x: u16,
 }
 
 /// One user mapping tracked by a VSpace object.
@@ -195,6 +203,9 @@ pub struct Mapping {
     pub pa: u64,
     pub len: u64,
     pub rights: Rights,
+    /// Exact Frame object that owns this leaf.  Storing it makes counter
+    /// bookkeeping exact even if two Frame objects ever name the same PA.
+    pub frame: ObjRef,
 }
 
 impl Default for Mapping {
@@ -204,6 +215,7 @@ impl Default for Mapping {
             pa: 0,
             len: 0,
             rights: Rights::NONE,
+            frame: ObjRef::invalid(),
         }
     }
 }
