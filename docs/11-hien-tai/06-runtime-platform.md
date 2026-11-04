@@ -118,8 +118,10 @@ Root task Rust in `ROOT RUST`, tự Retype/CapCopy/TcbConfigure/TcbResume
 server/client/fault thread, dựng VSpace client từ data Untyped (code RX +
 client stack RW + fault4 stack RW, log `CLIENT VSPACE OK`), cấp Untyped con
 64 KiB/8 object cho client, cấu hình client/fault4 trên VSpace riêng, in
-`ROOT READY`, rồi block bằng `Wait` trên notification riêng. Runtime không
-còn tham chiếu "Server"/"Client"; data Untyped được log lại lúc test-exit.
+`ROOT READY`, rồi Recv trên fault endpoint và in `FAULT EP OK addr=...` khi
+fault4 báo. Runtime không còn tham chiếu "Server"/"Client"; data Untyped được
+log lại lúc test-exit. Fault endpoint dùng message label `LABEL_FAULT`, data
+`[addr, cause, 0, 0]`; TCB chuyển `BlockedFault`.
 
 ## 4. Syscall dispatch
 

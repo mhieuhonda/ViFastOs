@@ -476,9 +476,8 @@ impl Platform for RiscvPlatform {
             core::arch::asm!("csrs sie, {}", in(reg) 1u64 << 5);
             core::arch::asm!("mv sp, {}", in(reg) context.regs[2]);
             core::arch::asm!("mv a0, {}", in(reg) context.regs[10]);
-            core::arch::asm!("sret");
+            core::arch::asm!("sret", options(noreturn));
         }
-        unreachable!()
     }
 
     fn write_result(

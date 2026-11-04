@@ -2202,6 +2202,16 @@ impl Kernel {
                         *slot = None;
                     }
                 }
+                if let Some(fault) = table.fault_ep {
+                    if fault.addr.tcb == r
+                        && table
+                            .cspace
+                            .get(fault.addr.slot as usize)
+                            .is_none_or(Option::is_none)
+                    {
+                        table.fault_ep = None;
+                    }
+                }
             }
         }
     }
@@ -2713,6 +2723,56 @@ impl Kernel {
             .and_then(|table| table.resume_error.take())
     }
 
+    pub fn set_fault_endpoint(&mut self, tcb: ObjRef, endpoint: Option<CapRef>) -> KResult<()> {
+        let table = self.tcb_mut(tcb).ok_or(KError::InvalidCap)?;
+        table.fault_ep = endpoint;
+        Ok(())
+    }
+
+    pub fn fault_endpoint(&self, tcb: ObjRef) -> Option<ObjRef> {
+        let fault = self.tcb(tcb)?.fault_ep?;
+        let cap = self.cap_at(fault.addr)?;
+        if cap.id != fault.id || cap.ty != ObjType::Endpoint {
+            return None;
+        }
+        self.endpoint(cap.obj)?;
+        Some(cap.obj)
+    }
+
+    /// Deliver a fault message to the TCB's configured endpoint and leave the
+    /// faulting thread in `BlockedFault`.  If the receiver is not waiting the
+    /// message is queued without making the faulting thread runnable again.
+    pub fn fault_to_endpoint(
+        &mut self,
+        tcb: ObjRef,
+        endpoint: ObjRef,
+        msg: Message,
+    ) -> KResult<()> {
+        let delivered = self.send(tcb, endpoint, 0, msg, false)?;
+        let mut index = 0;
+        while index < self.runq_len {
+            if self.runq[index] == Some(tcb) {
+                let mut shift = index;
+                while shift + 1 < self.runq_len {
+                    self.runq[shift] = self.runq[shift + 1];
+                    shift += 1;
+                }
+                self.runq_len -= 1;
+                self.runq[self.runq_len] = None;
+            } else {
+                index += 1;
+            }
+        }
+        let table = self.tcb_mut(tcb).ok_or(KError::ObjectDestroyed)?;
+        table.state = ThreadState::BlockedFault;
+        table.queued = false;
+        let _ = delivered;
+        if self.current == Some(tcb) {
+            self.current = None;
+        }
+        Ok(())
+    }
+
     /// Suspend the currently running TCB after a user fault and return the
     /// next runnable thread (if any).  The TCB is not destroyed so its fault
     /// can later be reported to a fault endpoint.
@@ -3064,12 +3124,44 @@ impl Kernel {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
-                match self.configure_tcb(cap.obj, a1, a2, vspace.obj, a4 as u8) {
-                    Ok(()) => UserAction::ConfigureTcb {
+                let fault_slot = slot_arg(a5).unwrap_or(0);
+                let fault = if fault_slot != 0 {
+                    let Some(fault_cap) = self.cap_at(SlotAddr {
                         tcb: cap.obj,
-                        entry: a1,
-                        stack: a2,
-                    },
+                        slot: fault_slot,
+                    }) else {
+                        return UserAction::Return {
+                            value: 0,
+                            error: KError::InvalidCap,
+                        };
+                    };
+                    if fault_cap.ty != ObjType::Endpoint {
+                        return UserAction::Return {
+                            value: 0,
+                            error: KError::WrongType,
+                        };
+                    }
+                    Some(CapRef {
+                        addr: SlotAddr {
+                            tcb: cap.obj,
+                            slot: fault_slot,
+                        },
+                        id: fault_cap.id,
+                    })
+                } else {
+                    None
+                };
+                match self.configure_tcb(cap.obj, a1, a2, vspace.obj, a4 as u8) {
+                    Ok(()) => {
+                        if let Err(error) = self.set_fault_endpoint(cap.obj, fault) {
+                            return UserAction::Return { value: 0, error };
+                        }
+                        UserAction::ConfigureTcb {
+                            tcb: cap.obj,
+                            entry: a1,
+                            stack: a2,
+                        }
+                    }
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
@@ -6722,6 +6814,117 @@ mod tests {
             kernel.reply_recv(server, endpoint, 4, Message::empty(0)),
             Err(KError::NoCaller)
         );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn fault_endpoint_delivers_to_waiting_handler() {
+        let mut kernel = Kernel::new();
+        let faulting = kernel.create_tcb("faulting", 1).unwrap();
+        let handler = kernel.create_tcb("handler", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(
+                faulting,
+                1,
+                Cap::new(endpoint, ObjType::Endpoint, Rights::READ | Rights::WRITE),
+            )
+            .unwrap();
+        let cap = kernel
+            .cap_at(SlotAddr {
+                tcb: faulting,
+                slot: 1,
+            })
+            .unwrap();
+        kernel
+            .set_fault_endpoint(
+                faulting,
+                Some(CapRef {
+                    addr: SlotAddr {
+                        tcb: faulting,
+                        slot: 1,
+                    },
+                    id: cap.id,
+                }),
+            )
+            .unwrap();
+        assert_eq!(kernel.fault_endpoint(faulting), Some(endpoint));
+        assert_eq!(kernel.recv(handler, endpoint, 4), Ok(None));
+        let message = Message::new(LABEL_FAULT, &[0x1234, 7, 0, 0]).unwrap();
+        kernel
+            .fault_to_endpoint(faulting, endpoint, message)
+            .unwrap();
+        assert_eq!(
+            kernel.tcb(faulting).unwrap().state,
+            ThreadState::BlockedFault
+        );
+        let received = kernel.take_resume(handler).unwrap();
+        assert_eq!(received.label, LABEL_FAULT);
+        assert_eq!(received.words()[0], 0x1234);
+        let check = kernel.check_invariants();
+        assert!(check.is_ok(), "{check:?}");
+    }
+
+    #[test]
+    fn fault_endpoint_queues_when_handler_is_not_waiting() {
+        let mut kernel = Kernel::new();
+        let faulting = kernel.create_tcb("faulting", 1).unwrap();
+        let handler = kernel.create_tcb("handler", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let message = Message::new(LABEL_FAULT, &[0x55, 1, 0, 0]).unwrap();
+        kernel
+            .fault_to_endpoint(faulting, endpoint, message)
+            .unwrap();
+        assert_eq!(
+            kernel.tcb(faulting).unwrap().state,
+            ThreadState::BlockedFault
+        );
+        let received = kernel.recv(handler, endpoint, 4).unwrap().unwrap();
+        assert_eq!(received.label, LABEL_FAULT);
+        assert_eq!(received.words()[0], 0x55);
+        assert_eq!(
+            kernel.tcb(faulting).unwrap().state,
+            ThreadState::BlockedFault
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn revoking_fault_endpoint_cap_clears_link() {
+        let mut kernel = Kernel::new();
+        let faulting = kernel.create_tcb("faulting", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(
+                faulting,
+                1,
+                Cap::new(endpoint, ObjType::Endpoint, Rights::READ | Rights::WRITE),
+            )
+            .unwrap();
+        let cap = kernel
+            .cap_at(SlotAddr {
+                tcb: faulting,
+                slot: 1,
+            })
+            .unwrap();
+        kernel
+            .set_fault_endpoint(
+                faulting,
+                Some(CapRef {
+                    addr: SlotAddr {
+                        tcb: faulting,
+                        slot: 1,
+                    },
+                    id: cap.id,
+                }),
+            )
+            .unwrap();
+        let message = Message::new(LABEL_FAULT, &[0x99, 1, 0, 0]).unwrap();
+        kernel
+            .fault_to_endpoint(faulting, endpoint, message)
+            .unwrap();
+        assert!(kernel.delete_cap(faulting, 1).is_ok());
+        assert_eq!(kernel.fault_endpoint(faulting), None);
         assert!(kernel.check_invariants().is_ok());
     }
 

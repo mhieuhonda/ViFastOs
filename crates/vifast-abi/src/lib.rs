@@ -291,6 +291,7 @@ pub enum ThreadState {
     BlockedReply = 5,
     BlockedNotification = 6,
     Faulted = 7,
+    BlockedFault = 8,
 }
 
 impl ThreadState {

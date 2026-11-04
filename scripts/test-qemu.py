@@ -97,6 +97,7 @@ def run_qemu(
         and output.count("ROOT RUST") == 1
         and output.count("BOOTINFO OK") == 1
         and output.count("CLIENT VSPACE OK") == 1
+        and output.count("FAULT EP OK") == 1
         and output.count("ROOT READY") == 1
         and "ROOT PANIC" not in output
         and root_rust_at >= 0

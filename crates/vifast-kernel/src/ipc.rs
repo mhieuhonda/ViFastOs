@@ -190,7 +190,10 @@ impl Kernel {
                 table.caller = Some((sender, epoch));
                 let sender_table = self.tcb_mut(sender).ok_or(KError::ObjectDestroyed)?;
                 sender_table.state = ThreadState::BlockedReply;
-            } else {
+            } else if self
+                .tcb(sender)
+                .is_some_and(|table| table.state != ThreadState::BlockedFault)
+            {
                 self.make_ready(sender);
             }
             self.stats.ipc_received += 1;

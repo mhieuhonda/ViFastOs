@@ -129,6 +129,20 @@ retype; 4.5 server có VSpace riêng; 7.5 client có VSpace riêng và Untyped c
   Recv, các vòng sau reply rồi nhận caller kế.
 - Host test: no caller, reply rồi nhận caller kế, stale epoch.
 
+## 5g. Fault endpoint (8.3)
+
+- TCB có `fault_ep: Option<CapRef>`; đặt qua `TcbConfigure` a5 là slot cap
+  Endpoint trong cspace của TCB được cấu hình (0 = clear).
+- User fault vẫn log `USER FAULT`. Nếu có fault endpoint, kernel gửi message
+  label `LABEL_FAULT`, data `[addr, cause, 0, 0]`; fault TCB chuyển
+  `BlockedFault`. Nếu handler chưa Recv, message được queue và TCB vẫn block.
+- Handler Recv nhận message; Reply để tiếp tục là quyết định của handler.
+- Root task được nâng priority trong runtime để nhận fault4 kịp thời; root in
+  `FAULT EP OK addr=...`.
+- x86 `enter_user` khôi phục đầy đủ register từ TrapFrame trước iretq, cần cho
+  việc resume handler sau page fault.
+- Fault1/2/3 không cấu hình endpoint nên giữ hành vi suspend cũ.
+
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
@@ -205,5 +219,5 @@ retype; 4.5 server có VSpace riêng; 7.5 client có VSpace riêng và Untyped c
    sync_icache khi map EXEC và counter checked_add (đã xong).
 7. Bước 7.2–7.5: Untyped con (7.2), BootInfo (7.3), VSpace client (7.4),
    tách client/fault4 (7.5 — hoàn tất 3b).
-8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv (đã xong 8.2), fault endpoint.
+8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv (đã xong 8.2), fault endpoint (đã xong 8.3).
 9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

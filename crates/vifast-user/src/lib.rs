@@ -109,6 +109,134 @@ pub unsafe fn syscall(number: u64, args: [u64; 6]) -> (u64, u64) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageResult {
+    pub error: KError,
+    pub value: u64,
+    pub label: u64,
+    pub data: [u64; 4],
+}
+
+pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let error: u64;
+        let value: u64;
+        let label: u64;
+        let d0: u64;
+        let d1: u64;
+        let d2: u64;
+        let d3: u64;
+        core::arch::asm!(
+            "int 0x80",
+            inlateout("rax") SyscallId::Recv as u64 => error,
+            inlateout("rdi") endpoint_slot as u64 => value,
+            inlateout("rsi") recv_slot as u64 => label,
+            lateout("rdx") d0,
+            lateout("rcx") d1,
+            lateout("r8") d2,
+            lateout("r9") d3,
+            lateout("r10") _,
+            lateout("r11") _,
+            lateout("r12") _,
+            lateout("r13") _,
+            lateout("r14") _,
+            lateout("r15") _,
+        );
+        MessageResult {
+            error: KError::from_u32(error as u32),
+            value,
+            label,
+            data: [d0, d1, d2, d3],
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let error: u64;
+        let value: u64;
+        let label: u64;
+        let d0: u64;
+        let d1: u64;
+        let d2: u64;
+        let d3: u64;
+        core::arch::asm!(
+            "svc #0",
+            in("x8") SyscallId::Recv as u64,
+            inlateout("x0") endpoint_slot as u64 => error,
+            inlateout("x1") recv_slot as u64 => value,
+            lateout("x2") label,
+            lateout("x3") d0,
+            lateout("x4") d1,
+            lateout("x5") d2,
+            lateout("x6") d3,
+            lateout("x7") _,
+            lateout("x9") _,
+            lateout("x10") _,
+            lateout("x11") _,
+            lateout("x12") _,
+            lateout("x13") _,
+            lateout("x14") _,
+            lateout("x15") _,
+            lateout("x16") _,
+            lateout("x17") _,
+        );
+        MessageResult {
+            error: KError::from_u32(error as u32),
+            value,
+            label,
+            data: [d0, d1, d2, d3],
+        }
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let error: u64;
+        let value: u64;
+        let label: u64;
+        let d0: u64;
+        let d1: u64;
+        let d2: u64;
+        let d3: u64;
+        core::arch::asm!(
+            "ecall",
+            in("a7") SyscallId::Recv as u64,
+            inlateout("a0") endpoint_slot as u64 => error,
+            inlateout("a1") recv_slot as u64 => value,
+            lateout("a2") label,
+            lateout("a3") d0,
+            lateout("a4") d1,
+            lateout("a5") d2,
+            lateout("a6") d3,
+            lateout("t0") _,
+            lateout("t1") _,
+            lateout("t2") _,
+            lateout("t3") _,
+            lateout("t4") _,
+            lateout("t5") _,
+            lateout("t6") _,
+        );
+        MessageResult {
+            error: KError::from_u32(error as u32),
+            value,
+            label,
+            data: [d0, d1, d2, d3],
+        }
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )))]
+    {
+        let _ = (endpoint_slot, recv_slot);
+        MessageResult {
+            error: KError::NotImplemented,
+            value: 0,
+            label: 0,
+            data: [0; 4],
+        }
+    }
+}
+
 fn result(error: u64, value: u64) -> SyscallResult {
     SyscallResult {
         error: KError::from_u32(error as u32),
@@ -234,6 +362,30 @@ pub fn tcb_configure(
                 vspace_slot as u64,
                 priority as u64,
                 0,
+            ],
+        )
+    };
+    result(e, v)
+}
+
+pub fn tcb_configure_fault(
+    tcb_slot: u8,
+    entry: u64,
+    stack: u64,
+    vspace_slot: u8,
+    priority: u8,
+    fault_endpoint_slot: u8,
+) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::TcbConfigure as u64,
+            [
+                tcb_slot as u64,
+                entry,
+                stack,
+                vspace_slot as u64,
+                priority as u64,
+                fault_endpoint_slot as u64,
             ],
         )
     };

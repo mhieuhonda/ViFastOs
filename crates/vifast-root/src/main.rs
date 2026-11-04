@@ -29,6 +29,7 @@ const ROOT_RUST: &[u8] = b"ROOT RUST\n";
 const ROOT_READY: &[u8] = b"ROOT READY\n";
 const BOOTINFO_OK: &[u8] = b"BOOTINFO OK\n";
 const CLIENT_VSPACE_OK: &[u8] = b"CLIENT VSPACE OK\n";
+const FAULT_EP_OK: &[u8] = b"FAULT EP OK addr=0x";
 const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
 const CLIENT_UNTYPED_SIZE: usize = 0x1_0000;
 const CLIENT_UNTYPED_OBJECTS: usize = 8;
@@ -48,6 +49,24 @@ fn write(bytes: &[u8]) {
 
 fn retype(untyped_slot: u8, ty: ObjType, slot: u8) {
     check(vifast_user::retype(untyped_slot, ty as u64, slot));
+}
+
+fn write_fault_addr(addr: u64) {
+    write(FAULT_EP_OK);
+    let mut hex = [b'0'; 16];
+    let digits = b"0123456789abcdef";
+    let mut value = addr;
+    let mut index = 16;
+    while index != 0 {
+        index -= 1;
+        hex[index] = digits[(value & 0xf) as usize];
+        value >>= 4;
+    }
+    check(vifast_user::debug_write(
+        hex.as_ptr() as u64,
+        hex.len() as u64,
+    ));
+    write(b"\n");
 }
 
 fn copy(src: u8, tcb: u8, dst: u8, rights: Rights) {
@@ -136,6 +155,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let fault2_tcb = slots.alloc();
     let fault3_tcb = slots.alloc();
     let fault4_tcb = slots.alloc();
+    let fault_endpoint_slot = slots.alloc();
 
     retype(meta_untyped, ObjType::Endpoint, endpoint_slot);
     retype(meta_untyped, ObjType::Tcb, server_tcb);
@@ -146,6 +166,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     retype(meta_untyped, ObjType::Tcb, fault2_tcb);
     retype(meta_untyped, ObjType::Tcb, fault3_tcb);
     retype(meta_untyped, ObjType::Tcb, fault4_tcb);
+    retype(meta_untyped, ObjType::Endpoint, fault_endpoint_slot);
 
     copy(endpoint_slot, server_tcb, 1, Rights::READ);
     check(vifast_user::tcb_configure(
@@ -247,18 +268,28 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     ));
     check(vifast_user::tcb_resume(client_tcb));
 
-    check(vifast_user::tcb_configure(
+    copy(
+        fault_endpoint_slot,
+        fault4_tcb,
+        6,
+        Rights::READ | Rights::WRITE,
+    );
+    check(vifast_user::tcb_configure_fault(
         fault4_tcb,
         USER_ENTRY_FAULT4 as u64,
         FAULT4_STACK_TOP as u64,
         client_vspace,
+        6,
         6,
     ));
     check(vifast_user::tcb_resume(fault4_tcb));
     write(ROOT_READY);
 
     loop {
-        let _ = vifast_user::wait(root_notification_slot);
+        let message = unsafe { vifast_user::recv_message(fault_endpoint_slot, 0) };
+        if message.error == KError::Ok {
+            write_fault_addr(message.data[0]);
+        }
     }
 }
 

@@ -572,9 +572,8 @@ impl Platform for Aarch64Platform {
             core::arch::asm!("msr elr_el1, {}", in(reg) context.elr);
             core::arch::asm!("msr spsr_el1, {}", in(reg) context.spsr);
             core::arch::asm!("mov x0, {}", in(reg) context.regs[0]);
-            core::arch::asm!("eret");
+            core::arch::asm!("eret", options(noreturn));
         }
-        unreachable!()
     }
 
     fn write_result(

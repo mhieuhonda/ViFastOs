@@ -695,19 +695,51 @@ impl Platform for X86Platform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
+        let base = context as *const TrapFrame as usize;
         unsafe {
             core::arch::asm!(
                 "push {ss}", "push {rsp}", "push {rflags}", "push {cs}", "push {rip}",
-                "mov rdi, {arg0}", "iretq",
+                "mov r10, {base}",
+                "mov r15, [r10 + {off_r15}]",
+                "mov r14, [r10 + {off_r14}]",
+                "mov r13, [r10 + {off_r13}]",
+                "mov r12, [r10 + {off_r12}]",
+                "mov r11, [r10 + {off_r11}]",
+                "mov r9, [r10 + {off_r9}]",
+                "mov r8, [r10 + {off_r8}]",
+                "mov rbp, [r10 + {off_rbp}]",
+                "mov rdi, [r10 + {off_rdi}]",
+                "mov rsi, [r10 + {off_rsi}]",
+                "mov rdx, [r10 + {off_rdx}]",
+                "mov rcx, [r10 + {off_rcx}]",
+                "mov rbx, [r10 + {off_rbx}]",
+                "mov rax, [r10 + {off_rax}]",
+                "mov r10, [r10 + {off_r10}]",
+                "iretq",
                 ss = in(reg) context.ss,
                 rsp = in(reg) context.rsp,
                 rflags = in(reg) context.rflags,
                 cs = in(reg) context.cs,
                 rip = in(reg) context.rip,
-                arg0 = in(reg) context.rdi,
+                base = in(reg) base,
+                off_r15 = const core::mem::offset_of!(TrapFrame, r15),
+                off_r14 = const core::mem::offset_of!(TrapFrame, r14),
+                off_r13 = const core::mem::offset_of!(TrapFrame, r13),
+                off_r12 = const core::mem::offset_of!(TrapFrame, r12),
+                off_r11 = const core::mem::offset_of!(TrapFrame, r11),
+                off_r10 = const core::mem::offset_of!(TrapFrame, r10),
+                off_r9 = const core::mem::offset_of!(TrapFrame, r9),
+                off_r8 = const core::mem::offset_of!(TrapFrame, r8),
+                off_rbp = const core::mem::offset_of!(TrapFrame, rbp),
+                off_rdi = const core::mem::offset_of!(TrapFrame, rdi),
+                off_rsi = const core::mem::offset_of!(TrapFrame, rsi),
+                off_rdx = const core::mem::offset_of!(TrapFrame, rdx),
+                off_rcx = const core::mem::offset_of!(TrapFrame, rcx),
+                off_rbx = const core::mem::offset_of!(TrapFrame, rbx),
+                off_rax = const core::mem::offset_of!(TrapFrame, rax),
+                options(noreturn),
             );
         }
-        unreachable!()
     }
 
     fn write_result(

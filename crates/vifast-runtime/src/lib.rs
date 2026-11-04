@@ -7,7 +7,9 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use vifast_abi::{BootInfo, KError, Message, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
+use vifast_abi::{
+    BootInfo, KError, Message, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, LABEL_FAULT,
+};
 use vifast_arch::Arch;
 use vifast_kernel::console::Console;
 use vifast_kernel::fs::MAX_PATH;
@@ -227,6 +229,11 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     );
     A::start_smp();
     let root = kernel.root().unwrap_or_else(|| A::exit(1));
+    /* The root task is the fault handler later; keep it above ordinary user
+    threads so a queued fault message resumes it promptly. */
+    if let Some(table) = kernel.tcb_mut(root) {
+        table.priority = 15;
+    }
     /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
     const RUNTIME_OBJECTS: usize = 5;
     const META_MAX_OBJECTS: usize = 32;
@@ -738,7 +745,23 @@ pub mod fault {
             cause,
             addr
         );
-        let Some(mut next) = kernel.fault_current() else {
+        let next = match old {
+            Some(old) if kernel.fault_endpoint(old).is_some() => {
+                let endpoint = kernel.fault_endpoint(old).unwrap();
+                match Message::new(LABEL_FAULT, &[addr, cause, 0, 0]) {
+                    Ok(message) => match kernel.fault_to_endpoint(old, endpoint, message) {
+                        Ok(()) => kernel.pick(),
+                        Err(error) => {
+                            vifast_kernel::klog!(A, "FAULT ENDPOINT FAILED: {:?}", error);
+                            kernel.fault_current()
+                        }
+                    },
+                    Err(_) => kernel.fault_current(),
+                }
+            }
+            _ => kernel.fault_current(),
+        };
+        let Some(mut next) = next else {
             vifast_kernel::klog!(A, "no runnable thread after fault");
             A::halt();
         };

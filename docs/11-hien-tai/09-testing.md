@@ -30,7 +30,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 73 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
+Hiện có 76 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 17 test trong `vifast-elf`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
@@ -38,6 +38,8 @@ Hiện có 73 test trong `vifast-kernel` + 11 test trong `vifast-pte` +
 - BootInfo layout cố định 32 byte và offset từng field;
 - ReplyRecv: no caller chỉ Recv; reply trước rồi nhận caller kế; stale epoch
   trả NoCaller;
+- Fault endpoint: handler waiting nhận message, không waiting thì queue, revoke
+  cap endpoint xoá link; QEMU in FAULT EP OK;
 - QEMU yêu cầu đúng 4 USER FAULT, gồm 0x80000000, 0x1000002000 và root Rust
   stack 0x1000301000; client dùng VSpace/Untyped con riêng, `Zero OK` vẫn qua;
 - capability rights monotonic;

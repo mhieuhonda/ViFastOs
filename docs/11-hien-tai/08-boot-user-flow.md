@@ -100,12 +100,14 @@ Retype data Untyped → VSpace client, PageTable ×level, client stack, fault4 s
 FrameMap code BootInfo → client VSpace RX; stacks RW; log CLIENT VSPACE OK
 TcbConfigure client (VSpace client, stack 0x1000009000)
 TcbConfigure/TcbResume fault1/2/3 (root VSpace), fault4 (client VSpace, priority 6)
-Wait(root notification)
+CapCopy fault endpoint → fault4 slot 6; TcbConfigure a5=6
+Root Recv(fault endpoint) → in FAULT EP OK addr=0x1000301000
 ```
 
 Fault1/2/3 chạy trong root VSpace; fault4 chạy trong VSpace client và ghi vào
-root Rust stack (không map trong VSpace client). Cả bốn log `USER FAULT`, bị
-suspend và server/client vẫn chạy. Không panic kernel.
+root Rust stack (không map trong VSpace client). Cả bốn log `USER FAULT`;
+fault4 có fault endpoint nên TCB chuyển `BlockedFault`, root nhận message và in
+`FAULT EP OK addr=...`. Server/client vẫn chạy; không panic kernel.
 
 ## 5. Server A
 
