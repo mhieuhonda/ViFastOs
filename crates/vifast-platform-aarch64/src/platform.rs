@@ -225,21 +225,11 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
-        let ap = if rights.contains(Rights::WRITE) {
-            AP_USER_RW
-        } else {
-            AP_USER_RO
-        };
-        let uxn = if rights.contains(Rights::EXEC) {
-            0
-        } else {
-            UXN
-        };
-        page_desc(pa, 0, ap, PXN, uxn, SH_INNER)
+        vifast_pte::aarch64::encode_leaf(pa, rights)
     }
 
     fn encode_table(&self, pa: u64) -> u64 {
-        table_desc(pa)
+        vifast_pte::aarch64::encode_table(pa)
     }
 
     fn decode(&self, entry: u64) -> vifast_kernel::Pte {

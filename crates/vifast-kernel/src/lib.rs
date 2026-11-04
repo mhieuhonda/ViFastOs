@@ -402,7 +402,10 @@ impl Kernel {
             match ops.decode_at(pte, level) {
                 Pte::Table(next) if level + 1 < levels => table = next,
                 Pte::Leaf(_, rights) => {
-                    return ops.leaf_is_user(pte)
+                    // User mappings are 4 KiB leaves only.  A block/superpage
+                    // inside the user range is not acceptable.
+                    return level + 1 == levels
+                        && ops.leaf_is_user(pte)
                         && rights.contains(Rights::READ)
                         && (!need_write || rights.contains(Rights::WRITE));
                 }
@@ -3290,6 +3293,129 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum PteFormat {
+        Riscv,
+        X86,
+        AArch,
+    }
+
+    struct PteFakeOps(PteFormat);
+
+    static PTE_FAKE_MEM: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+    static PTE_RISCV: PteFakeOps = PteFakeOps(PteFormat::Riscv);
+    static PTE_X86: PteFakeOps = PteFakeOps(PteFormat::X86);
+    static PTE_AARCH: PteFakeOps = PteFakeOps(PteFormat::AArch);
+
+    impl PageTableOps for PteFakeOps {
+        fn levels(&self) -> usize {
+            match self.0 {
+                PteFormat::Riscv => vifast_pte::riscv::LEVELS,
+                PteFormat::X86 => vifast_pte::x86_64::LEVELS,
+                PteFormat::AArch => vifast_pte::aarch64::LEVELS,
+            }
+        }
+        fn index(&self, va: u64, level: usize) -> usize {
+            match self.0 {
+                PteFormat::Riscv => vifast_pte::riscv::index(va, level),
+                PteFormat::X86 => vifast_pte::x86_64::index(va, level),
+                PteFormat::AArch => vifast_pte::aarch64::index(va, level),
+            }
+        }
+        fn read_pte(&self, table_pa: u64, idx: usize) -> u64 {
+            let base = ((table_pa >> 12) as usize) * 512;
+            PTE_FAKE_MEM
+                .lock()
+                .unwrap()
+                .get(base + idx)
+                .copied()
+                .unwrap_or(0)
+        }
+        fn write_pte(&self, table_pa: u64, idx: usize, pte: u64) {
+            let base = ((table_pa >> 12) as usize) * 512;
+            if let Some(slot) = PTE_FAKE_MEM.lock().unwrap().get_mut(base + idx) {
+                *slot = pte;
+            }
+        }
+        fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
+            match self.0 {
+                PteFormat::Riscv => vifast_pte::riscv::encode_leaf(pa, rights),
+                PteFormat::X86 => vifast_pte::x86_64::encode_leaf(pa, rights),
+                PteFormat::AArch => vifast_pte::aarch64::encode_leaf(pa, rights),
+            }
+        }
+        fn encode_table(&self, pa: u64) -> u64 {
+            match self.0 {
+                PteFormat::Riscv => vifast_pte::riscv::encode_table(pa),
+                PteFormat::X86 => vifast_pte::x86_64::encode_table(pa),
+                PteFormat::AArch => vifast_pte::aarch64::encode_table(pa),
+            }
+        }
+        fn decode(&self, pte: u64) -> Pte {
+            match self.0 {
+                PteFormat::Riscv => vifast_pte::riscv::decode(pte),
+                PteFormat::X86 => vifast_pte::x86_64::decode(pte),
+                PteFormat::AArch => vifast_pte::aarch64::decode(pte),
+            }
+        }
+        fn decode_at(&self, pte: u64, level: usize) -> Pte {
+            match self.0 {
+                PteFormat::Riscv => vifast_pte::riscv::decode_at(pte, level),
+                PteFormat::X86 => vifast_pte::x86_64::decode_at(pte, level),
+                PteFormat::AArch => vifast_pte::aarch64::decode_at(pte, level),
+            }
+        }
+        fn leaf_is_user(&self, pte: u64) -> bool {
+            match self.0 {
+                PteFormat::Riscv => vifast_pte::riscv::is_user(pte),
+                PteFormat::X86 => vifast_pte::x86_64::is_user(pte),
+                PteFormat::AArch => vifast_pte::aarch64::is_user(pte),
+            }
+        }
+        fn user_va_range(&self) -> (u64, u64) {
+            (vifast_pte::USER_VA_START, vifast_pte::USER_VA_END)
+        }
+        fn vspace_pages(&self) -> usize {
+            match self.0 {
+                PteFormat::Riscv => 1,
+                PteFormat::X86 | PteFormat::AArch => 2,
+            }
+        }
+        fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {
+            let base = ((pa >> 12) as usize) * 512;
+            let mut mem = PTE_FAKE_MEM.lock().unwrap();
+            for (index, byte) in bytes.iter().enumerate() {
+                let byte_index = base * 8 + index;
+                let word = byte_index / 8;
+                let shift = (byte_index % 8) * 8;
+                if let Some(slot) = mem.get_mut(word) {
+                    *slot = (*slot & !(0xffu64 << shift)) | ((*byte as u64) << shift);
+                }
+            }
+        }
+        fn zero_frame(&self, pa: u64, size: usize) {
+            let base = ((pa >> 12) as usize) * 512;
+            let words = (size + 7) / 8;
+            if let Some(slice) = PTE_FAKE_MEM.lock().unwrap().get_mut(base..base + words) {
+                slice.fill(0);
+            }
+        }
+    }
+
+    fn reset_pte_fake() {
+        let mut mem = PTE_FAKE_MEM.lock().unwrap();
+        mem.clear();
+        mem.resize(8192, 0);
+    }
+
+    fn pte_ops(format: PteFormat) -> &'static dyn PageTableOps {
+        match format {
+            PteFormat::Riscv => &PTE_RISCV,
+            PteFormat::X86 => &PTE_X86,
+            PteFormat::AArch => &PTE_AARCH,
+        }
+    }
+
     fn set_map_range(start: u64, end: u64) {
         MAP_USER_START.store(start, std::sync::atomic::Ordering::SeqCst);
         MAP_USER_END.store(end, std::sync::atomic::Ordering::SeqCst);
@@ -4311,6 +4437,73 @@ mod tests {
         assert!(kernel.mapping_at(space_b, va).is_none());
         assert_eq!(FAKE_MEM.lock().unwrap()[4096 + 1], 0);
         assert_eq!(FAKE_MEM.lock().unwrap()[4608 + 1], 0);
+    }
+
+    #[test]
+    fn pte_fake_ops_cover_all_formats_and_reject_high_leaves() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        for format in [PteFormat::Riscv, PteFormat::X86, PteFormat::AArch] {
+            reset_pte_fake();
+            let ops = pte_ops(format);
+            let mut kernel = Kernel::new();
+            kernel.set_page_table_ops(ops);
+            let untyped = kernel
+                .create_untyped_with_limit(0x1000, 0xa000, 4096, 16)
+                .unwrap();
+            let layout = TaskLayout {
+                code_va: 0x10_0000_0000,
+                stack_va: 0x10_0000_1000,
+                stack_pages: 2,
+                data_va: 0x10_0000_a000,
+                data_pages: 1,
+            };
+            let vspace = kernel.build_task_space(untyped, b"PTE", layout).unwrap();
+            let root = kernel.root().unwrap();
+            kernel.set_tcb_vspace(root, vspace).unwrap();
+            assert!(kernel
+                .validate_user_range(root, layout.code_va, 1, false)
+                .is_ok());
+            assert_eq!(
+                kernel.validate_user_range(root, layout.code_va, 1, true),
+                Err(KError::InvalidArg)
+            );
+            assert!(kernel
+                .validate_user_range(root, layout.stack_va, 1, true)
+                .is_ok());
+            assert!(kernel
+                .validate_user_range(root, layout.data_va, 1, true)
+                .is_ok());
+            assert_eq!(
+                kernel.validate_user_range(root, 0x8000_0000, 1, false),
+                Err(KError::InvalidArg)
+            );
+            kernel.unmap_frame(vspace, layout.code_va).unwrap();
+            assert_eq!(
+                kernel.validate_user_range(root, layout.code_va, 1, false),
+                Err(KError::InvalidArg)
+            );
+
+            // A user leaf above the final level is never accepted, even if
+            // it has the user bit and R/W rights.
+            reset_pte_fake();
+            let va = vifast_pte::USER_VA_START;
+            let (idx, pte) = match format {
+                PteFormat::Riscv => (
+                    vifast_pte::riscv::index(va, 0),
+                    ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE),
+                ),
+                PteFormat::X86 => (
+                    vifast_pte::x86_64::index(va, 0),
+                    ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE) | vifast_pte::x86_64::PS,
+                ),
+                PteFormat::AArch => (
+                    vifast_pte::aarch64::index(va, 0),
+                    ops.encode_leaf(0x9000, Rights::READ | Rights::WRITE) & !0b10,
+                ),
+            };
+            ops.write_pte(0, idx, pte);
+            assert!(!Kernel::user_leaf_ok(ops, 0, va, false));
+        }
     }
 
     #[test]

@@ -24,7 +24,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 44 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
+Hiện có 45 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -53,7 +53,8 @@ Hiện có 44 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 - retype VSpace cấp root + aux page, hai VSpace độc lập;
 - revoke bản copy Untyped không chạm object của cap gốc;
 - root revoke thu hồi cả object của cap con; delete cap bị từ chối khi còn con;
-- validate_user_range walk leaf user/R/W, cross-page và overflow;
+- validate_user_range walk leaf user/R/W, cross-page/high-leaf/overflow;
+- PteFakeOps dùng encoder/decoder thật của 3 format cho map/unmap/PageTableMap/build;
 - boot Untyped 64 KiB và build_task_space host test.
 - PageTableMap không thay entry 0 dùng chung;
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE

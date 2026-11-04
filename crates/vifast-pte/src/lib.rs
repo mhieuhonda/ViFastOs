@@ -332,6 +332,28 @@ mod tests {
         let arm_rw = aarch64::encode_leaf(0x3000, Rights::READ | Rights::WRITE);
         assert!(arm_rw & aarch64::UXN != 0);
         assert!(arm_rw & aarch64::AP_USER_RW != 0);
+        match aarch64::decode_at(arm_rw, 3) {
+            Pte::Leaf(pa, rights) => {
+                assert_eq!(pa, 0x3000);
+                assert!(rights.contains(Rights::READ));
+                assert!(rights.contains(Rights::WRITE));
+                assert!(!rights.contains(Rights::EXEC));
+            }
+            _ => panic!("not AArch64 RW page"),
+        }
+        assert!(aarch64::is_user(arm_rw));
+        let arm_ro_x = aarch64::encode_leaf(0x4000, Rights::READ | Rights::EXEC);
+        match aarch64::decode_at(arm_ro_x, 3) {
+            Pte::Leaf(pa, rights) => {
+                assert_eq!(pa, 0x4000);
+                assert!(rights.contains(Rights::READ));
+                assert!(!rights.contains(Rights::WRITE));
+                assert!(rights.contains(Rights::EXEC));
+            }
+            _ => panic!("not AArch64 RX page"),
+        }
+        let arm_kernel = arm_rw & !(0b11 << 6);
+        assert!(!aarch64::is_user(arm_kernel));
     }
 
     #[test]
