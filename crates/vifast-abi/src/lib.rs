@@ -56,6 +56,13 @@ pub mod user_layout {
     pub const ROOT_BOOTINFO_VA: usize = ROOT_ELF_STACK_TOP + 0x1000;
     const _: () = assert!(ROOT_BOOTINFO_VA >= ROOT_ELF_STACK_TOP);
     const _: () = assert!(ROOT_BOOTINFO_VA >= ROOT_ELF_STACK_GUARD);
+    /// Read-only staging window where the runtime maps boot-module ELF bytes
+    /// for the root loader.  The two modules are separated by 64 KiB.
+    pub const ROOT_MODULE_SERVER_VA: usize = ROOT_BOOTINFO_VA + 0x1000;
+    pub const ROOT_MODULE_CLIENT_VA: usize = ROOT_MODULE_SERVER_VA + 0x1_0000;
+    pub const ROOT_MODULE_END: usize = ROOT_MODULE_CLIENT_VA + 0x1_0000;
+    const _: () = assert!(ROOT_MODULE_SERVER_VA >= ROOT_BOOTINFO_VA);
+    const _: () = assert!(ROOT_MODULE_CLIENT_VA >= ROOT_MODULE_SERVER_VA);
 
     /// Fixed jump-table entries at the start of the bootstrap user image.
     pub const USER_ENTRY_SERVER: usize = CODE_VA;
@@ -111,6 +118,10 @@ pub struct BootInfo {
     pub user_code_count: u16,
     pub free_slot_start: u16,
     pub free_slot_end: u16,
+    pub server_elf_va: u64,
+    pub server_elf_len: u64,
+    pub client_elf_va: u64,
+    pub client_elf_len: u64,
 }
 const _: () = assert!(core::mem::size_of::<BootInfo>() <= 4096);
 

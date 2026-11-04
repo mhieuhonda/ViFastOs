@@ -68,6 +68,8 @@ unsafe fn check_loaded_image(image_handle: *mut c_void, system_table: *mut c_voi
 use vifast_runtime::{boot, PlatformInfo, UserImage};
 
 static ROOT_ELF: &[u8] = include_bytes!(env!("VIFAST_ROOT_ELF"));
+static SERVER_ELF: &[u8] = include_bytes!(env!("VIFAST_SERVER_ELF"));
+static CLIENT_ELF: &[u8] = include_bytes!(env!("VIFAST_CLIENT_ELF"));
 
 core::arch::global_asm!(
     include_str!("user.S"),
@@ -125,6 +127,8 @@ fn user_image() -> UserImage {
         entry_a,
         entry_b,
         root_elf: ROOT_ELF,
+        server_elf: SERVER_ELF,
+        client_elf: CLIENT_ELF,
     }
 }
 

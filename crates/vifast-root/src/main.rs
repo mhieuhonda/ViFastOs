@@ -32,8 +32,6 @@ const CLIENT_VSPACE_OK: &[u8] = b"CLIENT VSPACE OK\n";
 const FAULT_EP_OK: &[u8] = b"FAULT EP OK addr=0x";
 const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
 const MODULES_OK: &[u8] = b"RUST MODULES OK\n";
-static SERVER_ELF: &[u8] = include_bytes!(env!("VIFAST_SERVER_ELF"));
-static CLIENT_ELF: &[u8] = include_bytes!(env!("VIFAST_CLIENT_ELF"));
 const MODULE_WINDOW: u64 = 0x10_0000;
 #[cfg(target_arch = "riscv64")]
 const USER_ELF_MACHINE: u16 = 243;
@@ -207,6 +205,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         || info.user_code_count == 0
         || info.free_slot_start == 0
         || info.free_slot_start >= info.free_slot_end
+        || info.server_elf_va == 0
+        || info.server_elf_len == 0
+        || info.client_elf_va == 0
+        || info.client_elf_len == 0
     {
         panic!("invalid BootInfo slots");
     }
@@ -321,8 +323,20 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         &mut slots,
     );
 
-    let server_entry = load_module(data_untyped, server_vspace, SERVER_ELF, &mut slots);
-    let client_entry = load_module(data_untyped, client_vspace, CLIENT_ELF, &mut slots);
+    let server_bytes = unsafe {
+        core::slice::from_raw_parts(
+            info.server_elf_va as *const u8,
+            info.server_elf_len as usize,
+        )
+    };
+    let client_bytes = unsafe {
+        core::slice::from_raw_parts(
+            info.client_elf_va as *const u8,
+            info.client_elf_len as usize,
+        )
+    };
+    let server_entry = load_module(data_untyped, server_vspace, server_bytes, &mut slots);
+    let client_entry = load_module(data_untyped, client_vspace, client_bytes, &mut slots);
     write(MODULES_OK);
     write(CLIENT_VSPACE_OK);
 

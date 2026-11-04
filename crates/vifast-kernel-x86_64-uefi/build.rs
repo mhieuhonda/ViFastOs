@@ -1,6 +1,8 @@
 fn main() {
-    println!("cargo:rerun-if-env-changed=VIFAST_ROOT_ELF");
-    if let Ok(path) = std::env::var("VIFAST_ROOT_ELF") {
-        println!("cargo:rerun-if-changed={path}");
+    for key in ["VIFAST_ROOT_ELF", "VIFAST_SERVER_ELF", "VIFAST_CLIENT_ELF"] {
+        println!("cargo:rerun-if-env-changed={key}");
+        if let Ok(path) = std::env::var(key) {
+            println!("cargo:rerun-if-changed={path}");
+        }
     }
 }

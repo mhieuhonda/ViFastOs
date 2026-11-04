@@ -3572,9 +3572,13 @@ mod tests {
             user_code_count: 1,
             free_slot_start: 21,
             free_slot_end: 64,
+            server_elf_va: 0x1000_0000,
+            server_elf_len: 4096,
+            client_elf_va: 0x1000_2000,
+            client_elf_len: 4096,
         };
         let base = &info as *const BootInfo as usize;
-        assert_eq!(core::mem::size_of::<BootInfo>(), 32);
+        assert_eq!(core::mem::size_of::<BootInfo>(), 64);
         for (offset, field) in [
             (0usize, &info.magic as *const u64 as usize),
             (8, &info.version as *const u32 as usize),
@@ -3587,6 +3591,10 @@ mod tests {
             (26, &info.user_code_count as *const u16 as usize),
             (28, &info.free_slot_start as *const u16 as usize),
             (30, &info.free_slot_end as *const u16 as usize),
+            (32, &info.server_elf_va as *const u64 as usize),
+            (40, &info.server_elf_len as *const u64 as usize),
+            (48, &info.client_elf_va as *const u64 as usize),
+            (56, &info.client_elf_len as *const u64 as usize),
         ] {
             assert_eq!(field - base, offset);
         }

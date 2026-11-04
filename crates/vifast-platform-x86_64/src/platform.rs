@@ -838,6 +838,13 @@ impl Platform for X86Platform {
             && !user_range(
                 ptr,
                 out.len(),
+                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
+                vifast_abi::user_layout::ROOT_MODULE_END
+                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
+            )
+            && !user_range(
+                ptr,
+                out.len(),
                 vifast_abi::user_layout::IPC_BUF_SERVER_VA,
                 4096,
             )
@@ -875,6 +882,13 @@ impl Platform for X86Platform {
         }
         if !user_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
             && !user_range(ptr, input.len(), USER_DATA_VA, 4096)
+            && !user_range(
+                ptr,
+                input.len(),
+                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
+                vifast_abi::user_layout::ROOT_MODULE_END
+                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
+            )
             && !user_range(
                 ptr,
                 input.len(),

@@ -417,6 +417,13 @@ impl Platform for RiscvPlatform {
             || page_in_range(
                 ptr,
                 out.len(),
+                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
+                vifast_abi::user_layout::ROOT_MODULE_END
+                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
+            )
+            || page_in_range(
+                ptr,
+                out.len(),
                 vifast_abi::user_layout::IPC_BUF_SERVER_VA,
                 4096,
             )
@@ -453,6 +460,13 @@ impl Platform for RiscvPlatform {
         }
         if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
+            || page_in_range(
+                ptr,
+                input.len(),
+                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
+                vifast_abi::user_layout::ROOT_MODULE_END
+                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
+            )
             || page_in_range(
                 ptr,
                 input.len(),

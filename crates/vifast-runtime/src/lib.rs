@@ -39,6 +39,9 @@ pub struct UserImage {
     pub entry_b: usize,
     /// Root task ELF image, loaded into the root VSpace.
     pub root_elf: &'static [u8],
+    /// Server/client boot-module ELF images.
+    pub server_elf: &'static [u8],
+    pub client_elf: &'static [u8],
 }
 
 /// The complete architecture/platform contract used by the shared runtime.
@@ -174,6 +177,26 @@ fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
         pa,
         core::mem::offset_of!(BootInfo, free_slot_end),
         &info.free_slot_end.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, server_elf_va),
+        &info.server_elf_va.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, server_elf_len),
+        &info.server_elf_len.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, client_elf_va),
+        &info.client_elf_va.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, client_elf_len),
+        &info.client_elf_len.to_le_bytes(),
     );
 }
 
@@ -510,6 +533,54 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         }
     }
 
+    /* Stage boot-module ELF bytes into read-only frames in the root VSpace.
+    The runtime writes them through the kernel identity map; the root loader
+    then parses the slices and copies segments into child Frames. */
+    let module_pages = |bytes: &[u8]| (bytes.len() + A::PAGE_SIZE - 1) / A::PAGE_SIZE;
+    if image.server_elf.is_empty() || image.client_elf.is_empty() {
+        vifast_kernel::klog!(A, "BOOT MODULE EMPTY");
+        A::exit(1);
+    }
+    for (bytes, base) in [
+        (
+            image.server_elf,
+            vifast_abi::user_layout::ROOT_MODULE_SERVER_VA as u64,
+        ),
+        (
+            image.client_elf,
+            vifast_abi::user_layout::ROOT_MODULE_CLIENT_VA as u64,
+        ),
+    ] {
+        let pages = module_pages(bytes);
+        for page in 0..pages {
+            let Ok(frame) = kernel.retype(data_untyped, ObjType::Frame) else {
+                vifast_kernel::klog!(A, "BOOT MODULE FRAME FAILED");
+                A::exit(1);
+            };
+            let start = page * A::PAGE_SIZE;
+            let end = core::cmp::min(start + A::PAGE_SIZE, bytes.len());
+            if kernel
+                .copy_frame_bytes(frame, 0, &bytes[start..end])
+                .is_err()
+            {
+                vifast_kernel::klog!(A, "BOOT MODULE COPY FAILED");
+                A::exit(1);
+            }
+            if kernel
+                .map_frame(
+                    vspace,
+                    frame,
+                    base + (page * A::PAGE_SIZE) as u64,
+                    Rights::READ,
+                )
+                .is_err()
+            {
+                vifast_kernel::klog!(A, "BOOT MODULE MAP FAILED");
+                A::exit(1);
+            }
+        }
+    }
+
     let Ok(boot_info_frame) = kernel.retype(boot_untyped, ObjType::Frame) else {
         vifast_kernel::klog!(A, "BOOTINFO FRAME RETYPE FAILED");
         A::exit(1);
@@ -529,6 +600,10 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         user_code_count,
         free_slot_start,
         free_slot_end,
+        server_elf_va: vifast_abi::user_layout::ROOT_MODULE_SERVER_VA as u64,
+        server_elf_len: image.server_elf.len() as u64,
+        client_elf_va: vifast_abi::user_layout::ROOT_MODULE_CLIENT_VA as u64,
+        client_elf_len: image.client_elf.len() as u64,
     };
     write_bootinfo::<A>(boot_info_pa, &boot_info);
     if kernel
