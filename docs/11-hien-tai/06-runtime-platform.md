@@ -7,6 +7,7 @@ Nguồn: `crates/vifast-runtime/src/lib.rs`.
 `vifast-runtime` chứa logic dùng chung cho mọi port:
 
 - boot sequence;
+- Console trait (không phụ thuộc vifast-arch);
 - tạo duy nhất root TCB và giao VSpace/Untyped;
 - copy user image;
 - syscall action dispatch;
@@ -23,6 +24,7 @@ Các nhóm phương thức:
 ### Định danh và user layout
 
 ```rust
+pub trait Platform: Arch + vifast_kernel::console::Console {
 type Context: Copy + 'static;
 const USER_CODE_VA: usize;
 const USER_DATA_VA: usize;

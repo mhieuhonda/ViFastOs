@@ -187,6 +187,14 @@ impl Arch for Aarch64Platform {
     }
 }
 
+impl vifast_kernel::console::Console for Aarch64Platform {
+    const NAME: &'static str = Aarch64::NAME;
+
+    fn write_byte(byte: u8) {
+        Aarch64::putc(byte);
+    }
+}
+
 impl Platform for Aarch64Platform {
     type Context = TrapFrame;
 
@@ -266,6 +274,16 @@ impl Platform for Aarch64Platform {
 
     fn vspace_root() -> u64 {
         core::ptr::addr_of!(L0) as u64
+    }
+
+    fn zero_frame(pa: u64, size: usize) -> Result<(), KError> {
+        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
+            return Err(KError::Alignment);
+        }
+        unsafe {
+            core::ptr::write_bytes(pa as *mut u8, 0, size);
+        }
+        Ok(())
     }
 
     fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
@@ -443,11 +461,31 @@ impl Platform for Aarch64Platform {
             spins += 1;
         }
         if SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            vifast_kernel::klog!(Aarch64, "SMP OK (harts=2, psci={})", result as i64);
+            vifast_kernel::klog!(Aarch64Platform, "SMP OK (harts=2, psci={})", result as i64);
         } else {
-            vifast_kernel::klog!(Aarch64, "SMP SKIP (psci={})", result as i64);
+            vifast_kernel::klog!(Aarch64Platform, "SMP SKIP (psci={})", result as i64);
         }
     }
+}
+
+#[no_mangle]
+extern "C" fn aarch64_kernel_fault() -> ! {
+    let esr: u64;
+    let elr: u64;
+    let far: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, esr_el1", out(reg) esr);
+        core::arch::asm!("mrs {}, elr_el1", out(reg) elr);
+        core::arch::asm!("mrs {}, far_el1", out(reg) far);
+    }
+    vifast_kernel::klog!(
+        Aarch64Platform,
+        "KERNEL EXCEPTION ESR={:#x} ELR={:#x} FAR={:#x}",
+        esr,
+        elr,
+        far
+    );
+    Aarch64::exit(1)
 }
 
 extern "C" {

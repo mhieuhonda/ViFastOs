@@ -115,6 +115,7 @@ SELFTEST PASS (ipc_tx=3 ipc_rx=2 ntfn=2 ctx=0 ticks=0)
 entering user mode ...
 Fault
 USER FAULT ...
+Zero OK
 Server
 Mapped
 ViFastOS ramfs
@@ -240,12 +241,13 @@ bare-metal này.
 
 - Một kernel **nguồn** cho nhiều arch, nhưng **mỗi arch một binary**. Không có
   binary duy nhất chạy x86_64 + ARM + RISC-V.
-- `vifast-kernel` là `#![forbid(unsafe_code)]`; `unsafe` chỉ nằm trong arch/boot.
+- `vifast-kernel` là `#![forbid(unsafe_code)]` và không còn dependency
+  `vifast-arch`; `unsafe` chỉ nằm trong arch/boot.
 - Fixed-capacity object table (32 object, 8 TCB, 12 cap/TCB) để chứng minh lõi
   không cần heap. Đây là reference implementation, chưa phải allocator cuối.
 - Stack kernel hiện đặt 256 KiB trong linker script cho RISC-V/AArch64 vì
-  `Kernel` + format machinery cần nhiều hơn 64 KiB. RISC-V đang trap trên user
-  stack; AArch64 dùng `SP_EL1`, x86_64 dùng `TSS.RSP0`. Stack per-thread vẫn là
+  `Kernel` + format machinery cần nhiều hơn 64 KiB. RISC-V dùng trap stack qua
+  `sscratch`; AArch64 dùng `SP_EL1`, x86_64 dùng `TSS.RSP0`. Stack per-thread vẫn là
   việc tiếp theo.
 - x86_64 tự dựng PML4 và page table 4 KiB cho user; kernel/driver vẫn chạy
   identity map 0..1 GiB. Chưa có AP/SMP scheduler.

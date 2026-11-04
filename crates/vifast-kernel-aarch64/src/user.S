@@ -207,6 +207,42 @@ user_thread_b:
     mov x8, #38
     mov x0, x22
     svc #0
+    mov w20, #0xdead
+    str w20, [x19]
+    mov x8, #26
+    mov x0, #2
+    mov x1, x19
+    svc #0
+    mov x8, #14
+    mov x0, #3
+    svc #0
+    mov x8, #9
+    mov x0, #3
+    mov x1, #5
+    mov x2, #4
+    svc #0
+    mov x8, #25
+    mov x0, #2
+    mov x1, #4
+    mov x2, #0x10
+    lsl x2, x2, #32
+    add x2, x2, #0xa000
+    mov x3, #3
+    svc #0
+    mov x19, x1
+    ldr w20, [x19]
+    cbz w20, 7f
+    mov x8, #32
+    adr x0, user_zero_bad
+    mov x1, #9
+    svc #0
+    b 8f
+7:
+    mov x8, #32
+    adr x0, user_zero_ok
+    mov x1, #8
+    svc #0
+8:
     mov x8, #26
     mov x0, #2
     mov x1, x19
@@ -272,6 +308,10 @@ user_cap_bad:
     .asciz "Cap BAD\n"
 user_fault_msg:
     .asciz "Fault\n"
+user_zero_ok:
+    .asciz "Zero OK\n"
+user_zero_bad:
+    .asciz "Zero BAD\n"
     .balign 8
 user_mapped_text:
     .ascii "Mapped\n\0"

@@ -43,7 +43,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 17/17 PASS
+- cargo test -p vifast-kernel: 19/19 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -56,7 +56,7 @@ Output tiêu biểu:
 - SELFTEST PASS
 - SMP OK (harts=2) trên RISC-V/AArch64
 - SMP SKIP (x86 AP bootstrap pending) trên x86_64
-- "Fault", "USER FAULT", "Server", "Mapped", "ViFastOS ramfs",
+- "Fault", "USER FAULT", "Zero OK", "Server", "Mapped", "ViFastOS ramfs",
   "ViFastOS write", "Client", "Cap OK", "Reply OK", "PREEMPT OK"
 - user layout chung: code 0x0000_0010_0000_0000 (64 GiB)
 
@@ -92,7 +92,7 @@ Sơ đồ lớp:
           OpenSBI           QEMU virt        OVMF/UEFI
 
 Quan hệ phụ thuộc chính:
-- vifast-kernel -> vifast-arch (chỉ trait, không phần cứng)
+- vifast-kernel -> vifast-abi (không còn phụ thuộc vifast-arch)
 - vifast-runtime -> vifast-kernel + vifast-arch
 - vifast-user -> vifast-abi (syscall wrappers + layout)
 - vifast-platform-* -> vifast-runtime + vifast-kernel + vifast-arch-*
@@ -195,7 +195,7 @@ vifast-platform-x86_64
 - Files: platform.rs, trap.S.
 
 vifast-kernel-riscv64 / aarch64 / x86_64-uefi
-- Binary rất mỏng, hiện khoảng 48-49 dòng main.rs.
+- Binary rất mỏng, hiện khoảng 51-52 dòng main.rs.
 - Chỉ còn:
   - global_asm boot.S (RISC-V/AArch64);
   - global_asm user.S;
@@ -212,15 +212,18 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: khoảng 423 dòng
-- AArch64: khoảng 488 dòng
-- x86_64: khoảng 610 dòng
+- RISC-V: 447 dòng
+- AArch64: 526 dòng
+- x86_64: 634 dòng
 
 runtime:
-- khoảng 440 dòng
+- 464 dòng
 
 vifast-user:
-- khoảng 203 dòng
+- khoảng 208 dòng
+
+vifast-kernel:
+- 2368 dòng, không còn dependency vifast-arch
 
 arch primitive:
 - RISC-V: khoảng 86 dòng
@@ -289,7 +292,7 @@ Giới hạn cố định:
 - MAX_FILES = 8
 
 Object:
-- Object { gen: u32, kind: Kind }
+- Object { gen: u32, kind: Kind, owner: Option<ObjRef> }
 - ObjRef { index: u8, gen: u32 }
 - Generation tăng khi slot tái sử dụng; ObjRef cũ bị từ chối.
 
@@ -336,7 +339,8 @@ Untyped/retype:
 - Hết Untyped trả OutOfMemory.
 - Revoke cap Untyped xoá descendant, destroy object thật (Frame unmap, TCB detach,
   Endpoint/Notification wake lỗi), rồi reset bump/objects.
-- Chưa có free/destroy object/frame.
+- Revoke cap không phải Untyped chỉ xoá descendant; object gốc vẫn sống.
+- Chưa có free/destroy object/frame ngoài đường revoke Untyped.
 
 8. IPC VÀ SCHEDULER
 -------------------
@@ -591,7 +595,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 17 test:
+Host test hiện có 19 test:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -609,6 +613,8 @@ Host test hiện có 17 test:
 - TcbConfigure entry/stack validation
 - TcbResume từ chối TCB chưa configure
 - Yield thật qua switch_blocked
+- checked_add/overflow + buffer vắt qua hai page khác quyền
+- self-revoke Untyped bị từ chối khi TCB hiện tại là con
 
 QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
@@ -627,6 +633,7 @@ QEMU test:
 - ViFastOS write
 - Reply OK
 - USER FAULT
+- Zero OK
 - RISC-V/AArch64 phải có SMP OK
 - x86_64 chấp nhận SMP SKIP
 
@@ -662,7 +669,12 @@ Exit code:
   không panic.
 - `test-exit` là feature của binary test; runtime production không còn exit cứng
   sau 20 tick.
-- Host test hiện có 17 test.
+- Kernel fault từ S-mode/current EL/kernel error-code panic; user fault vẫn suspend.
+- Retype Frame zero page qua Platform::zero_frame; user test ghi/revoke/retype/đọc = Zero OK.
+- Untyped revoke có preflight giới hạn 16 unmap, tránh tràn UserAction.
+- Runtime assert tổng max_objects Untyped + object runtime <= 32.
+- vifast-kernel bỏ dependency vifast-arch; dùng Console trait.
+- Host test hiện có 19 test.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -685,6 +697,8 @@ Exit code:
 - Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
+- Revoke Untyped chỉ mang tối đa 16 unmap trong một report; cần dynamic vector khi nhiều VSpace.
+- Server fault khi client BlockedReply sẽ làm client chờ vô hạn; fault endpoint sẽ xử lý.
 
 17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
 ----------------------------------
@@ -739,6 +753,16 @@ E. Desktop / Space
 8. Fault endpoint gửi fault message và block thread; không panic kernel.
 9. Dùng ELF loader thay assembly nhúng sau root task.
 10. Gom unsafe vào wrapper nhỏ: MMIO, CSR/MSR, PTE.
+11. 3b: kernel mapping copy entry cấp cao (RISC-V/x86) hoặc TTBR1 (AArch64);
+    đánh dấu Global.
+12. 3b: context giữ VSpace root; switch satp/TTBR0/CR3; flush TLB user.
+13. 3b: bỏ code/stack window; code/stack là mapping thường; TcbConfigure không
+    kiểm tra entry/stack, fault sẽ suspend.
+14. 3b: ảnh task là boot module page-aligned + Frame cap; BootInfo frame map
+    read-only.
+15. 3b: Frame giữ nhiều mapping hoặc mỗi mapping một cap; revoke unmap mọi nơi.
+16. 3b: PageTableMap + retype VSpace/PageTable; walk generic, platform chỉ
+    encode/decode PTE; revoke VSpace trả page table về Untyped.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

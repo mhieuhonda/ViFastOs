@@ -7,6 +7,5 @@ license.workspace = true
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
-vifast-arch = { path = "../vifast-arch" }
 
 [dev-dependencies]

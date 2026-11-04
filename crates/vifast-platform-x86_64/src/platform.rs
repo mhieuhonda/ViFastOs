@@ -413,6 +413,14 @@ impl Arch for X86Platform {
     }
 }
 
+impl vifast_kernel::console::Console for X86Platform {
+    const NAME: &'static str = X86_64::NAME;
+
+    fn write_byte(byte: u8) {
+        X86_64::putc(byte);
+    }
+}
+
 impl Platform for X86Platform {
     type Context = TrapFrame;
 
@@ -469,6 +477,16 @@ impl Platform for X86Platform {
 
     fn vspace_root() -> u64 {
         core::ptr::addr_of!(PML4) as u64
+    }
+
+    fn zero_frame(pa: u64, size: usize) -> Result<(), KError> {
+        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
+            return Err(KError::Alignment);
+        }
+        unsafe {
+            core::ptr::write_bytes(pa as *mut u8, 0, size);
+        }
+        Ok(())
     }
 
     fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
@@ -579,17 +597,23 @@ extern "C" {
 }
 
 #[no_mangle]
-extern "C" fn x86_page_fault(_frame: *const u64) -> ! {
+extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
     let cr2: u64;
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
     }
-    if <X86Platform as Platform>::kernel().current().is_none() {
-        vifast_kernel::klog!(X86_64, "KERNEL PAGE FAULT cr2={:#x}", cr2);
+    /* error bit 2 is U/S: 1 means user mode, 0 means kernel mode. */
+    if error & 0x4 == 0 {
+        vifast_kernel::klog!(
+            X86Platform,
+            "KERNEL PAGE FAULT cr2={:#x} err={:#x}",
+            cr2,
+            error
+        );
         X86_64::exit(1);
     }
     let mut context = TrapFrame::empty();
-    vifast_runtime::fault::suspend::<X86Platform>(&mut context, 0xe, cr2);
+    vifast_runtime::fault::suspend::<X86Platform>(&mut context, error, cr2);
     <X86Platform as Platform>::enter_user(&context);
 }
 

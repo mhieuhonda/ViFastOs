@@ -201,6 +201,41 @@ user_thread_b:
     mov rax, 38
     mov rdi, r15
     int 0x80
+    mov eax, 0xdead
+    mov [r12], eax
+    mov rax, 26
+    mov rdi, 2
+    mov rsi, r12
+    int 0x80
+    mov rax, 14
+    mov rdi, 3
+    int 0x80
+    mov rax, 9
+    mov rdi, 3
+    mov rsi, 5
+    mov rdx, 4
+    int 0x80
+    mov rax, 25
+    mov rdi, 2
+    mov rsi, 4
+    movabs rdx, 0x100000a000
+    mov rcx, 3
+    int 0x80
+    mov r12, rdi
+    mov eax, [r12]
+    test eax, eax
+    jnz 7f
+    mov rax, 32
+    lea rdi, [rip + user_zero_ok]
+    mov rsi, 8
+    int 0x80
+    jmp 8f
+7:
+    mov rax, 32
+    lea rdi, [rip + user_zero_bad]
+    mov rsi, 9
+    int 0x80
+8:
     mov rax, 26
     mov rdi, 2
     mov rsi, r12
@@ -268,6 +303,10 @@ user_cap_bad:
     .asciz "Cap BAD\n"
 user_fault_msg:
     .asciz "Fault\n"
+user_zero_ok:
+    .asciz "Zero OK\n"
+user_zero_bad:
+    .asciz "Zero BAD\n"
     .balign 8
 user_mapped_text:
     .ascii "Mapped\n\0"

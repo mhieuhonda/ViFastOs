@@ -71,7 +71,7 @@ nếu không có VM/emulation. Vì vậy:
 
 ## 4. Những gì đã kiểm chứng
 
-- `cargo test -p vifast-kernel`: 17 test portable trên host.
+- `cargo test -p vifast-kernel`: 19 test portable trên host.
 - `cargo test -p vifast-user`: wrapper compile.
 - QEMU RISC-V64 (`-smp 2`): self-test + U-mode IPC + frame map/unmap + SMP
   bootstrap + timer preemption.
@@ -81,7 +81,7 @@ nếu không có VM/emulation. Vì vậy:
   AP bring-up chưa có.
 - `scripts/test-qemu.py` chạy lặp lại và kiểm tra `SELFTEST PASS`, banner,
   `Server`, `Mapped`, `ViFastOS ramfs`, `ViFastOS write`, `Client`, `Fault`,
-  `USER FAULT`, `Cap OK`, `Reply OK`, `PREEMPT OK`.
+  `USER FAULT`, `Zero OK`, `Cap OK`, `Reply OK`, `PREEMPT OK`.
 
 ## 5. Những gì cần thêm để thành OS
 

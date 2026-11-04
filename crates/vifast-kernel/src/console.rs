@@ -1,34 +1,40 @@
 //! Early console formatting without `alloc`.
+//!
+//! The kernel core does not depend on `vifast-arch`; a tiny `Console` trait
+//! keeps logging portable and lets tests use a host sink.
 
 use core::fmt::{self, Write};
 use core::marker::PhantomData;
 
-use vifast_arch::Arch;
+pub trait Console {
+    const NAME: &'static str;
+    fn write_byte(byte: u8);
+}
 
-struct Writer<A: Arch>(PhantomData<A>);
+struct Writer<C: Console>(PhantomData<C>);
 
-impl<A: Arch> Write for Writer<A> {
+impl<C: Console> Write for Writer<C> {
     fn write_str(&mut self, text: &str) -> fmt::Result {
         for byte in text.bytes() {
             if byte == b'\n' {
-                A::putc(b'\r');
+                C::write_byte(b'\r');
             }
-            A::putc(byte);
+            C::write_byte(byte);
         }
         Ok(())
     }
 }
 
-pub fn log<A: Arch>(args: fmt::Arguments<'_>) {
-    let mut writer = Writer::<A>(PhantomData);
+pub fn log<C: Console>(args: fmt::Arguments<'_>) {
+    let mut writer = Writer::<C>(PhantomData);
     let _ = writer.write_fmt(args);
-    A::putc(b'\r');
-    A::putc(b'\n');
+    C::write_byte(b'\r');
+    C::write_byte(b'\n');
 }
 
 #[macro_export]
 macro_rules! klog {
-    ($arch:ty, $($arg:tt)*) => {
-        $crate::console::log::<$arch>(format_args!($($arg)*))
+    ($console:ty, $($arg:tt)*) => {
+        $crate::console::log::<$console>(format_args!($($arg)*))
     };
 }

@@ -212,6 +212,42 @@ user_thread_b:
     li a7, 38
     mv a0, t4
     ecall
+    /* Write a pattern into the frame, then revoke/retype it.  The new
+       frame must be zeroed by the platform. */
+    li t4, 0xdead
+    sw t4, 0(t3)
+    li a7, 26
+    li a0, 2
+    mv a1, t3
+    ecall
+    li a7, 14
+    li a0, 3
+    ecall
+    li a7, 9
+    li a0, 3
+    li a1, 5
+    li a2, 4
+    ecall
+    li a7, 25
+    li a0, 2
+    li a1, 4
+    li a2, 0x100000a000
+    li a3, 3
+    ecall
+    mv t3, a1
+    lw t4, 0(t3)
+    bnez t4, 7f
+    li a7, 32
+    la a0, user_zero_ok
+    li a1, 8
+    ecall
+    j 8f
+7:
+    li a7, 32
+    la a0, user_zero_bad
+    li a1, 9
+    ecall
+8:
     li a7, 26
     li a0, 2
     mv a1, t3
@@ -286,5 +322,9 @@ user_cap_bad:
     .asciz "Cap BAD\n"
 user_fault_msg:
     .asciz "Fault\n"
+user_zero_ok:
+    .asciz "Zero OK\n"
+user_zero_bad:
+    .asciz "Zero BAD\n"
     .globl user_program_end
 user_program_end:

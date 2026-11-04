@@ -22,6 +22,8 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
    user mẫu.
 9. [09-testing.md](09-testing.md) — test host, QEMU và tiêu chí PASS.
 10. [10-vifast-user.md](10-vifast-user.md) — wrapper syscall và user layout chung.
+11. [11-phase-3b-decisions.md](11-phase-3b-decisions.md) — quyết định VSpace riêng,
+    TTBR1, BootInfo và PageTableMap.
 
 ## Bản đồ crate
 

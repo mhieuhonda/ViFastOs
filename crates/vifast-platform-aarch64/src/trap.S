@@ -73,6 +73,8 @@ vector_table:
     .endr
 
 unhandled:
+    /* Any current-EL or unsupported exception is a kernel bug. */
+    bl aarch64_kernel_fault
     wfi
     b unhandled
 

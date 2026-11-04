@@ -22,6 +22,7 @@ Mỗi object có:
 pub struct Object {
     pub gen: u32,
     pub kind: Kind,
+    pub owner: Option<ObjRef>, // Untyped đã tạo object
 }
 ```
 
@@ -83,6 +84,9 @@ descendant, giữ capability gốc. Nếu slot gốc là `Untyped`, kernel còn:
 - sau đó mới reset `bump = 0`, `objects = 0`.
 
 Độ sâu revoke được giới hạn bởi `MAX_OBJECTS * MAX_CAPS`.
+
+Với capability **không phải Untyped**, revoke chỉ xoá các capability con; object
+gốc vẫn sống. Object chỉ chết khi đường destroy/free tương ứng được gọi.
 
 ## 3. Untyped và retype
 

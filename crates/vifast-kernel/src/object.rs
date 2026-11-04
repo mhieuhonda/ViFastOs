@@ -435,6 +435,8 @@ impl Kind {
 pub struct Object {
     pub gen: u32,
     pub kind: Kind,
+    /// Untyped that owns this object, if it was created by retype.
+    pub owner: Option<ObjRef>,
 }
 
 impl Object {
@@ -442,6 +444,7 @@ impl Object {
         Object {
             gen: 0,
             kind: Kind::Free,
+            owner: None,
         }
     }
 

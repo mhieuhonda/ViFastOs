@@ -46,7 +46,8 @@ int80_entry:
     .globl pf_entry
 pf_entry:
     SAVE_REGS
-    mov rdi, rsp
+    mov rcx, rsp
+    mov rdx, [rsp + 120] # CPU error code, below saved registers
     call x86_page_fault
 1:
     hlt

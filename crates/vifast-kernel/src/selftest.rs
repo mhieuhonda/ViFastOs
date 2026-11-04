@@ -4,13 +4,13 @@
 //! started.  They are intentionally deterministic and allocation-free so the
 //! same code can run on the host, in QEMU and on real hardware.
 
+use crate::console::Console;
 use vifast_abi::*;
-use vifast_arch::Arch;
 
 use crate::object::{Cap, ObjRef};
 use crate::{Kernel, MAX_CAPS};
 
-pub fn run<A: Arch>(k: &mut Kernel) -> bool {
+pub fn run<A: Console>(k: &mut Kernel) -> bool {
     let mut passed = true;
 
     macro_rules! check {
@@ -388,7 +388,7 @@ pub fn run<A: Arch>(k: &mut Kernel) -> bool {
     passed
 }
 
-fn fail<A: Arch>(_passed: bool, reason: &str) -> bool {
+fn fail<A: Console>(_passed: bool, reason: &str) -> bool {
     crate::klog!(A, "[FAIL] {}", reason);
     false
 }

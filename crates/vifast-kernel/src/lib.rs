@@ -19,7 +19,6 @@ pub mod object;
 pub mod selftest;
 
 use vifast_abi::*;
-use vifast_arch::{Arch, BootInfo};
 
 pub use object::*;
 
@@ -43,6 +42,14 @@ pub enum UserAction {
     Debug {
         ptr: u64,
         len: u64,
+    },
+    /// A Frame was retyped.  The platform must zero the physical page before
+    /// returning success; otherwise a revoked/retyped frame could leak old
+    /// task data.
+    FrameRetyped {
+        dest: u64,
+        pa: u64,
+        size: u64,
     },
     /// Map `pa` at `va` in a user address space.  The architecture handler
     /// updates the page table, flushes the TLB and returns the chosen VA in
@@ -96,7 +103,7 @@ pub enum UserAction {
     Exit,
 }
 
-pub const MAX_REVOKE_UNMAPS: usize = 512;
+pub const MAX_REVOKE_UNMAPS: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RevokeUnmap {
@@ -123,6 +130,15 @@ impl RevokeReport {
     }
 
     fn add_unmap(&mut self, root: u64, va: u64) {
+        if self
+            .unmaps
+            .iter()
+            .take(self.unmap_count)
+            .flatten()
+            .any(|existing| existing.root == root && existing.va == va)
+        {
+            return;
+        }
         if self.unmap_count < MAX_REVOKE_UNMAPS {
             self.unmaps[self.unmap_count] = Some(RevokeUnmap { root, va });
             self.unmap_count += 1;
@@ -186,12 +202,17 @@ impl Kernel {
     }
 
     fn alloc(&mut self, kind: Kind) -> Option<ObjRef> {
+        self.alloc_owned(kind, None)
+    }
+
+    fn alloc_owned(&mut self, kind: Kind, owner: Option<ObjRef>) -> Option<ObjRef> {
         for i in 0..MAX_OBJECTS {
             if self.objs[i].is_free() {
                 let gen = self.objs[i].gen.wrapping_add(1);
                 let gen = if gen == 0 { 1 } else { gen };
                 self.objs[i].gen = gen;
                 self.objs[i].kind = kind;
+                self.objs[i].owner = owner;
                 return Some(ObjRef {
                     index: i as u8,
                     gen,
@@ -518,7 +539,9 @@ impl Kernel {
         } else {
             kind
         };
-        let object = self.alloc(kind).ok_or(KError::OutOfMemory)?;
+        let object = self
+            .alloc_owned(kind, Some(untyped))
+            .ok_or(KError::OutOfMemory)?;
         let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
         region.bump = consumed;
         region.objects = objects + 1;
@@ -971,6 +994,7 @@ impl Kernel {
         self.remove_caps_to(obj);
         if let Some(object) = self.get_mut(obj) {
             object.kind = Kind::Free;
+            object.owner = None;
             let gen = object.gen.wrapping_add(1);
             object.gen = if gen == 0 { 1 } else { gen };
         }
@@ -983,6 +1007,52 @@ impl Kernel {
     pub fn revoke_cap(&mut self, tcb: ObjRef, slot: u8) -> KResult<usize> {
         self.revoke_cap_with_report(tcb, slot)
             .map(|report| report.caps_removed)
+    }
+
+    fn revoke_unmap_count(&self, objects: &[ObjRef], count: usize) -> usize {
+        let mut seen = [None; MAX_REVOKE_UNMAPS];
+        let mut total = 0usize;
+        let mut add = |root: u64, va: u64| {
+            if seen[..total]
+                .iter()
+                .flatten()
+                .any(|(r, v)| *r == root && *v == va)
+            {
+                return;
+            }
+            if total < seen.len() {
+                seen[total] = Some((root, va));
+            }
+            total += 1;
+        };
+        for object in objects.iter().take(count) {
+            match self.get(*object).map(|object| object.kind) {
+                Some(Kind::VSpace(space)) => {
+                    for mapping in space.mappings.iter().flatten() {
+                        add(space.root, mapping.va);
+                    }
+                }
+                Some(Kind::Frame(frame)) => {
+                    for i in 0..MAX_OBJECTS {
+                        let r = ObjRef {
+                            index: i as u8,
+                            gen: self.objs[i].gen,
+                        };
+                        if let Some(space) = self.vspace(r) {
+                            for mapping in space.mappings.iter().flatten() {
+                                if mapping.pa >= frame.pa as u64
+                                    && mapping.pa < frame.pa.saturating_add(frame.size) as u64
+                                {
+                                    add(space.root, mapping.va);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        total
     }
 
     pub fn revoke_cap_with_report(&mut self, tcb: ObjRef, slot: u8) -> KResult<RevokeReport> {
@@ -1020,6 +1090,47 @@ impl Kernel {
             }
         }
 
+        if target_cap.ty == ObjType::Untyped {
+            for i in 0..MAX_OBJECTS {
+                if self.objs[i].owner == Some(target_cap.obj) {
+                    let r = ObjRef {
+                        index: i as u8,
+                        gen: self.objs[i].gen,
+                    };
+                    if !objects[..object_count].contains(&r) && object_count < objects.len() {
+                        objects[object_count] = r;
+                        object_count += 1;
+                    }
+                }
+            }
+            // Also collect capabilities to all object-table children, even
+            // if they were derived through a different copy of the Untyped.
+            for i in 0..MAX_OBJECTS {
+                let r = ObjRef {
+                    index: i as u8,
+                    gen: self.objs[i].gen,
+                };
+                if let Some(table) = self.tcb(r) {
+                    for s in 1..MAX_CAPS {
+                        if let Some(cap) = table.cspace[s] {
+                            if objects[..object_count].contains(&cap.obj) {
+                                let addr = SlotAddr {
+                                    tcb: r,
+                                    slot: s as u8,
+                                };
+                                if !victims[..victim_count].contains(&addr)
+                                    && victim_count < victims.len()
+                                {
+                                    victims[victim_count] = addr;
+                                    victim_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let mut report = RevokeReport::empty();
         report.caps_removed = victim_count;
 
@@ -1032,6 +1143,9 @@ impl Kernel {
 
         if objects[..object_count].contains(&self.current.unwrap_or(ObjRef::invalid())) {
             return Err(KError::IllegalOperation);
+        }
+        if self.revoke_unmap_count(&objects, object_count) > MAX_REVOKE_UNMAPS {
+            return Err(KError::OutOfMemory);
         }
         for victim in victims.iter().take(victim_count) {
             let _ = self.delete_cap(victim.tcb, victim.slot);
@@ -1414,6 +1528,19 @@ impl Kernel {
                     slot: untyped_slot,
                 });
                 match self.install_cap(tcb, dest, cap) {
+                    Ok(()) if ty == ObjType::Frame => {
+                        let Some(frame) = self.frame(object) else {
+                            return UserAction::Return {
+                                value: 0,
+                                error: KError::ObjectDestroyed,
+                            };
+                        };
+                        UserAction::FrameRetyped {
+                            dest: dest as u64,
+                            pa: frame.pa as u64,
+                            size: frame.size as u64,
+                        }
+                    }
                     Ok(()) => UserAction::Return {
                         value: dest as u64,
                         error: KError::Ok,
@@ -1674,67 +1801,18 @@ fn message_action(error: KError, value: u64, msg: &Message) -> UserAction {
     }
 }
 
-/// Entry point shared by all architecture ports.
-pub fn boot<A: Arch>(info: BootInfo) -> ! {
-    A::init();
-    klog!(A, "ViFastOS booting on {}", A::NAME);
-    klog!(
-        A,
-        "boot: hart={} dtb={:#x} ram={:#x}+{:#x}",
-        info.hartid,
-        info.dtb,
-        info.memory_base,
-        info.memory_size
-    );
-    let mut kernel = Kernel::new();
-    let ok = selftest::run::<A>(&mut kernel);
-    if ok {
-        let stats = kernel.stats();
-        klog!(
-            A,
-            "SELFTEST PASS (ipc_tx={} ipc_rx={} ntfn={} ctx={} ticks={})",
-            stats.ipc_sent,
-            stats.ipc_received,
-            stats.notifications,
-            stats.context_switches,
-            stats.ticks
-        );
-        A::exit(0)
-    } else {
-        klog!(A, "SELFTEST FAIL");
-        A::exit(1)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     struct TestArch;
 
-    impl Arch for TestArch {
+    impl crate::console::Console for TestArch {
         const NAME: &'static str = "test";
 
-        fn init() {}
-        fn putc(byte: u8) {
+        fn write_byte(byte: u8) {
             use std::io::Write;
             let _ = std::io::stdout().write_all(&[byte]);
-        }
-        fn now() -> u64 {
-            0
-        }
-        fn irq_disable() {}
-        fn irq_enable() {}
-        fn send_ipi(_: usize) {}
-        fn halt() -> ! {
-            loop {
-                core::hint::spin_loop();
-            }
-        }
-        fn exit(_: u8) -> ! {
-            loop {
-                core::hint::spin_loop();
-            }
         }
     }
 
@@ -1966,6 +2044,43 @@ mod tests {
     }
 
     #[test]
+    fn revoke_untyped_refuses_to_destroy_the_current_tcb() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x500_0000, 4096, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Tcb as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok
+            }
+        );
+        let child = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        assert!(kernel.copy_cap(root, 1, child, 1, Rights::ALL, 0).is_ok());
+        kernel.enqueue(child);
+        assert_eq!(kernel.pick(), Some(child));
+        assert_eq!(
+            kernel.revoke_cap_with_report(child, 1).err(),
+            Some(KError::IllegalOperation)
+        );
+        assert!(kernel.get(child).is_some());
+    }
+
+    #[test]
     fn cap_copy_preserves_untyped_parent_chain() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
@@ -2021,9 +2136,10 @@ mod tests {
                 0,
                 0
             ),
-            UserAction::Return {
-                value: 2,
-                error: KError::Ok
+            UserAction::FrameRetyped {
+                dest: 2,
+                pa: 0x100_0000,
+                size: 4096
             }
         );
         let frame = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
@@ -2039,15 +2155,22 @@ mod tests {
                 0x8000,
             )
             .unwrap();
+        let space2 = kernel
+            .create_vspace_with_page_size(0x2000, 0x5000_a000, 0x1000, 0x1000)
+            .unwrap();
         let mapping = kernel
             .map_frame(space, frame, 0, Rights::READ | Rights::WRITE)
+            .unwrap();
+        let mapping2 = kernel
+            .map_frame(space2, frame, 0, Rights::READ | Rights::WRITE)
             .unwrap();
 
         let report = kernel.revoke_cap_with_report(root, 1).unwrap();
         assert_eq!(report.objects_destroyed, 1);
-        assert_eq!(report.unmap_count, 1);
+        assert_eq!(report.unmap_count, 2);
         assert!(kernel.get(frame).is_none());
         assert!(kernel.mapping_at(space, mapping.va).is_none());
+        assert!(kernel.mapping_at(space2, mapping2.va).is_none());
 
         assert_eq!(
             kernel.user_syscall(
@@ -2060,9 +2183,10 @@ mod tests {
                 0,
                 0
             ),
-            UserAction::Return {
-                value: 2,
-                error: KError::Ok
+            UserAction::FrameRetyped {
+                dest: 2,
+                pa: 0x100_0000,
+                size: 4096
             }
         );
         let replacement = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
@@ -2105,6 +2229,27 @@ mod tests {
         assert_eq!(report.objects_destroyed, 1);
         assert!(kernel.get(child).is_none());
         assert!(kernel.endpoint(endpoint).unwrap().recv.is_empty());
+    }
+
+    #[test]
+    fn user_range_rejects_overflow_and_cross_page_write() {
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_vspace_with_page_size(0x1000, 0x4000_a000, 0x2000, 0x1000)
+            .unwrap();
+        let first = kernel.create_frame(0x9000, 4096).unwrap();
+        let second = kernel.create_frame(0xa000, 4096).unwrap();
+        kernel
+            .map_frame(space, first, 0, Rights::READ | Rights::WRITE)
+            .unwrap();
+        kernel.map_frame(space, second, 0, Rights::READ).unwrap();
+        assert!(space_validate(space, &kernel, 0x4000_a000, 0x1800, false));
+        assert!(!space_validate(space, &kernel, 0x4000_a000, 0x1800, true));
+        assert!(!space_validate(space, &kernel, u64::MAX - 1, 4, false));
+    }
+
+    fn space_validate(space: ObjRef, kernel: &Kernel, va: u64, len: usize, write: bool) -> bool {
+        kernel.vspace(space).unwrap().validate_range(va, len, write)
     }
 
     #[test]
@@ -2215,6 +2360,7 @@ mod tests {
         kernel.copy_cap(root, 1, root, 2, Rights::ALL, 0).unwrap();
         kernel.copy_cap(root, 2, root, 3, Rights::ALL, 0).unwrap();
         assert_eq!(kernel.revoke_cap(root, 1).unwrap(), 2);
+        assert!(kernel.endpoint(endpoint).is_some());
         assert!(kernel.lookup_cap(root, 1, None, Rights::NONE).is_ok());
         assert!(kernel.lookup_cap(root, 2, None, Rights::NONE).is_err());
         assert!(kernel.lookup_cap(root, 3, None, Rights::NONE).is_err());

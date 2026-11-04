@@ -39,7 +39,6 @@ name = "vifast-kernel"
 version = "0.1.0"
 dependencies = [
  "vifast-abi",
- "vifast-arch",
 ]
 
 [[package]]

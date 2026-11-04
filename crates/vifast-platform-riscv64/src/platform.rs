@@ -146,6 +146,14 @@ impl Arch for RiscvPlatform {
     }
 }
 
+impl vifast_kernel::console::Console for RiscvPlatform {
+    const NAME: &'static str = Riscv64::NAME;
+
+    fn write_byte(byte: u8) {
+        Riscv64::putc(byte);
+    }
+}
+
 impl Platform for RiscvPlatform {
     type Context = TrapFrame;
 
@@ -219,6 +227,16 @@ impl Platform for RiscvPlatform {
 
     fn vspace_root() -> u64 {
         table_pa(core::ptr::addr_of!(ROOT))
+    }
+
+    fn zero_frame(pa: u64, size: usize) -> Result<(), KError> {
+        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
+            return Err(KError::Alignment);
+        }
+        unsafe {
+            core::ptr::write_bytes(pa as *mut u8, 0, size);
+        }
+        Ok(())
     }
 
     fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
@@ -372,9 +390,9 @@ impl Platform for RiscvPlatform {
             spins += 1;
         }
         if SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            vifast_kernel::klog!(Riscv64, "SMP OK (harts=2)");
+            vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2)");
         } else {
-            vifast_kernel::klog!(Riscv64, "SMP SKIP (hsm_start={:#x})", started);
+            vifast_kernel::klog!(RiscvPlatform, "SMP SKIP (hsm_start={:#x})", started);
         }
     }
 }
@@ -385,7 +403,7 @@ extern "C" fn riscv_kernel_trap() -> ! {
     unsafe {
         core::arch::asm!("csrr {}, scause", out(reg) cause);
     }
-    vifast_kernel::klog!(Riscv64, "KERNEL TRAP cause={:#x}", cause);
+    vifast_kernel::klog!(RiscvPlatform, "KERNEL TRAP cause={:#x}", cause);
     Riscv64::exit(1)
 }
 
@@ -402,6 +420,12 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         return;
     }
     if frame.scause != 8 {
+        /* SPP=1 means the fault came from S-mode.  That is a kernel bug,
+        not a user fault, and must not be suspended. */
+        if frame.sstatus & (1 << 8) != 0 {
+            vifast_kernel::klog!(RiscvPlatform, "KERNEL FAULT cause={:#x}", frame.scause);
+            Riscv64::exit(1);
+        }
         let stval: u64;
         unsafe {
             core::arch::asm!("csrr {}, stval", out(reg) stval);

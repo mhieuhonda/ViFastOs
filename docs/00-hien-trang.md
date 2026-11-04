@@ -23,6 +23,7 @@ sang bản bare-metal.
 | W^X user code/data | có (RX + NX stack) | có (RO+X, NX data) | có (RX + NX data) |
 | Chuyển capability + notification qua IPC | có | có | có |
 | User fault suspend (không panic) | có | có | có |
+| Frame retype zero page | có | có | có |
 | User gọi `Exit` | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
@@ -94,7 +95,7 @@ python3 scripts/test-qemu.py
 
 Kỳ vọng: cả 3 dòng `riscv64`, `aarch64`, `x86_64` đều `PASS`, mỗi log có
 `SELFTEST PASS`, `Server`, `Mapped`, `ViFastOS ramfs`, `ViFastOS write`,
-`Client`, `Fault`, `USER FAULT`, `Cap OK`, `Reply OK` và `PREEMPT OK`.
+`Client`, `Fault`, `USER FAULT`, `Zero OK`, `Cap OK`, `Reply OK` và `PREEMPT OK`.
 
 ## Tài liệu thành phần
 

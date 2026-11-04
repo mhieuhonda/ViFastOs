@@ -9,6 +9,7 @@
 
 use vifast_abi::{KError, Message, ObjType, Rights};
 use vifast_arch::Arch;
+use vifast_kernel::console::Console;
 use vifast_kernel::fs::MAX_PATH;
 use vifast_kernel::{Cap, Kernel, UserAction};
 
@@ -43,7 +44,7 @@ pub struct UserImage {
 /// The kernel core only knows [`vifast_arch::Arch`].  This trait is the BSP
 /// boundary: it owns MMU state, trap frames, timer/IRQ controllers, user
 /// memory copies and the transition to user mode.
-pub trait Platform: Arch {
+pub trait Platform: Arch + Console {
     type Context: Copy + 'static;
 
     const USER_CODE_VA: usize;
@@ -65,6 +66,7 @@ pub trait Platform: Arch {
     fn build_page_tables();
     fn vspace_root() -> u64;
 
+    fn zero_frame(pa: u64, size: usize) -> Result<(), KError>;
     fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError>;
     fn unmap_user_page(va: u64) -> Result<(), KError>;
     fn unmap_user_page_at(root: u64, va: u64) -> Result<(), KError> {
@@ -117,7 +119,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     vifast_kernel::klog!(
         A,
         "ViFastOS booting on {} (hart={}, dtb={:#x})",
-        A::NAME,
+        <A as Console>::NAME,
         info.hartid,
         info.dtb
     );
@@ -157,13 +159,21 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     if kernel.set_tcb_vspace(root, vspace).is_err() {
         A::exit(1);
     }
+    /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
+    const RUNTIME_OBJECTS: usize = 4;
+    const META_MAX_OBJECTS: usize = 16;
+    const DATA_MAX_OBJECTS: usize = 1;
+    if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS > vifast_kernel::MAX_OBJECTS {
+        vifast_kernel::klog!(A, "UNTYPED LIMIT EXCEEDS OBJECT TABLE");
+        A::exit(1);
+    }
     let data = A::data_page();
     let metadata = A::metadata_page();
     let Some(meta_untyped) = kernel.create_untyped_with_limit(
         metadata.as_mut_ptr() as usize,
         metadata.len(),
         A::PAGE_SIZE,
-        16,
+        META_MAX_OBJECTS,
     ) else {
         A::exit(1);
     };
@@ -271,6 +281,20 @@ pub mod syscall {
                 } else {
                     A::write_result(context, KError::NotMapped, 0, 0, [0; 4]);
                 }
+            }
+            UserAction::FrameRetyped { dest, pa, size } => {
+                let ok = A::zero_frame(pa, size as usize).is_ok();
+                A::write_result(
+                    context,
+                    if ok {
+                        KError::Ok
+                    } else {
+                        KError::MissingPageTable
+                    },
+                    if ok { dest } else { 0 },
+                    0,
+                    [0; 4],
+                );
             }
             UserAction::Revoked { unmaps, count } => {
                 let mut ok = true;

@@ -74,6 +74,7 @@ def run_qemu(
         and "ViFastOS write" in output
         and "Reply OK" in output
         and "USER FAULT" in output
+        and "Zero OK" in output
         and (not require_smp or "SMP OK" in output)
     )
     if timed_out:
