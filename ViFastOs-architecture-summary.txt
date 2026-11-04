@@ -40,12 +40,13 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 1c488a2 feat: build root task space from boot untyped
 - 3758e81 feat: isolate server VSpace and switch roots from TCB
 - 1fb01b2 feat: centralize user layout and add ELF parser
-- 7fd7a3d feat: harden ELF parser constraints.
+- 7fd7a3d feat: harden ELF parser constraints
+- 4b667b9 feat: load ELF segments into a task VSpace.
 
-Cập nhật code gần nhất (commit 7fd7a3d): root/server VSpace, current_root từ TCB,
+Cập nhật code gần nhất (commit 4b667b9): root/server VSpace, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
-vifast-elf parser machine/range + 14 host test, ROOT_ELF_BASE/soft-float chốt,
-boot quota 117, revoke Untyped thật, fault
+vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
+ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
@@ -76,9 +77,9 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 49/49 PASS
-- cargo test -p vifast-pte: 10/10 PASS
-- cargo test -p vifast-elf: 14/14 PASS
+- cargo test -p vifast-kernel: 54/54 PASS
+- cargo test -p vifast-pte: 11/11 PASS
+- cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -197,21 +198,24 @@ vifast-pte
 - no_std, forbid unsafe; format Sv39, x86_64 4-level, AArch64 4 KiB.
 - encode/decode/index thuần bit; table_span() cho từng level.
 - USER_VA_START/USER_VA_END thật của 3 kiến trúc; platform chỉ trả hằng số.
+- ELF machine constants: EM_RISCV=243, EM_AARCH64=183, EM_X86_64=62.
 - Host test kiểm tra dải user không giao kernel identity, nằm trong Sv39,
   entry PML4/L0, KERNEL_SHARED_SLOTS, quyền leaf L3 AArch64 và index biên;
-  tổng 10 test.
+  tổng 11 test.
 - File: crates/vifast-pte/src/lib.rs.
 
 vifast-elf
 - no_std, forbid unsafe; parser ELF64 little-endian executable.
 - Chỉ nhận PT_LOAD; từ chối PT_INTERP/PT_DYNAMIC/PT_TLS; bỏ qua các metadata
   PT_NOTE/PT_GNU_*; kiểm tra header/phdr bounds, file range, p_offset cùng dư
-  trang với p_vaddr, user VA range truyền vào, overlap, W^X và entry executable.
+  trang với p_vaddr, user VA range truyền vào, overlap theo trang, R bắt buộc,
+  W^X và entry executable.
 - Host test ELF hỏng: magic/class, phdr table/offset overflow, file range,
   memory range overflow, misaligned/congruence, ET_DYN, wrong machine,
-  unsupported segment, W+X, overlap, bad entry, no segments.
+  unsupported segment, segment thiếu R, hai segment chung một trang, W+X,
+  overlap, bad entry, no segments.
 - File: crates/vifast-elf/src/lib.rs.
-- 14 host test.
+- 17 host test.
 
 vifast-user
 - no_std syscall wrappers cho 3 kiến trúc.
@@ -292,10 +296,10 @@ vifast-user:
 - khoảng 208 dòng
 
 vifast-elf:
-- 490 dòng, no_std, không unsafe
+- 526 dòng, no_std, không unsafe
 
 vifast-kernel:
-- 4914 dòng, không còn dependency vifast-arch
+- 5316 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597624 bytes
@@ -345,7 +349,9 @@ Runtime boot sequence chi tiết:
    Untyped, data Untyped; bảng kernel-only đã dựng trong init_platform
 9. cài metadata/data Untyped vào slot 2/3
 10. build_task_space(boot Untyped, user image, layout) dựng root VSpace mới:
-    code RX, không stack/data; map rời 5 stack page root/client/fault1/2/3
+    code RX, không stack/data; map rời 5 stack page root/client/fault1/2/3.
+    Khi 6.4 nối root ELF, stack root assembly +0x4000 bị bỏ; stack Rust nằm ở
+    ROOT_ELF_STACK_BASE với 4 trang + guard.
 11. set TCB root -> VSpace mới; next_va = DATA_VA để client FrameMap hint 0
 12. dựng VSpace server từ boot Untyped, code dùng chung Frame root, stack
     +0x2000; cài VSpace server vào root slot 12
@@ -528,7 +534,8 @@ RISC-V64:
 - KERNEL_SHARED_SLOTS = root[0] (UART/device) và root[2] (kernel RAM).
 - User code 64 GiB: RX U (Frame từ boot Untyped, dùng chung server).
 - Root VSpace: stack rời +0x4000/+0x5000/+0x6000/+0x7000/+0x8000 cho root,
-  fault1/2/3 và client; server stack +0x2000 để trống.
+  fault1/2/3 và client; server stack +0x2000 để trống. Stack root assembly
+  +0x4000 sẽ bị bỏ ở 6.4 khi root Rust dùng ROOT_ELF_STACK_BASE.
 - VSpace server: +0x2000 RW U, code dùng chung Frame.
 - Data 64 GiB+0xa000: để trống trong root VSpace; client FrameMap RW U.
 - TLB: sfence.vma.
@@ -732,8 +739,8 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 49 test `vifast-kernel` + 10 test `vifast-pte` +
-14 test `vifast-elf`:
+Host test hiện có 54 test `vifast-kernel` + 11 test `vifast-pte` +
+17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -768,6 +775,8 @@ Host test hiện có 49 test `vifast-kernel` + 10 test `vifast-pte` +
 - delete Untyped cap bị từ chối khi còn object/cap con; delete trả KResult
 - build_task_space map code RX/stack RW/data RW, rollback khi thiếu trang
 - build_task_space_shared_code map cùng Frame code vào root + server VSpace
+- build_task_space_elf: PT_LOAD R/RX/RW, BSS zero, segment giữa trang,
+  stack 4 trang + guard, thêm vào VSpace có sẵn và rollback khi thiếu trang
 - FrameUnmap đòi Frame cap đúng PA; chỉ VSpace WRITE hoặc sai frame bị từ chối
 - PteFakeOps tách riêng RISC-V/x86_64/AArch64, chạy map/unmap,
   PageTableMap, validate, build; build không data rồi FrameMap tại +0xa000
@@ -870,6 +879,8 @@ Exit code:
 - Host test đếm leaf: server VSpace đúng 2 leaf user (code + stack +0x2000),
   root builder chỉ 1 leaf code trong test shared; extra mapping sẽ đỏ.
 - vifast-elf parse ELF64 PT_LOAD host-test; chưa nối boot flow.
+- 6.2: `build_task_space_elf` host-test trên PteFakeOps 3 format; leaf đúng
+  trang/quyền, guard không map, extension + rollback. Chưa dùng trong boot.
 - Boot Untyped tăng lên 128 KiB/32 object; data Untyped giảm còn 48 object;
   tổng quota 5 + 32 + 48 + 32 = 117 <= 128. Log in used/free pages và objects.
 - Không còn code_page()/build_page_tables()/bảng user tĩnh; init_platform chỉ
@@ -902,7 +913,7 @@ Exit code:
   trên cả 3 arch; tổng 3 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 49 test `vifast-kernel` + 10 test `vifast-pte` + 14 test `vifast-elf`.
+- Host test hiện có 54 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1051,13 +1062,18 @@ E. Desktop / Space
     file range, congruence, overlap, W^X, entry, segment cấm) đã host-test;
     root Rust nạp ELF là Bước 6, BootInfo/Untyped con/client VSpace là Bước 7.
 32. Root Rust ELF ở `ROOT_ELF_BASE = CODE_VA + 0x20_0000` (2 MiB kế tiếp), giữ
-    user.S tại 64 GiB. Stack root 4 trang tại `ROOT_ELF_STACK_BASE`, một trang
-    guard ngay dưới không map. Vùng mới cần PageTable cấp cuối riêng.
+    user.S tại 64 GiB. Parser chỉ nhận cửa sổ
+    `[ROOT_ELF_BASE, ROOT_ELF_STACK_GUARD)` 1 MiB, không dùng toàn dải user.
+    Stack root 4 trang tại `ROOT_ELF_STACK_BASE`, một trang guard ngay dưới
+    không map. Vùng mới cần PageTable cấp cuối riêng.
 33. Code user không dùng FP/SIMD: RISC-V `riscv64imac-unknown-none-elf`,
     AArch64 `aarch64-unknown-none-softfloat`, x86_64 `x86_64-unknown-none`
     relocation static. Kernel chưa lưu FP/SIMD context; build.sh sẽ disassemble
     root ELF và từ chối thanh ghi FP/SIMD. Linker dùng `-z max-page-size=4096`
     và `-z separate-code`, mỗi segment căn 4096.
+34. 6.2 hoàn tất trên host: `build_task_space_elf` map PT_LOAD theo trang,
+    copy filesz đúng offset, BSS nhờ retype zero, stack 4 trang + guard,
+    rollback object/bump/PTE; test trên PteFakeOps cả 3 format. Chưa nối boot.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
