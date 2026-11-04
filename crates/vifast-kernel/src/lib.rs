@@ -132,6 +132,9 @@ pub trait PageTableOps {
     }
     fn flush_va(&self, _va: u64) {}
     fn flush_all_user(&self) {}
+    /// Make recently written instruction bytes visible to the local
+    /// instruction fetch path before an executable mapping becomes live.
+    fn sync_icache(&self, _pa: u64, _size: usize) {}
     fn zero_frame(&self, _pa: u64, _size: usize) {}
 }
 
@@ -1179,15 +1182,11 @@ impl Kernel {
         Err(KError::AlreadyMapped)
     }
 
-    fn note_frame_mapping(&mut self, frame_obj: ObjRef, rights: Rights) {
+    fn set_frame_mapping_counts(&mut self, frame_obj: ObjRef, mapped_w: u16, mapped_x: u16) {
         if let Some(object) = self.get_mut(frame_obj) {
             if let Kind::Frame(ref mut frame) = object.kind {
-                if rights.contains(Rights::WRITE) {
-                    frame.mapped_w += 1;
-                }
-                if rights.contains(Rights::EXEC) {
-                    frame.mapped_x += 1;
-                }
+                frame.mapped_w = mapped_w;
+                frame.mapped_x = mapped_x;
             }
         }
     }
@@ -1266,9 +1265,16 @@ impl Kernel {
         if (wants_w && frame.mapped_x != 0) || (wants_x && frame.mapped_w != 0) {
             return Err(KError::NoRights); // W^X over every mapping of this Frame
         }
-        if (wants_w && frame.mapped_w == u16::MAX) || (wants_x && frame.mapped_x == u16::MAX) {
-            return Err(KError::OutOfMemory);
-        }
+        let next_w = if wants_w {
+            frame.mapped_w.checked_add(1).ok_or(KError::OutOfMemory)?
+        } else {
+            frame.mapped_w
+        };
+        let next_x = if wants_x {
+            frame.mapped_x.checked_add(1).ok_or(KError::OutOfMemory)?
+        } else {
+            frame.mapped_x
+        };
         if self.page_table_ops.is_some() {
             self.map_leaf(root, va, frame.pa as u64, rights)?;
         }
@@ -1286,7 +1292,12 @@ impl Kernel {
             }
             return Err(error);
         }
-        self.note_frame_mapping(frame_obj, rights);
+        self.set_frame_mapping_counts(frame_obj, next_w, next_x);
+        if rights.contains(Rights::EXEC) {
+            if let Some(ops) = self.page_table_ops {
+                ops.sync_icache(frame.pa as u64, page_size as usize);
+            }
+        }
         Ok(mapping)
     }
 
@@ -1317,6 +1328,25 @@ impl Kernel {
         self.vspace(vspace)?.find(va)
     }
 
+    fn untyped_is_ancestor(&self, ancestor: ObjRef, mut descendant: ObjRef) -> bool {
+        for _ in 0..MAX_OBJECTS {
+            let Some(object) = self.get(descendant) else {
+                return false;
+            };
+            if !matches!(object.kind, Kind::Untyped(_)) {
+                return false;
+            }
+            let Some(parent) = object.owner else {
+                return false;
+            };
+            if parent == ancestor {
+                return true;
+            }
+            descendant = parent;
+        }
+        false
+    }
+
     /// Check the core object/capability/scheduler/VSpace invariants.  This is
     /// intentionally deterministic and allocation-free so it can run in the
     /// self-test and in a future watchdog.
@@ -1326,6 +1356,10 @@ impl Kernel {
         }
         let mut frame_w = [0u16; MAX_OBJECTS];
         let mut frame_x = [0u16; MAX_OBJECTS];
+        let mut physical = [(0u64, 0u64, None); MAX_OBJECTS * 2];
+        let mut physical_count = 0usize;
+        let mut untypeds = [(0u64, 0u64, ObjRef::invalid()); MAX_OBJECTS];
+        let mut untyped_count = 0usize;
         for i in 0..MAX_OBJECTS {
             let object = &self.objs[i];
             if object.is_free() {
@@ -1388,6 +1422,17 @@ impl Kernel {
                     if frame.mapped_w != 0 && frame.mapped_x != 0 {
                         return Err(KError::NoRights);
                     }
+                    if physical_count >= physical.len() {
+                        return Err(KError::IllegalOperation);
+                    }
+                    physical[physical_count] = (
+                        frame.pa as u64,
+                        (frame.pa as u64)
+                            .checked_add(frame.size as u64)
+                            .ok_or(KError::InvalidArg)?,
+                        object.owner,
+                    );
+                    physical_count += 1;
                 }
                 Kind::VSpace(ref space) => {
                     let page = space.page_size;
@@ -1441,18 +1486,130 @@ impl Kernel {
                             }
                         }
                     }
+                    if page == 0 || !page.is_power_of_two() || space.root % page != 0 {
+                        return Err(KError::Alignment);
+                    }
+                    if physical_count >= physical.len() {
+                        return Err(KError::IllegalOperation);
+                    }
+                    physical[physical_count] = (
+                        space.root,
+                        space.root.checked_add(page).ok_or(KError::InvalidArg)?,
+                        object.owner,
+                    );
+                    physical_count += 1;
+                    if let Some(aux) = space.aux_pa {
+                        if aux % page != 0 || physical_count >= physical.len() {
+                            return Err(KError::Alignment);
+                        }
+                        physical[physical_count] = (
+                            aux,
+                            aux.checked_add(page).ok_or(KError::InvalidArg)?,
+                            object.owner,
+                        );
+                        physical_count += 1;
+                    }
                 }
                 Kind::Untyped(ref untyped) => {
                     if untyped.bump > untyped.size || untyped.objects > untyped.max_objects {
                         return Err(KError::IllegalOperation);
                     }
+                    if untyped_count >= untypeds.len() {
+                        return Err(KError::IllegalOperation);
+                    }
+                    let end = untyped
+                        .base
+                        .checked_add(untyped.size)
+                        .ok_or(KError::InvalidArg)?;
+                    untypeds[untyped_count] = (untyped.base as u64, end as u64, reference);
+                    untyped_count += 1;
                 }
                 Kind::PageTable(ref table) => {
                     if table.root % DEFAULT_PAGE_SIZE != 0 {
                         return Err(KError::Alignment);
                     }
+                    if physical_count >= physical.len() {
+                        return Err(KError::IllegalOperation);
+                    }
+                    physical[physical_count] = (
+                        table.root,
+                        table
+                            .root
+                            .checked_add(DEFAULT_PAGE_SIZE as u64)
+                            .ok_or(KError::InvalidArg)?,
+                        object.owner,
+                    );
+                    physical_count += 1;
                 }
                 Kind::Free => {}
+            }
+        }
+        // A physical page is owned by at most one live object.  This is the
+        // precondition that makes per-Frame W^X meaningful even when a Frame
+        // is mapped through several VSpaces.
+        for i in 0..physical_count {
+            let (start, end, owner) = physical[i];
+            if start >= end {
+                return Err(KError::Alignment);
+            }
+            if let Some(owner) = owner {
+                let region = self.untyped(owner).ok_or(KError::ObjectDestroyed)?;
+                let region_start = region.base as u64;
+                let region_end = region_start
+                    .checked_add(region.size as u64)
+                    .ok_or(KError::InvalidArg)?;
+                let allocated_end = region_start
+                    .checked_add(region.bump as u64)
+                    .ok_or(KError::InvalidArg)?;
+                if start < region_start || end > region_end || end > allocated_end {
+                    return Err(KError::IllegalOperation);
+                }
+                for (child_start, child_end, child) in untypeds[..untyped_count].iter() {
+                    if start < *child_end
+                        && *child_start < end
+                        && self.untyped_is_ancestor(owner, *child)
+                    {
+                        return Err(KError::IllegalOperation);
+                    }
+                }
+            }
+            for other in physical[..i].iter() {
+                if start < other.1 && other.0 < end {
+                    return Err(KError::IllegalOperation);
+                }
+            }
+        }
+        // Untyped ranges may nest only along the owner chain (a future child
+        // Untyped inside its parent).  Sibling or unrelated leaf ranges may not
+        // overlap, otherwise two independent objects could alias one PA.
+        for i in 0..untyped_count {
+            let (start, end, obj) = untypeds[i];
+            if start >= end {
+                return Err(KError::Alignment);
+            }
+            if let Some(parent) = self.get(obj).and_then(|object| object.owner) {
+                let region = self.untyped(parent).ok_or(KError::ObjectDestroyed)?;
+                let parent_start = region.base as u64;
+                let parent_end = parent_start
+                    .checked_add(region.size as u64)
+                    .ok_or(KError::InvalidArg)?;
+                let parent_allocated = parent_start
+                    .checked_add(region.bump as u64)
+                    .ok_or(KError::InvalidArg)?;
+                if start < parent_start || end > parent_end || end > parent_allocated {
+                    return Err(KError::IllegalOperation);
+                }
+            }
+            for other in untypeds[..i].iter() {
+                if start < other.1 && other.0 < end {
+                    let contains_other = start <= other.0 && end >= other.1;
+                    let contained_by_other = other.0 <= start && other.1 >= end;
+                    if !(contains_other && self.untyped_is_ancestor(obj, other.2))
+                        && !(contained_by_other && self.untyped_is_ancestor(other.2, obj))
+                    {
+                        return Err(KError::IllegalOperation);
+                    }
+                }
             }
         }
         // Counters are derived from the reverse map and checked after every
@@ -3124,6 +3281,109 @@ mod tests {
     }
 
     #[test]
+    fn physical_page_ranges_are_unique() {
+        let mut alias = Kernel::new();
+        assert!(alias.create_frame(0x1000, 4096).is_some());
+        assert!(alias.create_frame(0x1000, 4096).is_some());
+        assert_eq!(alias.check_invariants(), Err(KError::IllegalOperation));
+
+        let mut mixed = Kernel::new();
+        assert!(mixed.create_page_table(0x1000, 0).is_some());
+        assert!(mixed
+            .create_vspace(0x1000, 0x10_0000_0000, 0x1000)
+            .is_some());
+        assert_eq!(mixed.check_invariants(), Err(KError::IllegalOperation));
+
+        let mut aux_alias = Kernel::new();
+        let space = aux_alias
+            .create_vspace(0x1000, 0x10_0000_0000, 0x1000)
+            .unwrap();
+        if let Kind::VSpace(ref mut space) = aux_alias.objs[space.index as usize].kind {
+            space.aux_pa = Some(0x2000);
+        }
+        assert!(aux_alias.create_frame(0x2000, 4096).is_some());
+        assert_eq!(aux_alias.check_invariants(), Err(KError::IllegalOperation));
+
+        let mut overlapping_untyped = Kernel::new();
+        assert!(overlapping_untyped
+            .create_untyped_with_limit(0x1000, 0x2000, 4096, 4)
+            .is_some());
+        assert!(overlapping_untyped
+            .create_untyped_with_limit(0x2000, 0x2000, 4096, 4)
+            .is_some());
+        assert_eq!(
+            overlapping_untyped.check_invariants(),
+            Err(KError::IllegalOperation)
+        );
+
+        let mut clean = Kernel::new();
+        assert!(clean.create_frame(0x1000, 4096).is_some());
+        assert!(clean.create_page_table(0x2000, 0).is_some());
+        assert!(clean
+            .create_vspace(0x3000, 0x10_0000_0000, 0x1000)
+            .is_some());
+        assert!(clean.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn frame_map_rejects_counter_overflow() {
+        let mut kernel = Kernel::new();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let vspace = kernel
+            .create_vspace(0x1000, 0x10_0000_0000, 0x1000)
+            .unwrap();
+        if let Kind::Frame(ref mut frame) = kernel.objs[frame.index as usize].kind {
+            frame.mapped_w = u16::MAX;
+        }
+        assert_eq!(
+            kernel.map_frame(vspace, frame, 0x10_0000_0000, Rights::READ | Rights::WRITE),
+            Err(KError::OutOfMemory)
+        );
+        assert!(kernel.mapping_at(vspace, 0x10_0000_0000).is_none());
+    }
+
+    #[test]
+    fn icache_syncs_only_for_exec_mappings() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x10_0000_0000, 0x20_0000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let va = 0x10_0000_0000;
+        let space = kernel
+            .create_vspace_with_page_size(0x1000, va, 0x2000, 4096)
+            .unwrap();
+        for table in [0x3000, 0x4000, 0x5000] {
+            let pt = kernel.create_page_table(table, 0).unwrap();
+            assert!(kernel.map_page_table(pt, space, va).is_ok());
+        }
+
+        let mapping = kernel
+            .map_frame(space, frame, va, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert_eq!(
+            FAKE_ICACHE_SYNCS.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        kernel.unmap_frame(space, mapping.va).unwrap();
+        assert!(kernel
+            .map_frame(space, frame, va, Rights::READ | Rights::EXEC)
+            .is_ok());
+        assert_eq!(
+            FAKE_ICACHE_SYNCS.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(kernel
+            .map_frame(space, frame, va + 0x1000, Rights::READ | Rights::EXEC)
+            .is_ok());
+        assert_eq!(
+            FAKE_ICACHE_SYNCS.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+    }
+
+    #[test]
     fn revoking_vspace_releases_frame_wx_counters() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
@@ -3853,6 +4113,8 @@ mod tests {
 
     static FAKE_MEM: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
     static FAKE_FLUSHES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static FAKE_ICACHE_SYNCS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
     static FAKE_OPS: FakeTableOps = FakeTableOps;
 
     const F_ROOT: u64 = 0x0000;
@@ -3928,6 +4190,7 @@ mod tests {
         mem.clear();
         mem.resize(8192, 0);
         FAKE_FLUSHES.store(0, std::sync::atomic::Ordering::SeqCst);
+        FAKE_ICACHE_SYNCS.store(0, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn fake_chain(root: u64, t1: u64, t2: u64, t3: u64) {
@@ -4033,6 +4296,9 @@ mod tests {
         }
         fn flush_va(&self, _va: u64) {
             FAKE_FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn sync_icache(&self, _pa: u64, _size: usize) {
+            FAKE_ICACHE_SYNCS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         fn copy_to_frame(&self, pa: u64, bytes: &[u8]) {
             let mut mem = FAKE_MEM.lock().unwrap();

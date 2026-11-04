@@ -246,6 +246,13 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn sync_icache(&self, _pa: u64, _size: usize) {
+        // Local hart only until SMP I-cache shootdown is implemented.
+        unsafe {
+            core::arch::asm!("fence.i");
+        }
+    }
+
     fn leaf_is_user(&self, pte: u64) -> bool {
         vifast_pte::riscv::is_user(pte)
     }

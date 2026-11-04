@@ -281,6 +281,32 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn sync_icache(&self, pa: u64, size: usize) {
+        if size == 0 {
+            return;
+        }
+        let ctr: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack));
+            let dline = 4u64 << (ctr & 0xf);
+            let iline = 4u64 << ((ctr >> 16) & 0xf);
+            let end = pa.saturating_add(size as u64);
+            let mut addr = pa & !(dline - 1);
+            while addr < end {
+                core::arch::asm!("dc cvau, {}", in(reg) addr, options(nostack));
+                addr = addr.saturating_add(dline);
+            }
+            core::arch::asm!("dsb ish", options(nostack));
+            addr = pa & !(iline - 1);
+            while addr < end {
+                core::arch::asm!("ic ivau, {}", in(reg) addr, options(nostack));
+                addr = addr.saturating_add(iline);
+            }
+            core::arch::asm!("dsb ish", options(nostack));
+            core::arch::asm!("isb", options(nostack));
+        }
+    }
+
     fn leaf_is_user(&self, pte: u64) -> bool {
         vifast_pte::aarch64::is_user(pte)
     }

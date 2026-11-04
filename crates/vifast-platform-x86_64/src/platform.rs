@@ -468,6 +468,10 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn sync_icache(&self, _pa: u64, _size: usize) {
+        // x86 has coherent instruction and data caches.
+    }
+
     fn leaf_is_user(&self, pte: u64) -> bool {
         vifast_pte::x86_64::is_user(pte)
     }
