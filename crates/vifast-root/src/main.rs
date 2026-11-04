@@ -10,8 +10,9 @@
 use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
     CLIENT_STACK_BASE, CLIENT_STACK_TOP, CODE_VA, FAULT1_STACK_TOP, FAULT2_STACK_TOP,
-    FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_CLIENT,
-    USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, USER_ENTRY_SERVER,
+    FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
+    SERVER_STACK_TOP, USER_ENTRY_CLIENT, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3,
+    USER_ENTRY_FAULT4, USER_ENTRY_SERVER,
 };
 use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_user::SyscallResult;
@@ -240,6 +241,26 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         Rights::READ | Rights::WRITE,
         &mut slots,
     );
+    let server_buffer_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, server_buffer_frame);
+    map_with_tables(
+        data_untyped,
+        server_vspace,
+        server_buffer_frame,
+        IPC_BUF_SERVER_VA as u64,
+        Rights::READ | Rights::WRITE,
+        &mut slots,
+    );
+    let client_buffer_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, client_buffer_frame);
+    map_with_tables(
+        data_untyped,
+        client_vspace,
+        client_buffer_frame,
+        IPC_BUF_CLIENT_VA as u64,
+        Rights::READ | Rights::WRITE,
+        &mut slots,
+    );
     write(CLIENT_VSPACE_OK);
 
     let client_untyped = slots.alloc();
@@ -265,6 +286,16 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         CLIENT_STACK_TOP as u64,
         client_vspace,
         5,
+    ));
+    check(vifast_user::tcb_set_ipc_buffer(
+        server_tcb,
+        server_buffer_frame,
+        IPC_BUF_SERVER_VA as u64,
+    ));
+    check(vifast_user::tcb_set_ipc_buffer(
+        client_tcb,
+        client_buffer_frame,
+        IPC_BUF_CLIENT_VA as u64,
     ));
     check(vifast_user::tcb_resume(client_tcb));
 

@@ -90,6 +90,10 @@ user_thread_a:
     mov x8, #5
     mov x0, #4
     svc #0
+    ldr x0, ={IPC_BUF_SERVER_VA}
+    mov x1, #11
+    mov x8, #32
+    svc #0
     b 1b
 
     .globl user_thread_b
@@ -102,7 +106,7 @@ user_thread_b:
     mov x8, #25
     mov x0, #2
     mov x1, #4
-    mov x2, #0
+    ldr x2, ={DATA_VA}
     mov x3, #3
     svc #0
     mov x19, x1
@@ -204,6 +208,16 @@ user_thread_b:
     adr x0, user_message_b
     mov x1, #7
     svc #0
+    ldr x9, ={IPC_BUF_CLIENT_VA}
+    mov w10, #0x5049
+    movk w10, #0x2043, lsl #16
+    str w10, [x9]
+    mov w10, #0x5542
+    movk w10, #0x2046, lsl #16
+    str w10, [x9, #4]
+    mov w10, #0x4b4f
+    movk w10, #0x000a, lsl #16
+    str w10, [x9, #8]
     mov x24, #5
 2:
     mov x8, #1

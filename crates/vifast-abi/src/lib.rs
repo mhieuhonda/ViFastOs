@@ -39,6 +39,10 @@ pub mod user_layout {
     pub const FAULT3_STACK_TOP: usize = CODE_VA + 0x8000;
     pub const FAULT4_STACK_BASE: usize = CODE_VA + 0x9000;
     pub const FAULT4_STACK_TOP: usize = CODE_VA + 0xa000;
+    /// Dedicated IPC-buffer pages, private to each task VSpace.  The kernel
+    /// copies IPC_BUFFER_WORDS between these pages on every endpoint send.
+    pub const IPC_BUF_SERVER_VA: usize = CODE_VA + 0xb000;
+    pub const IPC_BUF_CLIENT_VA: usize = CODE_VA + 0xc000;
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one

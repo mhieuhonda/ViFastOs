@@ -317,6 +317,12 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn copy_frame_to_frame(&self, src: u64, dst: u64, size: usize) {
+        unsafe {
+            core::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, size);
+        }
+    }
+
     fn zero_frame(&self, pa: u64, size: usize) {
         unsafe {
             core::ptr::write_bytes(pa as *mut u8, 0, size);
@@ -487,6 +493,18 @@ impl Platform for Aarch64Platform {
             || page_in_range(
                 ptr,
                 out.len(),
+                vifast_abi::user_layout::IPC_BUF_SERVER_VA,
+                4096,
+            )
+            || page_in_range(
+                ptr,
+                out.len(),
+                vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
+                4096,
+            )
+            || page_in_range(
+                ptr,
+                out.len(),
                 vifast_abi::user_layout::ROOT_ELF_BASE,
                 vifast_abi::user_layout::ROOT_ELF_STACK_TOP
                     - vifast_abi::user_layout::ROOT_ELF_BASE,
@@ -513,6 +531,18 @@ impl Platform for Aarch64Platform {
         }
         if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
             || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
+            || page_in_range(
+                ptr,
+                input.len(),
+                vifast_abi::user_layout::IPC_BUF_SERVER_VA,
+                4096,
+            )
+            || page_in_range(
+                ptr,
+                input.len(),
+                vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
+                4096,
+            )
             || page_in_range(
                 ptr,
                 input.len(),

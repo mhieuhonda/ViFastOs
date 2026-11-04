@@ -87,6 +87,10 @@ user_thread_a:
     mov rax, 5
     mov rdi, 4
     int 0x80
+    mov rax, 32
+    movabs rdi, {IPC_BUF_SERVER_VA}
+    mov rsi, 11
+    int 0x80
     jmp 1b
 
     .globl user_thread_b
@@ -99,7 +103,7 @@ user_thread_b:
     mov rax, 25
     mov rdi, 2
     mov rsi, 4
-    mov rdx, 0
+    movabs rdx, {DATA_VA}
     mov rcx, 3
     int 0x80
     mov r12, rdi
@@ -202,6 +206,10 @@ user_thread_b:
     lea rdi, [rip + user_message_b]
     mov rsi, 7
     int 0x80
+    movabs r11, {IPC_BUF_CLIENT_VA}
+    mov dword ptr [r11], 0x20435049
+    mov dword ptr [r11 + 4], 0x20465542
+    mov dword ptr [r11 + 8], 0x000a4b4f
     mov r10, 5
 2:
     mov rax, 1

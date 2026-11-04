@@ -89,6 +89,7 @@ def run_qemu(
         and "Cap OK" in output
         and "ViFastOS ramfs" in output
         and "ViFastOS write" in output
+        and "IPC BUF OK" in output
         and "Reply OK" in output
         and len(faults) == 4
         and 0x8000_0000 in faults

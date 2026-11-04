@@ -89,6 +89,10 @@ user_thread_a:
     li a7, 5
     li a0, 4
     ecall
+    li a7, 32
+    li a0, {IPC_BUF_SERVER_VA}
+    li a1, 11
+    ecall
     j 1b
 
     .globl user_thread_b
@@ -101,7 +105,7 @@ user_thread_b:
     li a7, 25
     li a0, 2
     li a1, 4
-    li a2, 0
+    li a2, {DATA_VA}
     li a3, 3
     ecall
     mv t3, a1
@@ -207,6 +211,13 @@ user_thread_b:
     la a0, user_message_b
     li a1, 7
     ecall
+    li t0, {IPC_BUF_CLIENT_VA}
+    li t1, 0x20435049
+    sw t1, 0(t0)
+    li t1, 0x20465542
+    sw t1, 4(t0)
+    li t1, 0x000a4b4f
+    sw t1, 8(t0)
     li s0, 5
 2:
     li a7, 1

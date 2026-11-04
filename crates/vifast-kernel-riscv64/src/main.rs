@@ -13,6 +13,8 @@ core::arch::global_asm!(
     include_str!("user.S"),
     DATA_VA = const vifast_abi::user_layout::DATA_VA,
     ROOT_ELF_STACK_BASE = const vifast_abi::user_layout::ROOT_ELF_STACK_BASE,
+    IPC_BUF_SERVER_VA = const vifast_abi::user_layout::IPC_BUF_SERVER_VA,
+    IPC_BUF_CLIENT_VA = const vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
     SERVER_STACK_BASE = const vifast_abi::user_layout::SERVER_STACK_BASE,
 );
 
