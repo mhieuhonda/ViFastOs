@@ -10,7 +10,7 @@ chung cho root/server/client.
   entry gốc. Mỗi VSpace có PML4/L0 riêng, entry 0..1 GiB trỏ tới PD/L2 kernel
   dùng chung; entry user trỏ tới bảng riêng của task.
 - Retype VSpace trên x86/AArch64 cần thêm page cho bảng gốc/trung gian.
-- Không đưa kernel mapping vào shadow `VSpace.mappings`.
+- Không đưa kernel mapping vào reverse map `VSpace.mappings`.
 - TTBR1 và high-half kernel là giai đoạn riêng sau 3b.
 
 ## 2. Chuyển address space
@@ -48,8 +48,9 @@ chung cho root/server/client.
 - BootInfo nằm trong `vifast-abi`, có `version`/`size` và slot ranges; root
   không hard-code slot 1/2/3.
 
-- Expose `PageTableMap`.
-- Retype VSpace/PageTable từ Untyped.
+- `PageTableMap` đã expose: kernel chọn level, kiểm tra toàn bộ table span,
+  lưu vị trí gắn và trả `AlreadyMapped` khi gắn lại.
+- Retype PageTable từ Untyped đã có; retype VSpace còn lại.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable
   kernel.
 

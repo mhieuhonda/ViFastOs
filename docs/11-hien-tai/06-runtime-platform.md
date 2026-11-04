@@ -122,9 +122,9 @@ sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham
 - gọi `Kernel::user_syscall`;
 - xử lý `UserAction`:
   - `Return`/`Message`: ghi register;
-  - `MapFrame`/`UnmapFrame`: gọi platform MMU, rollback shadow nếu lỗi;
   - `ConfigureTcb`: cài context entry/stack cho TCB con;
-  - `PageTableOps`: kernel walk generic, read/write PTE, flush, zero;
+  - `PageTableMap`/`FrameMap`/`FrameUnmap`: kernel walk generic qua
+    PageTableOps, read/write PTE, flush, kiểm tra table span;
   - `Open`/`Read`/`Write`: copy user pointer qua platform, gọi ramfs;
   - `Debug`: copy buffer rồi `putc`;
   - `Blocked`: chuyển context;

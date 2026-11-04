@@ -24,6 +24,17 @@ FrameMap syscall
 Thiếu bảng trung gian trả `MissingPageTable`; kernel không tự cấp phát bảng.
 Unmap đi cùng walk và dừng ở leaf cấp cao.
 
+`PageTableMap(page_table_cap, vspace_cap, va)`:
+
+- kernel walk từ root tới entry invalid đầu tiên trên đường tới `va`;
+- tự chọn level của bảng mới, user không truyền level;
+- kiểm tra toàn bộ `table_span(level)` nằm trong `user_va_range`, không chỉ `va`;
+- ghi đúng một PTE cha, flush, lưu `{vspace, va_base, level}` vào PageTable;
+- gắn lần hai trả `AlreadyMapped`.
+
+Revoke Untyped đi theo thứ tự Frame → PageTable sâu nhất → PageTable cha →
+VSpace, để Frame còn unmap được leaf trước khi bảng cha bị gỡ.
+
 ## 2. VSpace
 
 `VSpace` lưu:
@@ -37,7 +48,8 @@ Unmap đi cùng walk và dừng ở leaf cấp cao.
 
 `validate_user_range()` kiểm tra buffer user theo code/stack/mapping trước
 `DebugWrite`, `Open`, `Read`, `Write`. Đây là hàng rào bảo mật chính; platform
-copy chỉ là lớp thứ hai.
+copy chỉ là lớp thứ hai. Đây vẫn là mô hình tạm thời: khi bỏ code/stack window
+ở 3b, hàm này sẽ walk leaf thật qua `vifast-pte` và chỉ dựa vào page table.
 
 `Kernel::map_frame` kiểm tra:
 
@@ -56,8 +68,8 @@ File: `crates/vifast-platform-riscv64/src/platform.rs`.
 - Sv39, root tĩnh `ROOT`.
 - Kernel identity map `0x8000_0000..0x803f_ffff`.
 - UART `0x1000_0000` map 2 MiB.
-- User code `0x0000_0010_0000_0000`, stack `+0x1000..+0x8fff`,
-  data `+0xa000`.
+- User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
+  boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
 - Code: `R|X|U` (không W).
 - Stack: `R|W|U` (không X).
 - Data mapping qua `FrameMap`: `R|W|U` hoặc `R|X|U` theo quyền.
@@ -72,8 +84,8 @@ File: `crates/vifast-platform-aarch64/src/platform.rs`.
 
 - 4-level page table tĩnh.
 - GICv2 `0x0800_0000`, PL011 `0x0900_0000` map device block.
-- User code `0x0000_0010_0000_0000`, stack `+0x1000..+0x8fff`,
-  data `+0xa000`.
+- User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
+  boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
 - Code: EL0 read-only + executable (`AP_USER_RO`, UXN=0).
 - Stack: EL0 read-write + NX (`AP_USER_RW`, UXN=1).
 - Data: EL0 read-write + NX.
@@ -90,12 +102,13 @@ File: `crates/vifast-platform-x86_64/src/platform.rs`.
 
 - Tự dựng PML4/PDPT/PD/PT 4 KiB, không sửa page table UEFI.
 - Identity map 0..1 GiB cho kernel/UEFI image, stack, GDT/TSS/IDT.
-- User code `0x0000_0010_0000_0000`, stack `+0x1000..+0x8fff`,
-  data `+0xa000`.
+- User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
+  boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
 - Code: P|US, read+execute, NX clear.
 - Stack/data: P|W|US|NX.
 - `FrameMap` map đúng VA được yêu cầu; `FrameUnmap` clear PTE + `invlpg`.
-- `VSpace.direct` đã bị xoá; x86 dùng VA 64 GiB cố định.
+- `VSpace.direct` đã bị xoá; x86/AArch64 dùng chung root entry 0 nhưng tách
+  bảng user; PageTableMap không thay entry 0.
 - SMEP/SMAP nếu CPUID hỗ trợ; user copy dùng STAC/CLAC.
 - CR3 được chuyển sang PML4 riêng ngay trước `iretq`.
 - Hạn chế còn lại: identity map 0..1 GiB; chưa có AP; data kernel chưa NX.
@@ -115,8 +128,9 @@ Chưa có IPI shootdown đa hart. Khi thêm SMP scheduler, cần:
 
 ## 7. Page table allocator
 
-`PageTable` object đã có metadata nhưng page table root vẫn là **bảng tĩnh**
-trong platform. Chưa có:
+`PageTable` object đã có metadata `{root, level, mapped}` và PageTableMap,
+nhưng VSpace root vẫn là **bảng tĩnh** trong platform; retype VSpace và
+install_kernel thật chưa có. Chưa có:
 
 - allocator page table page tổng quát;
 - range VA allocator nhiều vùng;

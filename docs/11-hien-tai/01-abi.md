@@ -127,7 +127,7 @@ Số syscall là ổn định. `-` nghĩa là không dùng.
 | 14 | `CapRevoke` | a0 slot | Revoke cap; Untyped destroy object con + unmap qua PageTableOps |
 | 15 | `TcbConfigure` | a0 TCB cap, a1 entry, a2 stack, a3 VSpace cap, a4 priority | Set context |
 | 16 | `TcbResume` | a0 TCB cap | Đưa TCB vào runqueue |
-| 24 | `PageTableMap` | — | Chưa expose cho user |
+| 24 | `PageTableMap` | a0 PageTable cap, a1 VSpace cap, a2 VA | Kernel tự chọn level; trả level; toàn bộ table_span phải nằm trong user range |
 | 25 | `FrameMap` | a0 VSpace cap, a1 Frame cap, a2 VA hint, a3 rights | Map, trả VA |
 | 26 | `FrameUnmap` | a0 VSpace cap, a1 VA | Unmap + flush |
 | 27–31 | IO/IRQ | — | Chưa triển khai |

@@ -22,13 +22,18 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 7cf9adc refactor: efiapi exceptions, PageTableOps, static kernel storage
 - 5b1a992 feat: generic page-table ops, IST, larger data untyped
 - e785646 feat: vifast-pte and generic mapping walk
-- cc94730 test: cover generic page-table safety rules.
+- cc94730 test: cover generic page-table safety rules
+- 611ab2c feat: centralize user VA ranges and table spans
+- 68dcd50 feat: add PageTableMap and dependency-ordered revoke
+- e748d1b test: pin user VA boundary indices.
 
-Cập nhật gần nhất (commit cc94730): root task, revoke Untyped thật, fault
+Cập nhật gần nhất (commit e748d1b): root task, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
-PageTableOps generic, exception vector x86, IST, Kernel static storage,
-Untyped accounting, user layout chung 64 GiB, SMEP/SMAP/PAN/sscratch
-hardening và vifast-user.
+PageTableOps generic + generic page-table walk, exception vector x86, IST,
+Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
+range + table_span), PageTableMap level động, thứ tự revoke Frame → PageTable
+sâu → VSpace,
+vifast-pte host test, SMEP/SMAP/PAN/sscratch hardening và vifast-user.
 
 1. MỤC TIÊU
 -----------
@@ -49,7 +54,8 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 25/25 PASS
+- cargo test -p vifast-kernel: 29/29 PASS
+- cargo test -p vifast-pte: 8/8 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -64,7 +70,8 @@ Output tiêu biểu:
 - SMP SKIP (x86 AP bootstrap pending) trên x86_64
 - "Fault", "USER FAULT", "Zero OK", "Server", "Mapped", "ViFastOS ramfs",
   "ViFastOS write", "Client", "Cap OK", "Reply OK", "PREEMPT OK"
-- user layout chung: code 0x0000_0010_0000_0000 (64 GiB)
+- user layout chung: initial boot window tại 0x0000_0010_0000_0000 (64 GiB);
+  full user range hiện tại 64..128 GiB
 
 3. KIẾN TRÚC TỔNG THỂ SAU REFACTOR
 ----------------------------------
@@ -78,7 +85,7 @@ Sơ đồ lớp:
     +--------------------------------------------------+
     | vifast-kernel (portable, no_std, forbid unsafe)  |
     | object - capability - IPC - scheduler - VSpace   |
-    | shadow mapping - ramfs - ABI checks              |
+    | generic walk + reverse map - ramfs - ABI checks  |
     +--------------------------------------------------+
     | vifast-runtime (generic boot/syscall/timer)      |
     | no_std, forbid unsafe                            |
@@ -129,9 +136,11 @@ vifast-kernel
   - endpoint send/recv/call/reply;
   - notification signal/wait/poll;
   - scheduler priority + round-robin;
-  - Frame/VSpace/PageTable shadow mapping + validate_user_range;
+  - Frame/VSpace/PageTable generic page-table walk + reverse map;
+  - PageTableMap: kernel chọn level, kiểm tra toàn dải bảng;
+  - validate_user_range() dựa trên code/stack window + reverse map (tạm thời);
   - Untyped/retype có accounting metadata;
-  - root-task syscalls: Retype, CapCopy, TcbConfigure, TcbResume;
+  - root-task syscalls: Retype, CapCopy, TcbConfigure, TcbResume, PageTableMap;
   - ramfs + fd table;
   - invariant checker.
 - no_std, forbid unsafe.
@@ -157,7 +166,10 @@ vifast-runtime
 
 vifast-pte
 - no_std, forbid unsafe; format Sv39, x86_64 4-level, AArch64 4 KiB.
-- encode/decode/index thuần bit; host test 3 format.
+- encode/decode/index thuần bit; table_span() cho từng level.
+- USER_VA_START/USER_VA_END thật của 3 kiến trúc; platform chỉ trả hằng số.
+- Host test kiểm tra dải user không giao kernel identity, nằm trong Sv39,
+  entry PML4/L0 và index biên; tổng 8 test.
 - File: crates/vifast-pte/src/lib.rs.
 
 vifast-user
@@ -200,7 +212,8 @@ vifast-platform-x86_64
 - GDT/TSS/IDT.
 - PIC + PIT 100 Hz.
 - Tự dựng PML4/PDPT/PD/PT 4 KiB; identity map 0..1 GiB.
-- User window 64 GiB: code RX; stack/data RW+NX; unmap thật.
+- User range 64..128 GiB: boot code/stack window tạm thời ở 64 GiB;
+  code RX; stack/data RW+NX; unmap thật.
 - SMEP/SMAP nếu CPU hỗ trợ; user copy dùng STAC/CLAC.
 - ring3 qua iretq; CR3 chuyển sang PML4 riêng.
 - AP bootstrap qua UEFI MP Services đã thử nhưng OVMF hiện tại không trả
@@ -237,7 +250,7 @@ vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 2451 dòng, không còn dependency vifast-arch
+- 3060 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 396808 bytes
@@ -326,7 +339,8 @@ Kind:
 - Frame { pa, size }
 - VSpace { root, page_size, base, next_va, end, code_base, code_len,
            stack_base, stack_len, mappings }
-- PageTable { root, level }  // level sẽ do PageTableMap xác định ở 3b
+- PageTable { root, level, mapped: Option<{vspace, va_base, level}> }
+  // level do PageTableMap gán; mỗi page table chỉ gắn một lần
 
 Tcb:
 - name, state, priority
@@ -352,8 +366,9 @@ Capability:
   không có GRANT.
 
 Untyped/retype:
-- Frame: cấp 1 page căn theo page_size.
-- PageTable: cấp 1 page, level=3.
+- Frame: cấp 1 page căn theo page_size; có thể map vào nhiều VSpace.
+- PageTable: cấp 1 page; khi retype level=0, mapped=None; PageTableMap gán
+  level và vị trí thật.
 - Endpoint: tiêu OBJ_ENDPOINT_BYTES = 256.
 - Notification: tiêu OBJ_NOTIFICATION_BYTES = 128.
 - Tcb: tiêu OBJ_TCB_BYTES = 4096 (quota accounting).
@@ -412,18 +427,29 @@ Scheduler:
 
 9. MEMORY / MMU
 ---------------
-Portable shadow mapping:
+Portable generic page-table walk + reverse map:
 - Page table thật là nguồn sự thật duy nhất.
 - Kernel đi walk generic qua PageTableOps cho map/unmap.
-- VSpace.mappings là reverse map cho revoke/validation.
-- W^X: từ chối mapping vừa WRITE vừa EXEC.
+- VSpace.mappings là reverse map cho revoke và validation, không phải nguồn
+  sự thật của phần cứng.
+- W^X: từ chối mapping vừa WRITE vừa EXEC; Sv39 từ chối W thiếu R.
 - Kiểm tra alignment, overlap, range.
-- VSpace có page_size, code/stack window và reverse mappings.
-- Map thiếu bảng trung gian trả MissingPageTable; không tự cấp phát.
+- VSpace có page_size, range, next_va, code/stack window tạm thời và mappings.
+- Map thiếu bảng trung gian trả MissingPageTable; kernel không tự cấp phát.
+- PageTableMap(page_table_cap, vspace_cap, va):
+  kernel walk tới entry invalid đầu tiên, tự chọn level, kiểm tra toàn bộ
+  table_span(level) nằm trong user_va_range rồi mới ghi PTE.
+- Mỗi PageTable lưu {vspace, va_base, level}; gắn lần hai trả AlreadyMapped.
 - Walk dừng ở leaf cấp cao; không ghi vào bảng kernel dùng chung.
-- validate_user_range() kiểm tra con trỏ user trước DebugWrite/Open/Read/Write.
-- User layout chung trong vifast-abi: code 64 GiB, data +0xa000,
-  stack 64 GiB+0x1000..+0x8fff.
+- Entry 0 của PML4/L0 trên x86/AArch64 là bảng kernel dùng chung; PageTableMap
+  chỉ đi xuyên qua, không thay entry này.
+- Revoke Untyped: Frame trước (unmap leaf), PageTable sâu nhất trước
+  (xoá entry cha + flush), cuối cùng VSpace.
+- validate_user_range() kiểm tra con trỏ user trước DebugWrite/Open/Read/Write
+  dựa trên window/mapping; sẽ chuyển sang walk leaf khi bỏ window ở 3b.
+- User layout chung trong vifast-abi: initial code 64 GiB, data +0xa000,
+  stack 64 GiB+0x1000..+0x8fff; user range đầy đủ 64..128 GiB.
+  Code/stack window hiện là tạm thời, sẽ bỏ khi mỗi task có VSpace riêng.
 - x86 dùng VA cố định; VSpace.direct đã bị xoá.
 - Frame object chỉ metadata PA/size; retype Frame/PageTable zero page.
 - Chưa có page-table page allocator, range VA allocator, ASID/PCID.
@@ -456,7 +482,8 @@ x86_64:
 - Data 64 GiB+0xa000: RW + NX + U.
 - FrameMap/FrameUnmap đi generic walk, không còn platform map riêng.
 - CR3 chuyển sang PML4 riêng trước iretq.
-- Identity map 0..1 GiB; user window 64 GiB nằm ngoài identity.
+- Identity map 0..1 GiB; user range 64..128 GiB nằm ngoài identity,
+  dùng PDPT[64..127] trong entry 0 dùng chung.
 - SMEP/SMAP bật nếu CPUID hỗ trợ; chưa có NX cho data kernel.
 - Chưa có AP/SMP scheduler.
 
@@ -511,7 +538,7 @@ Số syscall chính:
 14 CapRevoke
 15 TcbConfigure
 16 TcbResume
-24 PageTableMap (chưa expose user)
+24 PageTableMap(pt_cap, vspace_cap, va) — trả level kernel chọn
 25 FrameMap
 26 FrameUnmap
 32 DebugWrite
@@ -615,12 +642,13 @@ Cap transfer:
 Lệnh:
     ./scripts/build.sh
     cargo test -p vifast-kernel
+    cargo test -p vifast-pte
     cargo test -p vifast-runtime
     cargo test -p vifast-user
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 25 test:
+Host test hiện có 29 test `vifast-kernel` + 8 test `vifast-pte`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -644,6 +672,19 @@ Host test hiện có 25 test:
 - generic page-table walk xoá leaf trên bảng giả lập host
 - TCB quota 16 đầy trả OutOfMemory
 - walk safety: user range/missing table/high leaf/valid PTE/snapshot
+- PageTableMap gán level 1/2/3, FrameMap qua bảng mới
+- PageTableMap từ chối bảng vượt user range, snapshot không đổi
+- PageTableMap không thay entry 0 dùng chung
+- revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
+  trỏ tới trang đã free.
+
+`vifast-pte` host test:
+- roundtrip/encode/decode 3 format;
+- index biên;
+- quyền R/W/X, RISC-V W-thiếu-R bị từ chối;
+- dải user 3 kiến trúc không giao kernel identity;
+- RISC-V < 256 GiB; x86/AArch64 entry 0 dùng chung;
+- table_span từng level và biên.
 
 QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
@@ -679,8 +720,8 @@ Exit code:
 - x86_64 tự dựng PML4/page table 4 KiB; bỏ VSpace.direct; code RX,
   data/stack NX; unmap thật; SMEP/SMAP nếu CPU hỗ trợ.
 - AArch64 bật PAN nếu CPU hỗ trợ.
-- User layout chung 64 GiB trong vifast-abi; x86 identity map 0..1 GiB
-  không còn chồng với user code.
+- User layout chung 64..128 GiB trong vifast-abi/vifast-pte; x86 identity map
+  0..1 GiB không còn chồng với user range. Boot window 2 MiB chỉ là tạm thời.
 - validate_user_range() trong kernel portable cho mọi syscall có con trỏ.
 - Untyped accounting cho Endpoint/Notification/Tcb; OutOfMemory khi hết.
 - Root task + Retype/CapCopy/TcbConfigure/TcbResume; runtime không còn
@@ -702,8 +743,11 @@ Exit code:
 - Retype Frame/PageTable zero page qua PageTableOps; user test ghi/revoke/retype/đọc = Zero OK.
 - PageTableOps mở rộng read/write PTE, encode/decode, install_kernel, flush;
   kernel walk generic, không gom RevokeReport.
-- vifast-pte crate no_std chứa format 3 arch + host test.
+- vifast-pte crate no_std chứa format 3 arch + host test; user VA constants
+  và table_span() là nguồn duy nhất cho platform.
 - FrameMap/FrameUnmap đi qua generic walk; platform không còn map/unmap riêng.
+- PageTableMap gắn page table ở entry invalid đầu tiên; level do kernel chọn.
+- Revoke Untyped sắp thứ tự Frame → PageTable sâu nhất → PageTable cha → VSpace.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
 - Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (128).
 - Data Untyped 256 KiB/max64; metadata Untyped max32.
@@ -713,7 +757,7 @@ Exit code:
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 396808 bytes dùng static storage.
-- Host test hiện có 25 test `vifast-kernel` + 6 test `vifast-pte`.
+- Host test hiện có 29 test `vifast-kernel` + 8 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -735,12 +779,16 @@ Exit code:
 - Kernel x86 identity map chưa đặt NX cho data.
 - Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
+- Chưa retype VSpace; root page table vẫn tĩnh, install_kernel còn no-op.
+- validate_user_range() vẫn dùng window/reverse map, chưa walk leaf thật.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
 - Self-revoke Untyped hiện trả IllegalOperation; supervisor hủy nhóm gồm chính
   nó sẽ cần destroy-xong-rồi-pick sau này.
 - Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
 - TCB/VSpace chưa tách pool riêng; TCB có quota 16 nhưng vẫn nằm trong object table.
-- PageTable level hiện cố định; PageTableMap level động sẽ làm ở 3b.
+  Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 128 object hoặc trước SMP,
+  vì static Kernel đã giải quyết áp lực stack và 3b chưa cần quá 128 object.
+- VSpace retype + install_kernel thật vẫn là bước tiếp theo.
 - `OBJ_TCB_BYTES=4096` chỉ là quota accounting, không phản ánh đúng `size_of::<Tcb>()`.
 - Server fault khi client BlockedReply sẽ làm client chờ vô hạn; fault endpoint sẽ xử lý.
 
@@ -805,9 +853,10 @@ E. Desktop / Space
 14. 3b: ảnh task là boot module page-aligned + Frame cap; BootInfo frame map
     read-only.
 15. 3b: Frame giữ nhiều mapping hoặc mỗi mapping một cap; revoke unmap mọi nơi.
-16. 3b: PageTableMap + retype VSpace/PageTable; walk generic, format PTE nằm
-    trong vifast-pte, platform chỉ read/write/flush/zero; revoke VSpace trả
-    page table về Untyped.
+16. PageTableMap và retype PageTable đã có; retype VSpace, install_kernel thật
+    và VSpace riêng là bước kế tiếp. Walk generic, format PTE nằm trong
+    vifast-pte, platform chỉ read/write/flush/zero; revoke VSpace trả page
+    table về Untyped.
 17. PageTableOps mở rộng read/write PTE, encode/decode, install_kernel, flush;
     thao tác ghi infallible; bỏ RevokeReport/UserAction::Revoked.
 18. Retype VSpace/PageTable phải zero page; BootInfo định nghĩa trong vifast-abi
@@ -816,8 +865,15 @@ E. Desktop / Space
 20. Page table thật là nguồn sự thật duy nhất; mappings chỉ reverse map.
 21. Map/unmap chỉ trong user_va_range; không ghi bảng kernel dùng chung.
 22. Chỉ invalid→valid và valid→invalid; dừng ở leaf cấp cao; barrier trong write_pte.
+23. PageTableMap walk tới entry invalid đầu tiên, user không truyền level;
+    toàn bộ table_span(level) phải nằm trong user_va_range.
+24. Mỗi PageTable chỉ gắn một vị trí {vspace, va_base, level}; revoke theo thứ
+    tự Frame → PageTable sâu nhất → cha → VSpace.
+25. User VA range thật nằm trong vifast-pte: 64..128 GiB, không giao kernel
+    identity; RISC-V nằm trong nửa thấp Sv39, x86/AArch64 dùng entry 0 chung
+    nhưng không thay entry đó.
 
-20. FILE / TÀI LIỆU LIÊN QUAN
+19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
 README.md
 docs/00-hien-trang.md
@@ -844,7 +900,7 @@ crates/vifast-kernel-*/src/main.rs
 scripts/build.sh
 scripts/test-qemu.py
 
-21. KẾT LUẬN NGẮN
+20. KẾT LUẬN NGẮN
 ------------------
 Đây là một microkernel bring-up đa kiến trúc có:
 - lõi portable sạch (không unsafe/asm/hardware);

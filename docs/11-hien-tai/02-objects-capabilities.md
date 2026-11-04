@@ -147,7 +147,8 @@ pub struct VSpace {
 ```
 
 - `root` là handle mờ với kernel: Sv39 root, TTBR0 root hoặc CR3.
-- `mappings` là shadow table để kiểm tra overlap/W^X/unmap.
+- `mappings` là reverse map để kiểm tra overlap/W^X/unmap; page table thật là nguồn sự thật.
+- `PageTable { root, level, mapped }`; PageTableMap gán level và không thay entry 0 dùng chung.
 - `next_va` dùng để cấp VA tuần tự trong range `[base, end)`.
 
 ### Mapping

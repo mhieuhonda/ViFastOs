@@ -26,7 +26,7 @@ chưa thay thế chương trình mẫu.
                     ├──────────────────────────────────────┤
                     │  vifast-kernel (portable, no_std)    │
                     │  object · capability · IPC · sched  │
-                    │  VSpace shadow · ramfs · ABI checks  │
+                    │  generic walk · ramfs · ABI checks   │
                     ├──────────────────────────────────────┤
                     │  vifast-runtime (generic boot/syscall)│
                     ├──────────────────────────────────────┤
@@ -140,7 +140,7 @@ Kernel chạy self-test trong kernel mode trước khi chuyển sang user mode:
 - Chuyển capability qua IPC: kiểm tra quyền `GRANT`, cài vào slot receiver,
   không cho chuyển tiếp quyền `GRANT`.
 - Untyped/retype: cấp frame và page-table page từ arena, kiểm tra hết arena.
-- VSpace/Frame: map/unmap, kiểm tra overlap và **W^X**.
+- VSpace/Frame/PageTable: generic walk, PageTableMap level động, kiểm tra overlap và **W^X**.
 - ramfs: mở/đọc `/motd`, tạo/ghi/seek/stat `/scratch`, đọc lại, báo
   `NotFound`, đóng fd.
 - SMP bootstrap: RISC-V SBI HSM và AArch64 PSCI khởi động hart thứ hai; hart
@@ -194,10 +194,11 @@ cargo test -p vifast-pte
 - IPC user có subset `Send/Call/Recv/Reply/Signal/Wait/Poll`; chuyển cap đã có
   end-to-end cho `Send`/`Call` (không cho `Reply`), chưa có shared memory,
   reply object/ReplyRecv, IPC buffer hay fault endpoint.
-- VSpace/PageTable object và map/unmap đã có, nhưng page-table root vẫn là bảng
-  tĩnh của từng port; root/server/client hiện dùng chung VSpace và stack window,
-  nên chưa cách ly bộ nhớ giữa các task; chưa có page-table page allocator tổng quát, TLB shootdown
-  đa hart, hay cấp phát địa chỉ ảo tự động theo range lớn.
+- VSpace/PageTable object, generic map/unmap và PageTableMap đã có, nhưng
+  page-table root vẫn là bảng tĩnh của từng port; retype VSpace/install_kernel
+  chưa làm; root/server/client hiện dùng chung VSpace và stack window, nên chưa
+  cách ly bộ nhớ giữa các task; chưa có page-table page allocator tổng quát,
+  TLB shootdown đa hart, hay cấp phát địa chỉ ảo tự động theo range lớn.
 - Untyped/retype đã tính phí Endpoint/Notification/Tcb và reset bump khi revoke
   Untyped; chưa có allocator vật lý đầy đủ, IOMMU hay thu hồi object.
 - RISC-V dùng kernel trap stack qua `sscratch` và `sscratch=0` ở kernel;
@@ -209,8 +210,8 @@ cargo test -p vifast-pte
   hay TLB shootdown đa hart.
 - Timer/scheduler vẫn chạy một hart qua SBI/GICv2/PIC.
 - x86_64 đã tự dựng PML4/page table riêng: code RX, data/stack NX, unmap thật.
-  User window 64 GiB nằm ngoài identity map 0..1 GiB; chưa có AP và data kernel
-  chưa được đặt NX.
+  User range 64..128 GiB nằm ngoài identity map 0..1 GiB; boot window ở 64 GiB
+  chỉ là tạm thời; chưa có AP và data kernel chưa được đặt NX.
 - RISC-V/AArch64/x86_64 đều map code read-only + executable và data/stack NX.
 - VFS mới là ramfs phẳng trong kernel: chưa có block device, cây thư mục,
   quyền file, mount, pager hay filesystem bền vững.
