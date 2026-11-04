@@ -26,9 +26,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 611ab2c feat: centralize user VA ranges and table spans
 - 68dcd50 feat: add PageTableMap and dependency-ordered revoke
 - e748d1b test: pin user VA boundary indices
-- 4ab18c6 feat: retype VSpace and harden cross-untyped revoke.
+- 4ab18c6 feat: retype VSpace and harden cross-untyped revoke
+- 99f7179 test: keep kernel slots untouched by PageTableMap.
 
-Cập nhật gần nhất (commit 4ab18c6): root task, revoke Untyped thật, fault
+Cập nhật code gần nhất (commit 99f7179): root task, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
