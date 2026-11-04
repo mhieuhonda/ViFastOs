@@ -199,6 +199,7 @@ pub struct Kernel {
     pub(crate) stats: KernelStats,
     pub(crate) page_table_ops: Option<&'static dyn PageTableOps>,
     pub(crate) next_cap_id: u64,
+    pub(crate) next_asid: u16,
 }
 
 impl Default for Kernel {
@@ -228,6 +229,7 @@ impl Kernel {
             },
             page_table_ops: None,
             next_cap_id: 1,
+            next_asid: 1,
         }
     }
 
@@ -254,6 +256,7 @@ impl Kernel {
         };
         self.page_table_ops = None;
         self.next_cap_id = 1;
+        self.next_asid = 1;
         self.init_fs();
         if let Some(root) = self.create_tcb("root", 1) {
             self.root = Some(root);
@@ -282,6 +285,18 @@ impl Kernel {
     pub fn current_root(&self, tcb: ObjRef) -> Option<u64> {
         let space = self.tcb(tcb)?.vspace?;
         Some(self.vspace(space)?.root)
+    }
+
+    /// Hardware address-space tag for the TCB's current VSpace.
+    pub fn current_asid(&self, tcb: ObjRef) -> Option<u16> {
+        let space = self.tcb(tcb)?.vspace?;
+        Some(self.vspace(space)?.asid)
+    }
+
+    fn take_asid(&mut self) -> u16 {
+        let asid = self.next_asid;
+        self.next_asid = if asid >= 0x0fff { 1 } else { asid + 1 };
+        asid
     }
 
     pub fn note_root_switch(&mut self) {
@@ -395,9 +410,14 @@ impl Kernel {
         size: u64,
         page_size: u64,
     ) -> Option<ObjRef> {
-        self.alloc(Kind::VSpace(VSpace::with_page_size(
+        let asid = self.take_asid();
+        let object = self.alloc(Kind::VSpace(VSpace::with_page_size(
             root, base, size, page_size,
-        )))
+        )))?;
+        if let Some(space) = self.vspace_mut(object) {
+            space.asid = asid;
+        }
+        Some(object)
     }
 
     pub fn create_user_vspace(&mut self, root: u64, base: u64, page_size: u64) -> Option<ObjRef> {
@@ -769,6 +789,7 @@ impl Kernel {
                 page as u64,
             );
             space.aux_pa = aux_pa;
+            space.asid = self.take_asid();
             Kind::VSpace(space)
         } else {
             kind
@@ -4067,6 +4088,20 @@ mod tests {
             .map_frame(space, frame_b, 0, Rights::READ | Rights::WRITE)
             .unwrap();
         assert_eq!(reused.va, first_free.va);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn vspace_asids_are_nonzero_and_distinct() {
+        let mut kernel = Kernel::new();
+        let first = kernel.create_vspace(0x1000, 0x4000_0000, 0x2000).unwrap();
+        let second = kernel.create_vspace(0x3000, 0x5000_0000, 0x2000).unwrap();
+        let first_asid = kernel.vspace(first).unwrap().asid;
+        let second_asid = kernel.vspace(second).unwrap().asid;
+        assert_ne!(first_asid, 0);
+        assert_ne!(second_asid, 0);
+        assert_ne!(first_asid, second_asid);
+        assert_eq!(kernel.current_asid(kernel.root().unwrap()), None);
         assert!(kernel.check_invariants().is_ok());
     }
 

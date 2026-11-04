@@ -64,6 +64,8 @@ static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut SMAP_ENABLED: bool = false;
 static mut ACTIVE_ROOT: u64 = 0;
+static mut ACTIVE_ASID: u16 = 0;
+static mut PCID_ENABLED: bool = false;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -221,6 +223,18 @@ unsafe fn enable_smep_smap() {
         SMAP_ENABLED = true;
     }
     core::arch::asm!("mov cr4, {}", in(reg) cr4);
+}
+
+unsafe fn enable_pcid() {
+    let leaf1 = core::arch::x86_64::__cpuid(1);
+    if leaf1.ecx & (1 << 17) == 0 {
+        return;
+    }
+    let mut cr4: u64;
+    core::arch::asm!("mov {}, cr4", out(reg) cr4);
+    cr4 |= 1 << 17;
+    core::arch::asm!("mov cr4, {}", in(reg) cr4);
+    PCID_ENABLED = true;
 }
 
 unsafe fn enable_nx() -> bool {
@@ -755,8 +769,12 @@ impl Platform for X86Platform {
         unsafe {
             setup_gdt_tss_idt();
             enable_smep_smap();
+            enable_pcid();
             if NX_ENABLED {
                 vifast_kernel::klog!(X86Platform, "KERNEL DATA NX OK");
+            }
+            if PCID_ENABLED {
+                vifast_kernel::klog!(X86Platform, "PCID ENABLED");
             }
         }
     }
@@ -792,13 +810,21 @@ impl Platform for X86Platform {
         core::ptr::addr_of!(PML4) as u64
     }
 
-    fn switch_root(root_pa: u64) -> bool {
+    fn switch_root(root_pa: u64, asid: u16) -> bool {
         unsafe {
-            if root_pa == 0 || root_pa == ACTIVE_ROOT {
+            if root_pa == 0 || (root_pa == ACTIVE_ROOT && asid == ACTIVE_ASID) {
                 return false;
             }
             ACTIVE_ROOT = root_pa;
-            core::arch::asm!("mov cr3, {}", in(reg) root_pa);
+            ACTIVE_ASID = asid;
+            let cr3 = if PCID_ENABLED {
+                root_pa | (((asid as u64) & 0x0fff) << 12)
+            } else {
+                root_pa
+            };
+            // A normal CR3 write invalidates the target PCID.  Other address
+            // spaces keep their tagged TLB entries.
+            core::arch::asm!("mov cr3, {}", in(reg) cr3);
         }
         true
     }

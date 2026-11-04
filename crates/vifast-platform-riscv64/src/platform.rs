@@ -46,6 +46,7 @@ struct BootPool([u8; 131072]);
 static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut ACTIVE_ROOT: u64 = 0;
+static mut ACTIVE_ASID: u16 = 0;
 #[allow(dead_code)]
 #[repr(align(16))]
 struct TrapStack([u8; 32768]);
@@ -373,15 +374,18 @@ impl Platform for RiscvPlatform {
         table_pa(core::ptr::addr_of!(ROOT))
     }
 
-    fn switch_root(root_pa: u64) -> bool {
+    fn switch_root(root_pa: u64, asid: u16) -> bool {
         unsafe {
-            if root_pa == 0 || root_pa == ACTIVE_ROOT {
+            if root_pa == 0 || (root_pa == ACTIVE_ROOT && asid == ACTIVE_ASID) {
                 return false;
             }
             ACTIVE_ROOT = root_pa;
-            let satp = (8u64 << 60) | (root_pa >> 12);
+            ACTIVE_ASID = asid;
+            let satp = (8u64 << 60) | ((asid as u64) << 44) | (root_pa >> 12);
             core::arch::asm!("csrw satp, {}", in(reg) satp);
-            core::arch::asm!("sfence.vma zero, zero");
+            // Invalidate only the new address-space tag.  ASIDs are unique
+            // until wrap, so entries belonging to other VSpaces remain valid.
+            core::arch::asm!("sfence.vma zero, {}", in(reg) asid as u64);
         }
         true
     }

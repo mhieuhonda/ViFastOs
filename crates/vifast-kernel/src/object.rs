@@ -228,6 +228,10 @@ pub struct VSpace {
     pub root: u64,
     /// Private PDPT/L1 page used by x86/AArch64 retyped roots.
     pub aux_pa: Option<u64>,
+    /// Hardware address-space tag assigned by the portable kernel.  Values
+    /// are nonzero and fit in x86's 12-bit PCID field; RISC-V/AArch64 use the
+    /// same value in their wider ASID fields.
+    pub asid: u16,
     pub page_size: u64,
     pub base: u64,
     pub next_va: u64,
@@ -245,6 +249,7 @@ impl VSpace {
         VSpace {
             root,
             aux_pa: None,
+            asid: 0,
             page_size,
             base,
             next_va: base,

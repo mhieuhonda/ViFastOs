@@ -60,6 +60,7 @@ struct BootPool([u8; 131072]);
 static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut ACTIVE_ROOT: u64 = 0;
+static mut ACTIVE_ASID: u16 = 0;
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
@@ -442,14 +443,19 @@ impl Platform for Aarch64Platform {
         core::ptr::addr_of!(L0) as u64
     }
 
-    fn switch_root(root_pa: u64) -> bool {
+    fn switch_root(root_pa: u64, asid: u16) -> bool {
         unsafe {
-            if root_pa == 0 || root_pa == ACTIVE_ROOT {
+            if root_pa == 0 || (root_pa == ACTIVE_ROOT && asid == ACTIVE_ASID) {
                 return false;
             }
             ACTIVE_ROOT = root_pa;
-            core::arch::asm!("msr ttbr0_el1, {}", in(reg) root_pa);
-            core::arch::asm!("tlbi vmalle1is");
+            ACTIVE_ASID = asid;
+            // TCR_EL1.AS=1 enables 16-bit ASIDs; TTBR0 carries the tag.
+            let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36);
+            core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);
+            let ttbr = root_pa | ((asid as u64) << 48);
+            core::arch::asm!("msr ttbr0_el1, {}", in(reg) ttbr);
+            core::arch::asm!("tlbi aside1is, {}", in(reg) asid as u64);
             core::arch::asm!("dsb ish");
             core::arch::asm!("isb");
         }
@@ -593,7 +599,7 @@ impl Platform for Aarch64Platform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
-        let tcr: u64 = 16 | (1 << 23) | (2 << 32);
+        let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36);
         let mair: u64 = 0xFF;
         unsafe {
             core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);

@@ -74,9 +74,9 @@ pub trait Platform: Arch + Console {
     /// The static kernel-only page tables.  Retyped VSpaces copy the shared
     /// kernel slots from these tables before they gain user mappings.
     fn vspace_root() -> u64;
-    /// Load `root_pa` as the current user root and perform a full TLB flush.
-    /// Returns true only when the loaded root actually changed.
-    fn switch_root(root_pa: u64) -> bool;
+    /// Load `root_pa` with its address-space tag and invalidate that tag's
+    /// stale TLB entries.  Returns true only when root or tag changed.
+    fn switch_root(root_pa: u64, asid: u16) -> bool;
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps;
     /// Verify that trap entry, kernel stacks, descriptor tables, kernel
@@ -207,10 +207,11 @@ pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
     let kernel = A::kernel();
     let tcb = kernel.current().ok_or(KError::IllegalOperation)?;
     let root = kernel.current_root(tcb).ok_or(KError::IllegalOperation)?;
+    let asid = kernel.current_asid(tcb).unwrap_or(0);
     if root == 0 {
         return Err(KError::IllegalOperation);
     }
-    if A::switch_root(root) {
+    if A::switch_root(root, asid) {
         kernel.note_root_switch();
     }
     Ok(())
