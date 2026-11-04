@@ -24,7 +24,7 @@ cargo test -p vifast-user
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
 
-Hiện có 42 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
+Hiện có 43 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;

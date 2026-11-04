@@ -4164,6 +4164,57 @@ mod tests {
     }
 
     #[test]
+    fn shared_frame_is_unmapped_from_two_vspaces() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x4000_0000, 0x8000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000, 0x1000, 4096, 2)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let frame = kernel
+            .retype_as(
+                untyped,
+                ObjType::Frame,
+                Some(SlotAddr { tcb: root, slot: 1 }),
+            )
+            .unwrap();
+        let space_a = kernel
+            .create_vspace_with_page_size(0x2000, 0x4000_0000, 0x4000_0000, 4096)
+            .unwrap();
+        let space_b = kernel
+            .create_vspace_with_page_size(0x3000, 0x4000_0000, 0x4000_0000, 4096)
+            .unwrap();
+        let va = 0x4000_1000;
+        for (space, tables) in [
+            (space_a, [0x4000, 0x6000, 0x8000]),
+            (space_b, [0x5000, 0x7000, 0x9000]),
+        ] {
+            for table in tables {
+                let pt = kernel.create_page_table(table, 0).unwrap();
+                kernel.map_page_table(pt, space, va).unwrap();
+            }
+            kernel
+                .map_frame(space, frame, va, Rights::READ | Rights::EXEC)
+                .unwrap();
+        }
+        assert_eq!(FAKE_MEM.lock().unwrap()[4096 + 1], 0x1002);
+        assert_eq!(FAKE_MEM.lock().unwrap()[4608 + 1], 0x1002);
+
+        kernel.revoke_cap(root, 1).unwrap();
+        assert!(kernel.get(frame).is_none());
+        assert!(kernel.mapping_at(space_a, va).is_none());
+        assert!(kernel.mapping_at(space_b, va).is_none());
+        assert_eq!(FAKE_MEM.lock().unwrap()[4096 + 1], 0);
+        assert_eq!(FAKE_MEM.lock().unwrap()[4608 + 1], 0);
+    }
+
+    #[test]
     fn untyped_object_limit_is_enforced() {
         let mut kernel = Kernel::new();
         let untyped = kernel
