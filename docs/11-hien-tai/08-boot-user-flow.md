@@ -39,8 +39,9 @@ OVMF
 6. `Platform::start_smp`.
 7. `Kernel::new` sạch; tạo boot Untyped 128 KiB/32 object + metadata/data Untyped.
 8. cài metadata/data Untyped slot 2/3.
-9. `build_task_space` dựng root VSpace (code RX, không stack/data); map rời
-   5 stack page root/client/fault; cài VSpace slot 1, set TCB root.
+9. `build_task_space` dựng root VSpace (code user.S RX, không stack/data);
+   map 4 stack page fault/client; parse root ELF và build_task_space_elf(Some)
+   thêm root ELF + stack Rust 4 trang + guard; cài VSpace slot 1.
 10. dựng server VSpace (code dùng chung Frame root, stack +0x2000), cài slot 12.
 11. `check_kernel_mappings` root+server; log boot Untyped sau server.
 12. `prepare_user` (x86).

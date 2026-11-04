@@ -40,7 +40,7 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Map từng PT_LOAD RX/RW theo quyền; không map W+X; không copy code.
 - Root stack 4 trang + một trang guard; server/client/fault tạm giữ user.S ở Bước 6.
 - 4.5 dùng `build_task_space_shared_code`: root và server map cùng Frame code.
-- Root VSpace map stack root/client/fault1/2/3; stack server +0x2000 chỉ nằm
+- Root VSpace map stack fault1/2/3 + client, root ELF + stack Rust; stack server +0x2000 chỉ nằm
   trong VSpace server. Fault3 ghi +0x2000 phải USER FAULT.
 
 ## 5. Frame map nhiều VSpace
@@ -65,6 +65,8 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
   BootInfo sẽ thay hard-code ở Bước 7.
 - FrameUnmap cần VSpace WRITE + Frame cap khớp PA; chỉ VSpace cap không thể
   unmap mapping của frame không sở hữu.
+- FrameMap kiểm tra quyền mapping ⊆ quyền Frame cap. Frame cap code user.S là
+  READ|EXEC, không WRITE, nên không thể map code dùng chung thành RW.
 - Object có `creator: CapRef { addr, id }` để revoke Untyped copy không phá
   object của cap gốc; `delete_cap` từ chối khi còn object/cap con.
 - Kernel mapping check dùng walk leaf thật (non-user/X/W), không chỉ kiểm tra slot.

@@ -3063,6 +3063,43 @@ mod tests {
     }
 
     #[test]
+    fn frame_map_rights_are_bounded_by_frame_cap_rights() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let vspace = kernel
+            .create_vspace_with_page_size(0x1000, 0x10_0000_0000, 0x1000, 4096)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(vspace, ObjType::VSpace, Rights::WRITE))
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(frame, ObjType::Frame, Rights::READ | Rights::EXEC),
+            )
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameMap as u64,
+                1,
+                2,
+                0x10_0000_0000,
+                (Rights::READ | Rights::WRITE).0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::NoRights,
+            }
+        );
+        assert!(kernel.mapping_at(vspace, 0x10_0000_0000).is_none());
+    }
+
+    #[test]
     fn cap_transfer_requires_an_explicit_empty_slot() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();

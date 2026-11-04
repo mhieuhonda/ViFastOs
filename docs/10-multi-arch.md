@@ -71,7 +71,7 @@ nếu không có VM/emulation. Vì vậy:
 
 ## 4. Những gì đã kiểm chứng
 
-- `cargo test -p vifast-kernel`: 54 test portable trên host.
+- `cargo test -p vifast-kernel`: 55 test portable trên host.
 - `cargo test -p vifast-pte`: 11 test host cho cả 3 format PTE.
 - `cargo test -p vifast-elf`: 17 test parser ELF64 PT_LOAD.
 - Root ELF: 3 target build + validate, ET_EXEC/segment window/soft-float.
@@ -101,7 +101,7 @@ Thứ tự đề xuất:
 5. ~~Untyped/retype cơ bản~~ — đã có Frame/PageTable page; còn allocator vật lý
    đầy đủ và thu hồi object.
 6. **vifast-user + ABI wire format** — wrapper đã có; còn root task Rust,
-   nạp root ELF bằng vifast-elf, IPC buffer/shared memory.
+   BootInfo, Untyped con/client VSpace, IPC buffer/shared memory.
 7. **VFS đầy đủ, block driver, net, compositor, ViFastKey** — ramfs đã có.
 
 Mỗi bước phải chạy cùng bộ test trên cả ba arch trước khi coi là “hỗ trợ”.

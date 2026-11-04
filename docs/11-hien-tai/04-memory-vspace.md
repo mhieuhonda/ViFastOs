@@ -65,7 +65,7 @@ VSpace, để Frame còn unmap được leaf trước khi bảng cha bị gỡ.
 - `aux_pa` cho PDPT/L1 riêng của VSpace retype trên x86/AArch64;
 - tối đa 32 mapping (reverse map).
 
-Root VSpace 4.5 dùng chung cho root/client/fault thread; server có VSpace riêng.
+Root VSpace 6.4 dùng chung cho root Rust/client/fault thread; server có VSpace riêng.
 `validate_user_range()` walk page table thật cho từng trang trước
 `DebugWrite`, `Open`, `Read`, `Write`: leaf phải non-kernel, có R, và W nếu
 cần ghi. Code/stack window fields đã bị xoá; reverse map chỉ còn cho revoke.
