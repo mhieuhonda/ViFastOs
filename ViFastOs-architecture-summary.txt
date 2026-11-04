@@ -31,9 +31,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 27a40f1 fix: scope Untyped revoke and assert kernel mappings
 - 9a325c5 fix: size the data Untyped object quota
 - 0eb3d67 fix: use exact cap ids and walk kernel mappings
-- d1c42b0 fix: reclaim orphaned objects and assert kernel image range.
+- d1c42b0 fix: reclaim orphaned objects and assert kernel image range
+- c9c4591 fix: reparent dying capability subtrees.
 
-Cập nhật code gần nhất (commit d1c42b0): root task, revoke Untyped thật, fault
+Cập nhật code gần nhất (commit c9c4591): root task, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
@@ -786,7 +787,7 @@ Exit code:
 - Revoke PageTable/VSpace xoá reverse map trong span, zero trang bảng và gỡ
   metadata của bảng con; VSpace đang là root của thread hiện tại bị từ chối hủy.
 - KERNEL_SHARED_SLOTS xác nhận AArch64 dùng L1[0..=1], không chỉ 0..1 GiB.
-- Object.creator/CapRef chặn client revoke bản copy Untyped để phá object của task khác; CapCopy Untyped vẫn chia sẻ vùng nhớ, Untyped con là bước sau.
+- Object.creator/CapRef + reparent chặn client revoke bản copy Untyped để phá object của task khác; CapCopy Untyped vẫn chia sẻ vùng nhớ, Untyped con là bước sau.
 - Runtime assert Untyped nằm trong kernel_accessible_range() của platform.
 - Boot-time check walk leaf thật từ root: trap entry có X, stack/IST/GDT/TSS/IDT/
   KERNEL_STORAGE có W, tất cả non-user; kiểm tra toàn bộ kernel_accessible_range.
