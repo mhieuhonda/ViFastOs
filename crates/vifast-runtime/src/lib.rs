@@ -780,6 +780,19 @@ pub mod timer {
                 switches
             );
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
+            if let Some((size, bump, objects, max_objects)) =
+                kernel.untyped_usage_by_base(A::data_page().as_ptr() as usize)
+            {
+                let page = A::PAGE_SIZE;
+                vifast_kernel::klog!(
+                    A,
+                    "DATA UNTYPED pages={}/{} objects={}/{}",
+                    bump / page,
+                    size / page,
+                    objects,
+                    max_objects
+                );
+            }
             A::exit(0);
         }
         A::reload_timer();

@@ -627,6 +627,17 @@ impl Kernel {
         Some((region.size, region.bump, region.objects, region.max_objects))
     }
 
+    /// Look up usage for an Untyped by its physical base.  Runtime uses this
+    /// to log the data arena at test-exit after root has allocated from it.
+    pub fn untyped_usage_by_base(&self, base: usize) -> Option<(usize, usize, usize, usize)> {
+        self.objs.iter().find_map(|object| match object.kind {
+            Kind::Untyped(ref region) if region.base == base => {
+                Some((region.size, region.bump, region.objects, region.max_objects))
+            }
+            _ => None,
+        })
+    }
+
     /// Carve one object out of an untyped memory region.
     ///
     /// Frames and page tables consume one aligned physical page.  Endpoint,

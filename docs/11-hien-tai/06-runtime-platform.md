@@ -115,8 +115,10 @@ MP Services, tránh làm hỏng môi trường firmware.
 19. `A::enter_user(context root)`.
 
 Root task Rust in `ROOT RUST`, tự Retype/CapCopy/TcbConfigure/TcbResume
-server/client/fault thread, in `ROOT READY`, rồi block bằng `Wait` trên
-notification riêng. Runtime không còn tham chiếu "Server"/"Client".
+server/client/fault thread, dựng VSpace client từ data Untyped (code RX +
+stack RW, log `CLIENT VSPACE OK`), in `ROOT READY`, rồi block bằng `Wait` trên
+notification riêng. Runtime không còn tham chiếu "Server"/"Client"; data
+Untyped được log lại lúc test-exit.
 
 ## 4. Syscall dispatch
 

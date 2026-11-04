@@ -98,6 +98,8 @@ TcbConfigure server (entry, stack 0x1000003000, VSpace BootInfo.server)
 TcbConfigure client (entry, stack 0x1000009000, VSpace BootInfo.root)
 TcbResume server/client
 TcbConfigure/TcbResume fault1/2/3 (priority 6)
+Retype data Untyped → VSpace client, PageTable ×level, stack Frame
+FrameMap code BootInfo → client VSpace RX; stack RW; log CLIENT VSPACE OK
 Wait(root notification)
 ```
 

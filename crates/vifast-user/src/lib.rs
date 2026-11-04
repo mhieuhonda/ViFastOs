@@ -158,6 +158,43 @@ pub fn cap_copy(src_slot: u8, dst_tcb_slot: u8, dst_slot: u8, rights: u8) -> Sys
     result(e, v)
 }
 
+pub fn page_table_map(page_table_slot: u8, vspace_slot: u8, va: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::PageTableMap as u64,
+            [page_table_slot as u64, vspace_slot as u64, va, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn frame_map(vspace_slot: u8, frame_slot: u8, va: u64, rights: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::FrameMap as u64,
+            [
+                vspace_slot as u64,
+                frame_slot as u64,
+                va,
+                rights as u64,
+                0,
+                0,
+            ],
+        )
+    };
+    result(e, v)
+}
+
+pub fn frame_unmap(vspace_slot: u8, va: u64, frame_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::FrameUnmap as u64,
+            [vspace_slot as u64, va, frame_slot as u64, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn tcb_configure(
     tcb_slot: u8,
     entry: u64,

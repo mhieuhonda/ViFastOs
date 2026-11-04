@@ -93,6 +93,18 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
   tuần tự từ `free_slot_start`; code caps nằm trong `user_code_first/count`.
 - Root in `BOOTINFO OK`; harness yêu cầu đúng một chuỗi.
 
+## 5d. VSpace client
+
+- 7.4 dựng VSpace client từ **data Untyped của root**, không dùng Untyped con.
+  VSpace/PageTable/stack là tài nguyên của root; client chưa được chuyển sang.
+- Root retype VSpace, lặp `PageTableMap` + `FrameMap` qua helper
+  `map_with_tables()` cho tới khi hết `MissingPageTable`. Code lấy từ Frame cap
+  READ|EXEC trong BootInfo, stack RW.
+- Code, client stack và DATA_VA cùng một vùng 2 MiB; bảng cấp cuối được tạo
+  bởi code/stack nên client FrameMap tại +0xa000 không gặp MissingPageTable.
+- Bước 7.4 chỉ log `CLIENT VSPACE OK`; TcbConfigure chuyển sang VSpace mới ở
+  7.5. Data Untyped được log lúc test-exit để kiểm tra quota.
+
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
@@ -167,7 +179,7 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
    giữ user.S.
 6. 7.1/7.1b/7.1c: FrameMap ⊆ Frame cap, W^X theo Frame + READ, PA uniqueness,
    sync_icache khi map EXEC và counter checked_add (đã xong).
-7. Bước 7.2–7.5: Untyped con (đã xong 7.2), BootInfo (đã xong 7.3), client
-   VSpace riêng; bỏ slot hard-code.
+7. Bước 7.2–7.5: Untyped con (đã xong 7.2), BootInfo (đã xong 7.3), dựng
+   VSpace client (đã xong 7.4), tách client/fault4 (7.5).
 8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
 9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

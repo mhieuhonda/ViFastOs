@@ -9,8 +9,9 @@
 
 use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
-    CLIENT_STACK_TOP, FAULT1_STACK_TOP, FAULT2_STACK_TOP, FAULT3_STACK_TOP, SERVER_STACK_TOP,
-    USER_ENTRY_CLIENT, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_SERVER,
+    CLIENT_STACK_BASE, CLIENT_STACK_TOP, CODE_VA, FAULT1_STACK_TOP, FAULT2_STACK_TOP,
+    FAULT3_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_CLIENT, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2,
+    USER_ENTRY_FAULT3, USER_ENTRY_SERVER,
 };
 use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_user::SyscallResult;
@@ -27,6 +28,7 @@ core::arch::global_asm!(include_str!("start_riscv64.S"));
 const ROOT_RUST: &[u8] = b"ROOT RUST\n";
 const ROOT_READY: &[u8] = b"ROOT READY\n";
 const BOOTINFO_OK: &[u8] = b"BOOTINFO OK\n";
+const CLIENT_VSPACE_OK: &[u8] = b"CLIENT VSPACE OK\n";
 const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
 
 fn check(result: SyscallResult) {
@@ -48,6 +50,29 @@ fn retype(untyped_slot: u8, ty: ObjType, slot: u8) {
 
 fn copy(src: u8, tcb: u8, dst: u8, rights: Rights) {
     check(vifast_user::cap_copy(src, tcb, dst, rights.0));
+}
+
+fn map_with_tables(
+    untyped_slot: u8,
+    vspace_slot: u8,
+    frame_slot: u8,
+    va: u64,
+    rights: Rights,
+    slots: &mut SlotAllocator,
+) {
+    for _ in 0..4 {
+        let mapped = vifast_user::frame_map(vspace_slot, frame_slot, va, rights.0);
+        if mapped.error == KError::Ok {
+            return;
+        }
+        if mapped.error != KError::MissingPageTable {
+            panic!("frame map failed: {:?}", mapped.error);
+        }
+        let table = slots.alloc();
+        retype(untyped_slot, ObjType::PageTable, table);
+        check(vifast_user::page_table_map(table, vspace_slot, va));
+    }
+    panic!("page table depth exceeded");
 }
 
 struct SlotAllocator {
@@ -170,6 +195,35 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         6,
     ));
     check(vifast_user::tcb_resume(fault3_tcb));
+
+    let client_vspace = slots.alloc();
+    retype(data_untyped, ObjType::VSpace, client_vspace);
+    for index in 0..info.user_code_count {
+        let code_slot = info.user_code_first + index;
+        let va = CODE_VA as u64 + index as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
+        map_with_tables(
+            data_untyped,
+            client_vspace,
+            code_slot as u8,
+            va,
+            Rights::READ | Rights::EXEC,
+            &mut slots,
+        );
+    }
+    // CODE_VA, CLIENT_STACK_BASE and DATA_VA share one 2 MiB table.  Building
+    // the code and stack mappings therefore leaves the final-level table in
+    // place for the client's later FrameMap at DATA_VA (+0xa000).
+    let client_stack_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, client_stack_frame);
+    map_with_tables(
+        data_untyped,
+        client_vspace,
+        client_stack_frame,
+        CLIENT_STACK_BASE as u64,
+        Rights::READ | Rights::WRITE,
+        &mut slots,
+    );
+    write(CLIENT_VSPACE_OK);
     write(ROOT_READY);
 
     loop {
