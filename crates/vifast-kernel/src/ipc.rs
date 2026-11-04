@@ -94,6 +94,7 @@ impl Kernel {
             }
             if let Some(table) = self.tcb_mut(receiver) {
                 table.resume = Some(msg);
+                table.resume_error = None;
             } else {
                 return Err(KError::ObjectDestroyed);
             }
@@ -229,6 +230,7 @@ impl Kernel {
         }
         if let Some(table) = self.tcb_mut(client) {
             table.resume = Some(msg);
+            table.resume_error = None;
             table.state = ThreadState::Ready;
         }
         self.make_ready(client);
@@ -250,6 +252,7 @@ impl Kernel {
             if let Ok(msg) = Message::new(LABEL_NOTIFICATION, &[value]) {
                 if let Some(table) = self.tcb_mut(waiter) {
                     table.resume = Some(msg);
+                    table.resume_error = None;
                 }
             }
             self.make_ready(waiter);

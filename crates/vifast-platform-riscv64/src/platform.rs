@@ -402,8 +402,12 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         return;
     }
     if frame.scause != 8 {
-        vifast_kernel::klog!(Riscv64, "unexpected trap cause {:#x}", frame.scause);
-        Riscv64::exit(1);
+        let stval: u64;
+        unsafe {
+            core::arch::asm!("csrr {}, stval", out(reg) stval);
+        }
+        vifast_runtime::fault::suspend::<RiscvPlatform>(frame, frame.scause, stval);
+        return;
     }
     let number = frame.regs[17];
     frame.sepc = frame.sepc.wrapping_add(4);

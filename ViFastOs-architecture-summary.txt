@@ -41,7 +41,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 12/12 PASS
+- cargo test -p vifast-kernel: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -54,8 +54,8 @@ Output tiêu biểu:
 - SELFTEST PASS
 - SMP OK (harts=2) trên RISC-V/AArch64
 - SMP SKIP (x86 AP bootstrap pending) trên x86_64
-- "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write", "Client",
-  "Cap OK", "Reply OK", "PREEMPT OK"
+- "Fault", "USER FAULT", "Server", "Mapped", "ViFastOS ramfs",
+  "ViFastOS write", "Client", "Cap OK", "Reply OK", "PREEMPT OK"
 - user layout chung: code 0x0000_0010_0000_0000 (64 GiB)
 
 3. KIẾN TRÚC TỔNG THỂ SAU REFACTOR
@@ -74,6 +74,8 @@ Sơ đồ lớp:
     +--------------------------------------------------+
     | vifast-runtime (generic boot/syscall/timer)      |
     | no_std, forbid unsafe                            |
+    +--------------------------------------------------+
+    | vifast-user (syscall wrappers, no_std)           |
     +--------------------------------------------------+
     | vifast-platform-* (BSP integration)              |
     | trap - MMU - timer - IRQ - SMP - user entry      |
@@ -203,17 +205,20 @@ vifast-kernel-riscv64 / aarch64 / x86_64-uefi
 5. KÍCH THƯỚC / ĐỘ TÁCH LỚP HIỆN TẠI
 -------------------------------------
 main.rs binary:
-- RISC-V: 49 dòng
-- AArch64: 49 dòng
-- x86_64 UEFI: 48 dòng
+- RISC-V: 52 dòng
+- AArch64: 52 dòng
+- x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: khoảng 381 dòng
-- AArch64: khoảng 454 dòng
-- x86_64: khoảng 528 dòng
+- RISC-V: khoảng 423 dòng
+- AArch64: khoảng 488 dòng
+- x86_64: khoảng 610 dòng
 
 runtime:
-- khoảng 366 dòng
+- khoảng 440 dòng
+
+vifast-user:
+- khoảng 203 dòng
 
 arch primitive:
 - RISC-V: khoảng 86 dòng
@@ -228,7 +233,7 @@ có unsafe). Platform là nơi duy nhất được phép dùng asm/MMIO/trap fra
 RISC-V:
   OpenSBI -> boot.S:_start -> rust_main(hartid, dtb)
   -> vifast_runtime::boot::<RiscvPlatform>
-  -> runtime tạo kernel/selftest/SMP/user/caps
+  -> runtime tạo root task + selftest/SMP
   -> Platform::enter_user: satp, stvec, sret.
 
 AArch64:
@@ -291,7 +296,7 @@ Kind:
 - Endpoint { send: Queue, recv: Queue }
 - Notification { word, waiter }
 - Tcb
-- Untyped { base, size, bump, page_size }
+- Untyped { base, size, bump, page_size, max_objects, objects }
 - Frame { pa, size }
 - VSpace { root, page_size, base, next_va, end, code_base, code_len,
            stack_base, stack_len, mappings }
@@ -327,7 +332,8 @@ Untyped/retype:
 - Notification: tiêu OBJ_NOTIFICATION_BYTES = 128.
 - Tcb: tiêu OBJ_TCB_BYTES = 1024.
 - Hết Untyped trả OutOfMemory.
-- Revoke cap Untyped xoá descendant và reset bump.
+- Revoke cap Untyped xoá descendant, destroy object thật (Frame unmap, TCB detach,
+  Endpoint/Notification wake lỗi), rồi reset bump/objects.
 - Chưa có free/destroy object/frame.
 
 8. IPC VÀ SCHEDULER
@@ -374,7 +380,7 @@ Scheduler:
 - yield_current() đưa Running về Ready + enqueue.
 - Block state không nằm trong runqueue.
 - Runtime lưu/nạp Platform::Context.
-- Timer 100 Hz, sau 20 tick in PREEMPT OK và exit QEMU.
+- Timer 100 Hz; binary test bật feature test-exit để sau 20 tick in PREEMPT OK và exit QEMU.
 - SMP scheduler chưa có: hart phụ chỉ idle.
 
 9. MEMORY / MMU
@@ -465,13 +471,14 @@ Số syscall chính:
 1  Call
 2  Recv
 3  Reply
+4  ReplyRecv (chưa triển khai)
 5  Signal
 6  Wait
 7  Poll
-4  ReplyRecv (chưa triển khai)
-8  Yield (hiện chỉ trả Ok, chưa switch)
+8  Yield (đã chuyển context qua switch_blocked)
 9  Retype (Endpoint/Notification/Tcb/Frame/PageTable)
 10 CapCopy
+14 CapRevoke
 15 TcbConfigure
 16 TcbResume
 24 PageTableMap (chưa expose user)
@@ -530,7 +537,9 @@ Root task dùng syscall:
 - TcbConfigure(server, entry, stack, VSpace slot 1, priority 5)
 - TcbConfigure(client, entry, stack, VSpace slot 1, priority 5)
 - TcbResume(server), TcbResume(client)
-- sau đó Yield loop; timer preempt root.
+- Retype thêm fault TCB (priority 6) và notification riêng cho root
+- TcbResume(fault), rồi Wait trên notification slot 8; root không busy-loop.
+- Fault TCB cố ý load 0x8000_0000; kernel suspend nó và chạy tiếp server/client.
 
 Server A:
 - cap endpoint READ.
@@ -548,6 +557,12 @@ Client B:
 - DebugWrite "Client".
 - loop Call với cap notification ở lần đầu; các Call sau không chuyển cap.
 - Poll notification, in "Cap OK"/"Cap BAD", "Reply OK"/"Reply BAD".
+
+Fault thread:
+- DebugWrite "Fault".
+- load từ 0x8000_0000 (kernel identity, U/S=0).
+- kernel in "USER FAULT", chuyển TCB sang Faulted, chọn thread kế tiếp.
+- QEMU vẫn in "Reply OK" và kết thúc "PREEMPT OK".
 
 Cap transfer:
 - First Call: client gửi notification cap có GRANT vào server slot 4.
@@ -574,7 +589,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 12 test:
+Host test hiện có 17 test:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -584,9 +599,14 @@ Host test hiện có 12 test:
 - syscall từ chối cap sai type/đã revoke và W^X
 - chuyển cap yêu cầu slot đích rõ ràng, không fallback
 - user pointer validation cho DebugWrite/Open/Read/Write
-- Untyped accounting metadata + OutOfMemory
-- revoke Untyped reset accounting + xoá cap con
-- TcbConfigure/TcbResume
+- Untyped byte accounting + OutOfMemory
+- revoke Untyped destroy Frame + xoá mapping cũ
+- revoke Untyped detach TCB đang BlockedRecv
+- max_objects limit
+- cap copy giữ parent chain
+- TcbConfigure entry/stack validation
+- TcbResume từ chối TCB chưa configure
+- Yield thật qua switch_blocked
 
 QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
@@ -604,6 +624,7 @@ QEMU test:
 - ViFastOS ramfs
 - ViFastOS write
 - Reply OK
+- USER FAULT
 - RISC-V/AArch64 phải có SMP OK
 - x86_64 chấp nhận SMP SKIP
 
@@ -630,7 +651,16 @@ Exit code:
 - ObjRef/Object generation u32.
 - Xoá legacy multiboot crate.
 - vifast-user crate với syscall wrapper 3 kiến trúc.
-- Host test hiện có 12 test.
+- Revoke Untyped destroy object thật: unmap Frame, detach TCB, wake
+  Endpoint/Notification bằng ObjectDestroyed, free object + tăng gen, rồi reset
+  bump/objects.
+- Mỗi Untyped có `max_objects`/`objects`; retype kiểm tra cả byte lẫn số object.
+- Yield thật qua `switch_blocked`; root block bằng `Wait` trên notification riêng.
+- User fault tối giản: log `USER FAULT`, suspend TCB Faulted, chọn thread khác,
+  không panic.
+- `test-exit` là feature của binary test; runtime production không còn exit cứng
+  sau 20 tick.
+- Host test hiện có 17 test.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -639,7 +669,7 @@ Exit code:
 - Chưa có TLB shootdown đa hart.
 - Page table root vẫn tĩnh; chưa có page-table page allocator tổng quát.
 - Chưa có range VA allocator, ASID/PCID.
-- Chưa có free/destroy object/frame; object table cố định 32.
+- Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 32.
 - Chưa có IOMMU.
 - Chưa có ELF loader, shared memory, IPC buffer.
 - Chưa có Reply mang capability/ReplyRecv/fault endpoint.
@@ -650,7 +680,9 @@ Exit code:
 - Chưa có formal verification/fuzz diện rộng.
 - x86 identity map 0..1 GiB; nếu OVMF/RAM vượt mốc này phải lấy memory map.
 - Kernel x86 identity map chưa đặt NX cho data.
-- Yield chưa chuyển context.
+- Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
+  client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
+- Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
 
 17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
 ----------------------------------
@@ -740,5 +772,6 @@ scripts/test-qemu.py
 - user mode, IPC, capability transfer, page mapping, ramfs và timer preemption;
 - test QEMU 3 kiến trúc xanh.
 
-Nó chưa phải OS hoàn chỉnh. Các khoảng trống lớn nhất là SMP scheduler thật,
-x86 AP, allocator/ELF/userland, driver/FS/network và compositor/ViFastKey.
+Nó chưa phải OS hoàn chỉnh. Theo thứ tự đã chốt, khoảng trống lớn nhất là
+userland/ELF + VSpace riêng, allocator/revoke hoàn chỉnh, rồi SMP thật (x86 AP,
+BKL, IPI, TLB shootdown), driver/FS/network và compositor/ViFastKey.

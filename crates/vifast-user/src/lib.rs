@@ -183,6 +183,11 @@ pub fn tcb_configure(
     result(e, v)
 }
 
+pub fn cap_revoke(slot: u8) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::CapRevoke as u64, [slot as u64, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn tcb_resume(tcb_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

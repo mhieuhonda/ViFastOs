@@ -460,16 +460,8 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
     let frame = unsafe { &mut *frame };
     let ec = (frame.esr >> 26) & 0x3f;
     if ec != 0x15 {
-        vifast_kernel::klog!(
-            Aarch64,
-            "unexpected exception EC={:#x} ESR={:#x} FAR={:#x} ELR={:#x} SPSR={:#x}",
-            ec,
-            frame.esr,
-            frame.far,
-            frame.elr,
-            frame.spsr
-        );
-        Aarch64::exit(1);
+        vifast_runtime::fault::suspend::<Aarch64Platform>(frame, frame.esr, frame.far);
+        return;
     }
     let number = frame.regs[8];
     let args = [

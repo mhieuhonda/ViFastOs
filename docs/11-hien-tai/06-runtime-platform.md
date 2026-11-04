@@ -103,8 +103,9 @@ MP Services, tránh làm hỏng môi trường firmware.
 16. `A::start_timer()`.
 17. `A::enter_user(context root)`.
 
-Root task tự Retype/CapCopy/TcbConfigure/TcbResume server và client. Runtime
-không còn tham chiếu "Server"/"Client".
+Root task tự Retype/CapCopy/TcbConfigure/TcbResume server/client/fault thread,
+sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham chiếu
+"Server"/"Client".
 
 ## 4. Syscall dispatch
 
@@ -117,6 +118,7 @@ không còn tham chiếu "Server"/"Client".
   - `Return`/`Message`: ghi register;
   - `MapFrame`/`UnmapFrame`: gọi platform MMU, rollback shadow nếu lỗi;
   - `ConfigureTcb`: cài context entry/stack cho TCB con;
+  - `Revoked`: flush các VA mà kernel đã bỏ khỏi shadow mapping;
   - `Open`/`Read`/`Write`: copy user pointer qua platform, gọi ramfs;
   - `Debug`: copy buffer rồi `putc`;
   - `Blocked`: chuyển context;
@@ -130,7 +132,8 @@ Mọi `unsafe` copy user nằm sau `Platform::read_user`/`write_user`.
 
 - lưu context;
 - tăng tick;
-- sau 20 tick in `PREEMPT OK` và exit;
+- in `PREEMPT OK` và exit **chỉ khi feature `test-exit` được bật** (binary test);
+- user fault → `fault::suspend`, TCB `Faulted`, chọn thread khác;
 - reload/ack timer;
 - yield + pick;
 - nạp context + resume message.

@@ -25,6 +25,18 @@ user_root:
     li a1, 3
     li a2, 7
     ecall
+    /* Separate notification used only to block root after bootstrap. */
+    li a7, 9
+    li a0, 2
+    li a1, 3
+    li a2, 8
+    ecall
+    /* Fault-injection thread: must be suspended, not panic the kernel. */
+    li a7, 9
+    li a0, 2
+    li a1, 1
+    li a2, 9
+    ecall
 
     /* endpoint -> server slot 1 (READ), client slot 1 (WRITE) */
     li a7, 10
@@ -82,9 +94,32 @@ user_root:
     li a7, 16
     li a0, 6
     ecall
-1:
-    li a7, 8
+    li a7, 15
+    li a0, 9
+    la a1, user_thread_fault
+    li a2, 0x1000005000
+    li a3, 1
+    li a4, 6
     ecall
+    li a7, 16
+    li a0, 9
+    ecall
+    /* Root has no policy loop; block until someone signals slot 8. */
+    li a7, 6
+    li a0, 8
+    ecall
+1:
+    j 1b
+
+    .globl user_thread_fault
+user_thread_fault:
+    li a7, 32
+    la a0, user_fault_msg
+    li a1, 6
+    ecall
+    li t0, 0x80000000
+    ld t1, 0(t0)
+1:
     j 1b
 
     .globl user_thread_a
@@ -249,5 +284,7 @@ user_cap_ok:
     .asciz "Cap OK\n"
 user_cap_bad:
     .asciz "Cap BAD\n"
+user_fault_msg:
+    .asciz "Fault\n"
     .globl user_program_end
 user_program_end:

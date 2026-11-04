@@ -56,7 +56,7 @@ nếu không có VM/emulation. Vì vậy:
 | User entry | `sret` → U-mode | `eret` → EL0 | `iretq` → ring3 |
 | Syscall | `ecall` | `svc #0` | `int 0x80` |
 | Timer | SBI timer | GICv2 + generic timer | PIC + PIT |
-| Preemption | root + 2 TCB | root + 2 TCB | root + 2 TCB |
+| Preemption | root + server/client/fault | root + server/client/fault | root + server/client/fault |
 | User IPC | Call/Reply | Call/Reply | Call/Reply |
 | User frame map/unmap | một page, Sv39 | một page, 4-level | một page, PML4 4 KiB |
 | W^X | code RX, stack NX | code RO+X, data NX | code RX, data/stack NX |
@@ -71,7 +71,7 @@ nếu không có VM/emulation. Vì vậy:
 
 ## 4. Những gì đã kiểm chứng
 
-- `cargo test -p vifast-kernel`: 12 test portable trên host.
+- `cargo test -p vifast-kernel`: 17 test portable trên host.
 - `cargo test -p vifast-user`: wrapper compile.
 - QEMU RISC-V64 (`-smp 2`): self-test + U-mode IPC + frame map/unmap + SMP
   bootstrap + timer preemption.
@@ -80,8 +80,8 @@ nếu không có VM/emulation. Vì vậy:
 - QEMU x86_64/OVMF (`-smp 2`): self-test + ring3 IPC + frame map/unmap + PIC/PIT;
   AP bring-up chưa có.
 - `scripts/test-qemu.py` chạy lặp lại và kiểm tra `SELFTEST PASS`, banner,
-  `Server`, `Mapped`, `ViFastOS ramfs`, `ViFastOS write`, `Client`, `Cap OK`,
-  `Reply OK`, `PREEMPT OK`.
+  `Server`, `Mapped`, `ViFastOS ramfs`, `ViFastOS write`, `Client`, `Fault`,
+  `USER FAULT`, `Cap OK`, `Reply OK`, `PREEMPT OK`.
 
 ## 5. Những gì cần thêm để thành OS
 

@@ -15,13 +15,14 @@ sang bản bare-metal.
 | Syscall vào kernel | `ecall` | `svc #0` | `int 0x80` |
 | User chạy `DebugWrite` | có | có | có |
 | Timer interrupt | SBI timer | GICv2 + generic timer | PIC + PIT |
-| Preemptive 2 user thread | có | có | có |
+| Preemptive root + server/client + fault | có | có | có |
 | User IPC Call/Reply | có | có | có |
 | User `Retype` + `FrameMap/Unmap` | có | có | có |
 | ramfs VFS + file syscall | có | có | có |
 | SMP bootstrap | HSM, hart phụ idle | PSCI, hart phụ idle | chưa AP; hướng ACPI MADT + LAPIC/SIPI |
 | W^X user code/data | có (RX + NX stack) | có (RO+X, NX data) | có (RX + NX data) |
 | Chuyển capability + notification qua IPC | có | có | có |
+| User fault suspend (không panic) | có | có | có |
 | User gọi `Exit` | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
@@ -58,7 +59,8 @@ Kernel portable hiện có:
 
 - TLB shootdown đa hart, page-table page allocator tổng quát, range VA allocator.
 - SMP scheduler: x86_64 AP bring-up, BKL, per-hart runqueue, IPI, timer đa hart.
-- Thu hồi object/frame, allocator vật lý đầy đủ, IOMMU.
+- Revoke Untyped đã destroy object con; còn allocator vật lý đầy đủ, free toàn
+  bộ object ngoài revoke và IOMMU.
 - `vifast-user` mới có syscall wrapper, chưa thay chương trình assembly;
   chưa có ELF loader, boot info page, ABI encode/decode đầy đủ, shared memory.
 - VFS đầy đủ (block device, cây thư mục, quyền, mount, pager, FS bền vững).
@@ -78,6 +80,8 @@ Kernel portable hiện có:
 - Hart phụ RISC-V/AArch64 mới chạy vòng idle, không vào scheduler; x86_64 chưa
   khởi động AP; hướng là ACPI MADT + LAPIC/SIPI.
 - Chương trình user là mã nhúng; `vifast-user` mới là syscall wrapper.
+- Server/client/root dùng chung một VSpace và stack window; chưa cách ly bộ nhớ
+  giữa các task.
 - User layout chung 64 GiB trong `vifast-abi`; x86 identity map 0..1 GiB.
 - DebugWrite/Open/Read/Write kiểm tra buffer user; kernel address bị từ chối.
 
@@ -90,7 +94,7 @@ python3 scripts/test-qemu.py
 
 Kỳ vọng: cả 3 dòng `riscv64`, `aarch64`, `x86_64` đều `PASS`, mỗi log có
 `SELFTEST PASS`, `Server`, `Mapped`, `ViFastOS ramfs`, `ViFastOS write`,
-`Client`, `Cap OK`, `Reply OK` và `PREEMPT OK`.
+`Client`, `Fault`, `USER FAULT`, `Cap OK`, `Reply OK` và `PREEMPT OK`.
 
 ## Tài liệu thành phần
 

@@ -73,8 +73,16 @@ Mỗi TCB có `cspace: [Option<Cap>; MAX_CAPS]`. Slot 0 không dùng; hợp lệ
 ### Revoke
 
 `revoke_cap` tìm mọi capability có quan hệ cha–con với slot gốc, xoá các
-descendant, giữ capability gốc. Độ sâu được giới hạn bởi
-`MAX_OBJECTS * MAX_CAPS` để tránh vòng lặp.
+descendant, giữ capability gốc. Nếu slot gốc là `Untyped`, kernel còn:
+
+- unmap mọi `Frame` con khỏi tất cả VSpace và trả danh sách VA cần flush;
+- detach `Tcb` con khỏi runqueue/endpoint queue, xoá caller trỏ tới nó;
+- đánh thức waiter/sender/receiver của Endpoint/Notification bằng
+  `ObjectDestroyed`;
+- đặt object con thành `Kind::Free`, tăng `gen`;
+- sau đó mới reset `bump = 0`, `objects = 0`.
+
+Độ sâu revoke được giới hạn bởi `MAX_OBJECTS * MAX_CAPS`.
 
 ## 3. Untyped và retype
 
@@ -86,6 +94,8 @@ pub struct Untyped {
     pub size: usize,
     pub bump: usize,
     pub page_size: usize,
+    pub max_objects: usize,
+    pub objects: usize,
 }
 ```
 
@@ -97,10 +107,9 @@ pub struct Untyped {
 - `Notification`: tiêu 128 byte Untyped;
 - `Tcb`: tiêu 1024 byte Untyped.
 
-Mỗi object đều tiêu `bump`; nếu không đủ chỗ trả `OutOfMemory`.
-Revoke capability Untyped sẽ xoá các capability con và reset `bump = 0`
-(object table chưa có free/destroy nên đây là reset accounting, không phải
-thu hồi metadata hoàn chỉnh).
+Mỗi object đều tiêu `bump` và một slot `objects`; nếu không đủ byte hoặc
+không đủ `max_objects`, trả `OutOfMemory`. Revoke Untyped destroy object con
+thật, đặt `Kind::Free`, tăng `gen`, rồi reset `bump = 0`, `objects = 0`.
 
 ## 4. Frame, VSpace, PageTable
 
@@ -125,6 +134,10 @@ pub struct VSpace {
     pub base: u64,
     pub next_va: u64,
     pub end: u64,
+    pub code_base: u64,
+    pub code_len: u64,
+    pub stack_base: u64,
+    pub stack_len: u64,
     pub mappings: [Option<Mapping>; MAX_MAPPINGS],
 }
 ```
@@ -146,9 +159,9 @@ pub struct Mapping {
 
 ## 5. Object lifecycle
 
-Hiện tại object table **chưa có free/destroy hoàn chỉnh**. Các object được cấp
-một lần khi boot hoặc bằng `retype`; chưa có syscall thu hồi object/frame.
-Đây là giới hạn đã ghi trong `docs/00-hien-trang.md`.
+Object table **chưa có API free tổng quát**. Đường `revoke Untyped` đã destroy
+Frame/TCB/Endpoint/Notification con, unmap Frame và tăng generation; ngoài
+đường đó chưa có syscall free object/frame độc lập.
 
 ## 6. Invariant checker
 

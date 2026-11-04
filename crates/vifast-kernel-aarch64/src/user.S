@@ -23,6 +23,16 @@ user_root:
     mov x1, #3
     mov x2, #7
     svc #0
+    mov x8, #9
+    mov x0, #2
+    mov x1, #3
+    mov x2, #8
+    svc #0
+    mov x8, #9
+    mov x0, #2
+    mov x1, #1
+    mov x2, #9
+    svc #0
 
     mov x8, #10
     mov x0, #4
@@ -79,9 +89,34 @@ user_root:
     mov x8, #16
     mov x0, #6
     svc #0
-1:
-    mov x8, #8
+    mov x8, #15
+    mov x0, #9
+    adr x1, user_thread_fault
+    mov x2, #0x10
+    lsl x2, x2, #32
+    add x2, x2, #0x5000
+    mov x3, #1
+    mov x4, #6
     svc #0
+    mov x8, #16
+    mov x0, #9
+    svc #0
+    mov x8, #6
+    mov x0, #8
+    svc #0
+1:
+    b 1b
+
+    .globl user_thread_fault
+user_thread_fault:
+    mov x8, #32
+    adr x0, user_fault_msg
+    mov x1, #6
+    svc #0
+    mov x1, #0x8000
+    lsl x1, x1, #16
+    ldr x0, [x1]
+1:
     b 1b
 
     .globl user_thread_a
@@ -235,6 +270,8 @@ user_cap_ok:
     .asciz "Cap OK\n"
 user_cap_bad:
     .asciz "Cap BAD\n"
+user_fault_msg:
+    .asciz "Fault\n"
     .balign 8
 user_mapped_text:
     .ascii "Mapped\n\0"

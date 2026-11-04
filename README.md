@@ -113,6 +113,8 @@ ViFastOS booting on riscv64
 ...
 SELFTEST PASS (ipc_tx=3 ipc_rx=2 ntfn=2 ctx=0 ticks=0)
 entering user mode ...
+Fault
+USER FAULT ...
 Server
 Mapped
 ViFastOS ramfs
@@ -164,12 +166,14 @@ endpoint, hai TCB và notification, `CapCopy` cap cho server/client,
 để tạo frame, rồi `FrameMap`/`FrameUnmap`; user ghi `Mapped\n` vào page vừa map
 và đọc lại qua `DebugWrite`. Ở `Call` đầu tiên, client chuyển một cap
 notification có quyền `GRANT` vào slot 4 của server; server nhận cap, `Signal`,
-rồi `Reply`; các Call sau không chuyển cap nữa để slot không bị chiếm. Client
+rồi `Reply`; các Call sau không chuyển cap nữa để slot không bị chiếm. Root
+sau khi resume các TCB thì block bằng `Wait`. Fault thread cố ý load từ
+`0x8000_0000`; kernel log `USER FAULT`, suspend thread và chạy tiếp. Client
 `Poll` và in `Cap OK`. Client cũng mở `/motd`, đọc vào page vừa map, in nội dung qua
 `DebugWrite`, tạo `/scratch`, ghi `ViFastOS write`, seek/đọc lại, rồi đóng fd
 và unmap. Khi IPC block, kernel lưu context, chọn TCB
-khác, rồi áp dụng `resume` message khi đánh thức. Timer preempts; sau 20 tick in
-`PREEMPT OK` và thoát QEMU. Chạy host test:
+khác, rồi áp dụng `resume` message khi đánh thức. Timer preempts; binary test
+bật feature `test-exit` để sau 20 tick in `PREEMPT OK` và thoát QEMU. Chạy host test:
 
 ```bash
 cargo test -p vifast-kernel
@@ -186,7 +190,8 @@ cargo test -p vifast-kernel
   end-to-end cho `Send`/`Call` (không cho `Reply`), chưa có shared memory,
   reply object/ReplyRecv, IPC buffer hay fault endpoint.
 - VSpace/PageTable object và map/unmap đã có, nhưng page-table root vẫn là bảng
-  tĩnh của từng port; chưa có page-table page allocator tổng quát, TLB shootdown
+  tĩnh của từng port; root/server/client hiện dùng chung VSpace và stack window,
+  nên chưa cách ly bộ nhớ giữa các task; chưa có page-table page allocator tổng quát, TLB shootdown
   đa hart, hay cấp phát địa chỉ ảo tự động theo range lớn.
 - Untyped/retype đã tính phí Endpoint/Notification/Tcb và reset bump khi revoke
   Untyped; chưa có allocator vật lý đầy đủ, IOMMU hay thu hồi object.

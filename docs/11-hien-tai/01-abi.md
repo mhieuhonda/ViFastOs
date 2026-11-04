@@ -101,6 +101,9 @@ pub struct Message {
   làm slot cap; `Reply` truyền 4 data word và không chuyển cap.
 - Receiver phải chỉ định slot nhận cap rõ ràng; kernel không tự chọn slot
   fallback. Nếu slot 0/đã dùng, chuyển cap thất bại.
+- `CapRevoke` trên Untyped trả danh sách VA đã bỏ shadow mapping để runtime
+  flush TLB/page table; object con bị free và `gen` tăng.
+- User fault không panic kernel: TCB chuyển `Faulted`, runtime chọn TCB khác.
 - `DebugWrite`, `Open`, `Read`, `Write` được kernel kiểm tra
   `validate_user_range()` trước khi runtime copy. Địa chỉ kernel/unmapped bị
   trả `InvalidArg`.
@@ -121,6 +124,7 @@ Số syscall là ổn định. `-` nghĩa là không dùng.
 | 8 | `Yield` | — | Hiện trả `Ok`, chưa chuyển context |
 | 9 | `Retype` | a0 Untyped cap, a1 ObjType, a2 dest slot | Endpoint/Notification/Tcb/Frame/PageTable |
 | 10 | `CapCopy` | a0 src slot, a1 TCB cap, a2 dst slot, a3 rights | Copy cap sang TCB khác |
+| 14 | `CapRevoke` | a0 slot | Revoke cap; Untyped destroy object con + unmap |
 | 15 | `TcbConfigure` | a0 TCB cap, a1 entry, a2 stack, a3 VSpace cap, a4 priority | Set context |
 | 16 | `TcbResume` | a0 TCB cap | Đưa TCB vào runqueue |
 | 24 | `PageTableMap` | — | Chưa expose cho user |

@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Test harness may terminate QEMU after TIMER_TICKS and print PREEMPT OK.
+# Production/user builds should leave this disabled.
+test-exit = []
+
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
 vifast-arch = { path = "../vifast-arch" }

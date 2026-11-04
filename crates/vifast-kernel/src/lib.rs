@@ -66,6 +66,12 @@ pub enum UserAction {
         entry: u64,
         stack: u64,
     },
+    /// Result of revoking an Untyped: page-table entries that must be
+    /// removed by the platform before the run continues.
+    Revoked {
+        unmaps: [Option<RevokeUnmap>; MAX_REVOKE_UNMAPS],
+        count: usize,
+    },
     /// Copy a user path into the ramfs VFS and return an fd.
     Open {
         ptr: u64,
@@ -88,6 +94,40 @@ pub enum UserAction {
     /// save its context and schedule another TCB.
     Blocked,
     Exit,
+}
+
+pub const MAX_REVOKE_UNMAPS: usize = 512;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RevokeUnmap {
+    pub root: u64,
+    pub va: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RevokeReport {
+    pub caps_removed: usize,
+    pub objects_destroyed: usize,
+    pub unmaps: [Option<RevokeUnmap>; MAX_REVOKE_UNMAPS],
+    pub unmap_count: usize,
+}
+
+impl RevokeReport {
+    pub const fn empty() -> Self {
+        RevokeReport {
+            caps_removed: 0,
+            objects_destroyed: 0,
+            unmaps: [None; MAX_REVOKE_UNMAPS],
+            unmap_count: 0,
+        }
+    }
+
+    fn add_unmap(&mut self, root: u64, va: u64) {
+        if self.unmap_count < MAX_REVOKE_UNMAPS {
+            self.unmaps[self.unmap_count] = Some(RevokeUnmap { root, va });
+            self.unmap_count += 1;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -183,11 +223,23 @@ impl Kernel {
         size: usize,
         page_size: usize,
     ) -> Option<ObjRef> {
+        self.create_untyped_with_limit(base, size, page_size, 8)
+    }
+
+    pub fn create_untyped_with_limit(
+        &mut self,
+        base: usize,
+        size: usize,
+        page_size: usize,
+        max_objects: usize,
+    ) -> Option<ObjRef> {
         self.alloc(Kind::Untyped(Untyped {
             base,
             size,
             bump: 0,
             page_size,
+            max_objects,
+            objects: 0,
         }))
     }
 
@@ -411,12 +463,22 @@ impl Kernel {
     /// notification and TCB metadata do not consume user physical pages in
     /// this reference model; they are allocated from the fixed object table.
     pub fn retype(&mut self, untyped: ObjRef, ty: ObjType) -> KResult<ObjRef> {
-        let (base, size, bump, page) = {
+        let (base, size, bump, page, max_objects, objects) = {
             let region = self.untyped(untyped).ok_or(KError::WrongType)?;
-            (region.base, region.size, region.bump, region.page_size)
+            (
+                region.base,
+                region.size,
+                region.bump,
+                region.page_size,
+                region.max_objects,
+                region.objects,
+            )
         };
         if page == 0 || !page.is_power_of_two() {
             return Err(KError::Alignment);
+        }
+        if objects >= max_objects {
+            return Err(KError::OutOfMemory);
         }
         let (kind, charge, align) = match ty {
             ObjType::Endpoint => (
@@ -457,10 +519,9 @@ impl Kernel {
             kind
         };
         let object = self.alloc(kind).ok_or(KError::OutOfMemory)?;
-        if consumed != bump {
-            let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
-            region.bump = consumed;
-        }
+        let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
+        region.bump = consumed;
+        region.objects = objects + 1;
         Ok(object)
     }
 
@@ -622,7 +683,7 @@ impl Kernel {
                     }
                 }
                 Kind::Untyped(ref untyped) => {
-                    if untyped.bump > untyped.size {
+                    if untyped.bump > untyped.size || untyped.objects > untyped.max_objects {
                         return Err(KError::IllegalOperation);
                     }
                 }
@@ -745,12 +806,192 @@ impl Kernel {
         false
     }
 
+    fn wake_error(&mut self, tcb: ObjRef, error: KError) {
+        if self.tcb(tcb).is_none() {
+            return;
+        }
+        if let Some(table) = self.tcb_mut(tcb) {
+            table.state = ThreadState::Ready;
+            table.pending = None;
+            table.resume = Some(Message::empty(0));
+            table.resume_error = Some(error);
+        }
+        self.enqueue(tcb);
+    }
+
+    fn detach_tcb(&mut self, obj: ObjRef) {
+        for slot in self.runq.iter_mut() {
+            if *slot == Some(obj) {
+                *slot = None;
+            }
+        }
+        if let Some((client, _)) = self.tcb(obj).and_then(|table| table.caller) {
+            self.wake_error(client, KError::ObjectDestroyed);
+        }
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            if let Some(endpoint) = self.endpoint_mut(r) {
+                endpoint.send.remove(obj);
+                endpoint.recv.remove(obj);
+            }
+            if let Some(table) = self.tcb_mut(r) {
+                if table.caller.is_some_and(|(client, _)| client == obj) {
+                    table.caller = None;
+                }
+            }
+            if let Some(notification) = self.notification_mut(r) {
+                if notification.waiter == Some(obj) {
+                    notification.waiter = None;
+                }
+            }
+        }
+    }
+
+    fn destroy_endpoint(&mut self, obj: ObjRef) {
+        let mut senders = [ObjRef::invalid(); MAX_QUEUE];
+        let mut receivers = [ObjRef::invalid(); MAX_QUEUE];
+        let mut send_count = 0usize;
+        let mut recv_count = 0usize;
+        if let Some(endpoint) = self.endpoint_mut(obj) {
+            while let Some(sender) = endpoint.send.pop() {
+                if send_count < MAX_QUEUE {
+                    senders[send_count] = sender;
+                    send_count += 1;
+                }
+            }
+            while let Some(receiver) = endpoint.recv.pop() {
+                if recv_count < MAX_QUEUE {
+                    receivers[recv_count] = receiver;
+                    recv_count += 1;
+                }
+            }
+        }
+        for sender in senders.iter().take(send_count) {
+            self.wake_error(*sender, KError::ObjectDestroyed);
+        }
+        for receiver in receivers.iter().take(recv_count) {
+            self.wake_error(*receiver, KError::ObjectDestroyed);
+        }
+    }
+
+    fn destroy_notification(&mut self, obj: ObjRef) {
+        let waiter = if let Some(notification) = self.notification_mut(obj) {
+            notification.word = 0;
+            notification.waiter.take()
+        } else {
+            None
+        };
+        if let Some(waiter) = waiter {
+            self.wake_error(waiter, KError::ObjectDestroyed);
+        }
+    }
+
+    fn unmap_frame_everywhere(&mut self, frame: Frame, report: &mut RevokeReport) {
+        let start = frame.pa as u64;
+        let end = start.saturating_add(frame.size as u64);
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            let Some(space) = self.vspace_mut(r) else {
+                continue;
+            };
+            for slot in space.mappings.iter_mut() {
+                if let Some(mapping) = *slot {
+                    if mapping.pa >= start && mapping.pa < end {
+                        report.add_unmap(space.root, mapping.va);
+                        *slot = None;
+                    }
+                }
+            }
+        }
+    }
+
+    fn unmap_space(&mut self, obj: ObjRef, report: &mut RevokeReport) {
+        let Some(space) = self.vspace_mut(obj) else {
+            return;
+        };
+        for slot in space.mappings.iter_mut() {
+            if let Some(mapping) = *slot {
+                report.add_unmap(space.root, mapping.va);
+                *slot = None;
+            }
+        }
+    }
+
+    fn remove_caps_to(&mut self, obj: ObjRef) {
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            if let Some(table) = self.tcb_mut(r) {
+                for slot in table.cspace.iter_mut() {
+                    if slot.is_some_and(|cap| cap.obj == obj) {
+                        *slot = None;
+                    }
+                }
+            }
+        }
+    }
+
+    fn destroy_object(&mut self, obj: ObjRef, report: &mut RevokeReport) -> KResult<()> {
+        let Some(kind) = self.get(obj).map(|object| object.kind) else {
+            return Ok(());
+        };
+        if self.current == Some(obj) {
+            return Err(KError::IllegalOperation);
+        }
+        match kind {
+            Kind::Tcb(_) => self.detach_tcb(obj),
+            Kind::Endpoint(_) => self.destroy_endpoint(obj),
+            Kind::Notification(_) => self.destroy_notification(obj),
+            Kind::Frame(frame) => self.unmap_frame_everywhere(frame, report),
+            Kind::VSpace(_) => {
+                self.unmap_space(obj, report);
+                for i in 0..MAX_OBJECTS {
+                    let r = ObjRef {
+                        index: i as u8,
+                        gen: self.objs[i].gen,
+                    };
+                    if let Some(table) = self.tcb_mut(r) {
+                        if table.vspace == Some(obj) {
+                            table.vspace = None;
+                            table.state = ThreadState::Faulted;
+                        }
+                    }
+                }
+            }
+            Kind::Untyped(_) | Kind::PageTable(_) | Kind::Free => {}
+        }
+        self.remove_caps_to(obj);
+        if let Some(object) = self.get_mut(obj) {
+            object.kind = Kind::Free;
+            let gen = object.gen.wrapping_add(1);
+            object.gen = if gen == 0 { 1 } else { gen };
+        }
+        report.objects_destroyed += 1;
+        Ok(())
+    }
+
     /// Remove all capabilities derived from `slot`.  The root capability is
     /// left in place.  Returns the number removed.
     pub fn revoke_cap(&mut self, tcb: ObjRef, slot: u8) -> KResult<usize> {
+        self.revoke_cap_with_report(tcb, slot)
+            .map(|report| report.caps_removed)
+    }
+
+    pub fn revoke_cap_with_report(&mut self, tcb: ObjRef, slot: u8) -> KResult<RevokeReport> {
         let target = SlotAddr { tcb, slot };
+        let target_cap = self.cap_at(target).ok_or(KError::InvalidCap)?;
         let mut victims = [SlotAddr::default(); MAX_OBJECTS * MAX_CAPS];
-        let mut count = 0usize;
+        let mut objects = [ObjRef::invalid(); MAX_OBJECTS];
+        let mut victim_count = 0usize;
+        let mut object_count = 0usize;
         for i in 0..MAX_OBJECTS {
             let r = ObjRef {
                 index: i as u8,
@@ -760,30 +1001,49 @@ impl Kernel {
                 for s in 1..MAX_CAPS {
                     if let Some(cap) = table.cspace[s] {
                         if self.is_descendant(&cap, target) {
-                            victims[count] = SlotAddr {
-                                tcb: r,
-                                slot: s as u8,
-                            };
-                            count += 1;
-                            if count == victims.len() {
-                                break;
+                            if victim_count < victims.len() {
+                                victims[victim_count] = SlotAddr {
+                                    tcb: r,
+                                    slot: s as u8,
+                                };
+                                victim_count += 1;
+                            }
+                            if !objects[..object_count].contains(&cap.obj) {
+                                if object_count < objects.len() {
+                                    objects[object_count] = cap.obj;
+                                    object_count += 1;
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        for victim in victims.iter().take(count) {
+
+        let mut report = RevokeReport::empty();
+        report.caps_removed = victim_count;
+
+        if target_cap.ty != ObjType::Untyped {
+            for victim in victims.iter().take(victim_count) {
+                let _ = self.delete_cap(victim.tcb, victim.slot);
+            }
+            return Ok(report);
+        }
+
+        if objects[..object_count].contains(&self.current.unwrap_or(ObjRef::invalid())) {
+            return Err(KError::IllegalOperation);
+        }
+        for victim in victims.iter().take(victim_count) {
             let _ = self.delete_cap(victim.tcb, victim.slot);
         }
-        if let Some(cap) = self.cap_at(target) {
-            if cap.ty == ObjType::Untyped {
-                if let Some(region) = self.untyped_mut(cap.obj) {
-                    region.bump = 0;
-                }
-            }
+        for object in objects.iter().take(object_count) {
+            self.destroy_object(*object, &mut report)?;
         }
-        Ok(count)
+        if let Some(region) = self.untyped_mut(target_cap.obj) {
+            region.bump = 0;
+            region.objects = 0;
+        }
+        Ok(report)
     }
 
     pub fn set_cap_badge(&mut self, tcb: ObjRef, slot: u8, badge: u64) -> KResult<()> {
@@ -863,7 +1123,9 @@ impl Kernel {
     }
 
     pub fn yield_current(&mut self) -> Option<ObjRef> {
-        let current = self.current.take()?;
+        // Keep `current` set until the architecture has saved the user context.
+        // The runtime's switch_blocked() saves it, then pick() replaces it.
+        let current = self.current?;
         if let Some(tcb) = self.tcb_mut(current) {
             if tcb.state == ThreadState::Running {
                 tcb.state = ThreadState::Ready;
@@ -881,6 +1143,23 @@ impl Kernel {
     /// this when they resume a blocked user thread.
     pub fn take_resume(&mut self, tcb: ObjRef) -> Option<Message> {
         self.tcb_mut(tcb).and_then(|table| table.resume.take())
+    }
+
+    pub fn take_resume_error(&mut self, tcb: ObjRef) -> Option<KError> {
+        self.tcb_mut(tcb)
+            .and_then(|table| table.resume_error.take())
+    }
+
+    /// Suspend the currently running TCB after a user fault and return the
+    /// next runnable thread (if any).  The TCB is not destroyed so its fault
+    /// can later be reported to a fault endpoint.
+    pub fn fault_current(&mut self) -> Option<ObjRef> {
+        let old = self.current.take()?;
+        if let Some(table) = self.tcb_mut(old) {
+            table.state = ThreadState::Faulted;
+            table.queued = false;
+        }
+        self.pick()
     }
 
     pub fn tick(&mut self) {
@@ -916,6 +1195,9 @@ impl Kernel {
             };
         }
         if number == SyscallId::Yield as u64 {
+            if self.yield_current().is_some() {
+                return UserAction::Blocked;
+            }
             return UserAction::Return {
                 value: 0,
                 error: KError::Ok,
@@ -1205,6 +1487,16 @@ impl Kernel {
                     Ok(()) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::CapRevoke as u64 => {
+                let slot = slot_arg(a0).unwrap_or(0);
+                match self.revoke_cap_with_report(tcb, slot) {
+                    Ok(report) => UserAction::Revoked {
+                        unmaps: report.unmaps,
+                        count: report.unmap_count,
                     },
                     Err(error) => UserAction::Return { value: 0, error },
                 }
@@ -1674,6 +1966,169 @@ mod tests {
     }
 
     #[test]
+    fn cap_copy_preserves_untyped_parent_chain() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let worker = kernel.create_tcb("worker", 1).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x400_0000, 4096, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Endpoint as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok
+            }
+        );
+        assert!(kernel.copy_cap(root, 2, worker, 1, Rights::ALL, 0).is_ok());
+        assert!(kernel
+            .lookup_cap(worker, 1, Some(ObjType::Endpoint), Rights::READ)
+            .is_ok());
+        assert_eq!(kernel.revoke_cap(root, 1), Ok(2));
+        assert!(kernel.lookup_cap(worker, 1, None, Rights::NONE).is_err());
+    }
+
+    #[test]
+    fn revoke_untyped_frees_frame_and_removes_old_mapping() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x100_0000, 4096, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Frame as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok
+            }
+        );
+        let frame = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        let old_pa = kernel.frame(frame).unwrap().pa;
+        let space = kernel
+            .create_user_vspace(
+                0x1000,
+                0x4000_a000,
+                4096,
+                0x4000_0000,
+                4096,
+                0x4000_1000,
+                0x8000,
+            )
+            .unwrap();
+        let mapping = kernel
+            .map_frame(space, frame, 0, Rights::READ | Rights::WRITE)
+            .unwrap();
+
+        let report = kernel.revoke_cap_with_report(root, 1).unwrap();
+        assert_eq!(report.objects_destroyed, 1);
+        assert_eq!(report.unmap_count, 1);
+        assert!(kernel.get(frame).is_none());
+        assert!(kernel.mapping_at(space, mapping.va).is_none());
+
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Frame as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok
+            }
+        );
+        let replacement = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        assert_eq!(kernel.frame(replacement).unwrap().pa, old_pa);
+        assert!(kernel.mapping_at(space, mapping.va).is_none());
+    }
+
+    #[test]
+    fn revoke_untyped_detaches_a_blocked_tcb() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x200_0000, 4096, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Tcb as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok
+            }
+        );
+        let child = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        let endpoint = kernel.create_endpoint().unwrap();
+        assert_eq!(kernel.recv(child, endpoint, 4), Ok(None));
+        assert!(kernel.endpoint(endpoint).unwrap().recv.contains(child));
+
+        let report = kernel.revoke_cap_with_report(root, 1).unwrap();
+        assert_eq!(report.objects_destroyed, 1);
+        assert!(kernel.get(child).is_none());
+        assert!(kernel.endpoint(endpoint).unwrap().recv.is_empty());
+    }
+
+    #[test]
+    fn untyped_object_limit_is_enforced() {
+        let mut kernel = Kernel::new();
+        let untyped = kernel
+            .create_untyped_with_limit(0x300_0000, 8192, 4096, 2)
+            .unwrap();
+        assert!(kernel.retype(untyped, ObjType::Endpoint).is_ok());
+        assert!(kernel.retype(untyped, ObjType::Notification).is_ok());
+        assert_eq!(
+            kernel.retype(untyped, ObjType::Tcb),
+            Err(KError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn resume_rejects_unconfigured_tcb() {
+        let mut kernel = Kernel::new();
+        let child = kernel.create_tcb("child", 1).unwrap();
+        assert_eq!(kernel.resume_tcb(child), Err(KError::IllegalOperation));
+    }
+
+    #[test]
     fn revoking_untyped_resets_accounting_and_children() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
@@ -1730,6 +2185,10 @@ mod tests {
         assert_eq!(kernel.resume_tcb(child), Ok(()));
         assert_eq!(
             kernel.configure_tcb(child, 0x9000_0000, 0x4000_5000, space, 5),
+            Err(KError::InvalidArg)
+        );
+        assert_eq!(
+            kernel.configure_tcb(child, 0x4000_0000, 0x9000_0000, space, 5),
             Err(KError::InvalidArg)
         );
     }

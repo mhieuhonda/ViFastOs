@@ -75,9 +75,10 @@ Root task nhận cap:
 - slot 2 metadata Untyped;
 - slot 3 data Untyped.
 
-Root lần lượt Retype endpoint/2 TCB/notification, CapCopy cho server/client,
-TcbConfigure entry/stack/VSpace/priority rồi TcbResume. Sau đó root Yield loop;
-timer preempt root và chạy server/client.
+Root lần lượt Retype endpoint/2 TCB/notification/fault TCB, CapCopy cho
+server/client, TcbConfigure entry/stack/VSpace/priority rồi TcbResume. Sau đó
+root block bằng `Wait` trên notification riêng; server/client/fault chạy theo
+scheduler.
 
 ## 4. Root task
 
@@ -92,8 +93,12 @@ CapCopy data Untyped → client slot 3 WRITE
 CapCopy notification → client slot 5 READ|WRITE|GRANT
 TcbConfigure server/client (entry, stack, VSpace slot 1, priority 5)
 TcbResume server/client
-Yield loop
+Retype fault TCB; TcbConfigure/TcbResume (priority 6)
+Retype root notification; Wait(root notification)
 ```
+
+Fault TCB cố ý load từ `0x8000_0000`; kernel log `USER FAULT`, suspend TCB và
+chạy tiếp server/client. Không panic kernel.
 
 ## 5. Server A
 
@@ -163,5 +168,5 @@ timer IRQ
   → kernel.tick
   → yield/pick
   → restore context
-  → sau 20 tick: PREEMPT OK + exit
+  → sau 20 tick: PREEMPT OK + exit (chỉ feature test-exit)
 ```

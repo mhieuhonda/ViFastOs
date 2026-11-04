@@ -123,6 +123,10 @@ trong platform. Chưa có:
 - ASID/PCID;
 - thu hồi frame.
 
+Hiện tại server/client/root dùng chung một VSpace và cùng stack window. Vì vậy
+capability đã tách nhưng bộ nhớ chưa tách: client có thể ghi vào stack của
+server. Đây là lý do chính phải làm VSpace riêng khi thêm ELF loader.
+
 ## 8. W^X hiện tại
 
 | Port | Code | Stack/Data |

@@ -363,6 +363,7 @@ pub struct Tcb {
     pub bound_ntfn: Option<ObjRef>,
     pub pending: Option<PendingSend>,
     pub resume: Option<Message>,
+    pub resume_error: Option<KError>,
     pub fds: [Option<Fd>; MAX_FDS],
     pub queued: bool,
     pub queue_seq: u64,
@@ -384,6 +385,7 @@ impl Tcb {
             bound_ntfn: None,
             pending: None,
             resume: None,
+            resume_error: None,
             fds: [None; MAX_FDS],
             queued: false,
             queue_seq: 0,
@@ -397,6 +399,8 @@ pub struct Untyped {
     pub size: usize,
     pub bump: usize,
     pub page_size: usize,
+    pub max_objects: usize,
+    pub objects: usize,
 }
 
 #[allow(clippy::large_enum_variant)]

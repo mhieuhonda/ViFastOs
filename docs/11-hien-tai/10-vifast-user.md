@@ -41,6 +41,7 @@ tables tại đúng VA; không tự định nghĩa lại địa chỉ user.
 - `yield_now`
 - `retype`
 - `cap_copy`
+- `cap_revoke`
 - `tcb_configure`
 - `tcb_resume`
 - `exit`

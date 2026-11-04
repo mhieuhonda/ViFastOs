@@ -12,6 +12,7 @@ use vifast_arch::Arch;
 use vifast_kernel::fs::MAX_PATH;
 use vifast_kernel::{Cap, Kernel, UserAction};
 
+#[cfg(feature = "test-exit")]
 pub const TIMER_TICKS: u64 = 20;
 pub const USER_COPY_MAX: usize = 256;
 
@@ -66,6 +67,13 @@ pub trait Platform: Arch {
 
     fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError>;
     fn unmap_user_page(va: u64) -> Result<(), KError>;
+    fn unmap_user_page_at(root: u64, va: u64) -> Result<(), KError> {
+        if root == Self::vspace_root() {
+            Self::unmap_user_page(va)
+        } else {
+            Err(KError::InvalidArg)
+        }
+    }
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError>;
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError>;
 
@@ -151,15 +159,16 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     let data = A::data_page();
     let metadata = A::metadata_page();
-    let Some(meta_untyped) = kernel.create_untyped_with_page_size(
+    let Some(meta_untyped) = kernel.create_untyped_with_limit(
         metadata.as_mut_ptr() as usize,
         metadata.len(),
         A::PAGE_SIZE,
+        16,
     ) else {
         A::exit(1);
     };
     let Some(data_untyped) =
-        kernel.create_untyped_with_page_size(data.as_mut_ptr() as usize, data.len(), A::PAGE_SIZE)
+        kernel.create_untyped_with_limit(data.as_mut_ptr() as usize, data.len(), A::PAGE_SIZE, 1)
     else {
         A::exit(1);
     };
@@ -263,6 +272,21 @@ pub mod syscall {
                     A::write_result(context, KError::NotMapped, 0, 0, [0; 4]);
                 }
             }
+            UserAction::Revoked { unmaps, count } => {
+                let mut ok = true;
+                for unmap in unmaps.iter().take(count).flatten() {
+                    if A::unmap_user_page_at(unmap.root, unmap.va).is_err() {
+                        ok = false;
+                    }
+                }
+                A::write_result(
+                    context,
+                    if ok { KError::Ok } else { KError::NotMapped },
+                    0,
+                    0,
+                    [0; 4],
+                );
+            }
             UserAction::ConfigureTcb { tcb, entry, stack } => {
                 let contexts = A::contexts();
                 if let Some(slot) = contexts.get_mut(tcb.index as usize) {
@@ -332,6 +356,15 @@ pub mod syscall {
         }
     }
 
+    pub fn apply_resume<A: Platform>(context: &mut A::Context, tcb: vifast_kernel::ObjRef) {
+        let kernel = A::kernel();
+        if let Some(error) = kernel.take_resume_error(tcb) {
+            A::write_result(context, error, 0, 0, [0; 4]);
+        } else if let Some(message) = kernel.take_resume(tcb) {
+            A::write_message(context, &message);
+        }
+    }
+
     pub fn switch_blocked<A: Platform>(context: &mut A::Context) {
         let kernel = A::kernel();
         let contexts = A::contexts();
@@ -342,9 +375,31 @@ pub mod syscall {
             A::exit(1);
         };
         *context = contexts[next.index as usize];
-        if let Some(message) = kernel.take_resume(next) {
-            A::write_message(context, &message);
-        }
+        crate::syscall::apply_resume::<A>(context, next);
+    }
+}
+
+/// Minimal user-fault suspension.  A full fault endpoint is future work;
+/// for now the faulting TCB becomes Faulted and another TCB continues.
+pub mod fault {
+    use super::*;
+
+    pub fn suspend<A: Platform>(context: &mut A::Context, cause: u64, addr: u64) {
+        let kernel = A::kernel();
+        let old = kernel.current();
+        vifast_kernel::klog!(
+            A,
+            "USER FAULT tcb={:?} cause={:#x} addr={:#x}",
+            old,
+            cause,
+            addr
+        );
+        let Some(next) = kernel.fault_current() else {
+            vifast_kernel::klog!(A, "no runnable thread after fault");
+            A::halt();
+        };
+        *context = A::contexts()[next.index as usize];
+        crate::syscall::apply_resume::<A>(context, next);
     }
 }
 
@@ -360,6 +415,7 @@ pub mod timer {
             contexts[old.index as usize] = *context;
         }
         kernel.tick();
+        #[cfg(feature = "test-exit")]
         if kernel.ticks() >= TIMER_TICKS {
             let switches = kernel.stats().context_switches.saturating_sub(1);
             vifast_kernel::klog!(
@@ -379,8 +435,6 @@ pub mod timer {
             A::exit(1);
         };
         *context = contexts[next.index as usize];
-        if let Some(message) = kernel.take_resume(next) {
-            A::write_message(context, &message);
-        }
+        crate::syscall::apply_resume::<A>(context, next);
     }
 }

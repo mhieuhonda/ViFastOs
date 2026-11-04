@@ -579,21 +579,18 @@ extern "C" {
 }
 
 #[no_mangle]
-extern "C" fn x86_page_fault(frame: *const u64) -> ! {
+extern "C" fn x86_page_fault(_frame: *const u64) -> ! {
     let cr2: u64;
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
     }
-    let error = unsafe { *frame.add(15) };
-    let rip = unsafe { *frame.add(16) };
-    vifast_kernel::klog!(
-        X86_64,
-        "PAGE FAULT cr2={:#x} err={:#x} rip={:#x}",
-        cr2,
-        error,
-        rip
-    );
-    X86_64::exit(1)
+    if <X86Platform as Platform>::kernel().current().is_none() {
+        vifast_kernel::klog!(X86_64, "KERNEL PAGE FAULT cr2={:#x}", cr2);
+        X86_64::exit(1);
+    }
+    let mut context = TrapFrame::empty();
+    vifast_runtime::fault::suspend::<X86Platform>(&mut context, 0xe, cr2);
+    <X86Platform as Platform>::enter_user(&context);
 }
 
 #[no_mangle]
