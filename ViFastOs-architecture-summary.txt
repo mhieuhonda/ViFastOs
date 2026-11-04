@@ -36,16 +36,18 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - df9e1c1 feat: add boot untyped and task-space builder
 - eae0741 test: cover builder and shared frame unmapping
 - 24c668d feat: validate user pointers through page tables
-- a68b488 test: exercise real PTE formats through fake ops.
+- a68b488 test: exercise real PTE formats through fake ops
+- 1c488a2 feat: build root task space from boot untyped.
 
-Cập nhật code gần nhất (commit a68b488): root task, revoke Untyped thật, fault
+Cập nhật code gần nhất (commit 1c488a2): root task, root VSpace từ boot Untyped,
+revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
 range + table_span), PageTableMap level động, retype VSpace/install_kernel,
 creator CapRef id + reparent, delete cap KResult, boot Untyped,
 build_task_space, validate_user_range walk leaf, AArch64 leaf rights decode,
-PteFakeOps 3 format, KERNEL_SHARED_SLOTS,
+PteFakeOps 3 format tách test, boot quota 117 object, KERNEL_SHARED_SLOTS,
 kernel accessible range, x86 LoadedImage assert, thứ tự revoke
 Frame → PageTable sâu → VSpace, vifast-pte host test, SMEP/SMAP/PAN/sscratch
 hardening và vifast-user.
@@ -69,8 +71,8 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 45/45 PASS
-- cargo test -p vifast-pte: 9/9 PASS
+- cargo test -p vifast-kernel: 47/47 PASS
+- cargo test -p vifast-pte: 10/10 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -173,7 +175,9 @@ vifast-runtime
   - boot sequence chỉ tạo một root TCB;
   - giao VSpace/Untyped cho root task;
   - syscall action dispatch (gồm ConfigureTcb);
-  - user image copy;
+  - dựng root VSpace từ boot Untyped bằng TaskLayout (code RX, stack 8 trang,
+    không map data);
+  - set active root + kiểm tra kernel mappings trước khi vào user;
   - context switch khi block;
   - timer tick/preemption.
 - no_std, forbid unsafe.
@@ -184,7 +188,8 @@ vifast-pte
 - encode/decode/index thuần bit; table_span() cho từng level.
 - USER_VA_START/USER_VA_END thật của 3 kiến trúc; platform chỉ trả hằng số.
 - Host test kiểm tra dải user không giao kernel identity, nằm trong Sv39,
-  entry PML4/L0, KERNEL_SHARED_SLOTS và index biên; tổng 9 test.
+  entry PML4/L0, KERNEL_SHARED_SLOTS, quyền leaf L3 AArch64 và index biên;
+  tổng 10 test.
 - File: crates/vifast-pte/src/lib.rs.
 
 vifast-user
@@ -203,17 +208,17 @@ vifast-arch-riscv64 / aarch64 / x86_64
 
 vifast-platform-riscv64
 - RiscvPlatform newtype.
-- Sv39 root tĩnh cho boot/kernel; VSpace retype copy các kernel slot.
+- Sv39 bảng kernel-only tĩnh; VSpace retype copy các kernel slot.
 - Trap entry/restore + trap handler.
 - SBI timer.
-- Frame/stack/data user page.
+- Chỉ bảng kernel-only tĩnh; page/stack user do boot Untyped + builder tạo.
 - HSM secondary hart + SMP bootstrap.
 - TLB: sfence.vma.
 - Files: platform.rs, trap.S, smp.S.
 
 vifast-platform-aarch64
 - Aarch64Platform newtype.
-- 4-level page table tĩnh cho boot/kernel; VSpace retype tạo L0/L1 riêng.
+- 4-level bảng kernel-only tĩnh; VSpace retype tạo L0/L1 riêng.
 - trap vector + IRQ handler.
 - GICv2 + generic timer PPI 30.
 - user context EL0, SP_EL0/SP_EL1.
@@ -255,18 +260,18 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 574 dòng
-- AArch64: 660 dòng
-- x86_64: 805 dòng
+- RISC-V: 556 dòng
+- AArch64: 638 dòng
+- x86_64: 784 dòng
 
 runtime:
-- 447 dòng
+- 491 dòng
 
 vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 4606 dòng, không còn dependency vifast-arch
+- 4656 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597616 bytes
@@ -312,17 +317,20 @@ Runtime boot sequence chi tiết:
 5. A::init_kernel() static; chạy selftest
 6. in SELFTEST PASS
 7. A::start_smp()
-8. A::init_kernel() reset static; tạo boot Untyped 64 KiB, metadata Untyped,
-   data Untyped
-9. cài cap slot 1/2/3 cho root; boot Untyped giữ trong kernel
-10. copy user image vào A::code_page()
-11. A::build_page_tables()
-12. A::prepare_user()
-13. tạo context cho duy nhất root TCB
-14. A::set_kernel(&mut kernel)
-15. enqueue root, pick root
-16. A::start_timer()
-17. A::enter_user(root)
+8. A::init_kernel() reset static; tạo boot Untyped 128 KiB/32 object, metadata
+   Untyped, data Untyped; bảng kernel-only đã dựng trong init_platform
+9. cài metadata/data Untyped vào slot 2/3
+10. build_task_space(boot Untyped, user image, layout) dựng root VSpace mới:
+    code RX, 8 trang stack RW, không map data; cài VSpace slot 1
+11. set TCB root -> VSpace mới; next_va = DATA_VA để client FrameMap hint 0
+12. check_kernel_mappings(root_pa); log BOOT UNTYPED còn trống; assert đủ chỗ
+    cho VSpace server 4.5
+13. A::set_active_root(root_pa), A::prepare_user()
+14. tạo context cho duy nhất root TCB
+15. A::set_kernel(&mut kernel)
+16. enqueue root, pick root
+17. A::start_timer()
+18. A::enter_user(root)
 
 Root task sau đó tự:
 - Retype endpoint/2 TCB/notification, 2 fault TCB, notification riêng;
@@ -483,7 +491,8 @@ Portable generic page-table walk + reverse map:
   có R, và W nếu cần ghi. Reverse map không còn dùng để validation.
 - User layout chung trong vifast-abi: initial code 64 GiB, data +0xa000,
   stack 64 GiB+0x1000..+0x8fff; user range đầy đủ 64..128 GiB.
-  Code/stack là mapping thường; TcbConfigure không kiểm tra entry/stack.
+  Root builder map code/stack, data None; client FrameMap +0xa000. TcbConfigure
+  không kiểm tra entry/stack.
 - x86 dùng VA cố định; VSpace.direct đã bị xoá.
 - Frame object chỉ metadata PA/size; retype Frame/PageTable zero page.
 - Chưa có page-table page allocator, range VA allocator, ASID/PCID.
@@ -491,9 +500,9 @@ Portable generic page-table walk + reverse map:
 RISC-V64:
 - Sv39 root boot tĩnh; kernel identity 0x8000_0000..0x803f_ffff; UART 0x1000_0000.
 - KERNEL_SHARED_SLOTS = root[0] (UART/device) và root[2] (kernel RAM).
-- User code 64 GiB: RX U.
-- Stack 64 GiB+0x1000..+0x8fff: RW U.
-- Data 64 GiB+0xa000: RW U qua FrameMap.
+- User code 64 GiB: RX U (Frame từ boot Untyped).
+- Stack 64 GiB+0x1000..+0x8fff: RW U (8 Frame boot Untyped).
+- Data 64 GiB+0xa000: để trống trong root VSpace; client FrameMap RW U.
 - TLB: sfence.vma.
 - Trap dùng kernel trap stack qua sscratch; sscratch=0 khi ở kernel.
 - SUM=0; read_user/write_user bật SUM tạm thời quanh copy.
@@ -502,9 +511,9 @@ AArch64:
 - 4-level page table boot tĩnh; VSpace retype tạo L0/L1 riêng.
 - Identity/MMIO dùng L1[0] (GIC 0x0800_0000, PL011 0x0900_0000) và L1[1]
   (RAM kernel 0x4000_0000..); KERNEL_SHARED_SLOTS = [0, 1].
-- User code 64 GiB: EL0 RO + X.
-- Stack 64 GiB+0x1000..+0x8fff: RW + NX.
-- Data 64 GiB+0xa000: RW + NX.
+- User code 64 GiB: EL0 RO + X (Frame từ boot Untyped).
+- Stack 64 GiB+0x1000..+0x8fff: RW + NX (8 Frame boot Untyped).
+- Data 64 GiB+0xa000: để trống trong root VSpace; client FrameMap RW + NX.
 - TLB: tlbi vae1is, dsb ish, isb.
 - Trap stack SP_EL1; user stack SP_EL0.
 - PAN nếu CPU hỗ trợ; read/write user tạm clear PAN.
@@ -612,7 +621,8 @@ WouldBlock, NotFound.
 Runtime chỉ tạo duy nhất root TCB. Root task nhận từ runtime:
 - slot 1: VSpace READ|WRITE
 - slot 2: metadata Untyped WRITE|GRANT (64 KiB, max_objects=32)
-- slot 3: data Untyped WRITE|GRANT (256 KiB, max_objects=64)
+- slot 3: data Untyped WRITE|GRANT (256 KiB, max_objects=48)
+- boot Untyped 128 KiB/32 object chỉ kernel giữ; không cấp cho user
 
 Root task dùng syscall:
 - Retype(metadata Untyped) -> Endpoint slot 4
@@ -686,7 +696,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 45 test `vifast-kernel` + 9 test `vifast-pte`:
+Host test hiện có 47 test `vifast-kernel` + 10 test `vifast-pte`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -720,7 +730,8 @@ Host test hiện có 45 test `vifast-kernel` + 9 test `vifast-pte`:
   `root_tcb_cannot_be_destroyed_by_untyped_revoke`
 - delete Untyped cap bị từ chối khi còn object/cap con; delete trả KResult
 - build_task_space map code RX/stack RW/data RW, rollback khi thiếu trang
-- PteFakeOps chạy map/unmap, PageTableMap, validate, build trên cả 3 format
+- PteFakeOps tách riêng RISC-V/x86_64/AArch64, chạy map/unmap,
+  PageTableMap, validate, build; build không data rồi FrameMap tại +0xa000
 - validate_user_range walk leaf, user bit, R/W, cross-page, high leaf bị từ chối
 - hai VSpace dùng chung Frame: revoke Frame xoá leaf ở cả hai
 - VSpace/PageTable cross-Untyped, kernel slots và retype page shortage
@@ -738,6 +749,7 @@ Boot assert (không tính vào host test):
 - roundtrip/encode/decode 3 format;
 - index biên;
 - quyền R/W/X, RISC-V W-thiếu-R bị từ chối;
+- AArch64 leaf L3 RO+X, RW+NX, có/không bit EL0 và leaf_is_user;
 - dải user 3 kiến trúc không giao kernel identity;
 - RISC-V < 256 GiB; x86/AArch64 chỉ dùng chung PDPT[0]/L1[0..1];
 - table_span từng level và biên.
@@ -750,6 +762,7 @@ QEMU test:
 Điều kiện PASS:
 - SELFTEST PASS
 - booting on
+- BOOT UNTYPED
 - PREEMPT OK
 - Server
 - Client
@@ -777,7 +790,7 @@ Exit code:
   data/stack NX; unmap thật; SMEP/SMAP nếu CPU hỗ trợ.
 - AArch64 bật PAN nếu CPU hỗ trợ.
 - User layout chung 64..128 GiB trong vifast-abi/vifast-pte; x86 identity map
-  0..1 GiB không còn chồng với user range; boot mappings 2 MiB là mapping thường.
+  0..1 GiB không còn chồng với user range; vùng boot 2 MiB gồm các leaf 4 KiB.
 - validate_user_range() walk page table thật cho mọi syscall có con trỏ.
 - Untyped accounting cho Endpoint/Notification/Tcb; OutOfMemory khi hết.
 - Root task + Retype/CapCopy/TcbConfigure/TcbResume; runtime không còn
@@ -799,7 +812,16 @@ Exit code:
 - Retype Frame/PageTable zero page qua PageTableOps; user test ghi/revoke/retype/đọc = Zero OK.
 - AArch64 từng có decode riêng trả leaf READ-only, làm Read của user fail;
   platform giờ chỉ gọi vifast-pte cho encode/decode/index/leaf_is_user.
-- PteFakeOps dùng encoder/decoder thật của cả 3 format trong host test.
+- PteFakeOps dùng encoder/decoder thật của cả 3 format trong host test, tách
+  ba test theo format để lỗi chỉ rõ kiến trúc.
+- 4.3: runtime dựng root VSpace từ boot Untyped, cài slot 1, check kernel
+  mappings trên root mới và set active root trước enter_user.
+- Boot Untyped tăng lên 128 KiB/32 object; data Untyped giảm còn 48 object;
+  tổng quota 5 + 32 + 48 + 32 = 117 <= 128. Log in used/free pages và objects.
+- Không còn code_page()/build_page_tables()/bảng user tĩnh; init_platform chỉ
+  dựng bảng kernel-only, bảng user do retype VSpace + PageTableMap tạo.
+- Data +0xa000 không được map sẵn trong root VSpace; PT cuối đã có do code/stack
+  cùng vùng 2 MiB, nên FrameMap đầu tiên của client vẫn thành công.
 - PageTableOps mở rộng read/write PTE, encode/decode, install_kernel, flush;
   kernel walk generic, không gom RevokeReport.
 - vifast-pte crate no_std chứa format 3 arch + host test; user VA constants
@@ -825,13 +847,14 @@ Exit code:
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 597616 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 45 test `vifast-kernel` + 9 test `vifast-pte`.
+- Host test hiện có 47 test `vifast-kernel` + 10 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
 - Scheduler một hart; SMP mới bootstrap, hart phụ idle.
 - x86_64 chưa boot AP.
-- VSpace root của runtime vẫn tĩnh; retype VSpace đã có nhưng chưa nối vào boot flow.
+- Root VSpace đã được retype; 4.5 chưa tách VSpace server nên server/client
+  vẫn dùng chung root VSpace và stack mapping.
 - Chưa có range VA allocator, ASID/PCID.
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
 - Chưa có IOMMU.
@@ -848,8 +871,9 @@ Exit code:
 - Kernel x86 identity map chưa đặt NX cho data.
 - Tất cả task hiện dùng chung một VSpace; stack mapping RW dùng chung, nên
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
-- Boot Untyped 64 KiB đã có trong runtime nhưng chưa dùng để dựng root/server.
-- Runtime root vẫn dùng VSpace tĩnh cho tới khi context switch root (Bước 4).
+- Boot Untyped 128 KiB/32 object đã dùng cho root; log QEMU cho thấy còn
+  19-20 trang và 20 object cho VSpace server ở 4.5.
+- 4.4 chưa làm: context chưa lưu root_pa và chưa có ROOT SWITCH n/full flush.
 - Root TCB bị cấm destroy; nếu vi phạm sẽ làm mất root cap của Untyped.
 - TOCTOU validate-copy chỉ an toàn khi một hart/syscall không bị ngắt; xử lý khi làm BKL/SMP.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
