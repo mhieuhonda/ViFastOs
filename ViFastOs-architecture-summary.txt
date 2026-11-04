@@ -35,9 +35,10 @@ Cập nhật code gần nhất (commit 9a325c5): root task, revoke Untyped thậ
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
-range + table_span), PageTableMap level động, thứ tự revoke Frame → PageTable
-sâu → VSpace,
-vifast-pte host test, SMEP/SMAP/PAN/sscratch hardening và vifast-user.
+range + table_span), PageTableMap level động, retype VSpace/install_kernel,
+creator cap, KERNEL_SHARED_SLOTS, kernel accessible range, thứ tự revoke
+Frame → PageTable sâu → VSpace, vifast-pte host test, SMEP/SMAP/PAN/sscratch
+hardening và vifast-user.
 
 1. MỤC TIÊU
 -----------
