@@ -807,7 +807,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 77 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 79 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
