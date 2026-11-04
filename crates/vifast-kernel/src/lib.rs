@@ -4748,7 +4748,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     enum PteFormat {
         Riscv,
         X86,
@@ -7117,6 +7117,120 @@ mod tests {
         kernel.unmap_frame(sender_space, va).unwrap();
         assert!(kernel.tcb(sender).unwrap().ipc_buffer.is_none());
         assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn syscall_fuzz_three_pte_formats_keeps_invariants() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        let mut seed = 0x5eed_1234_abcd_9876u64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            seed
+        };
+        for format in [PteFormat::Riscv, PteFormat::X86, PteFormat::AArch] {
+            reset_pte_fake();
+            let ops = pte_ops(format);
+            let mut kernel = Kernel::new();
+            kernel.set_page_table_ops(ops);
+            let root = kernel.root().unwrap();
+            let untyped = kernel
+                .create_untyped_with_limit(0x4000, 0xb000, 4096, 64)
+                .unwrap();
+            let space = kernel
+                .create_vspace_with_page_size(0x1000, 0x10_0000_0000, 0x1000, 4096)
+                .unwrap();
+            let frame = kernel.create_frame(0x2000, 4096).unwrap();
+            let table = kernel.create_page_table(0x3000, 0).unwrap();
+            for (slot, object, ty, rights) in [
+                (1, untyped, ObjType::Untyped, Rights::ALL),
+                (4, space, ObjType::VSpace, Rights::ALL),
+                (5, frame, ObjType::Frame, Rights::ALL),
+                (6, table, ObjType::PageTable, Rights::ALL),
+            ] {
+                kernel
+                    .install_cap(root, slot, Cap::new(object, ty, rights))
+                    .unwrap();
+            }
+            let types = [
+                ObjType::Frame,
+                ObjType::PageTable,
+                ObjType::VSpace,
+                ObjType::Tcb,
+                ObjType::Endpoint,
+                ObjType::Notification,
+                ObjType::Untyped,
+            ];
+            let mut successes = 0usize;
+            for step in 0..10_000usize {
+                let choice = next() % 7;
+                let slot = 7 + (next() as usize % 25);
+                let other = 7 + (next() as usize % 25);
+                let va = 0x10_0000_0000u64 + (next() & 0x3f) * 0x1000;
+                let rights = Rights((next() as u8) & Rights::ALL.0);
+                let (number, a0, a1, a2, a3, a4, a5) = match choice {
+                    0 => (
+                        SyscallId::Retype as u64,
+                        1,
+                        types[(next() as usize) % types.len()] as u64,
+                        slot as u64,
+                        (next() & 0x1fff) as u64,
+                        (next() & 0x3f) as u64,
+                        0,
+                    ),
+                    1 => (
+                        SyscallId::CapCopy as u64,
+                        1 + (next() % 31) as u64,
+                        other as u64,
+                        slot as u64,
+                        rights.0 as u64,
+                        0,
+                        0,
+                    ),
+                    2 => (SyscallId::CapDelete as u64, slot as u64, 0, 0, 0, 0, 0),
+                    3 => (SyscallId::CapRevoke as u64, slot as u64, 0, 0, 0, 0, 0),
+                    4 => (
+                        SyscallId::FrameMap as u64,
+                        4,
+                        if next() & 1 == 0 { 5 } else { other as u64 },
+                        va,
+                        rights.0 as u64,
+                        0,
+                        0,
+                    ),
+                    5 => (SyscallId::FrameUnmap as u64, 4, va, 0, 0, 0, 0),
+                    _ => (
+                        SyscallId::PageTableMap as u64,
+                        if next() & 1 == 0 { 6 } else { other as u64 },
+                        4,
+                        va,
+                        0,
+                        0,
+                        0,
+                    ),
+                };
+                if let UserAction::Return {
+                    error: KError::Ok, ..
+                } = kernel.user_syscall(root, number, a0, a1, a2, a3, a4, a5)
+                {
+                    successes += 1;
+                }
+                assert_eq!(
+                    kernel.check_invariants(),
+                    Ok(()),
+                    "format {:?} failed at step {}",
+                    format,
+                    step
+                );
+            }
+            assert!(
+                successes > 100,
+                "format {:?} only produced {} successful syscalls",
+                format,
+                successes
+            );
+        }
     }
 
     #[test]
