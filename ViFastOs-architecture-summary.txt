@@ -18,10 +18,12 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 3f16fb1 feat: root task, user pointer validation, untyped accounting
 - 604576e test: exercise PAN/SMEP/SMAP and document root task
 - c79d8f9 fix: destroy untyped children and isolate user faults
-- c9e3028 fix: distinguish kernel faults, zero retyped frames, record 3b design.
+- c9e3028 fix: distinguish kernel faults, zero retyped frames, record 3b design
+- 7cf9adc refactor: efiapi exceptions, PageTableOps, static kernel storage.
 
-Cập nhật gần nhất (commit c9e3028): root task, revoke Untyped thật, fault
-suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame khi retype,
+Cập nhật gần nhất (commit 7cf9adc): root task, revoke Untyped thật, fault
+suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
+PageTableOps, exception vector x86, Kernel static storage,
 Untyped accounting, user layout chung 64 GiB, SMEP/SMAP/PAN/sscratch
 hardening và vifast-user.
 
