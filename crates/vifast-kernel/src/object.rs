@@ -13,6 +13,8 @@ pub const MAX_QUEUE: usize = 8;
 pub const MAX_MAPPINGS: usize = 32;
 pub const MAX_FDS: usize = 8;
 pub const MAX_PRIORITY: u8 = 15;
+const _: () = assert!(MAX_OBJECTS <= 256);
+const _: () = assert!(MAX_CAPS <= u8::MAX as usize);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ObjRef {

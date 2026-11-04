@@ -55,7 +55,10 @@ static mut L2_USER: Table = Table([0; 512]);
 static mut L3_USER: Table = Table([0; 512]);
 static mut USER_CODE: Page = Page([0; 4096]);
 static mut USER_STACK: UserStack = UserStack([0; 32768]);
-static mut USER_DATA: Page = Page([0; 4096]);
+#[allow(dead_code)]
+#[repr(align(4096))]
+struct DataPool([u8; 262144]);
+static mut USER_DATA: DataPool = DataPool([0; 262144]);
 #[allow(dead_code)]
 #[repr(align(16))]
 struct Metadata([u8; 65536]);
@@ -198,21 +201,91 @@ impl vifast_kernel::console::Console for Aarch64Platform {
 struct PageOps;
 
 impl vifast_kernel::PageTableOps for PageOps {
-    fn unmap(&self, root: u64, va: u64) -> Result<(), KError> {
-        if root != <Aarch64Platform as Platform>::vspace_root() {
-            return Err(KError::InvalidArg);
-        }
-        <Aarch64Platform as Platform>::unmap_user_page(va)
+    fn levels(&self) -> usize {
+        4
     }
 
-    fn zero_frame(&self, pa: u64, size: usize) -> Result<(), KError> {
-        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
-            return Err(KError::Alignment);
+    fn index(&self, va: u64, level: usize) -> usize {
+        ((va >> (12 + 9 * (3 - level))) & 0x1ff) as usize
+    }
+
+    fn read_pte(&self, table_pa: u64, idx: usize) -> u64 {
+        unsafe { *((table_pa as *const u64).add(idx)) }
+    }
+
+    fn write_pte(&self, table_pa: u64, idx: usize, pte: u64) {
+        unsafe {
+            *((table_pa as *mut u64).add(idx)) = pte;
         }
+    }
+
+    fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
+        let ap = if rights.contains(Rights::WRITE) {
+            AP_USER_RW
+        } else {
+            AP_USER_RO
+        };
+        let uxn = if rights.contains(Rights::EXEC) {
+            0
+        } else {
+            UXN
+        };
+        page_desc(pa, 0, ap, PXN, uxn, SH_INNER)
+    }
+
+    fn encode_table(&self, pa: u64) -> u64 {
+        table_desc(pa)
+    }
+
+    fn decode(&self, entry: u64) -> vifast_kernel::Pte {
+        if entry & 0b11 == 0 {
+            return vifast_kernel::Pte::Invalid;
+        }
+        let pa = entry & 0x0000_ffff_ffff_f000;
+        if entry & 0b11 == 0b11 {
+            vifast_kernel::Pte::Table(pa)
+        } else {
+            vifast_kernel::Pte::Leaf(pa, Rights::READ)
+        }
+    }
+
+    fn decode_at(&self, entry: u64, level: usize) -> vifast_kernel::Pte {
+        if entry & 0b11 == 0 {
+            return vifast_kernel::Pte::Invalid;
+        }
+        let pa = entry & 0x0000_ffff_ffff_f000;
+        if level == 3 {
+            return vifast_kernel::Pte::Leaf(pa, Rights::READ);
+        }
+        if entry & 0b11 == 0b01 {
+            vifast_kernel::Pte::Leaf(pa, Rights::READ)
+        } else {
+            vifast_kernel::Pte::Table(pa)
+        }
+    }
+
+    fn install_kernel(&self, _root_pa: u64) {}
+
+    fn flush_va(&self, va: u64) {
+        unsafe {
+            core::arch::asm!("tlbi vae1is, {}", in(reg) va);
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+    }
+
+    fn flush_all_user(&self) {
+        unsafe {
+            core::arch::asm!("tlbi vmalle1is");
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+    }
+
+    fn zero_frame(&self, pa: u64, size: usize) {
         unsafe {
             core::ptr::write_bytes(pa as *mut u8, 0, size);
         }
-        Ok(())
     }
 }
 
@@ -259,7 +332,7 @@ impl Platform for Aarch64Platform {
     }
     fn data_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_DATA) as *mut u8, 4096)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_DATA) as *mut u8, 262144)
         }
     }
 

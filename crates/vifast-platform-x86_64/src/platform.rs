@@ -47,13 +47,17 @@ static mut PD_USER: Table = Table([0; 512]);
 static mut PT_USER: Table = Table([0; 512]);
 static mut USER_PAGE: Page = Page([0; 4096]);
 static mut USER_STACK: Stack = Stack([0; 32768]);
-static mut USER_FRAME: Page = Page([0; 4096]);
+#[allow(dead_code)]
+#[repr(align(4096))]
+struct DataPool([u8; 262144]);
+static mut USER_FRAME: DataPool = DataPool([0; 262144]);
 #[allow(dead_code)]
 #[repr(align(16))]
 struct Metadata([u8; 65536]);
 static mut METADATA: Metadata = Metadata([0; 65536]);
 static mut CONTEXTS: [TrapFrame; 32] = [TrapFrame::empty(); 32];
 static mut TRAP_STACK: Stack = Stack([0; 32768]);
+static mut IST_STACK: Stack = Stack([0; 32768]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut SMAP_ENABLED: bool = false;
 
@@ -296,6 +300,7 @@ unsafe fn unmap_page(va: u64) -> Result<(), KError> {
 unsafe fn setup_gdt_tss_idt() {
     let tss = core::ptr::addr_of_mut!(TSS);
     (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACK) as u64 + 16384;
+    (*tss).ist[0] = core::ptr::addr_of!(IST_STACK) as u64 + 32768;
     (*tss).iomap = core::mem::size_of::<Tss>() as u16;
     let tss_base = tss as u64;
     let tss_limit = core::mem::size_of::<Tss>() as u64 - 1;
@@ -346,7 +351,7 @@ unsafe fn setup_gdt_tss_idt() {
         (*idt)[vector] = IdtEntry {
             offset_low: handler as u16,
             selector: 0x08,
-            ist: 0,
+            ist: if matches!(vector, 2 | 8 | 18) { 1 } else { 0 },
             type_attr: 0x8E,
             offset_mid: (handler >> 16) as u16,
             offset_high: (handler >> 32) as u32,
@@ -439,21 +444,90 @@ impl vifast_kernel::console::Console for X86Platform {
 struct PageOps;
 
 impl vifast_kernel::PageTableOps for PageOps {
-    fn unmap(&self, root: u64, va: u64) -> Result<(), KError> {
-        if root != <X86Platform as Platform>::vspace_root() {
-            return Err(KError::InvalidArg);
-        }
-        <X86Platform as Platform>::unmap_user_page(va)
+    fn levels(&self) -> usize {
+        4
     }
 
-    fn zero_frame(&self, pa: u64, size: usize) -> Result<(), KError> {
-        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
-            return Err(KError::Alignment);
+    fn index(&self, va: u64, level: usize) -> usize {
+        ((va >> (12 + 9 * (3 - level))) & 0x1ff) as usize
+    }
+
+    fn read_pte(&self, table_pa: u64, idx: usize) -> u64 {
+        unsafe { *((table_pa as *const u64).add(idx)) }
+    }
+
+    fn write_pte(&self, table_pa: u64, idx: usize, pte: u64) {
+        unsafe {
+            *((table_pa as *mut u64).add(idx)) = pte;
         }
+    }
+
+    fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
+        let mut flags = PAGE_PRESENT | PAGE_USER;
+        if rights.contains(Rights::WRITE) {
+            flags |= PAGE_WRITE;
+        }
+        if !rights.contains(Rights::EXEC) {
+            flags |= PAGE_NX;
+        }
+        pa | flags
+    }
+
+    fn encode_table(&self, pa: u64) -> u64 {
+        pa | PAGE_PRESENT | PAGE_WRITE | PAGE_USER
+    }
+
+    fn decode(&self, entry: u64) -> vifast_kernel::Pte {
+        if entry & PAGE_PRESENT == 0 {
+            return vifast_kernel::Pte::Invalid;
+        }
+        let pa = entry & 0x000f_ffff_ffff_f000;
+        if entry & PAGE_LARGE != 0 {
+            vifast_kernel::Pte::Leaf(pa, Rights::READ)
+        } else {
+            vifast_kernel::Pte::Table(pa)
+        }
+    }
+
+    fn decode_at(&self, entry: u64, level: usize) -> vifast_kernel::Pte {
+        if entry & PAGE_PRESENT == 0 {
+            return vifast_kernel::Pte::Invalid;
+        }
+        let pa = entry & 0x000f_ffff_ffff_f000;
+        if level == 3 || entry & PAGE_LARGE != 0 {
+            let mut rights = Rights::READ;
+            if entry & PAGE_WRITE != 0 {
+                rights = rights | Rights::WRITE;
+            }
+            if entry & PAGE_NX == 0 {
+                rights = rights | Rights::EXEC;
+            }
+            vifast_kernel::Pte::Leaf(pa, rights)
+        } else {
+            vifast_kernel::Pte::Table(pa)
+        }
+    }
+
+    fn install_kernel(&self, _root_pa: u64) {}
+
+    fn flush_va(&self, va: u64) {
+        unsafe {
+            core::arch::asm!("invlpg [{}]", in(reg) va);
+        }
+    }
+
+    fn flush_all_user(&self) {
+        unsafe {
+            let cr3: u64;
+            core::arch::asm!("mov {}, cr3", out(reg) cr3);
+            core::arch::asm!("mov cr3, {}", in(reg) cr3);
+        }
+    }
+
+    fn zero_frame(&self, pa: u64, size: usize) {
         unsafe {
             core::ptr::write_bytes(pa as *mut u8, 0, size);
         }
-        Ok(())
     }
 }
 
@@ -507,7 +581,7 @@ impl Platform for X86Platform {
     }
     fn data_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_FRAME) as *mut u8, 4096)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_FRAME) as *mut u8, 262144)
         }
     }
 
@@ -642,6 +716,15 @@ extern "efiapi" {
 
 #[no_mangle]
 extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: u64) -> ! {
+    if matches!(vector, 2 | 8 | 18) {
+        vifast_kernel::klog!(
+            X86Platform,
+            "FATAL EXCEPTION vector={} err={:#x}",
+            vector,
+            error
+        );
+        X86Platform::exit(1);
+    }
     let cs = unsafe { *frame.add(18) };
     if cs & 3 == 0 {
         vifast_kernel::klog!(

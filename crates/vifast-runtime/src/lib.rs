@@ -158,8 +158,8 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
     const RUNTIME_OBJECTS: usize = 4;
-    const META_MAX_OBJECTS: usize = 16;
-    const DATA_MAX_OBJECTS: usize = 1;
+    const META_MAX_OBJECTS: usize = 32;
+    const DATA_MAX_OBJECTS: usize = 64;
     if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS > vifast_kernel::MAX_OBJECTS {
         vifast_kernel::klog!(A, "UNTYPED LIMIT EXCEEDS OBJECT TABLE");
         A::exit(1);

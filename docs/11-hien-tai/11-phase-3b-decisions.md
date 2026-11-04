@@ -5,11 +5,13 @@ chung cho root/server/client.
 
 ## 1. Kernel mapping
 
-- RISC-V và x86_64: mỗi VSpace copy các entry cấp cao nhất của kernel identity
-  map khi tạo; đánh dấu Global để không bị flush khi đổi task.
-- AArch64: chuyển kernel sang **TTBR1**; user dùng TTBR0. Không copy kernel map
-  theo từng VSpace.
+- RISC-V: copy entry gốc của kernel identity map vào root mới; đánh dấu Global.
+- x86_64 và AArch64: **không copy entry cấp cao nhất** vì kernel và user cùng
+  entry gốc. Mỗi VSpace có PML4/L0 riêng, entry 0..1 GiB trỏ tới PD/L2 kernel
+  dùng chung; entry user trỏ tới bảng riêng của task.
+- Retype VSpace trên x86/AArch64 cần thêm page cho bảng gốc/trung gian.
 - Không đưa kernel mapping vào shadow `VSpace.mappings`.
+- TTBR1 và high-half kernel là giai đoạn riêng sau 3b.
 
 ## 2. Chuyển address space
 
@@ -39,8 +41,10 @@ chung cho root/server/client.
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
-- `PageTableOps` là đường duy nhất kernel gọi unmap/zero; không dùng
-  `RevokeReport` hay trả danh sách VA về runtime.
+- `PageTableOps` là đường duy nhất kernel gọi read/write PTE, unmap, zero,
+  install_kernel và flush; không dùng `RevokeReport` hay trả danh sách VA về
+  runtime.
+- Các thao tác ghi PTE là infallible; kiểm tra nằm ở preflight.
 - BootInfo nằm trong `vifast-abi`, có `version`/`size` và slot ranges; root
   không hard-code slot 1/2/3.
 

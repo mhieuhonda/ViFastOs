@@ -24,6 +24,8 @@ sang bản bare-metal.
 | Chuyển capability + notification qua IPC | có | có | có |
 | User fault suspend (không panic) | có | có | có |
 | Frame retype zero page | có | có | có |
+| PageTable retype zero page | có | có | có |
+| x86 vector 0..31 / IST #DF,NMI,#MC | có | — | có |
 | User gọi `Exit` | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +

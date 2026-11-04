@@ -89,11 +89,49 @@ pub enum UserAction {
     Exit,
 }
 
-/// Platform page-table operations used by revoke/unmap and object retype.
-/// The kernel stays safe: unsafe PTE/TLB access lives in the platform impl.
+/// Decoded page-table entry shared by the portable walker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pte {
+    Invalid,
+    Table(u64),
+    Leaf(u64, Rights),
+}
+
+/// Platform page-table operations used by revoke/unmap, retype and the future
+/// generic walker.  unsafe PTE/TLB access stays in the platform impl.
+///
+/// Writes are infallible; callers perform preflight checks before destroying
+/// objects.  The default implementations keep host tests and simple platforms
+/// usable; real ports override all methods they need.
 pub trait PageTableOps {
-    fn unmap(&self, root: u64, va: u64) -> KResult<()>;
-    fn zero_frame(&self, pa: u64, size: usize) -> KResult<()>;
+    fn levels(&self) -> usize {
+        0
+    }
+    fn index(&self, _va: u64, _level: usize) -> usize {
+        0
+    }
+    fn read_pte(&self, _table_pa: u64, _idx: usize) -> u64 {
+        0
+    }
+    fn write_pte(&self, _table_pa: u64, _idx: usize, _pte: u64) {}
+    fn encode_leaf(&self, _pa: u64, _rights: Rights) -> u64 {
+        0
+    }
+    fn encode_table(&self, _pa: u64) -> u64 {
+        0
+    }
+    fn decode(&self, _pte: u64) -> Pte {
+        Pte::Invalid
+    }
+    /// Level-aware decode for architectures where page and table descriptors
+    /// share the same low bits (AArch64).
+    fn decode_at(&self, pte: u64, _level: usize) -> Pte {
+        self.decode(pte)
+    }
+    fn install_kernel(&self, _root_pa: u64) {}
+    fn flush_va(&self, _va: u64) {}
+    fn flush_all_user(&self) {}
+    fn zero_frame(&self, _pa: u64, _size: usize) {}
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -519,7 +557,7 @@ impl Kernel {
         let consumed = pa.checked_add(charge).ok_or(KError::OutOfMemory)? - base;
         if matches!(ty, ObjType::Frame | ObjType::PageTable) {
             if let Some(ops) = self.page_table_ops {
-                ops.zero_frame(pa as u64, page)?;
+                ops.zero_frame(pa as u64, page);
             }
         }
         let kind = if matches!(ty, ObjType::Frame | ObjType::PageTable) {
@@ -907,6 +945,32 @@ impl Kernel {
         }
     }
 
+    pub fn unmap_page_table(&self, root: u64, va: u64) {
+        Self::unmap_va_with_ops(self.page_table_ops, root, va);
+    }
+
+    fn unmap_va_with_ops(ops: Option<&dyn PageTableOps>, root: u64, va: u64) {
+        let Some(ops) = ops else { return };
+        let levels = ops.levels();
+        if levels == 0 {
+            return;
+        }
+        let mut table = root;
+        for level in 0..levels {
+            let idx = ops.index(va, level);
+            let pte = ops.read_pte(table, idx);
+            match ops.decode_at(pte, level) {
+                Pte::Invalid => return,
+                Pte::Table(pa) => table = pa,
+                Pte::Leaf(_, _) => {
+                    ops.write_pte(table, idx, 0);
+                    ops.flush_va(va);
+                    return;
+                }
+            }
+        }
+    }
+
     fn unmap_frame_everywhere(&mut self, frame: Frame) {
         let start = frame.pa as u64;
         let end = start.saturating_add(frame.size as u64);
@@ -922,9 +986,7 @@ impl Kernel {
             for slot in space.mappings.iter_mut() {
                 if let Some(mapping) = *slot {
                     if mapping.pa >= start && mapping.pa < end {
-                        if let Some(ops) = ops {
-                            let _ = ops.unmap(space.root, mapping.va);
-                        }
+                        Self::unmap_va_with_ops(ops, space.root, mapping.va);
                         *slot = None;
                     }
                 }
@@ -939,9 +1001,7 @@ impl Kernel {
         };
         for slot in space.mappings.iter_mut() {
             if let Some(mapping) = *slot {
-                if let Some(ops) = ops {
-                    let _ = ops.unmap(space.root, mapping.va);
-                }
+                Self::unmap_va_with_ops(ops, space.root, mapping.va);
                 *slot = None;
             }
         }
@@ -2153,13 +2213,8 @@ mod tests {
     static ZERO_OPS: ZeroOps = ZeroOps;
 
     impl PageTableOps for ZeroOps {
-        fn unmap(&self, _root: u64, _va: u64) -> KResult<()> {
-            Ok(())
-        }
-
-        fn zero_frame(&self, _pa: u64, _size: usize) -> KResult<()> {
+        fn zero_frame(&self, _pa: u64, _size: usize) {
             ZERO_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
         }
     }
 
@@ -2174,6 +2229,52 @@ mod tests {
         assert!(kernel.retype(untyped, ObjType::Frame).is_ok());
         assert!(kernel.retype(untyped, ObjType::PageTable).is_ok());
         assert_eq!(ZERO_CALLS.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    struct FakeTableOps;
+
+    static FAKE_PTES: std::sync::Mutex<[u64; 2]> = std::sync::Mutex::new([0; 2]);
+    static FAKE_FLUSHES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static FAKE_OPS: FakeTableOps = FakeTableOps;
+
+    impl PageTableOps for FakeTableOps {
+        fn levels(&self) -> usize {
+            1
+        }
+        fn index(&self, va: u64, _level: usize) -> usize {
+            ((va >> 12) & 1) as usize
+        }
+        fn read_pte(&self, _table_pa: u64, idx: usize) -> u64 {
+            FAKE_PTES.lock().unwrap()[idx]
+        }
+        fn write_pte(&self, _table_pa: u64, idx: usize, pte: u64) {
+            FAKE_PTES.lock().unwrap()[idx] = pte;
+        }
+        fn decode(&self, pte: u64) -> Pte {
+            if pte == 0 {
+                Pte::Invalid
+            } else {
+                Pte::Leaf(pte & !0xfff, Rights::READ | Rights::WRITE)
+            }
+        }
+        fn flush_va(&self, _va: u64) {
+            FAKE_FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn generic_page_table_walk_clears_leaf() {
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&FAKE_OPS);
+        {
+            let mut table = FAKE_PTES.lock().unwrap();
+            table[0] = 0x9000 | 0x3;
+            table[1] = 0;
+        }
+        FAKE_FLUSHES.store(0, std::sync::atomic::Ordering::SeqCst);
+        kernel.unmap_page_table(0x1000, 0x4000);
+        assert_eq!(FAKE_PTES.lock().unwrap()[0], 0);
+        assert_eq!(FAKE_FLUSHES.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

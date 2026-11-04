@@ -46,7 +46,10 @@ static mut USER_L1: Table = Table([0; 512]);
 static mut USER_L0: Table = Table([0; 512]);
 static mut USER_CODE: Page = Page([0; 4096]);
 static mut USER_STACK: UserStack = UserStack([0; 32768]);
-static mut USER_DATA: Page = Page([0; 4096]);
+#[allow(dead_code)]
+#[repr(align(4096))]
+struct DataPool([u8; 262144]);
+static mut USER_DATA: DataPool = DataPool([0; 262144]);
 #[allow(dead_code)]
 #[repr(align(16))]
 struct Metadata([u8; 65536]);
@@ -157,21 +160,82 @@ impl vifast_kernel::console::Console for RiscvPlatform {
 struct PageOps;
 
 impl vifast_kernel::PageTableOps for PageOps {
-    fn unmap(&self, root: u64, va: u64) -> Result<(), KError> {
-        if root != <RiscvPlatform as Platform>::vspace_root() {
-            return Err(KError::InvalidArg);
-        }
-        <RiscvPlatform as Platform>::unmap_user_page(va)
+    fn levels(&self) -> usize {
+        3
     }
 
-    fn zero_frame(&self, pa: u64, size: usize) -> Result<(), KError> {
-        if pa == 0 || size == 0 || (pa as usize) % 4096 != 0 || size % 4096 != 0 {
-            return Err(KError::Alignment);
+    fn index(&self, va: u64, level: usize) -> usize {
+        ((va >> (12 + 9 * (2 - level))) & 0x1ff) as usize
+    }
+
+    fn read_pte(&self, table_pa: u64, idx: usize) -> u64 {
+        unsafe { *((table_pa as *const u64).add(idx)) }
+    }
+
+    fn write_pte(&self, table_pa: u64, idx: usize, pte: u64) {
+        unsafe {
+            *((table_pa as *mut u64).add(idx)) = pte;
         }
+    }
+
+    fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
+        let mut flags = PTE_V | PTE_U;
+        if rights.contains(Rights::READ) || rights.contains(Rights::WRITE) {
+            flags |= PTE_R;
+        }
+        if rights.contains(Rights::WRITE) {
+            flags |= PTE_W;
+        }
+        if rights.contains(Rights::EXEC) {
+            flags |= PTE_X;
+        }
+        pte(pa, flags)
+    }
+
+    fn encode_table(&self, pa: u64) -> u64 {
+        pte(pa, PTE_V)
+    }
+
+    fn decode(&self, entry: u64) -> vifast_kernel::Pte {
+        if entry & PTE_V == 0 {
+            return vifast_kernel::Pte::Invalid;
+        }
+        let pa = (entry >> 10) << 12;
+        if entry & (PTE_R | PTE_W | PTE_X) != 0 {
+            let mut rights = Rights::NONE;
+            if entry & PTE_R != 0 {
+                rights = rights | Rights::READ;
+            }
+            if entry & PTE_W != 0 {
+                rights = rights | Rights::WRITE;
+            }
+            if entry & PTE_X != 0 {
+                rights = rights | Rights::EXEC;
+            }
+            vifast_kernel::Pte::Leaf(pa, rights)
+        } else {
+            vifast_kernel::Pte::Table(pa)
+        }
+    }
+
+    fn install_kernel(&self, _root_pa: u64) {}
+
+    fn flush_va(&self, va: u64) {
+        unsafe {
+            core::arch::asm!("sfence.vma {}, zero", in(reg) va);
+        }
+    }
+
+    fn flush_all_user(&self) {
+        unsafe {
+            core::arch::asm!("sfence.vma zero, zero");
+        }
+    }
+
+    fn zero_frame(&self, pa: u64, size: usize) {
         unsafe {
             core::ptr::write_bytes(pa as *mut u8, 0, size);
         }
-        Ok(())
     }
 }
 
@@ -220,7 +284,7 @@ impl Platform for RiscvPlatform {
 
     fn data_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_DATA) as *mut u8, 4096)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_DATA) as *mut u8, 262144)
         }
     }
 

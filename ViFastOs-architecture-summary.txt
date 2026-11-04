@@ -46,7 +46,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 20/20 PASS
+- cargo test -p vifast-kernel: 21/21 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -216,9 +216,9 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 473 dòng
-- AArch64: 552 dòng
-- x86_64: 696 dòng
+- RISC-V: 537 dòng
+- AArch64: 625 dòng
+- x86_64: 779 dòng
 
 runtime:
 - 432 dòng
@@ -227,7 +227,7 @@ vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 2263 dòng, không còn dependency vifast-arch
+- 2393 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 396808 bytes
@@ -321,7 +321,7 @@ Kind:
 Tcb:
 - name, state, priority
 - entry, stack, vspace: Option<ObjRef>
-- cspace [Option<Cap>; 12]
+- cspace [Option<Cap>; 64]
 - caller: Option<(ObjRef, epoch)>
 - reply_epoch
 - recv_slot
@@ -537,8 +537,8 @@ WouldBlock, NotFound.
 ----------------------------
 Runtime chỉ tạo duy nhất root TCB. Root task nhận từ runtime:
 - slot 1: VSpace READ|WRITE
-- slot 2: metadata Untyped WRITE|GRANT (64 KiB)
-- slot 3: data Untyped WRITE|GRANT (4 KiB)
+- slot 2: metadata Untyped WRITE|GRANT (64 KiB, max_objects=32)
+- slot 3: data Untyped WRITE|GRANT (256 KiB, max_objects=64)
 
 Root task dùng syscall:
 - Retype(metadata Untyped) -> Endpoint slot 4
@@ -554,9 +554,10 @@ Root task dùng syscall:
 - TcbConfigure(server, entry, stack, VSpace slot 1, priority 5)
 - TcbConfigure(client, entry, stack, VSpace slot 1, priority 5)
 - TcbResume(server), TcbResume(client)
-- Retype thêm fault TCB (priority 6) và notification riêng cho root
-- TcbResume(fault), rồi Wait trên notification slot 8; root không busy-loop.
-- Fault TCB cố ý load 0x8000_0000; kernel suspend nó và chạy tiếp server/client.
+- Retype thêm 2 fault TCB (priority 6) và notification riêng cho root
+- TcbResume(fault1/fault2), rồi Wait trên notification slot 8.
+- Fault1 load 0x8000_0000; fault2 chạy lệnh đặc quyền; cả hai log USER FAULT.
+- Server/client hiện vẫn dùng chung VSpace slot 1 cho đến 3b.
 
 Server A:
 - cap endpoint READ.
@@ -606,7 +607,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 20 test:
+Host test hiện có 21 test:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -621,12 +622,13 @@ Host test hiện có 20 test:
 - revoke Untyped detach TCB đang BlockedRecv
 - max_objects limit
 - cap copy giữ parent chain
-- TcbConfigure entry/stack validation
+- TcbConfigure entry/stack validation (sẽ bỏ ở 3b khi code/stack là mapping thường)
 - TcbResume từ chối TCB chưa configure
 - Yield thật qua switch_blocked
 - checked_add/overflow + buffer vắt qua hai page khác quyền
 - self-revoke Untyped bị từ chối khi TCB hiện tại là con
 - retype Frame/PageTable gọi zero_page qua PageTableOps
+- generic page-table walk xoá leaf trên bảng giả lập host
 
 QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
@@ -686,13 +688,13 @@ Exit code:
 - PageTableOps trait: kernel gọi unmap/zero trực tiếp, không gom RevokeReport.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
 - Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (128).
+- Data Untyped 256 KiB/max64; metadata Untyped max32.
 - vifast-kernel bỏ dependency vifast-arch; dùng Console trait.
 - x86 page-fault/exception entry dùng efiapi rcx/rdx/r8; vector 0..31 có handler.
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 396808 bytes dùng static storage.
-- Retype Frame/PageTable zero page; QEMU test Zero OK.
-- Host test hiện có 20 test.
+- Host test hiện có 21 test.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -715,8 +717,8 @@ Exit code:
 - Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
-- x86 đã có handler vector 0..31; user exception suspend, kernel panic.
 - Self-revoke Untyped bị từ chối nếu TCB hiện tại nằm trong nhóm con.
+- #DF/NMI/#MC dùng IST1 và luôn panic; vector 0..31 khác đã có handler.
 - Self-revoke hiện trả IllegalOperation; supervisor hủy nhóm gồm chính nó sẽ cần
   destroy-xong-rồi-pick sau này.
 - Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
@@ -775,8 +777,8 @@ E. Desktop / Space
 8. Fault endpoint gửi fault message và block thread; không panic kernel.
 9. Dùng ELF loader thay assembly nhúng sau root task.
 10. Gom unsafe vào wrapper nhỏ: MMIO, CSR/MSR, PTE.
-11. 3b: kernel mapping copy entry cấp cao (RISC-V/x86) hoặc TTBR1 (AArch64);
-    đánh dấu Global.
+11. 3b: RISC-V copy entry gốc kernel; x86/AArch64 dùng root riêng, entry
+    0..1 GiB trỏ PD/L2 kernel dùng chung, user trỏ bảng riêng; TTBR1 để sau.
 12. 3b: context giữ VSpace root; switch satp/TTBR0/CR3; flush TLB user.
 13. 3b: bỏ code/stack window; code/stack là mapping thường; TcbConfigure không
     kiểm tra entry/stack, fault sẽ suspend.
@@ -785,13 +787,13 @@ E. Desktop / Space
 15. 3b: Frame giữ nhiều mapping hoặc mỗi mapping một cap; revoke unmap mọi nơi.
 16. 3b: PageTableMap + retype VSpace/PageTable; walk generic, platform chỉ
     encode/decode PTE; revoke VSpace trả page table về Untyped.
-17. PageTableOps (unmap/zero) là đường duy nhất để kernel tác động page table;
-    bỏ RevokeReport/UserAction::Revoked.
+17. PageTableOps mở rộng read/write PTE, encode/decode, install_kernel, flush;
+    thao tác ghi infallible; bỏ RevokeReport/UserAction::Revoked.
 18. Retype VSpace/PageTable phải zero page; BootInfo định nghĩa trong vifast-abi
     có version/size và slot ranges; root không hard-code slot 1/2/3.
 19. Self-revoke hiện từ chối; supervisor destroy-cả-nhóm là hạn chế đã ghi.
 
-19. FILE / TÀI LIỆU LIÊN QUAN
+20. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
 README.md
 docs/00-hien-trang.md
@@ -816,7 +818,7 @@ crates/vifast-kernel-*/src/main.rs
 scripts/build.sh
 scripts/test-qemu.py
 
-20. KẾT LUẬN NGẮN
+21. KẾT LUẬN NGẮN
 ------------------
 Đây là một microkernel bring-up đa kiến trúc có:
 - lõi portable sạch (không unsafe/asm/hardware);
