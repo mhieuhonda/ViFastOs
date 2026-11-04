@@ -59,8 +59,9 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 562727d feat: add first-fit vspace range allocator
 - 395a589 feat: demo notification capability transfer over call
 - 85fe2cf feat: add user-space vfs server over ipc
+- 826efed feat: tag vspaces with asid and pcid
 
-Cập nhật code gần nhất (commit 85fe2cf): user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit 826efed): ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
@@ -96,14 +97,14 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 80/80 PASS
+- cargo test -p vifast-kernel: 81/81 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
-  headroom 565.232 B dưới 0x80400000
+  headroom 565.216 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -825,7 +826,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 80 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 81 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -1056,7 +1057,7 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 80 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 81 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1065,7 +1066,8 @@ Exit code:
   cần đồng bộ I-cache sang các PE khác trước khi cho hart khác chạy code mới.
   Hiện `sync_icache` chỉ bảo đảm hart đang map.
 - x86_64 chưa boot AP.
-- Đã có first-fit range VA allocator; ASID/PCID chưa có.
+- Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
+  chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
 - Chưa có IOMMU.
 - vifast-elf + vifast-root ELF đã build/validate; server/client cũng là Rust ELF
@@ -1125,7 +1127,7 @@ B. Bộ nhớ
 2. Page-table page allocator.
 3. Range VA allocator.
 4. Free/unmap toàn VSpace, thu hồi frame/object.
-5. ASID/PCID.
+5. ASID/PCID — đã tag ASID/PCID theo VSpace (x86 conditional).
 6. IOMMU.
 
 C. SMP

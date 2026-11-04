@@ -16,6 +16,7 @@
 - `562727d` — first-fit VSpace VA range allocator.
 - `395a589` — notification capability transfer demo.
 - `85fe2cf` — user-space VFS server over IPC.
+- `826efed` — ASID/PCID VSpace tagging.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -31,6 +32,9 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - 8.5 đã có user-space VFS server: `/motd` và `/scratch` đi qua IPC
   request/reply; client không còn dùng syscall Open/Read/Write/Close của kernel.
   Kernel ramfs chỉ còn là fallback/selftest.
+- 8.6 đã tag VSpace bằng ASID/PCID: RISC-V satp ASID + `sfence.vma` theo tag,
+  AArch64 TTBR0 ASID + `tlbi aside1is`, x86 PCID nếu CPUID hỗ trợ (QEMU TCG
+  hiện không bật PCID nên dùng CR3 fallback).
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -39,7 +43,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## Số liệu cuối
 
-- `vifast-kernel` 80/80, PTE 11/11, ELF 17/17; runtime/user compile.
+- `vifast-kernel` 81/81, PTE 11/11, ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
   `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`.
 - Boot Untyped: RISC-V 20/32 pages, AArch/x86 22/32; free 12/10 pages,
@@ -48,8 +52,8 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
   x86 40/64 pages; 20/48 object (x86 24/48).
 - ROOT SWITCH lần chạy cuối: 33 / 33 / 33 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
-  565232 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `c47b85d83ba692d35ce6ecf6f2b9682757e12f73206db52b7f735461d074d69a`.
+  565216 B.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `6f9f03bd134b7386a3e6ae1434193ccd60bc4f67b4798633c47dbe2aa291e781`.
 
 ---
 
@@ -181,6 +185,19 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## 8.6 — ASID/PCID cho VSpace
+
+- Commit `826efed feat: tag vspaces with asid and pcid`.
+- Kernel cấp ASID 12-bit không lặp trong phạm vi object table; `VSpace.asid`
+  sống cùng object và `current_asid` lấy từ TCB hiện tại.
+- Runtime truyền `(root, asid)` qua `Platform::switch_root`; platform chỉ
+  invalidate tag của VSpace đích thay vì flush toàn bộ TLB user.
+- RISC-V: `satp.ASID`, `sfence.vma zero, asid`.
+- AArch64: `TCR_EL1.AS=1`, ASID trong TTBR0, `tlbi aside1is, asid`.
+- x86_64: bật CR4.PCIDE khi CPUID leaf1 ECX bit17; CR3 mang PCID 12-bit. QEMU
+  TCG hiện không expose PCID nên đường QEMU dùng CR3 fallback, vẫn đúng.
+- Thêm test ASID khác 0/khác nhau; `vifast-kernel` 81/81; QEMU 3/3 PASS ×3.
 
 ## 8.5 — User-space VFS server qua IPC
 
