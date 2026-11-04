@@ -14,6 +14,7 @@
 - `ea3793b` — 8.4 Rust server/client ELF modules.
 - `6963f58` — 8.4b runtime boot modules via BootInfo.
 - `562727d` — first-fit VSpace VA range allocator.
+- `395a589` — notification capability transfer demo.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -43,7 +44,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
   6/48 objects.
 - ROOT SWITCH lần chạy cuối: 47861 / 38447 / 15977.
 - Root ELF: RISC-V 8752 B, AArch64/x86 8576 B; headroom RISC-V 614384 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `b1d522572c5a7ecf95d3103a496a734c3453162c15fe40c6554f8e148b21af76`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `1cc97091509d1b2829ebb90bd475175a023966122e9eb65cf97b910260c64113`.
 
 ---
 
@@ -175,6 +176,14 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## 8.2b — Notification capability transfer demo
+
+- Commit `395a589 feat: demo notification capability transfer over call`.
+- Client dùng `call_with_cap` cho lần Call đầu, chuyển notification cap slot 5
+  sang server recv slot 4; server `signal(4)`; client `Poll(5)` thấy tín hiệu.
+- Các Call sau dùng `CAP_NONE`; server vẫn signal notification đã nhận.
+- `vifast-kernel` 80/80; QEMU 3/3 PASS ×3.
 
 ## M1 — VSpace VA range allocator
 

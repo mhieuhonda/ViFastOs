@@ -55,11 +55,11 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a18663f feat: deliver user faults to endpoint
 - 854744a feat: add ipc buffer binding and copy.
 
-Cập nhật code gần nhất (commit 562727d): VSpace range allocator first-fit, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit 395a589): notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
-W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, IPC buffer + FrameWrite loader, 3 target link/FP
+W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, IPC buffer + FrameWrite loader, notification cap transfer, 3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
