@@ -310,8 +310,9 @@ Runtime boot sequence chi tiết:
 5. A::init_kernel() static; chạy selftest
 6. in SELFTEST PASS
 7. A::start_smp()
-8. A::init_kernel() reset static; tạo VSpace, metadata Untyped, data Untyped
-9. cài cap slot 1/2/3 cho root
+8. A::init_kernel() reset static; tạo boot Untyped 64 KiB, metadata Untyped,
+   data Untyped
+9. cài cap slot 1/2/3 cho root; boot Untyped giữ trong kernel
 10. copy user image vào A::code_page()
 11. A::build_page_tables()
 12. A::prepare_user()
@@ -712,19 +713,23 @@ Host test hiện có 44 test `vifast-kernel` + 9 test `vifast-pte`:
 - PageTableMap không thay các kernel slot trong PDPT/L1
 - revoke bản copy Untyped không hủy object của cap gốc
 - root revoke thu hồi cả object của cap con
-- TCB bị hủy: creator/cap con được reparent; client copy không revoke object server
+- TCB bị hủy: `multiple_dying_tcbs_reparent_through_dead_intermediate_cap`,
+  `root_flag_does_not_propagate_to_copies_or_ipc`,
+  `root_tcb_cannot_be_destroyed_by_untyped_revoke`
 - delete Untyped cap bị từ chối khi còn object/cap con; delete trả KResult
-- x86 assert LoadedImage base/end trong 0..1 GiB
 - build_task_space map code RX/stack RW/data RW, rollback khi thiếu trang
 - validate_user_range walk leaf, user bit, R/W, cross-page
 - hai VSpace dùng chung Frame: revoke Frame xoá leaf ở cả hai
-- assert Untyped nằm trong kernel_accessible_range()
-- walk leaf thật cho kernel mapping, kiểm tra non-user/X/W
 - VSpace/PageTable cross-Untyped, kernel slots và retype page shortage
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
   trỏ tới trang đã free.
 - cross-Untyped: revoke PageTable làm sạch reverse map và validate_user_range;
 - cross-Untyped: revoke VSpace detach/zero PageTable, cho phép gắn lại.
+
+Boot assert (không tính vào host test):
+- x86 LoadedImage base/end nằm trong 0..1 GiB;
+- RISC-V/AArch64 kernel image end + metadata/data/boot Untyped nằm trong kernel accessible range;
+- walk leaf thật từ root: non-user, X cho trap entry, W cho stack/storage.
 
 `vifast-pte` host test:
 - roundtrip/encode/decode 3 format;
@@ -832,7 +837,7 @@ Exit code:
 - Chưa có compositor, ViFastKey.
 - Chưa có formal verification/fuzz diện rộng.
 - RISC-V kernel accessible chỉ 4 MiB (0x8000_0000..0x8040_0000); runtime/assert
-  kiểm tra kernel image + metadata/data Untyped nằm trọn trong dải này.
+  kiểm tra kernel image + metadata/data/boot Untyped nằm trọn trong dải này.
 - x86 identity map 0..1 GiB; nếu OVMF/RAM vượt mốc này phải lấy memory map.
 - Kernel x86 identity map chưa đặt NX cho data.
 - Tất cả task hiện dùng chung một VSpace; stack mapping RW dùng chung, nên

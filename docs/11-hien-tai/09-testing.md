@@ -53,11 +53,7 @@ Hiện có 44 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 - retype VSpace cấp root + aux page, hai VSpace độc lập;
 - revoke bản copy Untyped không chạm object của cap gốc;
 - root revoke thu hồi cả object của cap con; delete cap bị từ chối khi còn con;
-- assert Untyped nằm trong kernel_accessible_range();
-- walk leaf thật cho kernel mapping: non-user, X cho trap entry, W cho stack/storage;
 - validate_user_range walk leaf user/R/W, cross-page và overflow;
-- assert kernel image end + metadata/data nằm trong kernel accessible range;
-- x86 assert LoadedImage base/end trong 0..1 GiB;
 - boot Untyped 64 KiB và build_task_space host test.
 - PageTableMap không thay entry 0 dùng chung;
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
@@ -65,6 +61,11 @@ Hiện có 44 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 - page table và VSpace thuộc hai Untyped khác nhau: revoke một bên không để
   reverse map/metadata treo;
 - kernel accessible range và boot-time trap-path slot check trên cả 3 arch.
+
+Boot assert:
+- x86 LoadedImage base/end trong 0..1 GiB;
+- RISC-V/AArch64 kernel image end + metadata/data/boot Untyped trong kernel accessible range;
+- walk leaf thật cho kernel mapping: non-user, X trap entry, W stack/storage.
 
 `vifast-pte` có 9 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
 kiến trúc và các biên index.
