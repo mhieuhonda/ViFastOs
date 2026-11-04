@@ -6,9 +6,9 @@ chung cho root/server/client.
 ## 1. Kernel mapping
 
 - RISC-V: copy entry gốc của kernel identity map vào root mới; đánh dấu Global.
-- x86_64 và AArch64: **không copy entry cấp cao nhất** vì kernel và user cùng
-  entry gốc. Mỗi VSpace có PML4/L0 riêng, entry 0..1 GiB trỏ tới PD/L2 kernel
-  dùng chung; entry user trỏ tới bảng riêng của task.
+- x86_64 và AArch64: PML4/L0 và PDPT/L1 là **riêng** mỗi VSpace; entry 0
+  của root trỏ bảng private. Chỉ PDPT[0] (x86) / L1[0..=1] (AArch64) trỏ
+  PD/L2 kernel dùng chung; entry user 64..127 trỏ bảng riêng của task.
 - Retype VSpace trên x86/AArch64 cần thêm page cho bảng gốc/trung gian.
 - Không đưa kernel mapping vào reverse map `VSpace.mappings`.
 - TTBR1 và high-half kernel là giai đoạn riêng sau 3b.
@@ -50,7 +50,7 @@ chung cho root/server/client.
 
 - `PageTableMap` đã expose: kernel chọn level, kiểm tra toàn bộ table span,
   lưu vị trí gắn và trả `AlreadyMapped` khi gắn lại.
-- Retype PageTable từ Untyped đã có; retype VSpace còn lại.
+- Retype PageTable và VSpace từ Untyped đã có; runtime root chuyển sang VSpace mới ở bước switch root.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable
   kernel.
 

@@ -22,7 +22,7 @@ cargo test -p vifast-runtime
 cargo test -p vifast-user
 ```
 
-Hiện có 29 test trong `vifast-kernel` + 8 test trong `vifast-pte`:
+Hiện có 32 test trong `vifast-kernel` + 9 test trong `vifast-pte`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -48,11 +48,14 @@ Hiện có 29 test trong `vifast-kernel` + 8 test trong `vifast-pte`:
 - TCB pool quota đầy trả OutOfMemory;
 - walk safety: user range, thiếu bảng, leaf cấp cao, PTE valid, snapshot không đổi;
 - PageTableMap gán level 1/2/3, FrameMap qua bảng mới, từ chối bảng vượt range;
+- retype VSpace cấp root + aux page, hai VSpace độc lập;
 - PageTableMap không thay entry 0 dùng chung;
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
-  trỏ tới trang đã free.
+  trỏ tới trang đã free;
+- page table và VSpace thuộc hai Untyped khác nhau: revoke một bên không để
+  reverse map/metadata treo.
 
-`vifast-pte` có 8 test cho encode/decode, table_span, dải user thật của 3
+`vifast-pte` có 9 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
 kiến trúc và các biên index.
 
 `vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.

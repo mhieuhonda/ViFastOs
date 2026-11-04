@@ -44,6 +44,7 @@ VSpace, để Frame còn unmap được leaf trước khi bảng cha bị gỡ.
 - range `[base, end)`;
 - `next_va` cho cấp phát tuần tự;
 - `code_base/code_len`, `stack_base/stack_len`;
+- `aux_pa` cho PDPT/L1 riêng của VSpace retype trên x86/AArch64;
 - tối đa 32 mapping (reverse map).
 
 `validate_user_range()` kiểm tra buffer user theo code/stack/mapping trước
@@ -83,7 +84,8 @@ Trap entry dùng kernel trap stack qua `sscratch`; `sscratch=0` khi ở kernel
 File: `crates/vifast-platform-aarch64/src/platform.rs`.
 
 - 4-level page table tĩnh.
-- GICv2 `0x0800_0000`, PL011 `0x0900_0000` map device block.
+- GICv2 `0x0800_0000`, PL011 `0x0900_0000` map trong L1[0]; RAM kernel
+  `0x4000_0000..` map trong L1[1]. `KERNEL_SHARED_SLOTS = [0, 1]`.
 - User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
   boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
 - Code: EL0 read-only + executable (`AP_USER_RO`, UXN=0).
@@ -101,7 +103,8 @@ Lưu ý encoding `AP[2:1]`:
 File: `crates/vifast-platform-x86_64/src/platform.rs`.
 
 - Tự dựng PML4/PDPT/PD/PT 4 KiB, không sửa page table UEFI.
-- Identity map 0..1 GiB cho kernel/UEFI image, stack, GDT/TSS/IDT.
+- Identity map 0..1 GiB cho kernel/UEFI image, stack, GDT/TSS/IDT; PDPT[0]
+  là shared slot, PML4[0]/PDPT là private mỗi VSpace.
 - User range `0x0000_0010_0000_0000..0x0000_0020_0000_0000` (64..128 GiB);
   boot window code `+0`, stack `+0x1000..+0x8fff`, data `+0xa000` là tạm thời.
 - Code: P|US, read+execute, NX clear.
@@ -128,9 +131,9 @@ Chưa có IPI shootdown đa hart. Khi thêm SMP scheduler, cần:
 
 ## 7. Page table allocator
 
-`PageTable` object đã có metadata `{root, level, mapped}` và PageTableMap,
-nhưng VSpace root vẫn là **bảng tĩnh** trong platform; retype VSpace và
-install_kernel thật chưa có. Chưa có:
+`PageTable` object đã có metadata `{root, mapped: {vspace, va_base, level}}` và PageTableMap.
+Retype VSpace đã cấp root + aux page, zero và gọi `install_kernel`; runtime
+root vẫn dùng bảng tĩnh cho tới khi switch root ở Bước 4. Chưa có:
 
 - allocator page table page tổng quát;
 - range VA allocator nhiều vùng;

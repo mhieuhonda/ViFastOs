@@ -25,9 +25,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - cc94730 test: cover generic page-table safety rules
 - 611ab2c feat: centralize user VA ranges and table spans
 - 68dcd50 feat: add PageTableMap and dependency-ordered revoke
-- e748d1b test: pin user VA boundary indices.
+- e748d1b test: pin user VA boundary indices
+- 4ab18c6 feat: retype VSpace and harden cross-untyped revoke.
 
-Cập nhật gần nhất (commit e748d1b): root task, revoke Untyped thật, fault
+Cập nhật gần nhất (commit 4ab18c6): root task, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
@@ -54,8 +55,8 @@ vifast-pte host test, SMEP/SMAP/PAN/sscratch hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 29/29 PASS
-- cargo test -p vifast-pte: 8/8 PASS
+- cargo test -p vifast-kernel: 32/32 PASS
+- cargo test -p vifast-pte: 9/9 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
@@ -169,7 +170,7 @@ vifast-pte
 - encode/decode/index thuần bit; table_span() cho từng level.
 - USER_VA_START/USER_VA_END thật của 3 kiến trúc; platform chỉ trả hằng số.
 - Host test kiểm tra dải user không giao kernel identity, nằm trong Sv39,
-  entry PML4/L0 và index biên; tổng 8 test.
+  entry PML4/L0, KERNEL_SHARED_SLOTS và index biên; tổng 9 test.
 - File: crates/vifast-pte/src/lib.rs.
 
 vifast-user
@@ -239,18 +240,18 @@ main.rs binary:
 - x86_64 UEFI: 51 dòng
 
 platform.rs:
-- RISC-V: 537 dòng
-- AArch64: 625 dòng
-- x86_64: 779 dòng
+- RISC-V: 491 dòng
+- AArch64: 600 dòng
+- x86_64: 721 dòng
 
 runtime:
-- 432 dòng
+- 407 dòng
 
 vifast-user:
 - khoảng 208 dòng
 
 vifast-kernel:
-- 3060 dòng, không còn dependency vifast-arch
+- 3372 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 396808 bytes
@@ -337,10 +338,10 @@ Kind:
 - Tcb
 - Untyped { base, size, bump, page_size, max_objects, objects }
 - Frame { pa, size }
-- VSpace { root, page_size, base, next_va, end, code_base, code_len,
-           stack_base, stack_len, mappings }
-- PageTable { root, level, mapped: Option<{vspace, va_base, level}> }
-  // level do PageTableMap gán; mỗi page table chỉ gắn một lần
+- VSpace { root, aux_pa, page_size, base, next_va, end, code_base,
+           code_len, stack_base, stack_len, mappings }
+- PageTable { root, mapped: Option<{vspace, va_base, level}> }
+  // level chỉ nằm trong mapping do PageTableMap gán; mỗi bảng gắn một lần
 
 Tcb:
 - name, state, priority
@@ -367,8 +368,10 @@ Capability:
 
 Untyped/retype:
 - Frame: cấp 1 page căn theo page_size; có thể map vào nhiều VSpace.
-- PageTable: cấp 1 page; khi retype level=0, mapped=None; PageTableMap gán
-  level và vị trí thật.
+- PageTable: cấp 1 page; khi retype mapped=None; PageTableMap gán
+  level và vị trí thật trong mapping.
+- VSpace: retype cấp root page + aux_pa (PDPT/L1) cho x86/AArch64; zero
+  các trang và gọi install_kernel. Base mặc định là user range 64..128 GiB.
 - Endpoint: tiêu OBJ_ENDPOINT_BYTES = 256.
 - Notification: tiêu OBJ_NOTIFICATION_BYTES = 128.
 - Tcb: tiêu OBJ_TCB_BYTES = 4096 (quota accounting).
@@ -441,8 +444,13 @@ Portable generic page-table walk + reverse map:
   table_span(level) nằm trong user_va_range rồi mới ghi PTE.
 - Mỗi PageTable lưu {vspace, va_base, level}; gắn lần hai trả AlreadyMapped.
 - Walk dừng ở leaf cấp cao; không ghi vào bảng kernel dùng chung.
-- Entry 0 của PML4/L0 trên x86/AArch64 là bảng kernel dùng chung; PageTableMap
-  chỉ đi xuyên qua, không thay entry này.
+- x86/AArch64: PML4/L0 là **riêng** cho từng VSpace; entry 0 trỏ tới
+  PDPT/L1 **riêng**. Chỉ PDPT[0]/L1[0..=1] trỏ PD/L2 kernel dùng chung;
+  các entry user 64..127 trỏ bảng user riêng. PageTableMap đi xuyên qua entry 0
+  nhưng không thay nó.
+- AArch64 hiện dùng L1[0] cho MMIO thấp (GIC/PL011) và L1[1] cho RAM kernel
+  0x4000_0000..; cả hai là KERNEL_SHARED_SLOTS. RISC-V copy root[0] (UART) và
+  root[2] (kernel RAM); x86 copy PDPT[0] (identity 0..1 GiB).
 - Revoke Untyped: Frame trước (unmap leaf), PageTable sâu nhất trước
   (xoá entry cha + flush), cuối cùng VSpace.
 - validate_user_range() kiểm tra con trỏ user trước DebugWrite/Open/Read/Write
@@ -456,8 +464,8 @@ Portable generic page-table walk + reverse map:
 
 RISC-V64:
 - Sv39 root tĩnh.
-- Kernel identity 0x8000_0000..0x803f_ffff.
-- UART 0x1000_0000.
+- Kernel identity 0x8000_0000..0x803f_ffff; UART 0x1000_0000.
+- KERNEL_SHARED_SLOTS = root[0] (UART/device) và root[2] (kernel RAM).
 - User code 64 GiB: RX U.
 - Stack 64 GiB+0x1000..+0x8fff: RW U.
 - Data 64 GiB+0xa000: RW U qua FrameMap.
@@ -467,7 +475,8 @@ RISC-V64:
 
 AArch64:
 - 4-level page table tĩnh.
-- GICv2 0x0800_0000, PL011 0x0900_0000.
+- Identity/MMIO dùng L1[0] (GIC 0x0800_0000, PL011 0x0900_0000) và L1[1]
+  (RAM kernel 0x4000_0000..); KERNEL_SHARED_SLOTS = [0, 1].
 - User code 64 GiB: EL0 RO + X.
 - Stack 64 GiB+0x1000..+0x8fff: RW + NX.
 - Data 64 GiB+0xa000: RW + NX.
@@ -482,8 +491,9 @@ x86_64:
 - Data 64 GiB+0xa000: RW + NX + U.
 - FrameMap/FrameUnmap đi generic walk, không còn platform map riêng.
 - CR3 chuyển sang PML4 riêng trước iretq.
-- Identity map 0..1 GiB; user range 64..128 GiB nằm ngoài identity,
-  dùng PDPT[64..127] trong entry 0 dùng chung.
+- Identity map 0..1 GiB nằm ở PDPT[0]; PDPT[0] trỏ PD kernel dùng chung.
+  User range 64..128 GiB dùng PDPT[64..127] trỏ bảng user riêng.
+- PML4[0] và PDPT là riêng mỗi VSpace; không dùng chung PDPT/L1.
 - SMEP/SMAP bật nếu CPUID hỗ trợ; chưa có NX cho data kernel.
 - Chưa có AP/SMP scheduler.
 
@@ -648,7 +658,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 29 test `vifast-kernel` + 8 test `vifast-pte`:
+Host test hiện có 32 test `vifast-kernel` + 9 test `vifast-pte`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -677,6 +687,8 @@ Host test hiện có 29 test `vifast-kernel` + 8 test `vifast-pte`:
 - PageTableMap không thay entry 0 dùng chung
 - revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
   trỏ tới trang đã free.
+- cross-Untyped: revoke PageTable làm sạch reverse map và validate_user_range;
+- cross-Untyped: revoke VSpace detach/zero PageTable, cho phép gắn lại.
 
 `vifast-pte` host test:
 - roundtrip/encode/decode 3 format;
@@ -747,7 +759,11 @@ Exit code:
   và table_span() là nguồn duy nhất cho platform.
 - FrameMap/FrameUnmap đi qua generic walk; platform không còn map/unmap riêng.
 - PageTableMap gắn page table ở entry invalid đầu tiên; level do kernel chọn.
+- Retype VSpace cấp root + aux page, zero và gọi install_kernel thật.
 - Revoke Untyped sắp thứ tự Frame → PageTable sâu nhất → PageTable cha → VSpace.
+- Revoke PageTable/VSpace xoá reverse map trong span, zero trang bảng và gỡ
+  metadata của bảng con; VSpace đang là root của thread hiện tại bị từ chối hủy.
+- KERNEL_SHARED_SLOTS xác nhận AArch64 dùng L1[0..=1], không chỉ 0..1 GiB.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
 - Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (128).
 - Data Untyped 256 KiB/max64; metadata Untyped max32.
@@ -757,7 +773,7 @@ Exit code:
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault thread 2 (UD2/HLT/illegal) có USER FAULT trên cả 3 arch.
 - Kernel object limits tăng 128/64/32; Kernel 396808 bytes dùng static storage.
-- Host test hiện có 29 test `vifast-kernel` + 8 test `vifast-pte`.
+- Host test hiện có 32 test `vifast-kernel` + 9 test `vifast-pte`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -779,7 +795,7 @@ Exit code:
 - Kernel x86 identity map chưa đặt NX cho data.
 - Tất cả task hiện dùng chung một VSpace; stack window RW dùng chung, nên
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
-- Chưa retype VSpace; root page table vẫn tĩnh, install_kernel còn no-op.
+- Runtime root vẫn dùng VSpace tĩnh cho tới khi context switch root (Bước 4).
 - validate_user_range() vẫn dùng window/reverse map, chưa walk leaf thật.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
 - Self-revoke Untyped hiện trả IllegalOperation; supervisor hủy nhóm gồm chính
@@ -788,7 +804,6 @@ Exit code:
 - TCB/VSpace chưa tách pool riêng; TCB có quota 16 nhưng vẫn nằm trong object table.
   Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 128 object hoặc trước SMP,
   vì static Kernel đã giải quyết áp lực stack và 3b chưa cần quá 128 object.
-- VSpace retype + install_kernel thật vẫn là bước tiếp theo.
 - `OBJ_TCB_BYTES=4096` chỉ là quota accounting, không phản ánh đúng `size_of::<Tcb>()`.
 - Server fault khi client BlockedReply sẽ làm client chờ vô hạn; fault endpoint sẽ xử lý.
 
@@ -845,18 +860,18 @@ E. Desktop / Space
 8. Fault endpoint gửi fault message và block thread; không panic kernel.
 9. Dùng ELF loader thay assembly nhúng sau root task.
 10. Gom unsafe vào wrapper nhỏ: MMIO, CSR/MSR, PTE.
-11. 3b: RISC-V copy entry gốc kernel; x86/AArch64 dùng root riêng, entry
-    0..1 GiB trỏ PD/L2 kernel dùng chung, user trỏ bảng riêng; TTBR1 để sau.
+11. 3b: RISC-V copy root[KERNEL_SHARED_SLOTS]. x86/AArch64 dùng PML4/L0 và
+    PDPT/L1 riêng cho từng VSpace; chỉ PDPT[0]/L1[0..=1] trỏ PD/L2 kernel
+    dùng chung. User dùng entry riêng 64..127. TTBR1 để sau.
 12. 3b: context giữ VSpace root; switch satp/TTBR0/CR3; flush TLB user.
 13. 3b: bỏ code/stack window; code/stack là mapping thường; TcbConfigure không
     kiểm tra entry/stack, fault sẽ suspend.
 14. 3b: ảnh task là boot module page-aligned + Frame cap; BootInfo frame map
     read-only.
 15. 3b: Frame giữ nhiều mapping hoặc mỗi mapping một cap; revoke unmap mọi nơi.
-16. PageTableMap và retype PageTable đã có; retype VSpace, install_kernel thật
-    và VSpace riêng là bước kế tiếp. Walk generic, format PTE nằm trong
-    vifast-pte, platform chỉ read/write/flush/zero; revoke VSpace trả page
-    table về Untyped.
+16. Retype VSpace đã cấp root (+ PDPT/L1 phụ cho x86/AArch64), zero và gọi
+    install_kernel. install_kernel chỉ copy KERNEL_SHARED_SLOTS; user slots
+    do PageTableMap gắn. Runtime root chuyển sang VSpace mới ở Bước 4.
 17. PageTableOps mở rộng read/write PTE, encode/decode, install_kernel, flush;
     thao tác ghi infallible; bỏ RevokeReport/UserAction::Revoked.
 18. Retype VSpace/PageTable phải zero page; BootInfo định nghĩa trong vifast-abi

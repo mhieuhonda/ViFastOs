@@ -26,6 +26,7 @@ decode(pte)
 decode_at(pte, level)
 table_span(level)
 USER_VA_START / USER_VA_END
+KERNEL_SHARED_SLOTS
 ```
 
 `decode_at` cần cho AArch64 vì page descriptor L3 và table descriptor dùng
@@ -35,6 +36,7 @@ cùng bit thấp `0b11`.
 
 - `W^X`: leaf không được vừa write vừa exec.
 - RISC-V: W không hợp lệ nếu thiếu R; encoder tự thêm R khi W.
+- KERNEL_SHARED_SLOTS: RISC-V root[0,2], x86 PDPT[0], AArch64 L1[0,1].
 - x86: leaf có U/S, RW, NX; table có P|W|U.
 - AArch64: page L3 vs table; block L1/L2; AP[2:1], UXN/PXN.
 - Dải user 64..128 GiB: nằm ngoài kernel identity, RISC-V vẫn trong nửa thấp
