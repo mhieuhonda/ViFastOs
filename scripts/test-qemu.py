@@ -214,6 +214,7 @@ def test_x86_64() -> bool:
     vars_path = os.path.join(tmp, "vars.fd")
     shutil.copyfile(vars_src, vars_path)
     serial = os.path.join(tmp, "serial.txt")
+    disk = make_disk("x86_64")
     cmd = [
         QEMU_X86,
         "-machine", "q35",
@@ -226,10 +227,21 @@ def test_x86_64() -> bool:
         "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
         "-drive", f"if=pflash,format=raw,file={vars_path}",
         "-drive", f"format=raw,file=fat:rw:{esp}",
+        "-device", "isa-ide",
+        "-drive", f"id=vd1,if=none,format=raw,file={disk}",
+        "-device", "ide-hd,drive=vd1,bus=ide.6,unit=0",
         "-device", "isa-debug-exit,iobase=0x501,iosize=0x03",
     ]
     # The kernel writes 0x501 with value 1, which QEMU turns into exit code 3.
-    return run_qemu("x86_64", cmd, serial, 40, {3})
+    return run_qemu(
+        "x86_64",
+        cmd,
+        serial,
+        40,
+        {3},
+        require_block=True,
+        require_disk=True,
+    )
 
 
 def main() -> int:

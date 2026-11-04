@@ -201,6 +201,101 @@ unsafe fn outb(port: u16, value: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") value);
 }
 
+unsafe fn inb(port: u16) -> u8 {
+    let value: u8;
+    core::arch::asm!("in al, dx", in("dx") port, out("al") value);
+    value
+}
+
+unsafe fn inw(port: u16) -> u16 {
+    let value: u16;
+    core::arch::asm!("in ax, dx", in("dx") port, out("ax") value);
+    value
+}
+
+unsafe fn outw(port: u16, value: u16) {
+    core::arch::asm!("out dx, ax", in("dx") port, in("ax") value);
+}
+
+const ATA_BASE: u16 = 0x1F0;
+const ATA_CTRL: u16 = 0x3F6;
+
+unsafe fn ata_wait_bsy() -> bool {
+    let mut spins = 0u32;
+    while inb(ATA_BASE + 7) & 0x80 != 0 {
+        spins += 1;
+        if spins > 10_000_000 {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+    true
+}
+
+unsafe fn ata_wait_drq() -> bool {
+    let mut spins = 0u32;
+    loop {
+        let status = inb(ATA_BASE + 7);
+        if status & 0x80 == 0 && status & 0x08 != 0 {
+            return true;
+        }
+        if status & 0x01 != 0 || spins > 10_000_000 {
+            return false;
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+}
+
+unsafe fn ata_prepare(lba: u64) -> bool {
+    if lba >= 1 << 28 || !ata_wait_bsy() {
+        return false;
+    }
+    outb(ATA_BASE + 6, 0xE0 | ((lba >> 24) as u8 & 0x0f));
+    // 400 ns delay: four alternate-status reads.
+    for _ in 0..4 {
+        let _ = inb(ATA_CTRL);
+    }
+    outb(ATA_BASE + 2, 1);
+    outb(ATA_BASE + 3, lba as u8);
+    outb(ATA_BASE + 4, (lba >> 8) as u8);
+    outb(ATA_BASE + 5, (lba >> 16) as u8);
+    true
+}
+
+unsafe fn ata_read(lba: u64, out: &mut [u8; 512]) -> bool {
+    if !ata_prepare(lba) {
+        return false;
+    }
+    outb(ATA_BASE + 7, 0x20);
+    if !ata_wait_drq() {
+        return false;
+    }
+    for i in 0..256 {
+        let word = inw(ATA_BASE);
+        out[i * 2] = word as u8;
+        out[i * 2 + 1] = (word >> 8) as u8;
+    }
+    true
+}
+
+unsafe fn ata_write(lba: u64, input: &[u8; 512]) -> bool {
+    if !ata_prepare(lba) {
+        return false;
+    }
+    outb(ATA_BASE + 7, 0x30);
+    if !ata_wait_drq() {
+        return false;
+    }
+    for i in 0..256 {
+        let word = input[i * 2] as u16 | ((input[i * 2 + 1] as u16) << 8);
+        outw(ATA_BASE, word);
+    }
+    outb(ATA_BASE + 7, 0xE7); // flush cache
+    let _ = ata_wait_bsy();
+    true
+}
+
 fn table_pa(table: *const Table) -> u64 {
     table as u64
 }
@@ -1034,6 +1129,14 @@ impl Platform for X86Platform {
         unsafe {
             outb(0x20, 0x20);
         }
+    }
+
+    fn block_read(lba: u64, out: &mut [u8; 512]) -> bool {
+        unsafe { ata_read(lba, out) }
+    }
+
+    fn block_write(lba: u64, input: &[u8; 512]) -> bool {
+        unsafe { ata_write(lba, input) }
     }
 
     fn start_smp() {
