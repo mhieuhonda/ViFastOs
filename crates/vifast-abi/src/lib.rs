@@ -44,6 +44,11 @@ pub mod user_layout {
     pub const ROOT_ELF_STACK_GUARD: usize = ROOT_ELF_BASE + 0x10_0000;
     pub const ROOT_ELF_STACK_BASE: usize = ROOT_ELF_STACK_GUARD + 0x1000;
     pub const ROOT_ELF_STACK_TOP: usize = ROOT_ELF_STACK_BASE + 0x4000;
+    /// Read-only BootInfo page passed to the root task in its first argument.
+    /// It is above the root ELF stack and outside the ELF parse window.
+    pub const ROOT_BOOTINFO_VA: usize = ROOT_ELF_STACK_TOP + 0x1000;
+    const _: () = assert!(ROOT_BOOTINFO_VA >= ROOT_ELF_STACK_TOP);
+    const _: () = assert!(ROOT_BOOTINFO_VA >= ROOT_ELF_STACK_GUARD);
 
     /// Fixed jump-table entries at the start of the bootstrap user image.
     pub const USER_ENTRY_SERVER: usize = CODE_VA;
@@ -77,6 +82,30 @@ pub mod user_layout {
     pub const USER_VA_START: usize = CODE_VA;
     pub const USER_VA_END: usize = CODE_VA + 0x10_0000_0000;
 }
+/// Magic value for the read-only boot information page (`VFBOOT01` LE).
+pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VFBOOT01");
+pub const BOOTINFO_VERSION: u32 = 1;
+
+/// Fixed layout passed to the root task as its first argument.  All fields are
+/// integers so the ABI has no Rust layout surprises; `free_slot_start` is the
+/// first slot the root may allocate and `free_slot_end` is exclusive.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BootInfo {
+    pub magic: u64,
+    pub version: u32,
+    pub size: u32,
+    pub root_vspace: u16,
+    pub meta_untyped: u16,
+    pub data_untyped: u16,
+    pub server_vspace: u16,
+    pub user_code_first: u16,
+    pub user_code_count: u16,
+    pub free_slot_start: u16,
+    pub free_slot_end: u16,
+}
+const _: () = assert!(core::mem::size_of::<BootInfo>() <= 4096);
+
 /// Maximum bytes copied through a single user I/O syscall.
 pub const USER_IO_MAX: usize = 256;
 /// Fixed untyped-memory accounting sizes.  These make object creation

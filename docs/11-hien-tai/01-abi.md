@@ -110,6 +110,34 @@ pub struct Message {
   `validate_user_range()` trước khi runtime copy. Địa chỉ kernel/unmapped bị
   trả `InvalidArg`.
 
+## 5b. BootInfo
+
+Root task nhận con trỏ `BootInfo` trong thanh ghi đối số đầu tiên
+(`a0`/`x0`/`rdi`). Trang này được runtime map **READ-only** tại
+`ROOT_BOOTINFO_VA`, nằm trên root ELF stack và ngoài cửa sổ parse ELF.
+
+```rust
+#[repr(C)]
+pub struct BootInfo {
+    pub magic: u64,          // VFBOOT01
+    pub version: u32,
+    pub size: u32,           // size_of::<BootInfo>()
+    pub root_vspace: u16,
+    pub meta_untyped: u16,
+    pub data_untyped: u16,
+    pub server_vspace: u16,
+    pub user_code_first: u16,
+    pub user_code_count: u16,
+    pub free_slot_start: u16, // inclusive
+    pub free_slot_end: u16,   // exclusive
+}
+```
+
+Root kiểm tra magic/version/size và in `BOOTINFO OK`; mọi slot root dùng đều
+đọc từ đây. `user_code_first/count` mô tả các Frame cap code user.S có quyền
+`READ|EXEC` (không WRITE/GRANT). Root cấp object mới tuần tự từ
+`free_slot_start`.
+
 ## 6. Bảng syscall
 
 Số syscall là ổn định. `-` nghĩa là không dùng.

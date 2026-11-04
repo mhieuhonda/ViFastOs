@@ -3303,6 +3303,40 @@ mod tests {
     }
 
     #[test]
+    fn bootinfo_layout_is_stable() {
+        let info = BootInfo {
+            magic: BOOTINFO_MAGIC,
+            version: BOOTINFO_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            root_vspace: 1,
+            meta_untyped: 2,
+            data_untyped: 3,
+            server_vspace: 12,
+            user_code_first: 20,
+            user_code_count: 1,
+            free_slot_start: 21,
+            free_slot_end: 64,
+        };
+        let base = &info as *const BootInfo as usize;
+        assert_eq!(core::mem::size_of::<BootInfo>(), 32);
+        for (offset, field) in [
+            (0usize, &info.magic as *const u64 as usize),
+            (8, &info.version as *const u32 as usize),
+            (12, &info.size as *const u32 as usize),
+            (16, &info.root_vspace as *const u16 as usize),
+            (18, &info.meta_untyped as *const u16 as usize),
+            (20, &info.data_untyped as *const u16 as usize),
+            (22, &info.server_vspace as *const u16 as usize),
+            (24, &info.user_code_first as *const u16 as usize),
+            (26, &info.user_code_count as *const u16 as usize),
+            (28, &info.free_slot_start as *const u16 as usize),
+            (30, &info.free_slot_end as *const u16 as usize),
+        ] {
+            assert_eq!(field - base, offset);
+        }
+    }
+
+    #[test]
     fn selftest_passes() {
         let mut kernel = Kernel::new();
         assert!(selftest::run::<TestArch>(&mut kernel));

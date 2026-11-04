@@ -458,6 +458,10 @@ impl Platform for RiscvPlatform {
         TrapFrame::user(entry, stack)
     }
 
+    fn set_context_arg0(context: &mut TrapFrame, value: u64) {
+        context.regs[10] = value;
+    }
+
     fn contexts() -> &'static mut [TrapFrame] {
         unsafe { &mut *core::ptr::addr_of_mut!(CONTEXTS) }
     }
@@ -471,6 +475,7 @@ impl Platform for RiscvPlatform {
             core::arch::asm!("csrw sscratch, {}", in(reg) trap_top);
             core::arch::asm!("csrs sie, {}", in(reg) 1u64 << 5);
             core::arch::asm!("mv sp, {}", in(reg) context.regs[2]);
+            core::arch::asm!("mv a0, {}", in(reg) context.regs[10]);
             core::arch::asm!("sret");
         }
         unreachable!()

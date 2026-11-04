@@ -9,13 +9,10 @@
 
 use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
-    CLIENT_STACK_TOP, CLIENT_TCB_SLOT, ENDPOINT_SLOT, FAULT1_STACK_TOP, FAULT1_TCB_SLOT,
-    FAULT2_STACK_TOP, FAULT2_TCB_SLOT, FAULT3_STACK_TOP, FAULT3_TCB_SLOT, META_UNTYPED_SLOT,
-    NOTIFICATION_SLOT, ROOT_NOTIFICATION_SLOT, ROOT_VSPACE_SLOT, SERVER_STACK_TOP, SERVER_TCB_SLOT,
-    SERVER_VSPACE_SLOT, USER_ENTRY_CLIENT, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3,
-    USER_ENTRY_SERVER,
+    CLIENT_STACK_TOP, FAULT1_STACK_TOP, FAULT2_STACK_TOP, FAULT3_STACK_TOP, SERVER_STACK_TOP,
+    USER_ENTRY_CLIENT, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_SERVER,
 };
-use vifast_abi::{KError, ObjType, Rights};
+use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_user::SyscallResult;
 
 #[cfg(target_arch = "x86_64")]
@@ -29,6 +26,7 @@ core::arch::global_asm!(include_str!("start_riscv64.S"));
 
 const ROOT_RUST: &[u8] = b"ROOT RUST\n";
 const ROOT_READY: &[u8] = b"ROOT READY\n";
+const BOOTINFO_OK: &[u8] = b"BOOTINFO OK\n";
 const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
 
 fn check(result: SyscallResult) {
@@ -44,97 +42,138 @@ fn write(bytes: &[u8]) {
     ));
 }
 
-fn retype(ty: ObjType, slot: u8) {
-    check(vifast_user::retype(
-        META_UNTYPED_SLOT as u8,
-        ty as u64,
-        slot,
-    ));
+fn retype(untyped_slot: u8, ty: ObjType, slot: u8) {
+    check(vifast_user::retype(untyped_slot, ty as u64, slot));
 }
 
 fn copy(src: u8, tcb: u8, dst: u8, rights: Rights) {
     check(vifast_user::cap_copy(src, tcb, dst, rights.0));
 }
 
+struct SlotAllocator {
+    next: u8,
+    end: u8,
+}
+
+impl SlotAllocator {
+    fn alloc(&mut self) -> u8 {
+        if self.next >= self.end {
+            panic!("root slot range exhausted");
+        }
+        let slot = self.next;
+        self.next += 1;
+        slot
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn root_main() -> ! {
+pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     write(ROOT_RUST);
 
-    retype(ObjType::Endpoint, ENDPOINT_SLOT as u8);
-    retype(ObjType::Tcb, SERVER_TCB_SLOT as u8);
-    retype(ObjType::Tcb, CLIENT_TCB_SLOT as u8);
-    retype(ObjType::Notification, NOTIFICATION_SLOT as u8);
-    retype(ObjType::Notification, ROOT_NOTIFICATION_SLOT as u8);
-    retype(ObjType::Tcb, FAULT1_TCB_SLOT as u8);
-    retype(ObjType::Tcb, FAULT2_TCB_SLOT as u8);
-    retype(ObjType::Tcb, FAULT3_TCB_SLOT as u8);
+    if bootinfo_ptr == 0 {
+        panic!("missing BootInfo pointer");
+    }
+    let info = unsafe { core::ptr::read_volatile(bootinfo_ptr as *const BootInfo) };
+    if info.magic != BOOTINFO_MAGIC
+        || info.version != BOOTINFO_VERSION
+        || info.size as usize != core::mem::size_of::<BootInfo>()
+    {
+        panic!("invalid BootInfo");
+    }
+    let root_vspace = info.root_vspace as u8;
+    let meta_untyped = info.meta_untyped as u8;
+    let data_untyped = info.data_untyped as u8;
+    let server_vspace = info.server_vspace as u8;
+    if root_vspace == 0
+        || meta_untyped == 0
+        || data_untyped == 0
+        || server_vspace == 0
+        || info.user_code_count == 0
+        || info.free_slot_start == 0
+        || info.free_slot_start >= info.free_slot_end
+    {
+        panic!("invalid BootInfo slots");
+    }
+    write(BOOTINFO_OK);
 
-    copy(ENDPOINT_SLOT as u8, SERVER_TCB_SLOT as u8, 1, Rights::READ);
-    copy(ENDPOINT_SLOT as u8, CLIENT_TCB_SLOT as u8, 1, Rights::WRITE);
+    let mut slots = SlotAllocator {
+        next: info.free_slot_start as u8,
+        end: info.free_slot_end as u8,
+    };
+    let endpoint_slot = slots.alloc();
+    let server_tcb = slots.alloc();
+    let client_tcb = slots.alloc();
+    let notification_slot = slots.alloc();
+    let root_notification_slot = slots.alloc();
+    let fault1_tcb = slots.alloc();
+    let fault2_tcb = slots.alloc();
+    let fault3_tcb = slots.alloc();
+
+    retype(meta_untyped, ObjType::Endpoint, endpoint_slot);
+    retype(meta_untyped, ObjType::Tcb, server_tcb);
+    retype(meta_untyped, ObjType::Tcb, client_tcb);
+    retype(meta_untyped, ObjType::Notification, notification_slot);
+    retype(meta_untyped, ObjType::Notification, root_notification_slot);
+    retype(meta_untyped, ObjType::Tcb, fault1_tcb);
+    retype(meta_untyped, ObjType::Tcb, fault2_tcb);
+    retype(meta_untyped, ObjType::Tcb, fault3_tcb);
+
+    copy(endpoint_slot, server_tcb, 1, Rights::READ);
+    copy(endpoint_slot, client_tcb, 1, Rights::WRITE);
+    copy(root_vspace, client_tcb, 2, Rights::WRITE);
+    copy(data_untyped, client_tcb, 3, Rights::WRITE);
     copy(
-        ROOT_VSPACE_SLOT as u8,
-        CLIENT_TCB_SLOT as u8,
-        2,
-        Rights::WRITE,
-    );
-    copy(
-        vifast_abi::user_layout::DATA_UNTYPED_SLOT as u8,
-        CLIENT_TCB_SLOT as u8,
-        3,
-        Rights::WRITE,
-    );
-    copy(
-        NOTIFICATION_SLOT as u8,
-        CLIENT_TCB_SLOT as u8,
+        notification_slot,
+        client_tcb,
         5,
         Rights::READ | Rights::WRITE | Rights::GRANT,
     );
 
     check(vifast_user::tcb_configure(
-        SERVER_TCB_SLOT as u8,
+        server_tcb,
         USER_ENTRY_SERVER as u64,
         SERVER_STACK_TOP as u64,
-        SERVER_VSPACE_SLOT as u8,
+        server_vspace,
         5,
     ));
     check(vifast_user::tcb_configure(
-        CLIENT_TCB_SLOT as u8,
+        client_tcb,
         USER_ENTRY_CLIENT as u64,
         CLIENT_STACK_TOP as u64,
-        ROOT_VSPACE_SLOT as u8,
+        root_vspace,
         5,
     ));
-    check(vifast_user::tcb_resume(SERVER_TCB_SLOT as u8));
-    check(vifast_user::tcb_resume(CLIENT_TCB_SLOT as u8));
+    check(vifast_user::tcb_resume(server_tcb));
+    check(vifast_user::tcb_resume(client_tcb));
 
     check(vifast_user::tcb_configure(
-        FAULT1_TCB_SLOT as u8,
+        fault1_tcb,
         USER_ENTRY_FAULT1 as u64,
         FAULT1_STACK_TOP as u64,
-        ROOT_VSPACE_SLOT as u8,
+        root_vspace,
         6,
     ));
-    check(vifast_user::tcb_resume(FAULT1_TCB_SLOT as u8));
+    check(vifast_user::tcb_resume(fault1_tcb));
     check(vifast_user::tcb_configure(
-        FAULT2_TCB_SLOT as u8,
+        fault2_tcb,
         USER_ENTRY_FAULT2 as u64,
         FAULT2_STACK_TOP as u64,
-        ROOT_VSPACE_SLOT as u8,
+        root_vspace,
         6,
     ));
-    check(vifast_user::tcb_resume(FAULT2_TCB_SLOT as u8));
+    check(vifast_user::tcb_resume(fault2_tcb));
     check(vifast_user::tcb_configure(
-        FAULT3_TCB_SLOT as u8,
+        fault3_tcb,
         USER_ENTRY_FAULT3 as u64,
         FAULT3_STACK_TOP as u64,
-        ROOT_VSPACE_SLOT as u8,
+        root_vspace,
         6,
     ));
-    check(vifast_user::tcb_resume(FAULT3_TCB_SLOT as u8));
+    check(vifast_user::tcb_resume(fault3_tcb));
     write(ROOT_READY);
 
     loop {
-        let _ = vifast_user::wait(ROOT_NOTIFICATION_SLOT as u8);
+        let _ = vifast_user::wait(root_notification_slot);
     }
 }
 

@@ -103,10 +103,13 @@ MP Services, tránh làm hỏng môi trường firmware.
     thêm root ELF + stack 4 trang + guard.
 12. Dựng server VSpace từ boot Untyped, code dùng chung Frame root, stack
     +0x2000; cài server VSpace slot 12.
-13. `check_kernel_mappings(root_pa/server_pa)`; log BOOT/DATA Untyped.
-14. `A::prepare_user()`.
-15. Tạo context root từ entry ELF + `ROOT_ELF_STACK_TOP`.
-16. `A::set_kernel()`.
+13. Cài Frame cap code user.S READ|EXEC tại các slot code; retype BootInfo
+    frame, ghi BootInfo, map READ-only tại `ROOT_BOOTINFO_VA`.
+14. `check_kernel_mappings(root_pa/server_pa)`; log BOOT/DATA Untyped.
+15. `A::prepare_user()`.
+16. Tạo context root từ entry ELF + `ROOT_ELF_STACK_TOP`; set arg0 =
+    `ROOT_BOOTINFO_VA`.
+17. `A::set_kernel()`.
 17. Enqueue root, `pick()`, `ensure_current_root()` -> `ROOT SWITCH 1`.
 18. `A::start_timer()`.
 19. `A::enter_user(context root)`.

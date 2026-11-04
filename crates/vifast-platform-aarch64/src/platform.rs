@@ -540,6 +540,10 @@ impl Platform for Aarch64Platform {
         TrapFrame::user(entry, stack)
     }
 
+    fn set_context_arg0(context: &mut TrapFrame, value: u64) {
+        context.regs[0] = value;
+    }
+
     fn contexts() -> &'static mut [TrapFrame] {
         unsafe { &mut *core::ptr::addr_of_mut!(CONTEXTS) }
     }
@@ -567,6 +571,7 @@ impl Platform for Aarch64Platform {
             core::arch::asm!("msr sp_el0, {}", in(reg) context.sp);
             core::arch::asm!("msr elr_el1, {}", in(reg) context.elr);
             core::arch::asm!("msr spsr_el1, {}", in(reg) context.spsr);
+            core::arch::asm!("mov x0, {}", in(reg) context.regs[0]);
             core::arch::asm!("eret");
         }
         unreachable!()

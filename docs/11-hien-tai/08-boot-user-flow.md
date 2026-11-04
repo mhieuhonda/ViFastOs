@@ -74,33 +74,31 @@ pub struct UserImage {
 Runtime parse `root_elf` trong cửa sổ 1 MiB và lấy entry từ ELF;
 server/client/fault dùng jump table `USER_ENTRY_*`. Builder copy image
 vào Frame lấy từ boot Untyped; các message nằm trong code page RX.
-Root task nhận cap:
-- slot 1 root VSpace;
-- slot 2 metadata Untyped;
-- slot 3 data Untyped;
-- slot 12 server VSpace.
+Root task nhận `BootInfo` READ-only qua arg0 (`ROOT_BOOTINFO_VA`). Các slot
+runtime cài (root VSpace, meta/data Untyped, server VSpace, code Frame caps)
+được đọc từ BootInfo; root cấp object mới tuần tự từ `free_slot_start`.
+BootInfo chứa Frame cap code user.S READ|EXEC, không WRITE/GRANT.
 
 Root lần lượt Retype endpoint/2 TCB/notification/3 fault TCB, CapCopy cho
 server/client, TcbConfigure entry/stack/VSpace/priority rồi TcbResume. Sau đó
 root block bằng `Wait` trên notification riêng; server/client/fault chạy theo
-scheduler.
+scheduler. Root in `BOOTINFO OK` sau khi kiểm tra magic/version/size.
 
 ## 4. Root task
 
 ```text
-Retype metadata Untyped → Endpoint slot 4
-Retype metadata Untyped → TCB server slot 5
-Retype metadata Untyped → TCB client slot 6
-Retype metadata Untyped → Notification slot 7
+Retype metadata Untyped → Endpoint (slot kế tiếp từ BootInfo)
+Retype metadata Untyped → TCB server/client/notification
+Retype metadata Untyped → 3 fault TCB + root notification
 CapCopy endpoint → server slot 1 READ, client slot 1 WRITE
-CapCopy VSpace → client slot 2 WRITE
-CapCopy data Untyped → client slot 3 WRITE
+CapCopy root VSpace (BootInfo) → client slot 2 WRITE
+CapCopy data Untyped (BootInfo) → client slot 3 WRITE
 CapCopy notification → client slot 5 READ|WRITE|GRANT
-TcbConfigure server (entry, stack 0x1000003000, VSpace slot 12)
-TcbConfigure client (entry, stack 0x1000009000, VSpace slot 1)
+TcbConfigure server (entry, stack 0x1000003000, VSpace BootInfo.server)
+TcbConfigure client (entry, stack 0x1000009000, VSpace BootInfo.root)
 TcbResume server/client
-Retype fault TCB ×2; TcbConfigure/TcbResume (priority 6)
-Retype root notification; Wait(root notification)
+TcbConfigure/TcbResume fault1/2/3 (priority 6)
+Wait(root notification)
 ```
 
 Fault TCB thứ nhất cố ý load từ kernel VA; fault TCB thứ hai chạy

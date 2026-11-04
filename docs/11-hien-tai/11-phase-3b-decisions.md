@@ -82,6 +82,17 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Con lồng con được phép; invariant 39 kiểm tra containment và PA uniqueness
   sau mỗi bước.
 
+## 5c. BootInfo
+
+- `BootInfo` nằm trong `vifast-abi`, layout `#[repr(C)]` 32 byte, magic
+  `VFBOOT01`, version/size được kiểm tra.
+- Runtime cài root/meta/data/server, code Frame caps READ|EXEC, rồi retype một
+  Frame BootInfo và map READ-only tại `ROOT_BOOTINFO_VA` — trên root stack,
+  ngoài cửa sổ parse ELF.
+- Root nhận địa chỉ BootInfo trong arg0 (`a0`/`x0`/`rdi`) và cấp object mới
+  tuần tự từ `free_slot_start`; code caps nằm trong `user_code_first/count`.
+- Root in `BOOTINFO OK`; harness yêu cầu đúng một chuỗi.
+
 ## 6. Page table
 
 - Retype VSpace/PageTable phải zero page (không chỉ Frame).
@@ -156,7 +167,7 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
    giữ user.S.
 6. 7.1/7.1b/7.1c: FrameMap ⊆ Frame cap, W^X theo Frame + READ, PA uniqueness,
    sync_icache khi map EXEC và counter checked_add (đã xong).
-7. Bước 7.2–7.5: Untyped con (đã xong 7.2), BootInfo, client VSpace riêng;
-   bỏ slot hard-code.
+7. Bước 7.2–7.5: Untyped con (đã xong 7.2), BootInfo (đã xong 7.3), client
+   VSpace riêng; bỏ slot hard-code.
 8. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
 9. AArch64 TTBR1 là giai đoạn riêng sau 3b.

@@ -686,6 +686,10 @@ impl Platform for X86Platform {
     fn context_for_user(entry: usize, stack: usize) -> TrapFrame {
         TrapFrame::user(entry, stack)
     }
+
+    fn set_context_arg0(context: &mut TrapFrame, value: u64) {
+        context.rdi = value;
+    }
     fn contexts() -> &'static mut [TrapFrame] {
         unsafe { &mut *core::ptr::addr_of_mut!(CONTEXTS) }
     }
@@ -693,12 +697,14 @@ impl Platform for X86Platform {
     fn enter_user(context: &TrapFrame) -> ! {
         unsafe {
             core::arch::asm!(
-                "push {ss}", "push {rsp}", "push {rflags}", "push {cs}", "push {rip}", "iretq",
+                "push {ss}", "push {rsp}", "push {rflags}", "push {cs}", "push {rip}",
+                "mov rdi, {arg0}", "iretq",
                 ss = in(reg) context.ss,
                 rsp = in(reg) context.rsp,
                 rflags = in(reg) context.rflags,
                 cs = in(reg) context.cs,
                 rip = in(reg) context.rip,
+                arg0 = in(reg) context.rdi,
             );
         }
         unreachable!()

@@ -240,7 +240,7 @@ bare-metal này.
 5. ~~Untyped/retype cơ bản~~ — đã có frame/page-table page + accounting metadata;
    còn allocator vật lý đầy đủ và thu hồi object.
 6. **Root task + vifast-user** — root Rust ELF đã được nạp vào runtime 6.4;
-   còn BootInfo, Untyped con/client VSpace, IPC buffer/shared memory.
+   còn client VSpace riêng, IPC buffer/shared memory; BootInfo và Untyped con đã xong.
 7. **Driver framework** user space: VirtIO console/block/net.
 8. **FS thật + block driver, name server, pager, supervisor, compositor,
    ViFastKey** — ramfs phẳng đã có.

@@ -7,7 +7,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use vifast_abi::{KError, Message, ObjType, Rights};
+use vifast_abi::{BootInfo, KError, Message, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_arch::Arch;
 use vifast_kernel::console::Console;
 use vifast_kernel::fs::MAX_PATH;
@@ -84,6 +84,8 @@ pub trait Platform: Arch + Console {
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError>;
 
     fn context_for_user(entry: usize, stack: usize) -> Self::Context;
+    /// Set the first integer argument (`a0`/`x0`/`rdi`) of a fresh context.
+    fn set_context_arg0(context: &mut Self::Context, value: u64);
     fn contexts() -> &'static mut [Self::Context];
     fn enter_user(context: &Self::Context) -> !;
 
@@ -112,6 +114,65 @@ pub trait Platform: Arch + Console {
     fn reload_timer();
     fn ack_timer();
     fn start_smp();
+}
+
+fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
+    let ops = A::page_table_ops();
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, magic),
+        &info.magic.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, version),
+        &info.version.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, size),
+        &info.size.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, root_vspace),
+        &info.root_vspace.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, meta_untyped),
+        &info.meta_untyped.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, data_untyped),
+        &info.data_untyped.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, server_vspace),
+        &info.server_vspace.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, user_code_first),
+        &info.user_code_first.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, user_code_count),
+        &info.user_code_count.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, free_slot_start),
+        &info.free_slot_start.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, free_slot_end),
+        &info.free_slot_end.to_le_bytes(),
+    );
 }
 
 /// Load the root owned by the current TCB, if it still has one.  The root is
@@ -408,6 +469,77 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     {
         A::exit(1);
     }
+
+    /* The boot image code is read+execute only.  Root needs these Frame caps
+    to build the client VSpace in 7.4 without gaining permission to rewrite
+    the shared code. */
+    const USER_CODE_FIRST_SLOT: u16 = 20;
+    let user_code_count = ((image.code.len() + A::PAGE_SIZE - 1) / A::PAGE_SIZE) as u16;
+    let free_slot_start = USER_CODE_FIRST_SLOT + user_code_count;
+    let free_slot_end = vifast_kernel::MAX_CAPS as u16;
+    if user_code_count == 0 || free_slot_start.saturating_add(8) > free_slot_end {
+        vifast_kernel::klog!(A, "BOOT SLOT RANGE TOO SMALL");
+        A::exit(1);
+    }
+    for index in 0..user_code_count {
+        let va = layout.code_va + index as u64 * page_size;
+        let Some(code_pa) = kernel.mapping_at(vspace, va).map(|mapping| mapping.pa) else {
+            A::exit(1);
+        };
+        let Some(code_frame) = kernel.frame_for_pa(code_pa) else {
+            A::exit(1);
+        };
+        let slot = USER_CODE_FIRST_SLOT + index;
+        if kernel
+            .install_cap(
+                root,
+                slot as u8,
+                Cap::new(code_frame, ObjType::Frame, Rights::READ | Rights::EXEC),
+            )
+            .is_err()
+        {
+            vifast_kernel::klog!(A, "USER CODE CAP INSTALL FAILED slot={}", slot);
+            A::exit(1);
+        }
+    }
+
+    let Ok(boot_info_frame) = kernel.retype(boot_untyped, ObjType::Frame) else {
+        vifast_kernel::klog!(A, "BOOTINFO FRAME RETYPE FAILED");
+        A::exit(1);
+    };
+    let Some(boot_info_pa) = kernel.frame(boot_info_frame).map(|frame| frame.pa as u64) else {
+        A::exit(1);
+    };
+    let boot_info = BootInfo {
+        magic: BOOTINFO_MAGIC,
+        version: BOOTINFO_VERSION,
+        size: core::mem::size_of::<BootInfo>() as u32,
+        root_vspace: vifast_abi::user_layout::ROOT_VSPACE_SLOT as u16,
+        meta_untyped: vifast_abi::user_layout::META_UNTYPED_SLOT as u16,
+        data_untyped: vifast_abi::user_layout::DATA_UNTYPED_SLOT as u16,
+        server_vspace: vifast_abi::user_layout::SERVER_VSPACE_SLOT as u16,
+        user_code_first: USER_CODE_FIRST_SLOT,
+        user_code_count,
+        free_slot_start,
+        free_slot_end,
+    };
+    write_bootinfo::<A>(boot_info_pa, &boot_info);
+    if kernel
+        .map_frame(
+            vspace,
+            boot_info_frame,
+            vifast_abi::user_layout::ROOT_BOOTINFO_VA as u64,
+            Rights::READ,
+        )
+        .is_err()
+    {
+        vifast_kernel::klog!(A, "BOOTINFO MAP FAILED");
+        A::exit(1);
+    }
+    if let Some(space) = kernel.vspace_mut(vspace) {
+        space.next_va = vifast_abi::user_layout::DATA_VA as u64;
+    }
+
     if let Some((size, bump, objects, max_objects)) = kernel.untyped_usage(boot_untyped) {
         let total_pages = size / page_size as usize;
         let used_pages = bump / page_size as usize;
@@ -449,10 +581,15 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     A::prepare_user();
 
     let contexts = A::contexts();
-    contexts[root.index as usize] = A::context_for_user(
+    let mut root_context = A::context_for_user(
         root_elf.entry as usize,
         vifast_abi::user_layout::ROOT_ELF_STACK_TOP,
     );
+    A::set_context_arg0(
+        &mut root_context,
+        vifast_abi::user_layout::ROOT_BOOTINFO_VA as u64,
+    );
+    contexts[root.index as usize] = root_context;
 
     A::set_kernel(kernel as *mut Kernel);
     kernel.enqueue(root);
