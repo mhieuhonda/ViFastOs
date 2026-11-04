@@ -91,6 +91,9 @@ def run_qemu(
         and "ViFastOS write" in output
         and "IPC BUF OK" in output
         and "Reply OK" in output
+        and output.count("VFS SERVER OK") == 1
+        and output.count("VFS OK") == 1
+        and "VFS BAD" not in output
         and len(faults) == 4
         and 0x8000_0000 in faults
         and 0x1000002000 in faults

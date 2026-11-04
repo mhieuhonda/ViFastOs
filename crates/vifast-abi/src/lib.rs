@@ -145,6 +145,25 @@ pub const O_WRONLY: u64 = 1;
 pub const O_RDWR: u64 = 2;
 pub const O_CREATE: u64 = 4;
 
+/// Minimal user-space VFS request/reply protocol carried by the ordinary IPC
+/// message label and three data words.  Reads and writes are deliberately
+/// bounded to three words so a reply fits in one `ReplyRecv`.
+pub mod vfs {
+    pub const OPEN: u64 = 0x2001;
+    pub const READ: u64 = 0x2002;
+    pub const WRITE: u64 = 0x2003;
+    pub const CLOSE: u64 = 0x2004;
+
+    /// Successful open/close reply label.  Read/write replies use the byte
+    /// count as the label so zero-length operations remain distinguishable.
+    pub const OK: u64 = 1;
+    /// Reply label used for malformed requests, missing files and invalid fds.
+    pub const ERR: u64 = u64::MAX;
+    pub const MAX_NAME: usize = 8;
+    pub const MAX_IO: usize = 24;
+    pub const MAX_FILES: usize = 4;
+}
+
 /// Kernel error codes.  These values are part of the ABI and must never be
 /// renumbered.
 #[repr(u32)]
