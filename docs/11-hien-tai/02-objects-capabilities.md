@@ -154,7 +154,9 @@ pub struct VSpace {
 
 - `root` là handle mờ với kernel: Sv39 root, TTBR0 root hoặc CR3.
 - `mappings` là reverse map để kiểm tra overlap/W^X/unmap; page table thật là nguồn sự thật.
-- `Cap` có `id: u64` tăng đơn điệu; `parent` là `CapRef { addr, id }`.
+- `Cap` có `id: u64` tăng đơn điệu; `root: bool`; `parent` là `CapRef { addr, id }`.
+  `root=true` chỉ do `install_cap` đặt khi parent=None lúc runtime boot; CapCopy, IPC
+  và reparent giữ `root=false`.
 - `Object.creator` lưu `CapRef`; revoke chỉ khớp cả slot và id, nên slot tái
   sử dụng không kế thừa creator cũ.
 - `delete_cap` trả `KResult`: `InvalidCap` nếu không có cap, `IllegalOperation`

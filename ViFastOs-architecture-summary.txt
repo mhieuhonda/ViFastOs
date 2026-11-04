@@ -33,9 +33,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 0eb3d67 fix: use exact cap ids and walk kernel mappings
 - d1c42b0 fix: reclaim orphaned objects and assert kernel image range
 - c9c4591 fix: reparent dying capability subtrees
-- df9e1c1 feat: add boot untyped and task-space builder.
+- df9e1c1 feat: add boot untyped and task-space builder
+- eae0741 test: cover builder and shared frame unmapping.
 
-Cập nhật code gần nhất (commit df9e1c1): root task, revoke Untyped thật, fault
+Cập nhật code gần nhất (commit eae0741): root task, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
 Kernel static storage, Untyped accounting, vifast-pte (format PTE + user VA
@@ -369,6 +370,8 @@ Tcb:
 
 Capability:
 - Cap { obj, ty, rights, badge, id: u64, root: bool, parent: Option<CapRef> }
+  // root chỉ được set bởi install_cap khi parent=None (runtime boot);
+  // CapCopy/IPC/reparent không bao giờ set root=true.
 - install_cap/lookup_cap/copy_cap/delete_cap/revoke_cap/set_cap_badge
 - Rights: READ=1, WRITE=2, EXEC=4, GRANT=8
 - copy/derive chỉ giảm quyền
@@ -392,6 +395,7 @@ Untyped/retype:
   Revoke Untyped copy chỉ hủy object tạo qua cap đó hoặc cap con của nó.
 - `delete_cap` trả KResult: InvalidCap nếu không có cap, IllegalOperation nếu còn
   object/cap con, Ok nếu xoá thành công.
+- Root TCB không được destroy; revoke nhóm chứa root TCB trả IllegalOperation.
 - Khi TCB bị hủy, object/cap con được reparent lên cap cha còn sống gần nhất;
   nếu không còn cha, creator=parent=None và chỉ revoke root cap mới thu hồi.
 - Chỉ reset bump khi không còn object nào thuộc Untyped từ bất kỳ cap nào.
@@ -834,6 +838,7 @@ Exit code:
   client có thể ghi đè stack server. Cần VSpace riêng khi làm ELF loader.
 - Boot Untyped 64 KiB đã có trong runtime nhưng chưa dùng để dựng root/server.
 - Runtime root vẫn dùng VSpace tĩnh cho tới khi context switch root (Bước 4).
+- Root TCB bị cấm destroy; nếu vi phạm sẽ làm mất root cap của Untyped.
 - validate_user_range() vẫn dùng window/reverse map, chưa walk leaf thật.
 - Fault endpoint đầy đủ chưa có; hiện chỉ suspend thread.
 - Self-revoke Untyped hiện trả IllegalOperation; supervisor hủy nhóm gồm chính
