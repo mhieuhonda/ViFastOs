@@ -15,6 +15,7 @@
 - `6963f58` — 8.4b runtime boot modules via BootInfo.
 - `562727d` — first-fit VSpace VA range allocator.
 - `395a589` — notification capability transfer demo.
+- `85fe2cf` — user-space VFS server over IPC.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -27,6 +28,9 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - 8.4/8.4b đã có: server/client là crate Rust, build thành ELF riêng; runtime
   cấp module qua BootInfo, map bytes read-only vào root VSpace; root parse và nạp
   vào VSpace riêng bằng `FrameWrite`. Range VA allocator first-fit đã có.
+- 8.5 đã có user-space VFS server: `/motd` và `/scratch` đi qua IPC
+  request/reply; client không còn dùng syscall Open/Read/Write/Close của kernel.
+  Kernel ramfs chỉ còn là fallback/selftest.
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -35,16 +39,17 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## Số liệu cuối
 
-- `vifast-kernel` 77/77, PTE 11/11, ELF 17/17; runtime/user compile.
+- `vifast-kernel` 80/80, PTE 11/11, ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
-  `0x1000301000`; `FAULT EP OK`.
-- Boot Untyped: RISC-V 19/32 pages, AArch/x86 21/32; free 13/11 pages,
-  13/13 objects.
-- DATA UNTYPED lúc test-exit: RISC-V 21/64 pages, AArch/x86 22/64 pages,
-  6/48 objects.
-- ROOT SWITCH lần chạy cuối: 47861 / 38447 / 15977.
-- Root ELF: RISC-V 8752 B, AArch64/x86 8576 B; headroom RISC-V 614384 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `1cc97091509d1b2829ebb90bd475175a023966122e9eb65cf97b910260c64113`.
+  `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`.
+- Boot Untyped: RISC-V 20/32 pages, AArch/x86 22/32; free 12/10 pages,
+  12/12 objects.
+- DATA UNTYPED lúc test-exit: RISC-V 35/64 pages, AArch/x86 36/64 pages,
+  x86 40/64 pages; 20/48 object (x86 24/48).
+- ROOT SWITCH lần chạy cuối: 33 / 33 / 33 (timer test-exit).
+- Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
+  565232 B.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `c47b85d83ba692d35ce6ecf6f2b9682757e12f73206db52b7f735461d074d69a`.
 
 ---
 
@@ -176,6 +181,23 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## 8.5 — User-space VFS server qua IPC
+
+- Commit `85fe2cf feat: add user-space vfs server over ipc`.
+- `vifast-abi::vfs` thêm protocol request/reply: `OPEN`, `READ`, `WRITE`,
+  `CLOSE`; reply label mang kết quả, tối đa 3 word dữ liệu.
+- Thêm `vifast_user::call_message` và `reply_recv_message` để giữ label/data
+  của reply/request thay vì chỉ error/value.
+- Rust server giữ bảng 4 file trong static storage; `/motd` là file read-only
+  khởi tạo, `/scratch` hỗ trợ create/write/read/close. Write dùng IPC buffer
+  client → server; read trả tối đa 24 byte trong reply data.
+- Client bỏ Open/Read/Write/Close syscall cho demo file và dùng VFS IPC; kernel
+  ramfs vẫn được giữ cho selftest/ABI fallback.
+- Harness thêm `VFS SERVER OK`, đúng một `VFS OK`, và cấm `VFS BAD`; toàn bộ
+  legacy string và 4 USER FAULT vẫn giữ nguyên.
+- `vifast-kernel` 80/80; PTE 11/11; ELF 17/17; build không warning; QEMU 3/3
+  PASS ×3. DATA UNTYPED test-exit 35/36/40 trang, 20/24 object.
 
 ## 8.2b — Notification capability transfer demo
 

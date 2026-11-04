@@ -54,12 +54,17 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - c5119e7 feat: add reply-recvsyscall and server loop
 - a18663f feat: deliver user faults to endpoint
 - 854744a feat: add ipc buffer binding and copy.
+- ea3793b feat: load rust server and client elf modules
+- 6963f58 refactor: supply rust modules through bootinfo
+- 562727d feat: add first-fit vspace range allocator
+- 395a589 feat: demo notification capability transfer over call
+- 85fe2cf feat: add user-space vfs server over ipc
 
-Cập nhật code gần nhất (commit 395a589): notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit 85fe2cf): user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
-W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, IPC buffer + FrameWrite loader, notification cap transfer, 3 target link/FP
+W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, IPC buffer + FrameWrite loader, notification cap transfer, user-space VFS server, 3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
@@ -91,14 +96,14 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 77/77 PASS
+- cargo test -p vifast-kernel: 80/80 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
-- root ELF stripped: RISC-V 8.752 B, AArch64/x86 8.576 B; RISC-V kernel_end
-  0x8036a010, headroom 614.384 B dưới 0x80400000
+- root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
+  headroom 565.232 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -110,9 +115,9 @@ Output tiêu biểu:
 - SMP OK (harts=2) trên RISC-V/AArch64
 - SMP SKIP (x86 AP bootstrap pending) trên x86_64
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
-  "Fault4", "USER FAULT" ×4, "Isolation",
+  "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
-  "Client", "Cap OK", "Reply OK", "PREEMPT OK", "ROOT SWITCH n>1"
+  "Client", "Cap OK", "Reply OK", "VFS OK", "PREEMPT OK", "ROOT SWITCH n>1"
 - user layout chung: boot mappings tại 0x0000_0010_0000_0000 (64 GiB);
   full user range hiện tại 64..128 GiB
 
@@ -632,6 +637,16 @@ x86_64:
 
 10. VFS / RAMFS
 ---------------
+Kernel fallback: `crates/vifast-kernel/src/fs.rs`; user-space service:
+`crates/vifast-server/src/main.rs` + `vifast-abi::vfs`.
+- Server Rust sở hữu `/motd` và `/scratch`, trả lời OPEN/READ/WRITE/CLOSE qua
+  endpoint IPC hiện có; write dùng IPC buffer, read trả tối đa 24 byte trong
+  reply data.
+- Client demo không còn gọi syscall Open/Read/Write/Close; kernel ramfs chỉ
+  còn selftest/fallback. Server chưa tách thành module riêng và chưa có
+  directory/permission/persistence.
+
+Kernel fallback:
 File: crates/vifast-kernel/src/fs.rs.
 - MAX_FILES = 8
 - MAX_FILE_NAME = 24
@@ -754,8 +769,10 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
 
 Server A:
 - cap endpoint READ.
-- DebugWrite "Server".
-- loop Recv(endpoint, recv_slot=4), Signal(notification slot 4), Reply.
+- DebugWrite "Server" + "VFS SERVER OK".
+- loop ReplyRecv(endpoint, recv_slot=4); nhánh label 0x1234 in IPC buffer,
+  Signal(notification slot 4); nhánh VFS OPEN/READ/WRITE/CLOSE giữ bảng file
+  static và trả reply label/data; panic nếu lỗi hệ thống.
 
 Client B:
 - cap endpoint WRITE, VSpace WRITE, data Untyped WRITE,
@@ -764,8 +781,9 @@ Client B:
   Client CapRevoke(slot 3) chỉ hủy Frame do client tạo, không hủy object
   root/server tạo qua cap gốc của cùng Untyped.
 - FrameMap, DebugWrite "Mapped".
-- Open /motd, Read, DebugWrite "ViFastOS ramfs".
-- Open /scratch O_CREATE|O_RDWR, Write, Seek, Read, DebugWrite, Close.
+- Gọi VFS IPC: Open /motd / Read / DebugWrite "ViFastOS ramfs".
+- Gọi VFS IPC: Open /scratch O_CREATE|O_RDWR, Write qua IPC buffer, Close,
+  Open lại, Read, DebugWrite "ViFastOS write", Close, in "VFS OK".
 - FrameUnmap(vspace slot 2, VA, frame slot 4); thiếu cap Frame hoặc sai PA
   trả InvalidCap/NoRights, không thể phá mapping của task khác.
 - DebugWrite "Client".
@@ -778,7 +796,7 @@ Fault thread:
   stack server 0x1000002000 (không map trong root VSpace).
 - kernel in "USER FAULT", chuyển TCB sang Faulted, chọn thread kế tiếp.
 - QEMU vẫn in "BOOTINFO OK", "CLIENT VSPACE OK", "Server", "Reply OK",
-  "Zero OK", "Fault4" và "ROOT SWITCH n>1".
+  "Zero OK", "Fault4", "VFS SERVER OK", "VFS OK" và "ROOT SWITCH n>1".
 
 Cap transfer:
 - First Call: client gửi notification cap có GRANT vào server slot 4.
@@ -807,7 +825,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 79 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 80 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -1055,7 +1073,9 @@ Exit code:
   core + demo end-to-end đã có (8.1/8.1b); chưa có shared-memory mapping dùng
   chung ngoài IPC buffer.
 - Chưa có Reply mang capability; ReplyRecv và fault endpoint tối giản đã có.
-- VFS chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
+- Kernel VFS fallback chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
+  User-space VFS server đã có `/motd` + `/scratch` qua IPC, tối đa 4 file x 64 B,
+  chưa có directory/permission/persistence và chưa tách module riêng.
 - Chưa có block device, FS bền vững, directory, permission.
 - Chưa có driver network/GPU/input.
 - Chưa có compositor, ViFastKey.
@@ -1117,7 +1137,8 @@ C. SMP
 6. Timer đa hart.
 
 D. VFS / driver
-1. Chuyển VFS/FS ra user-space server khi có IPC buffer.
+1. Chuyển VFS/FS ra user-space server khi có IPC buffer — bước đầu đã xong
+   (server hiện tại, OPEN/READ/WRITE/CLOSE); còn tách module/FS bền vững.
 2. Block driver VirtIO.
 3. FS bền vững.
 4. Network VirtIO + TCP/UDP tối giản.
@@ -1136,7 +1157,8 @@ E. Desktop / Space
 3. Chuyển VSpace động khi làm ELF loader — đã xong ở Bước 4.
 4. x86 AP đi theo ACPI MADT + LAPIC/SIPI.
 5. Dùng BKL trước, tối ưu lock mịn sau khi đo tranh chấp.
-6. FS chuyển ra user space khi có IPC buffer; ramfs kernel chỉ là tạm.
+6. FS chuyển ra user space khi có IPC buffer; ramfs kernel chỉ là tạm
+   (VFS IPC bước đầu đã chạy, kernel ramfs chỉ còn fallback/selftest).
 7. Shared memory/IPC buffer dùng Frame capability.
 8. Fault endpoint gửi fault message và block thread; không panic kernel.
 9. ELF loader dùng cho root task ngay ở Bước 6; không viết root flat binary
@@ -1304,12 +1326,13 @@ scripts/test-qemu.py
 - lõi portable sạch (không unsafe/asm/hardware);
 - platform layer riêng cho MMU/trap/timer/SMP;
 - binary kernel mỏng;
-- user mode, IPC, capability transfer, page mapping, ramfs và timer preemption;
+- user mode, IPC, capability transfer, page mapping, user-space VFS và timer
+  preemption;
 - test QEMU 3 kiến trúc xanh.
 
 Nó chưa phải OS hoàn chỉnh. Root và server/client đều chạy từ ELF Rust; mỗi
 task có VSpace riêng; client dùng Untyped con. 8.4/8.4b đã xong: runtime cấp
-Rust ELF qua BootInfo staging, root loader nạp vào VSpace riêng. Khoảng trống
-lớn tiếp theo là VFS/driver/SMP thật và dọn tài liệu sâu (S3).
-allocator/revoke hoàn chỉnh, SMP thật (x86 AP, BKL, IPI, TLB shootdown),
-driver/FS/network và compositor/ViFastKey.
+Rust ELF qua BootInfo staging, root loader nạp vào VSpace riêng; 8.5 đã có VFS
+IPC server bước đầu. Khoảng trống lớn tiếp theo là block/network/input driver,
+FS bền vững, SMP thật (x86 AP, BKL, IPI, TLB shootdown), ASID/PCID, IOMMU và
+compositor/ViFastKey.
