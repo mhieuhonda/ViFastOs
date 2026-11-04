@@ -49,11 +49,26 @@ pub mod user_layout {
     pub const ROOT_ELF_STACK_BASE: usize = ROOT_ELF_STACK_GUARD + 0x1000;
     pub const ROOT_ELF_STACK_TOP: usize = ROOT_ELF_STACK_BASE + 0x4000;
 
+    /// Fixed jump-table entries at the start of the bootstrap user image.
+    pub const USER_ENTRY_SERVER: usize = CODE_VA;
+    pub const USER_ENTRY_CLIENT: usize = CODE_VA + 0x10;
+    pub const USER_ENTRY_FAULT1: usize = CODE_VA + 0x20;
+    pub const USER_ENTRY_FAULT2: usize = CODE_VA + 0x30;
+    pub const USER_ENTRY_FAULT3: usize = CODE_VA + 0x40;
+
     /// Bootstrap capability slots.  BootInfo will replace these constants.
     pub const ROOT_VSPACE_SLOT: usize = 1;
     pub const META_UNTYPED_SLOT: usize = 2;
     pub const DATA_UNTYPED_SLOT: usize = 3;
     pub const SERVER_VSPACE_SLOT: usize = 12;
+    pub const ENDPOINT_SLOT: usize = 4;
+    pub const SERVER_TCB_SLOT: usize = 5;
+    pub const CLIENT_TCB_SLOT: usize = 6;
+    pub const NOTIFICATION_SLOT: usize = 7;
+    pub const ROOT_NOTIFICATION_SLOT: usize = 8;
+    pub const FAULT1_TCB_SLOT: usize = 9;
+    pub const FAULT2_TCB_SLOT: usize = 10;
+    pub const FAULT3_TCB_SLOT: usize = 11;
     /// Maximum user virtual window reserved for code/data/stack/IPC buffers.
     pub const WINDOW_BASE: usize = CODE_VA;
     pub const WINDOW_SIZE: usize = 0x20_0000;

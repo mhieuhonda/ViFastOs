@@ -94,6 +94,9 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
   `aarch64-unknown-none-softfloat`, x86_64 `x86_64-unknown-none` relocation
   static. Kernel chưa lưu FP/SIMD context.
 - Linker: `-z max-page-size=4096`, `-z separate-code`, ALIGN(4096) giữa segment.
+- Code model: RISC-V medium; x86_64 pic + `-no-pie` để vẫn ET_EXEC; AArch64
+  static. `_start` asm căn stack; RISC-V nạp gp; linker định nghĩa
+  `__global_pointer$`.
 - build.sh disassemble root ELF và từ chối FP/SIMD; kiểm tra e_type ET_EXEC.
 - vifast-elf nhận `machine`, user range từ caller và từ chối
   PT_INTERP/PT_DYNAMIC/PT_TLS; bỏ qua PT_NOTE/PT_GNU_*.
@@ -107,8 +110,9 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 2. VSpace động + code/stack mapping + PageTableMap (đã xong 4.3).
 3. Root/server VSpace riêng + stack isolation (đã xong 4.5).
 4. vifast-elf parser + host test (đã xong).
-5. Bước 6: build_task_space_elf + host test (đã xong); root task Rust nạp từ
-   ELF, stack 4 trang + guard vẫn là việc tiếp theo; server/client/fault giữ user.S.
+5. Bước 6: build_task_space_elf + host test, jump table user.S, vifast-root
+   ELF/link 3 target (đã xong); nối root ELF vào runtime 6.4 là việc tiếp theo;
+   server/client/fault giữ user.S.
 6. Bước 7: BootInfo, Untyped con, client VSpace riêng; bỏ slot hard-code.
 7. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
 8. AArch64 TTBR1 là giai đoạn riêng sau 3b.

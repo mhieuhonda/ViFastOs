@@ -38,8 +38,6 @@ pub unsafe fn syscall(number: u64, args: [u64; 6]) -> (u64, u64) {
             in("rcx") args[3],
             in("r8") args[4],
             in("r9") args[5],
-            lateout("rbx") _,
-            lateout("rbp") _,
             lateout("r10") _,
             lateout("r11") _,
             lateout("r12") _,
@@ -185,6 +183,26 @@ pub fn tcb_configure(
 
 pub fn cap_revoke(slot: u8) -> SyscallResult {
     let (e, v) = unsafe { syscall(SyscallId::CapRevoke as u64, [slot as u64, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
+pub fn wait(notification_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::Wait as u64,
+            [notification_slot as u64, 0, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn signal(notification_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::Signal as u64,
+            [notification_slot as u64, 0, 0, 0, 0, 0],
+        )
+    };
     result(e, v)
 }
 

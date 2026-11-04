@@ -4747,6 +4747,25 @@ mod tests {
         assert_eq!(kernel.untyped(small).unwrap().objects, before_objects);
     }
 
+    fn table_snapshot(
+        ops: &dyn PageTableOps,
+        table_pa: u64,
+        level: usize,
+    ) -> std::vec::Vec<(u64, usize, u64)> {
+        let levels = ops.levels();
+        let mut snapshot = std::vec::Vec::new();
+        for index in 0..512 {
+            let pte = ops.read_pte(table_pa, index);
+            snapshot.push((table_pa, index, pte));
+            if let Pte::Table(next) = ops.decode_at(pte, level) {
+                if level + 1 < levels {
+                    snapshot.extend(table_snapshot(ops, next, level + 1));
+                }
+            }
+        }
+        snapshot
+    }
+
     fn count_user_leaves(ops: &dyn PageTableOps, table_pa: u64, level: usize) -> usize {
         let levels = ops.levels();
         let mut count = 0;
@@ -4918,10 +4937,10 @@ mod tests {
     #[test]
     fn elf_builder_extends_existing_vspace() {
         let _guard = WALK_LOCK.lock().unwrap();
-        reset_fake();
-        set_map_range(vifast_pte::USER_VA_START, vifast_pte::USER_VA_END);
+        reset_pte_fake();
+        let ops = pte_ops(PteFormat::X86);
         let mut kernel = Kernel::new();
-        kernel.set_page_table_ops(&MAP_OPS);
+        kernel.set_page_table_ops(ops);
         let untyped = kernel
             .create_untyped_with_limit(0x1000, 0xf000, 4096, 32)
             .unwrap();
@@ -4965,16 +4984,16 @@ mod tests {
             .mapping_at(existing, vifast_abi::user_layout::ROOT_ELF_BASE as u64)
             .is_some());
         let root_pa = kernel.vspace(existing).unwrap().root;
-        assert_eq!(count_user_leaves(&MAP_OPS, root_pa, 0), 8);
+        assert_eq!(count_user_leaves(ops, root_pa, 0), 8);
     }
 
     #[test]
     fn elf_builder_extends_existing_vspace_and_rolls_back() {
         let _guard = WALK_LOCK.lock().unwrap();
-        reset_fake();
-        set_map_range(vifast_pte::USER_VA_START, vifast_pte::USER_VA_END);
+        reset_pte_fake();
+        let ops = pte_ops(PteFormat::X86);
         let mut kernel = Kernel::new();
-        kernel.set_page_table_ops(&MAP_OPS);
+        kernel.set_page_table_ops(ops);
         let untyped = kernel
             .create_untyped_with_limit(0x1000, 0xf000, 4096, 16)
             .unwrap();
@@ -5001,6 +5020,8 @@ mod tests {
         .unwrap();
         let before_bump = kernel.untyped(untyped).unwrap().bump;
         let before_objects = kernel.untyped(untyped).unwrap().objects;
+        let root_pa = kernel.vspace(existing).unwrap().root;
+        let before_tables = table_snapshot(ops, root_pa, 0);
         let error = kernel
             .build_task_space_elf(
                 untyped,
@@ -5018,8 +5039,14 @@ mod tests {
         assert_eq!(kernel.untyped(untyped).unwrap().bump, before_bump);
         assert_eq!(kernel.untyped(untyped).unwrap().objects, before_objects);
         assert!(kernel.mapping_at(existing, code_va).is_some());
-        let root_pa = kernel.vspace(existing).unwrap().root;
-        assert_eq!(count_user_leaves(&MAP_OPS, root_pa, 0), 1);
+        assert_eq!(count_user_leaves(ops, root_pa, 0), 1);
+        let after_tables = table_snapshot(ops, root_pa, 0);
+        assert_eq!(before_tables.len(), after_tables.len());
+        for (index, (before, after)) in before_tables.iter().zip(after_tables.iter()).enumerate() {
+            if before != after {
+                panic!("page-table snapshot differs at {index}: {before:?} != {after:?}");
+            }
+        }
     }
 
     #[test]

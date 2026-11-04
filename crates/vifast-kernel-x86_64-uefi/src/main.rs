@@ -85,6 +85,11 @@ extern "C" {
     fn user_thread_a();
     fn user_thread_b();
     fn user_root();
+    fn user_entry_server();
+    fn user_entry_client();
+    fn user_entry_fault1();
+    fn user_entry_fault2();
+    fn user_entry_fault3();
 }
 
 fn user_image() -> UserImage {
@@ -93,6 +98,26 @@ fn user_image() -> UserImage {
     let entry_root = user_root as *const () as usize - start;
     let entry_a = user_thread_a as *const () as usize - start;
     let entry_b = user_thread_b as *const () as usize - start;
+    assert_eq!(
+        user_entry_server as *const () as usize - start,
+        vifast_abi::user_layout::USER_ENTRY_SERVER - vifast_abi::user_layout::CODE_VA
+    );
+    assert_eq!(
+        user_entry_client as *const () as usize - start,
+        vifast_abi::user_layout::USER_ENTRY_CLIENT - vifast_abi::user_layout::CODE_VA
+    );
+    assert_eq!(
+        user_entry_fault1 as *const () as usize - start,
+        vifast_abi::user_layout::USER_ENTRY_FAULT1 - vifast_abi::user_layout::CODE_VA
+    );
+    assert_eq!(
+        user_entry_fault2 as *const () as usize - start,
+        vifast_abi::user_layout::USER_ENTRY_FAULT2 - vifast_abi::user_layout::CODE_VA
+    );
+    assert_eq!(
+        user_entry_fault3 as *const () as usize - start,
+        vifast_abi::user_layout::USER_ENTRY_FAULT3 - vifast_abi::user_layout::CODE_VA
+    );
     UserImage {
         code: unsafe { core::slice::from_raw_parts(start as *const u8, end - start) },
         entry_a,

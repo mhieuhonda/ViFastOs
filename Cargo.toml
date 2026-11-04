@@ -27,6 +27,7 @@ members = [
     "crates/vifast-kernel-x86_64-uefi",
     "crates/vifast-kernel-aarch64",
     "crates/vifast-kernel-riscv64",
+    "crates/vifast-root",
 ]
 
 [workspace.package]

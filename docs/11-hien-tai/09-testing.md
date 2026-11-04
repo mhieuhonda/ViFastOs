@@ -8,7 +8,11 @@
 
 Bao gồm:
 
-- host test `vifast-kernel`, `vifast-runtime`, `vifast-user`;
+- host test `vifast-kernel`, `vifast-pte`, `vifast-elf`, `vifast-runtime`,
+  `vifast-user`;
+- build/validate root ELF cho 3 target
+  (`riscv64imac-unknown-none-elf`, `aarch64-unknown-none-softfloat`,
+  `x86_64-unknown-none`) bằng `vifast-elf` và kiểm tra FP/SIMD;
 - build RISC-V64 bare metal;
 - build AArch64 bare metal;
 - build x86_64 UEFI.
@@ -21,6 +25,7 @@ cargo test -p vifast-pte
 cargo test -p vifast-elf
 cargo test -p vifast-runtime
 cargo test -p vifast-user
+# build.sh cũng build root ELF cho 3 target và chạy vifast-elf-validate
 ```
 
 `.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.

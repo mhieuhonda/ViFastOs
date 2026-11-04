@@ -121,6 +121,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vifast-root"
+version = "0.1.0"
+dependencies = [
+ "vifast-abi",
+ "vifast-user",
+]
+
+[[package]]
 name = "vifast-runtime"
 version = "0.1.0"
 dependencies = [

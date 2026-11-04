@@ -1,6 +1,27 @@
     .section .text.userprog, "ax"
     .globl user_program_start
 user_program_start:
+    .globl user_entry_server
+user_entry_server:
+    jmp user_thread_a
+    .balign 16
+    .globl user_entry_client
+user_entry_client:
+    jmp user_thread_b
+    .balign 16
+    .globl user_entry_fault1
+user_entry_fault1:
+    jmp user_thread_fault
+    .balign 16
+    .globl user_entry_fault2
+user_entry_fault2:
+    jmp user_thread_fault2
+    .balign 16
+    .globl user_entry_fault3
+user_entry_fault3:
+    jmp user_thread_fault3
+    .balign 16
+
     .globl user_root
 user_root:
     mov rax, 9

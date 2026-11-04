@@ -50,6 +50,7 @@ chưa thay thế chương trình mẫu.
 | `vifast-user` | Syscall wrapper + user layout cho 3 arch | có | có (asm syscall) |
 | `vifast-pte` | Encode/decode PTE Sv39/x86/AArch64 | có | cấm |
 | `vifast-elf` | Parser ELF64 PT_LOAD, validation W^X/range/overlap | có | cấm |
+| `vifast-root` | Root task Rust ELF, `_start` asm, linker ROOT_ELF_BASE | có | có (start asm) |
 | `vifast-arch-riscv64` | UART 16550, `rdtime`, SBI shutdown | có | có (MMIO/asm) |
 | `vifast-arch-aarch64` | PL011, `cntpct_el0`, PSCI shutdown | có | có (MMIO/asm) |
 | `vifast-arch-x86_64` | COM1, `rdtsc`, QEMU debug-exit | có | có (port I/O) |
@@ -184,6 +185,7 @@ bật feature `test-exit` để sau 20 tick in `PREEMPT OK` và thoát QEMU. Ch�
 cargo test -p vifast-kernel
 cargo test -p vifast-pte
 cargo test -p vifast-elf
+# build.sh cũng build root ELF 3 target và chạy validator
 ```
 
 ## Những gì **chưa** có
@@ -237,8 +239,9 @@ bare-metal này.
    x86_64 AP, BKL, per-hart runqueue, IPI scheduler và TLB shootdown.
 5. ~~Untyped/retype cơ bản~~ — đã có frame/page-table page + accounting metadata;
    còn allocator vật lý đầy đủ và thu hồi object.
-6. **Root task + vifast-user** — root task đã có; crate wrapper + vifast-elf
-   parser đã có; còn nạp root ELF, BootInfo, IPC buffer/shared memory.
+6. **Root task + vifast-user** — root assembly và crate root Rust ELF đã có,
+   ELF link 3 target đã validate; còn nạp root ELF vào runtime (6.4), BootInfo,
+   IPC buffer/shared memory.
 7. **Driver framework** user space: VirtIO console/block/net.
 8. **FS thật + block driver, name server, pager, supervisor, compositor,
    ViFastKey** — ramfs phẳng đã có.
