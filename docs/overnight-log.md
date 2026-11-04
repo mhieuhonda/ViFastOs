@@ -13,6 +13,7 @@
 - `82c9c11` — S2 x86 kernel data NX.
 - `ea3793b` — 8.4 Rust server/client ELF modules.
 - `6963f58` — 8.4b runtime boot modules via BootInfo.
+- `562727d` — first-fit VSpace VA range allocator.
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -24,7 +25,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 - 8.4/8.4b đã có: server/client là crate Rust, build thành ELF riêng; runtime
   cấp module qua BootInfo, map bytes read-only vào root VSpace; root parse và nạp
-  vào VSpace riêng bằng `FrameWrite`.
+  vào VSpace riêng bằng `FrameWrite`. Range VA allocator first-fit đã có.
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -42,7 +43,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
   6/48 objects.
 - ROOT SWITCH lần chạy cuối: 47861 / 38447 / 15977.
 - Root ELF: RISC-V 8752 B, AArch64/x86 8576 B; headroom RISC-V 614384 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `764cf1f6ec4962328ce9b3b91ca662961a48349822fd1f2c83f1f12b4fdab6a8`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `b1d522572c5a7ecf95d3103a496a734c3453162c15fe40c6554f8e148b21af76`.
 
 ---
 
@@ -174,6 +175,15 @@ follow-up `62b31f4`.
   headroom 573424 B.
 - DATA UNTYPED test-exit: RISC-V 27/64 trang, AArch64/x86 28/64 trang, 12/48
   object. Harness yêu cầu thêm `RUST MODULES OK` đúng một lần.
+
+## M1 — VSpace VA range allocator
+
+- Commit `562727d feat: add first-fit vspace range allocator`.
+- `VSpace::find_free_va` quét reverse-map 32 mapping để tìm khoảng trống đầu tiên
+  trong `[base,end)`, thay vì chỉ bump `next_va`; `FrameMap` hint 0 dùng allocator.
+- Hole được tái sử dụng sau `FrameUnmap`/revoke; mapping explicit vẫn giữ nguyên.
+- Thêm test map explicit + hint 0 + unmap + map lại; `vifast-kernel` 80/80.
+- QEMU 3/3 PASS ×3 sau thay đổi.
 
 ## 8.4b — Runtime boot modules qua BootInfo
 

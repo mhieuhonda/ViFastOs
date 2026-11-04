@@ -55,7 +55,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a18663f feat: deliver user faults to endpoint
 - 854744a feat: add ipc buffer binding and copy.
 
-Cập nhật code gần nhất (commit 6963f58): Runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit 562727d): VSpace range allocator first-fit, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
@@ -584,7 +584,7 @@ Portable generic page-table walk + reverse map:
   FrameMap. TcbConfigure không kiểm tra entry/stack.
 - x86 dùng VA cố định; VSpace.direct đã bị xoá.
 - Frame object metadata PA/size + mapped_w/mapped_x; retype Frame/PageTable zero page.
-- Chưa có page-table page allocator, range VA allocator, ASID/PCID.
+- Chưa có page-table page allocator; đã có range VA allocator; ASID/PCID chưa có.
 
 RISC-V64:
 - Sv39 root boot tĩnh; kernel identity 0x8000_0000..0x803f_ffff; UART 0x1000_0000.
@@ -1038,7 +1038,7 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 79 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 80 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1047,7 +1047,7 @@ Exit code:
   cần đồng bộ I-cache sang các PE khác trước khi cho hart khác chạy code mới.
   Hiện `sync_icache` chỉ bảo đảm hart đang map.
 - x86_64 chưa boot AP.
-- Chưa có range VA allocator, ASID/PCID.
+- Đã có first-fit range VA allocator; ASID/PCID chưa có.
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
 - Chưa có IOMMU.
 - vifast-elf + vifast-root ELF đã build/validate; server/client cũng là Rust ELF
