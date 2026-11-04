@@ -3244,6 +3244,10 @@ mod tests {
         assert_eq!(kernel.map_page_table(pt, space_a, va), Ok(2));
         assert_eq!(FAKE_MEM.lock().unwrap()[1024 + 64], 0x5001);
         assert_eq!(FAKE_MEM.lock().unwrap()[2048 + 64], 0);
+        // Kernel slots in the private root/aux table stay untouched.
+        assert_eq!(FAKE_MEM.lock().unwrap()[512], 0x2001);
+        assert_eq!(FAKE_MEM.lock().unwrap()[1024], 0x9001);
+        assert_eq!(FAKE_MEM.lock().unwrap()[2048], 0x9001);
         assert!(kernel.mapping_at(space_b, va).is_none());
 
         let one_page = kernel
