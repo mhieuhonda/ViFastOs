@@ -21,9 +21,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - c9e3028 fix: distinguish kernel faults, zero retyped frames, record 3b design
 - 7cf9adc refactor: efiapi exceptions, PageTableOps, static kernel storage
 - 5b1a992 feat: generic page-table ops, IST, larger data untyped
-- e785646 feat: vifast-pte and generic mapping walk.
+- e785646 feat: vifast-pte and generic mapping walk
+- cc94730 test: cover generic page-table safety rules.
 
-Cập nhật gần nhất (commit e785646): root task, revoke Untyped thật, fault
+Cập nhật gần nhất (commit cc94730): root task, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic, exception vector x86, IST, Kernel static storage,
 Untyped accounting, user layout chung 64 GiB, SMEP/SMAP/PAN/sscratch
