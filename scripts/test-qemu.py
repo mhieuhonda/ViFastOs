@@ -105,6 +105,7 @@ def run_qemu(
         and server_at > root_rust_at
         and client_at > root_rust_at
         and "Zero OK" in output
+        and (name != "x86_64" or "KERNEL DATA NX OK" in output)
         and (not require_smp or "SMP OK" in output)
     )
     if timed_out:

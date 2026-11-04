@@ -23,6 +23,9 @@ const PAGE_PRESENT: u64 = 1;
 const PAGE_WRITE: u64 = 2;
 const PAGE_USER: u64 = 4;
 const PAGE_LARGE: u64 = 0x80;
+const PAGE_NX: u64 = 1 << 63;
+const IA32_EFER: u32 = 0xC000_0080;
+const EFER_NXE: u64 = 1 << 11;
 
 core::arch::global_asm!(include_str!("trap.S"));
 
@@ -36,6 +39,13 @@ struct Table([u64; 512]);
 static mut PML4: Table = Table([0; 512]);
 static mut PDPT: Table = Table([0; 512]);
 static mut PD_IDENTITY: Table = Table([0; 512]);
+
+#[allow(dead_code)]
+#[repr(align(4096))]
+struct SplitTables([[u64; 512]; 8]);
+static mut SPLIT_TABLES: SplitTables = SplitTables([[0; 512]; 8]);
+static mut SPLIT_USED: usize = 0;
+static mut NX_ENABLED: bool = false;
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct DataPool([u8; 262144]);
@@ -213,6 +223,130 @@ unsafe fn enable_smep_smap() {
     core::arch::asm!("mov cr4, {}", in(reg) cr4);
 }
 
+unsafe fn enable_nx() -> bool {
+    let ext = core::arch::x86_64::__cpuid(0x8000_0000).eax;
+    if ext < 0x8000_0001 || core::arch::x86_64::__cpuid(0x8000_0001).edx & (1 << 20) == 0 {
+        return false;
+    }
+    let low: u32;
+    let high: u32;
+    core::arch::asm!("rdmsr", in("ecx") IA32_EFER, out("eax") low, out("edx") high);
+    let efer = (((high as u64) << 32) | low as u64) | EFER_NXE;
+    core::arch::asm!(
+        "wrmsr",
+        in("ecx") IA32_EFER,
+        in("eax") efer as u32,
+        in("edx") (efer >> 32) as u32,
+    );
+    true
+}
+
+/// Split one 2 MiB identity leaf into 4 KiB leaves so individual kernel data
+/// pages can be marked non-executable without affecting the text page.
+unsafe fn split_identity_2m(region: usize) -> *mut u64 {
+    let identity = core::ptr::addr_of_mut!(PD_IDENTITY) as *mut Table;
+    let entry = &mut (*identity).0[region];
+    if *entry & PAGE_LARGE == 0 {
+        return (*entry & !0xfff) as *mut u64;
+    }
+    let slot = SPLIT_USED;
+    if slot >= 8 {
+        return core::ptr::null_mut();
+    }
+    SPLIT_USED += 1;
+    let table = core::ptr::addr_of_mut!(SPLIT_TABLES) as *mut u64;
+    let table = table.add(slot * 512);
+    let base = region as u64 * 0x20_0000;
+    for index in 0..512 {
+        *table.add(index) = (base + index as u64 * 4096) | PAGE_PRESENT | PAGE_WRITE;
+    }
+    *entry = table as u64 | PAGE_PRESENT | PAGE_WRITE;
+    table
+}
+
+unsafe fn mark_nx_range(start: u64, len: usize) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let end = match start.checked_add(len as u64 - 1) {
+        Some(end) => end,
+        None => return false,
+    };
+    let mut va = start & !0xfff;
+    loop {
+        let region = (va >> 21) as usize;
+        let index = ((va >> 12) & 0x1ff) as usize;
+        let table = split_identity_2m(region);
+        if table.is_null() {
+            return false;
+        }
+        *table.add(index) |= PAGE_NX;
+        if va >= (end & !0xfff) {
+            break;
+        }
+        va += 4096;
+    }
+    true
+}
+
+fn kernel_data_ranges() -> [(u64, usize); 14] {
+    [
+        (
+            core::ptr::addr_of!(TRAP_STACK) as u64,
+            core::mem::size_of::<Stack>(),
+        ),
+        (
+            core::ptr::addr_of!(IST_STACK) as u64,
+            core::mem::size_of::<Stack>(),
+        ),
+        (
+            core::ptr::addr_of!(CONTEXTS) as u64,
+            core::mem::size_of::<[TrapFrame; 32]>(),
+        ),
+        (
+            core::ptr::addr_of!(GDT) as u64,
+            core::mem::size_of::<[u64; 7]>(),
+        ),
+        (core::ptr::addr_of!(TSS) as u64, core::mem::size_of::<Tss>()),
+        (
+            core::ptr::addr_of!(IDT) as u64,
+            core::mem::size_of::<[IdtEntry; 256]>(),
+        ),
+        (
+            core::ptr::addr_of!(BOOT_POOL) as u64,
+            core::mem::size_of::<BootPool>(),
+        ),
+        (
+            core::ptr::addr_of!(USER_FRAME) as u64,
+            core::mem::size_of::<DataPool>(),
+        ),
+        (
+            core::ptr::addr_of!(METADATA) as u64,
+            core::mem::size_of::<Metadata>(),
+        ),
+        (
+            core::ptr::addr_of!(KERNEL_STORAGE) as u64,
+            core::mem::size_of::<Kernel>(),
+        ),
+        (
+            core::ptr::addr_of!(PML4) as u64,
+            core::mem::size_of::<Table>(),
+        ),
+        (
+            core::ptr::addr_of!(PDPT) as u64,
+            core::mem::size_of::<Table>(),
+        ),
+        (
+            core::ptr::addr_of!(PD_IDENTITY) as u64,
+            core::mem::size_of::<Table>(),
+        ),
+        (
+            core::ptr::addr_of!(SPLIT_TABLES) as u64,
+            core::mem::size_of::<SplitTables>(),
+        ),
+    ]
+}
+
 unsafe fn build_kernel_page_tables() {
     let pml4 = core::ptr::addr_of_mut!(PML4) as *mut Table;
     let pdpt = core::ptr::addr_of_mut!(PDPT) as *mut Table;
@@ -228,6 +362,15 @@ unsafe fn build_kernel_page_tables() {
     (*pdpt).0[0] = table_pa(identity) | PAGE_PRESENT | PAGE_WRITE;
     for i in 0..512usize {
         (*identity).0[i] = (i as u64 * 0x20_0000) | PAGE_PRESENT | PAGE_WRITE | PAGE_LARGE;
+    }
+    NX_ENABLED = enable_nx();
+    if NX_ENABLED {
+        for (start, len) in kernel_data_ranges() {
+            if !mark_nx_range(start, len) {
+                NX_ENABLED = false;
+                break;
+            }
+        }
     }
 }
 
@@ -519,6 +662,55 @@ fn kernel_leaf_ok(root_pa: u64, va: u64, need_write: bool, need_exec: bool) -> b
     false
 }
 
+fn kernel_leaf_nx(root_pa: u64, va: u64) -> bool {
+    let mut table = root_pa;
+    for level in 0..vifast_pte::x86_64::LEVELS {
+        let idx = vifast_pte::x86_64::index(va, level);
+        let pte = PageOps.read_pte(table, idx);
+        match PageOps.decode_at(pte, level) {
+            vifast_kernel::Pte::Table(next) => {
+                if level + 1 == vifast_pte::x86_64::LEVELS {
+                    return false;
+                }
+                table = next;
+            }
+            vifast_kernel::Pte::Leaf(_, _) => return pte & PAGE_NX != 0,
+            vifast_kernel::Pte::Invalid => return false,
+        }
+    }
+    false
+}
+
+fn kernel_range_nx(root_pa: u64, start: u64, len: usize) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let end = match start.checked_add(len as u64 - 1) {
+        Some(end) => end,
+        None => return false,
+    };
+    let mut va = start & !0xfff;
+    loop {
+        if !kernel_leaf_nx(root_pa, va) {
+            return false;
+        }
+        if va >= (end & !0xfff) {
+            break;
+        }
+        va += 4096;
+    }
+    true
+}
+
+fn kernel_data_nx(root_pa: u64) -> bool {
+    if unsafe { !NX_ENABLED } {
+        return true;
+    }
+    kernel_data_ranges()
+        .into_iter()
+        .all(|(start, len)| kernel_range_nx(root_pa, start, len))
+}
+
 fn kernel_range_ok(root_pa: u64) -> bool {
     let (start, end) = PageOps.kernel_accessible_range();
     let mut va = start;
@@ -563,6 +755,9 @@ impl Platform for X86Platform {
         unsafe {
             setup_gdt_tss_idt();
             enable_smep_smap();
+            if NX_ENABLED {
+                vifast_kernel::klog!(X86Platform, "KERNEL DATA NX OK");
+            }
         }
     }
 
@@ -619,6 +814,7 @@ impl Platform for X86Platform {
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
             && kernel_leaf_ok(root_pa, unsafe { x86_exception_table[0] }, false, true)
+            && kernel_data_nx(root_pa)
             && kernel_leaf_ok(root_pa, core::ptr::addr_of!(TRAP_STACK) as u64, true, false)
             && kernel_leaf_ok(root_pa, core::ptr::addr_of!(IST_STACK) as u64, true, false)
             && kernel_leaf_ok(root_pa, core::ptr::addr_of!(GDT) as u64, true, false)
