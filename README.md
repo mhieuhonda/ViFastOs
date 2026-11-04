@@ -97,7 +97,7 @@ qemu-system-riscv64 -machine virt -m 128M -nographic -bios default \
 
 # AArch64 (QEMU virt)
 cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
-qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a57 -m 128M -nographic \
+qemu-system-aarch64 -machine virt,gic-version=2 -cpu max -m 128M -nographic \
   -kernel target/aarch64-unknown-none/release/vifast-kernel-aarch64
 
 # x86_64 (UEFI/OVMF; xem scripts/test-qemu.py để có lệnh đầy đủ)

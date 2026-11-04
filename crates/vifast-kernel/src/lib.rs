@@ -546,6 +546,11 @@ impl Kernel {
             }
             match object.kind {
                 Kind::Tcb(ref tcb) => {
+                    if let Some(vspace) = tcb.vspace {
+                        if self.vspace(vspace).is_none() {
+                            return Err(KError::ObjectDestroyed);
+                        }
+                    }
                     for cap in tcb.cspace.iter().flatten() {
                         let Some(object) = self.get(cap.obj) else {
                             return Err(KError::ObjectDestroyed);

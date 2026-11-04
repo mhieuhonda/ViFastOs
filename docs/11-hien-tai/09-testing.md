@@ -8,7 +8,7 @@
 
 Bao gồm:
 
-- host test `vifast-kernel`;
+- host test `vifast-kernel`, `vifast-runtime`, `vifast-user`;
 - build RISC-V64 bare metal;
 - build AArch64 bare metal;
 - build x86_64 UEFI.
@@ -47,7 +47,7 @@ python3 scripts/test-qemu.py
 Script chạy:
 
 - RISC-V64: `-machine virt -smp 2`, OpenSBI;
-- AArch64: `-machine virt,gic-version=2 -cpu cortex-a57 -smp 2`;
+- AArch64: `-machine virt,gic-version=2 -cpu max -smp 2`;
 - x86_64: OVMF, `-smp 2`.
 
 Điều kiện PASS:

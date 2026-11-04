@@ -4,6 +4,8 @@ cd "$(dirname "$0")/.."
 
 echo "== host portable-kernel tests =="
 cargo test -p vifast-kernel
+cargo test -p vifast-runtime
+cargo test -p vifast-user
 
 echo "== riscv64 bare metal =="
 cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release

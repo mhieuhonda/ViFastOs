@@ -589,8 +589,8 @@ Host test hiện có 12 test:
 
 QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
-- AArch64: -machine virt,gic-version=2 -cpu cortex-a57 -smp 2
-- x86_64: OVMF + -smp 2 + isa-debug-exit
+- AArch64: -machine virt,gic-version=2 -cpu max -smp 2
+- x86_64: OVMF + -cpu max + -smp 2 + isa-debug-exit
 
 Điều kiện PASS:
 - SELFTEST PASS

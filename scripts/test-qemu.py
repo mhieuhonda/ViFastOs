@@ -115,7 +115,7 @@ def test_aarch64() -> bool:
     cmd = [
         QEMU_ARM,
         "-machine", "virt,gic-version=2",
-        "-cpu", "cortex-a57",
+        "-cpu", "max",
         "-smp", "2",
         "-m", "128M",
         "-display", "none",
@@ -160,6 +160,7 @@ def test_x86_64() -> bool:
     cmd = [
         QEMU_X86,
         "-machine", "q35",
+        "-cpu", "max",
         "-smp", "2",
         "-m", "256M",
         "-display", "none",
