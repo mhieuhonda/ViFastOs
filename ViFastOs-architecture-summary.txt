@@ -43,12 +43,14 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 7fd7a3d feat: harden ELF parser constraints
 - 4b667b9 feat: load ELF segments into a task VSpace
 - 91dfbcd feat: add Rust root ELF link scaffold
-- 71b83c9 feat: boot Rust root task from ELF.
+- 71b83c9 feat: boot Rust root task from ELF
+- 3328169 test: bound FrameMap rights by frame cap.
 
-Cập nhật code gần nhất (commit 71b83c9): root/server VSpace, current_root từ TCB,
+Cập nhật code gần nhất (commit 3328169): root/server VSpace, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
-root Rust ELF nạp vào boot, ROOT RUST/ROOT READY, jump table, 3 target link/FP
+root Rust ELF nạp vào boot, ROOT RUST/ROOT READY, jump table, FrameMap cap bound,
+3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
 suspend, max_objects, Yield/Wait, kiểm tra con trỏ user, zero frame/PageTable,
 PageTableOps generic + generic page-table walk, exception vector x86, IST,
@@ -80,7 +82,7 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 54/54 PASS
+- cargo test -p vifast-kernel: 55/55 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
@@ -193,8 +195,8 @@ vifast-runtime
   - boot sequence chỉ tạo một root TCB;
   - giao VSpace/Untyped cho root task;
   - syscall action dispatch (gồm ConfigureTcb);
-  - dựng root VSpace từ boot Untyped bằng TaskLayout (code RX, 5 stack page
-    rời, không map data/server stack);
+  - dựng root VSpace từ boot Untyped bằng TaskLayout (code RX, 4 stack page
+    fault/client, không map data/server stack); parse/nạp root ELF + stack Rust;
   - dựng VSpace server từ boot Untyped, code dùng chung Frame root, stack riêng;
   - đọc root từ TCB mỗi lần restore; switch_root + full flush khi khác;
   - kiểm tra loaded root trong read_user/write_user;
@@ -234,7 +236,7 @@ vifast-user
 vifast-root
 - no_std, no_main, root task Rust ELF; `_start` asm cho 3 arch.
 - Logic root: retype TCB/endpoint/notification, CapCopy, TcbConfigure/Resume,
-  in `ROOT RUST`, Wait notification 8; panic in `ROOT PANIC` rồi Exit.
+  in `ROOT RUST`/`ROOT READY`, Wait notification 8; panic in `ROOT PANIC` rồi Exit.
 - Linker script tại `ROOT_ELF_BASE`; x86 code-model pic + -no-pie, RISC-V
   code-model medium, AArch static; stack 4 trang + guard.
 - 6.4 đã nạp root ELF vào runtime; root assembly đã bị xoá.
@@ -371,9 +373,9 @@ Runtime boot sequence chi tiết:
    Untyped, data Untyped; bảng kernel-only đã dựng trong init_platform
 9. cài metadata/data Untyped vào slot 2/3
 10. build_task_space(boot Untyped, user image, layout) dựng root VSpace mới:
-    code RX, không stack/data; map rời 5 stack page root/client/fault1/2/3.
-    Root assembly + stack +0x4000 đã bị bỏ; root Rust nằm ở ROOT_ELF_BASE,
-    stack Rust ở ROOT_ELF_STACK_BASE với 4 trang + guard.
+    code RX, không stack/data; map rời 4 stack page fault/client.
+    Parse root ELF cửa sổ 1 MiB và build_task_space_elf(Some(root)) thêm ELF +
+    stack Rust 4 trang + guard. Root assembly + stack +0x4000 đã bị bỏ.
 11. set TCB root -> VSpace mới; next_va = DATA_VA để client FrameMap hint 0
 12. dựng VSpace server từ boot Untyped, code dùng chung Frame root, stack
     +0x2000; cài VSpace server vào root slot 12
@@ -545,7 +547,7 @@ Portable generic page-table walk + reverse map:
 - User layout hằng trong vifast-abi: code 64 GiB, data +0xa000.
   USER_ENTRY_* tại +0x00/+0x10/+0x20/+0x30/+0x40 cho server/client/fault1/2/3.
   Stack tops: server +0x3000, client +0x9000, fault1/2/3 +0x6000/+0x7000/+0x8000.
-  Root ELF ở +0x20_0000, stack Rust 4 trang tại ROOT_ELF_STACK_BASE + guard; root builder map code + stack root/client/fault;
+  Root ELF ở +0x20_0000, stack Rust 4 trang tại ROOT_ELF_STACK_BASE + guard; root builder map code + 4 stack fault/client;
   server builder map code chung + stack +0x2000; data để trống cho client
   FrameMap. TcbConfigure không kiểm tra entry/stack.
 - x86 dùng VA cố định; VSpace.direct đã bị xoá.
@@ -762,7 +764,7 @@ Lệnh:
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
 
-Host test hiện có 54 test `vifast-kernel` + 11 test `vifast-pte` +
+Host test hiện có 55 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -802,6 +804,7 @@ Host test hiện có 54 test `vifast-kernel` + 11 test `vifast-pte` +
   stack 4 trang + guard, thêm vào VSpace có sẵn và rollback khi thiếu trang;
   rollback so sánh snapshot toàn cây page table
 - FrameUnmap đòi Frame cap đúng PA; chỉ VSpace WRITE hoặc sai frame bị từ chối
+- FrameMap kiểm tra quyền mapping ⊆ quyền Frame cap; READ|EXEC cap không map RW
 - PteFakeOps tách riêng RISC-V/x86_64/AArch64, chạy map/unmap,
   PageTableMap, validate, build; build không data rồi FrameMap tại +0xa000
 - validate_user_range walk leaf, user bit, R/W, cross-page, high leaf bị từ chối
@@ -815,7 +818,9 @@ Host test hiện có 54 test `vifast-kernel` + 11 test `vifast-pte` +
 Boot assert (không tính vào host test):
 - x86 LoadedImage base/end nằm trong 0..1 GiB;
 - RISC-V/AArch64 kernel image end + metadata/data/boot Untyped nằm trong kernel accessible range;
-- walk leaf thật từ root: non-user, X cho trap entry, W cho stack/storage.
+- walk leaf thật từ root: non-user, X cho trap entry, W cho stack/storage;
+- offset USER_ENTRY_* khớp jump table trong user_image();
+- boot Untyped còn ít nhất 2 trang + 2 object cho BootInfo.
 
 `vifast-pte` host test:
 - roundtrip/encode/decode 3 format;
@@ -945,7 +950,7 @@ Exit code:
   trên cả 3 arch; tổng 3 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 54 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có 55 test `vifast-kernel` + 11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -994,8 +999,7 @@ Thứ tự ưu tiên:
 A. Userland / ABI trước
 1. vifast-user wrappers + user layout (đã có bản đầu).
 2. vifast-elf parser ELF64 PT_LOAD + host test (đã có).
-3. Bước 6: root task Rust nạp từ ELF; stack 4 trang + guard; server/client/fault
-   tạm giữ user.S.
+3. Bước 6: root task Rust nạp từ ELF; stack 4 trang + guard — đã xong.
 4. Bước 7: BootInfo, Untyped con, client VSpace riêng; bỏ slot hard-code.
 5. Shared memory / IPC buffer.
 6. Reply capability + ReplyRecv + fault endpoint.
@@ -1041,7 +1045,7 @@ E. Desktop / Space
 7. Shared memory/IPC buffer dùng Frame capability.
 8. Fault endpoint gửi fault message và block thread; không panic kernel.
 9. ELF loader dùng cho root task ngay ở Bước 6; không viết root flat binary
-   trung gian. vifast-elf đã host-test parser; phần nạp boot sẽ nối sau.
+   trung gian. vifast-elf đã host-test parser và root ELF đã nạp ở 6.4.
 10. Gom unsafe vào wrapper nhỏ: MMIO, CSR/MSR, PTE.
 11. 3b: RISC-V copy root[KERNEL_SHARED_SLOTS]. x86/AArch64 dùng PML4/L0 và
     PDPT/L1 riêng cho từng VSpace; chỉ PDPT[0]/L1[0..=1] trỏ PD/L2 kernel
@@ -1085,15 +1089,15 @@ E. Desktop / Space
     kernel accessible; chạy lại trên root mới trước lần switch root đầu tiên.
 28. FrameUnmap cần VSpace cap WRITE **và** Frame cap có PA khớp mapping. Chỉ
     VSpace cap không đủ để unmap code/stack của task khác.
-29. 4.5: root VSpace chỉ map stack root/client/fault1/2/3; stack server +0x2000
-    chỉ có trong server VSpace. Fault3 ghi +0x2000 phải USER FAULT; server
-    vẫn Reply OK. ROOT SWITCH n > 1.
+29. 4.5/6.4: root VSpace map stack fault1/2/3 + client, root ELF + stack Rust;
+    stack server +0x2000 chỉ có trong server VSpace. Fault3 ghi +0x2000 phải
+    USER FAULT; server vẫn Reply OK. ROOT SWITCH n > 1.
 30. Stack tops/bases và server VSpace slot là hằng trong vifast-abi; user.S
     nhận qua global_asm const, runtime dùng trực tiếp. Host test server VSpace
     đúng 2 leaf user (code + stack); root builder test đúng 1 leaf code.
 31. vifast-elf parse/validate ELF64 PT_LOAD (machine/user-range tham số,
     file range, congruence, overlap, W^X, entry, segment cấm) đã host-test;
-    root Rust nạp ELF là Bước 6, BootInfo/Untyped con/client VSpace là Bước 7.
+    root Rust đã nạp ELF ở 6.4; BootInfo/Untyped con/client VSpace là Bước 7.
 32. Root Rust ELF ở `ROOT_ELF_BASE = CODE_VA + 0x20_0000` (2 MiB kế tiếp), giữ
     user.S tại 64 GiB. Parser chỉ nhận cửa sổ
     `[ROOT_ELF_BASE, ROOT_ELF_STACK_GUARD)` 1 MiB, không dùng toàn dải user.
@@ -1107,13 +1111,17 @@ E. Desktop / Space
     mỗi segment căn 4096.
 34. 6.2 hoàn tất trên host: `build_task_space_elf` map PT_LOAD theo trang,
     copy filesz đúng offset, BSS nhờ retype zero, stack 4 trang + guard,
-    rollback object/bump/PTE; test trên PteFakeOps cả 3 format. Chưa nối boot.
+    rollback object/bump/PTE; test trên PteFakeOps cả 3 format. Đã nối boot ở 6.4.
 35. 6.3: jump table tại đầu user.S với USER_ENTRY_*; root Rust ELF `_start`
     asm + logic root, linker ROOT_ELF_BASE, build/validate 3 target.
 36. 6.4: root ELF được include_bytes! vào kernel, parse cửa sổ 1 MiB, map vào
     root VSpace cùng root ELF stack 4 trang + guard; root assembly và stack
     +0x4000 bị xoá. Entry root lấy từ ELF, stack ROOT_ELF_STACK_TOP. Harness
     kiểm tra ROOT RUST/ROOT READY, đúng 3 USER FAULT và không ROOT PANIC.
+37. Frame cap là upper bound cho quyền FrameMap: mapping rights phải nằm trong
+    cap rights. Test host xác nhận Frame cap READ|EXEC không map được RW.
+    Root sẽ nhận Frame cap code user.S READ|EXEC (không WRITE) trong BootInfo
+    ở Bước 7.3/7.4.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
@@ -1152,7 +1160,7 @@ scripts/test-qemu.py
 - user mode, IPC, capability transfer, page mapping, ramfs và timer preemption;
 - test QEMU 3 kiến trúc xanh.
 
-Nó chưa phải OS hoàn chỉnh. Root và server đã có VSpace riêng; client vẫn dùng
-root VSpace. Khoảng trống lớn nhất hiện là nạp root Rust từ ELF + BootInfo +
-Untyped con, rồi allocator/revoke hoàn chỉnh, SMP thật (x86 AP, BKL, IPI, TLB
-shootdown), driver/FS/network và compositor/ViFastKey.
+Nó chưa phải OS hoàn chỉnh. Root chạy từ ELF Rust; root và server đã có VSpace
+riêng; client vẫn dùng root VSpace. Khoảng trống lớn nhất hiện là BootInfo +
+Untyped con + client VSpace riêng, rồi allocator/revoke hoàn chỉnh, SMP thật
+(x86 AP, BKL, IPI, TLB shootdown), driver/FS/network và compositor/ViFastKey.
