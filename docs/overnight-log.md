@@ -51,7 +51,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
   12/12 objects.
 - DATA UNTYPED lúc test-exit: RISC-V 35/64 pages, AArch/x86 36/64 pages,
   x86 40/64 pages; 20/48 object (x86 24/48).
-- ROOT SWITCH lần chạy cuối: 33 / 33 / 33 (timer test-exit).
+- ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565216 B.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `3823fef95bd7bed33f30190a7c18a49823df554b7bbad083c1a64b055cd83126`.
