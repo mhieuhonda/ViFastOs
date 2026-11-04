@@ -443,8 +443,8 @@ impl vifast_kernel::PageTableOps for PageOps {
 
     fn user_va_range(&self) -> (u64, u64) {
         (
-            vifast_abi::user_layout::WINDOW_BASE as u64,
-            (vifast_abi::user_layout::WINDOW_BASE + vifast_abi::user_layout::WINDOW_SIZE) as u64,
+            vifast_pte::x86_64::USER_VA_START,
+            vifast_pte::x86_64::USER_VA_END,
         )
     }
 

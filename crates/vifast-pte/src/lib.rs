@@ -6,13 +6,39 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use vifast_abi::Rights;
+use vifast_abi::{Rights, DEFAULT_PAGE_SIZE};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pte {
     Invalid,
     Table(u64),
     Leaf(u64, Rights),
+}
+
+/// User virtual range shared by the three current ports.  Keeping this in the
+/// safe PTE crate lets host tests check the real numbers used by the platforms.
+pub const USER_VA_START: u64 = vifast_abi::user_layout::USER_VA_START as u64;
+pub const USER_VA_END: u64 = vifast_abi::user_layout::USER_VA_END as u64;
+
+/// Number of virtual addresses covered by a page-table level.
+///
+/// Level 0 is the root.  A level-3 table on a 4-level format covers one 4 KiB
+/// page; a level-2 table covers 2 MiB; a level-1 table covers 1 GiB.  Returning
+/// zero for an invalid level keeps the helper safe to call from assertions and
+/// tests.
+pub const fn table_span(levels: usize, level: usize, page_size: u64) -> u64 {
+    if levels == 0 || level >= levels {
+        return 0;
+    }
+    let shift = 9 * (levels - 1 - level);
+    match page_size.checked_shl(shift as u32) {
+        Some(span) => span,
+        None => 0,
+    }
+}
+
+pub const fn table_span_default(levels: usize, level: usize) -> u64 {
+    table_span(levels, level, DEFAULT_PAGE_SIZE)
 }
 
 fn rights(r: bool, w: bool, x: bool) -> Rights {
@@ -33,6 +59,12 @@ pub mod riscv {
     use super::*;
 
     pub const LEVELS: usize = 3;
+    pub const USER_VA_START: u64 = crate::USER_VA_START;
+    pub const USER_VA_END: u64 = crate::USER_VA_END;
+
+    pub const fn table_span(level: usize) -> u64 {
+        crate::table_span(LEVELS, level, DEFAULT_PAGE_SIZE)
+    }
     pub const PTE_V: u64 = 1;
     pub const PTE_R: u64 = 2;
     pub const PTE_W: u64 = 4;
@@ -91,6 +123,12 @@ pub mod x86_64 {
     use super::*;
 
     pub const LEVELS: usize = 4;
+    pub const USER_VA_START: u64 = crate::USER_VA_START;
+    pub const USER_VA_END: u64 = crate::USER_VA_END;
+
+    pub const fn table_span(level: usize) -> u64 {
+        crate::table_span(LEVELS, level, DEFAULT_PAGE_SIZE)
+    }
     pub const P: u64 = 1;
     pub const W: u64 = 2;
     pub const U: u64 = 4;
@@ -138,6 +176,12 @@ pub mod aarch64 {
     use super::*;
 
     pub const LEVELS: usize = 4;
+    pub const USER_VA_START: u64 = crate::USER_VA_START;
+    pub const USER_VA_END: u64 = crate::USER_VA_END;
+
+    pub const fn table_span(level: usize) -> u64 {
+        crate::table_span(LEVELS, level, DEFAULT_PAGE_SIZE)
+    }
     pub const AF: u64 = 1 << 10;
     pub const SH_INNER: u64 = 0b11 << 8;
     pub const AP_USER_RW: u64 = 1 << 6;
@@ -276,5 +320,70 @@ mod tests {
             Pte::Leaf(pa, _) => assert_eq!(pa, 0x4000_0000),
             _ => panic!("not block"),
         }
+    }
+
+    #[test]
+    fn user_ranges_exclude_kernel_identity() {
+        // The 64 GiB base is above the RISC-V identity map and above the
+        // x86/AArch64 low 1 GiB kernel mapping.
+        assert!(USER_VA_START >= 0x8000_0000);
+        assert!(USER_VA_START >= 1 << 30);
+        assert!(USER_VA_END > USER_VA_START);
+        assert_eq!(USER_VA_END - USER_VA_START, 0x10_0000_0000);
+
+        // Sv39 user addresses must remain in the lower half.
+        assert!(riscv::USER_VA_END <= 1 << 38);
+
+        // The whole range is inside the shared PML4/L0 entry 0 on x86 and
+        // AArch64, but not inside the low 1 GiB identity mapping.
+        for arch in [0, 1] {
+            let (start, end) = if arch == 0 {
+                (x86_64::USER_VA_START, x86_64::USER_VA_END)
+            } else {
+                (aarch64::USER_VA_START, aarch64::USER_VA_END)
+            };
+            let index0 = if arch == 0 {
+                x86_64::index(start, 0)
+            } else {
+                aarch64::index(start, 0)
+            };
+            assert_eq!(index0, 0);
+            assert!(
+                if arch == 0 {
+                    x86_64::index(start, 1)
+                } else {
+                    aarch64::index(start, 1)
+                } >= 64
+            );
+            assert!(
+                if arch == 0 {
+                    x86_64::index(end - 1, 0)
+                } else {
+                    aarch64::index(end - 1, 0)
+                } == 0
+            );
+        }
+
+        // RISC-V uses its own root entry 64..127; it never touches the
+        // identity root entry 2.
+        assert_eq!(riscv::index(riscv::USER_VA_START, 0), 64);
+        assert_eq!(riscv::index(riscv::USER_VA_END - 1, 0), 127);
+    }
+
+    #[test]
+    fn table_spans_match_each_format() {
+        assert_eq!(riscv::table_span(2), 4096);
+        assert_eq!(riscv::table_span(1), 0x20_0000);
+        assert_eq!(riscv::table_span(0), 0x4000_0000);
+        assert_eq!(x86_64::table_span(3), 4096);
+        assert_eq!(x86_64::table_span(2), 0x20_0000);
+        assert_eq!(x86_64::table_span(1), 0x4000_0000);
+        assert_eq!(x86_64::table_span(0), 0x80_0000_0000);
+        assert_eq!(aarch64::table_span(3), 4096);
+        assert_eq!(aarch64::table_span(2), 0x20_0000);
+        assert_eq!(aarch64::table_span(1), 0x4000_0000);
+        assert_eq!(aarch64::table_span(0), 0x80_0000_0000);
+        assert_eq!(riscv::table_span(3), 0);
+        assert_eq!(x86_64::table_span(4), 0);
     }
 }

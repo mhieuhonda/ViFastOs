@@ -27,6 +27,14 @@ pub mod user_layout {
     /// Maximum user virtual window reserved for code/data/stack/IPC buffers.
     pub const WINDOW_BASE: usize = CODE_VA;
     pub const WINDOW_SIZE: usize = 0x20_0000;
+    /// Full user virtual-address range accepted by the MMU layer.
+    ///
+    /// This is deliberately not the full lower half of the address space: it
+    /// starts above every kernel identity mapping and leaves room for page
+    /// tables below it.  The initial boot window above is only a small part of
+    /// this range and will disappear once code/stack are ordinary mappings.
+    pub const USER_VA_START: usize = CODE_VA;
+    pub const USER_VA_END: usize = CODE_VA + 0x10_0000_0000;
 }
 /// Maximum bytes copied through a single user I/O syscall.
 pub const USER_IO_MAX: usize = 256;
