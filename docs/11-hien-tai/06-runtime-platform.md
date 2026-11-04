@@ -124,7 +124,7 @@ sau đó block bằng `Wait` trên notification riêng. Runtime không còn tham
   - `Return`/`Message`: ghi register;
   - `MapFrame`/`UnmapFrame`: gọi platform MMU, rollback shadow nếu lỗi;
   - `ConfigureTcb`: cài context entry/stack cho TCB con;
-  - `PageTableOps`: kernel gọi unmap/zero trực tiếp trong revoke/retype;
+  - `PageTableOps`: kernel walk generic, read/write PTE, flush, zero;
   - `Open`/`Read`/`Write`: copy user pointer qua platform, gọi ramfs;
   - `Debug`: copy buffer rồi `putc`;
   - `Blocked`: chuyển context;

@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
+vifast-pte = { path = "../vifast-pte" }
 vifast-arch = { path = "../vifast-arch" }
 vifast-arch-riscv64 = { path = "../vifast-arch-riscv64" }
 vifast-kernel = { path = "../vifast-kernel" }

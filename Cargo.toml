@@ -2,6 +2,7 @@
 resolver = "2"
 default-members = [
     "crates/vifast-abi",
+    "crates/vifast-pte",
     "crates/vifast-arch",
     "crates/vifast-kernel",
     "crates/vifast-runtime",
@@ -10,6 +11,7 @@ default-members = [
 
 members = [
     "crates/vifast-abi",
+    "crates/vifast-pte",
     "crates/vifast-arch",
     "crates/vifast-kernel",
     "crates/vifast-runtime",

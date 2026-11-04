@@ -48,6 +48,7 @@ chưa thay thế chương trình mẫu.
 | `vifast-kernel` | Object/capability/IPC/scheduler/VSpace/ramfs portable | có | cấm |
 | `vifast-runtime` | Boot sequence, syscall dispatch, timer/preemption dùng chung | có | cấm |
 | `vifast-user` | Syscall wrapper + user layout cho 3 arch | có | có (asm syscall) |
+| `vifast-pte` | Encode/decode PTE Sv39/x86/AArch64 | có | cấm |
 | `vifast-arch-riscv64` | UART 16550, `rdtime`, SBI shutdown | có | có (MMIO/asm) |
 | `vifast-arch-aarch64` | PL011, `cntpct_el0`, PSCI shutdown | có | có (MMIO/asm) |
 | `vifast-arch-x86_64` | COM1, `rdtsc`, QEMU debug-exit | có | có (port I/O) |
@@ -180,6 +181,7 @@ bật feature `test-exit` để sau 20 tick in `PREEMPT OK` và thoát QEMU. Ch�
 
 ```bash
 cargo test -p vifast-kernel
+cargo test -p vifast-pte
 ```
 
 ## Những gì **chưa** có
@@ -245,7 +247,7 @@ bare-metal này.
   binary duy nhất chạy x86_64 + ARM + RISC-V.
 - `vifast-kernel` là `#![forbid(unsafe_code)]` và không còn dependency
   `vifast-arch`; `unsafe` chỉ nằm trong arch/boot.
-- Fixed-capacity object table (128 object, 8 TCB, 64 cap/TCB, 32 mapping/VSpace)
+- Fixed-capacity object table (128 object, 16 TCB, 64 cap/TCB, 32 mapping/VSpace)
   để chứng minh lõi không cần heap; `Kernel` đặt trong static storage per port
   (khoảng 397 KiB), không đặt trên boot stack. Đây là reference implementation, chưa phải allocator cuối.
 - Stack kernel hiện đặt 256 KiB trong linker script cho RISC-V/AArch64 vì

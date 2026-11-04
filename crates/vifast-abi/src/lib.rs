@@ -24,6 +24,9 @@ pub mod user_layout {
     pub const STACK_B_TOP: usize = CODE_VA + 0x9000;
     pub const STACK_BASE: usize = CODE_VA + 0x1000;
     pub const STACK_LEN: usize = 0x8000;
+    /// Maximum user virtual window reserved for code/data/stack/IPC buffers.
+    pub const WINDOW_BASE: usize = CODE_VA;
+    pub const WINDOW_SIZE: usize = 0x20_0000;
 }
 /// Maximum bytes copied through a single user I/O syscall.
 pub const USER_IO_MAX: usize = 256;
@@ -32,7 +35,7 @@ pub const USER_IO_MAX: usize = 256;
 /// kernel object table.
 pub const OBJ_ENDPOINT_BYTES: usize = 256;
 pub const OBJ_NOTIFICATION_BYTES: usize = 128;
-pub const OBJ_TCB_BYTES: usize = 1024;
+pub const OBJ_TCB_BYTES: usize = 4096;
 pub const OBJ_METADATA_ALIGN: usize = 16;
 pub const LABEL_FAULT: u64 = 0xFFFF_0001;
 pub const LABEL_NOTIFICATION: u64 = 0xFFFF_0002;

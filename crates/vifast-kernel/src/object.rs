@@ -7,7 +7,7 @@
 use vifast_abi::*;
 
 pub const MAX_OBJECTS: usize = 128;
-pub const MAX_TCBS: usize = 8;
+pub const MAX_TCBS: usize = 16;
 pub const MAX_CAPS: usize = 64;
 pub const MAX_QUEUE: usize = 8;
 pub const MAX_MAPPINGS: usize = 32;

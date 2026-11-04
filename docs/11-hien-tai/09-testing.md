@@ -21,7 +21,7 @@ cargo test -p vifast-runtime
 cargo test -p vifast-user
 ```
 
-Hiện có 21 test trong `vifast-kernel`:
+Hiện có 22 test trong `vifast-kernel`:
 
 - kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
 - self-test đầy đủ;
@@ -43,7 +43,10 @@ Hiện có 21 test trong `vifast-kernel`:
 - checked_add/overflow + buffer vắt qua hai page khác quyền;
 - self-revoke Untyped bị từ chối khi TCB hiện tại là con;
 - retype Frame và PageTable đều gọi zero page qua PageTableOps;
-- generic page-table walk xoá leaf qua PageTableOps giả lập.
+- generic page-table walk xoá leaf qua PageTableOps giả lập;
+- TCB pool quota đầy trả OutOfMemory.
+
+`vifast-pte` có 6 test riêng cho encode/decode 3 format.
 
 `vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.
 

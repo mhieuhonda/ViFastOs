@@ -34,7 +34,7 @@ Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
 
 Kernel portable hiện có:
 
-- object table cố định 128 object, 64 cap/TCB, 32 mapping/VSpace; `Kernel`
+- object table cố định 128 object, 16 TCB, 64 cap/TCB, 32 mapping/VSpace; `Kernel`
   khoảng 397 KiB đặt trong static storage của platform;
 - capability install/copy/derive/revoke, chuyển cap qua IPC với quyền `GRANT`;
 - endpoint Send/Recv, Call/Reply một caller;

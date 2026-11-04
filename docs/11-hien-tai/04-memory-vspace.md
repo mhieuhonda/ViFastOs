@@ -7,21 +7,22 @@ Nguồn: `crates/vifast-kernel/src/object.rs`,
 
 ## 1. Mô hình chung
 
-Kernel portable chỉ giữ **shadow mapping**. Nó không biết địa chỉ thanh ghi
-page table, không đụng MMIO và không thực hiện `sfence.vma`/`tlbi`/`invlpg`.
+Kernel portable đi **generic page-table walk** qua `PageTableOps`. Page table
+thật là nguồn sự thật duy nhất; `VSpace.mappings` chỉ còn là reverse map cho
+revoke/validation.
 
 Trình tự map:
 
 ```text
 FrameMap syscall
-  → Kernel::map_frame() kiểm tra shadow
-  → UserAction::MapFrame
-  → Platform::map_user_page()
-  → Platform flush TLB
+  → Kernel::map_frame() kiểm tra W^X/range/reverse map
+  → Kernel map_page_table() walk generic
+  → PageTableOps::write_pte + flush_va
   → Runtime trả VA cho user
 ```
 
-Trình tự unmap tương tự với `FrameUnmap`.
+Thiếu bảng trung gian trả `MissingPageTable`; kernel không tự cấp phát bảng.
+Unmap đi cùng walk và dừng ở leaf cấp cao.
 
 ## 2. VSpace
 
@@ -32,7 +33,7 @@ Trình tự unmap tương tự với `FrameUnmap`.
 - range `[base, end)`;
 - `next_va` cho cấp phát tuần tự;
 - `code_base/code_len`, `stack_base/stack_len`;
-- tối đa 8 mapping.
+- tối đa 32 mapping (reverse map).
 
 `validate_user_range()` kiểm tra buffer user theo code/stack/mapping trước
 `DebugWrite`, `Open`, `Read`, `Write`. Đây là hàng rào bảo mật chính; platform

@@ -9,7 +9,7 @@ Kernel dùng một bảng cố định:
 
 ```rust
 MAX_OBJECTS = 128
-MAX_TCBS    = 8
+MAX_TCBS    = 16
 MAX_CAPS    = 64
 MAX_QUEUE   = 8
 MAX_FDS     = 8

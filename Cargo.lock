@@ -39,6 +39,7 @@ name = "vifast-kernel"
 version = "0.1.0"
 dependencies = [
  "vifast-abi",
+ "vifast-pte",
 ]
 
 [[package]]
@@ -76,6 +77,7 @@ dependencies = [
  "vifast-arch",
  "vifast-arch-aarch64",
  "vifast-kernel",
+ "vifast-pte",
  "vifast-runtime",
 ]
 
@@ -87,6 +89,7 @@ dependencies = [
  "vifast-arch",
  "vifast-arch-riscv64",
  "vifast-kernel",
+ "vifast-pte",
  "vifast-runtime",
 ]
 
@@ -98,7 +101,15 @@ dependencies = [
  "vifast-arch",
  "vifast-arch-x86_64",
  "vifast-kernel",
+ "vifast-pte",
  "vifast-runtime",
+]
+
+[[package]]
+name = "vifast-pte"
+version = "0.1.0"
+dependencies = [
+ "vifast-abi",
 ]
 
 [[package]]

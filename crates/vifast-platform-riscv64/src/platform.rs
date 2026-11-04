@@ -161,11 +161,11 @@ struct PageOps;
 
 impl vifast_kernel::PageTableOps for PageOps {
     fn levels(&self) -> usize {
-        3
+        vifast_pte::riscv::LEVELS
     }
 
     fn index(&self, va: u64, level: usize) -> usize {
-        ((va >> (12 + 9 * (2 - level))) & 0x1ff) as usize
+        vifast_pte::riscv::index(va, level)
     }
 
     fn read_pte(&self, table_pa: u64, idx: usize) -> u64 {
@@ -175,50 +175,34 @@ impl vifast_kernel::PageTableOps for PageOps {
     fn write_pte(&self, table_pa: u64, idx: usize, pte: u64) {
         unsafe {
             *((table_pa as *mut u64).add(idx)) = pte;
+            core::arch::asm!("sfence.vma");
         }
     }
 
     fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
-        let mut flags = PTE_V | PTE_U;
-        if rights.contains(Rights::READ) || rights.contains(Rights::WRITE) {
-            flags |= PTE_R;
-        }
-        if rights.contains(Rights::WRITE) {
-            flags |= PTE_W;
-        }
-        if rights.contains(Rights::EXEC) {
-            flags |= PTE_X;
-        }
-        pte(pa, flags)
+        vifast_pte::riscv::encode_leaf(pa, rights)
     }
 
     fn encode_table(&self, pa: u64) -> u64 {
-        pte(pa, PTE_V)
+        vifast_pte::riscv::encode_table(pa)
     }
 
     fn decode(&self, entry: u64) -> vifast_kernel::Pte {
-        if entry & PTE_V == 0 {
-            return vifast_kernel::Pte::Invalid;
-        }
-        let pa = (entry >> 10) << 12;
-        if entry & (PTE_R | PTE_W | PTE_X) != 0 {
-            let mut rights = Rights::NONE;
-            if entry & PTE_R != 0 {
-                rights = rights | Rights::READ;
-            }
-            if entry & PTE_W != 0 {
-                rights = rights | Rights::WRITE;
-            }
-            if entry & PTE_X != 0 {
-                rights = rights | Rights::EXEC;
-            }
-            vifast_kernel::Pte::Leaf(pa, rights)
-        } else {
-            vifast_kernel::Pte::Table(pa)
-        }
+        vifast_pte::riscv::decode(entry)
+    }
+
+    fn decode_at(&self, entry: u64, level: usize) -> vifast_kernel::Pte {
+        vifast_pte::riscv::decode_at(entry, level)
     }
 
     fn install_kernel(&self, _root_pa: u64) {}
+
+    fn user_va_range(&self) -> (u64, u64) {
+        (
+            vifast_abi::user_layout::WINDOW_BASE as u64,
+            (vifast_abi::user_layout::WINDOW_BASE + vifast_abi::user_layout::WINDOW_SIZE) as u64,
+        )
+    }
 
     fn flush_va(&self, va: u64) {
         unsafe {
@@ -329,48 +313,6 @@ impl Platform for RiscvPlatform {
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
         &PAGE_OPS
     }
-    fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
-        if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
-            return Err(KError::InvalidArg);
-        }
-        if pa % 4096 != 0 {
-            return Err(KError::Alignment);
-        }
-        if rights.contains(Rights::WRITE) && rights.contains(Rights::EXEC) {
-            return Err(KError::NoRights);
-        }
-        let mut flags = PTE_V | PTE_U;
-        if rights.contains(Rights::READ) || rights.contains(Rights::WRITE) {
-            flags |= PTE_R;
-        }
-        if rights.contains(Rights::WRITE) {
-            flags |= PTE_W;
-        }
-        if rights.contains(Rights::EXEC) {
-            flags |= PTE_X;
-        }
-        unsafe {
-            let l0 = core::ptr::addr_of_mut!(USER_L0) as *mut Table;
-            let index = ((va >> 12) & 0x1ff) as usize;
-            (*l0).0[index] = pte(pa, flags);
-            core::arch::asm!("sfence.vma {}, zero", in(reg) va, options(nostack));
-        }
-        Ok(())
-    }
-
-    fn unmap_user_page(va: u64) -> Result<(), KError> {
-        if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
-            return Err(KError::InvalidArg);
-        }
-        unsafe {
-            let l0 = core::ptr::addr_of_mut!(USER_L0) as *mut Table;
-            let index = ((va >> 12) & 0x1ff) as usize;
-            (*l0).0[index] = 0;
-            core::arch::asm!("sfence.vma {}, zero", in(reg) va, options(nostack));
-        }
-        Ok(())
-    }
-
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)

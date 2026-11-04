@@ -202,11 +202,11 @@ struct PageOps;
 
 impl vifast_kernel::PageTableOps for PageOps {
     fn levels(&self) -> usize {
-        4
+        vifast_pte::aarch64::LEVELS
     }
 
     fn index(&self, va: u64, level: usize) -> usize {
-        ((va >> (12 + 9 * (3 - level))) & 0x1ff) as usize
+        vifast_pte::aarch64::index(va, level)
     }
 
     fn read_pte(&self, table_pa: u64, idx: usize) -> u64 {
@@ -216,6 +216,7 @@ impl vifast_kernel::PageTableOps for PageOps {
     fn write_pte(&self, table_pa: u64, idx: usize, pte: u64) {
         unsafe {
             *((table_pa as *mut u64).add(idx)) = pte;
+            core::arch::asm!("dsb ishst");
         }
     }
 
@@ -265,6 +266,13 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn install_kernel(&self, _root_pa: u64) {}
+
+    fn user_va_range(&self) -> (u64, u64) {
+        (
+            vifast_abi::user_layout::WINDOW_BASE as u64,
+            (vifast_abi::user_layout::WINDOW_BASE + vifast_abi::user_layout::WINDOW_SIZE) as u64,
+        )
+    }
 
     fn flush_va(&self, va: u64) {
         unsafe {
@@ -385,53 +393,6 @@ impl Platform for Aarch64Platform {
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
         &PAGE_OPS
     }
-    fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
-        if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
-            return Err(KError::InvalidArg);
-        }
-        if pa % 4096 != 0 {
-            return Err(KError::Alignment);
-        }
-        if rights.contains(Rights::WRITE) && rights.contains(Rights::EXEC) {
-            return Err(KError::NoRights);
-        }
-        let ap = if rights.contains(Rights::WRITE) {
-            AP_USER_RW
-        } else {
-            AP_USER_RO
-        };
-        let uxn = if rights.contains(Rights::EXEC) {
-            0
-        } else {
-            UXN
-        };
-        let desc = page_desc(pa, 0, ap, PXN, uxn, SH_INNER);
-        unsafe {
-            let l3 = core::ptr::addr_of_mut!(L3_USER) as *mut Table;
-            let index = ((va >> 12) & 0x1ff) as usize;
-            (*l3).0[index] = desc;
-            core::arch::asm!("tlbi vae1is, {}", in(reg) va);
-            core::arch::asm!("dsb ish");
-            core::arch::asm!("isb");
-        }
-        Ok(())
-    }
-
-    fn unmap_user_page(va: u64) -> Result<(), KError> {
-        if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
-            return Err(KError::InvalidArg);
-        }
-        unsafe {
-            let l3 = core::ptr::addr_of_mut!(L3_USER) as *mut Table;
-            let index = ((va >> 12) & 0x1ff) as usize;
-            (*l3).0[index] = 0;
-            core::arch::asm!("tlbi vae1is, {}", in(reg) va);
-            core::arch::asm!("dsb ish");
-            core::arch::asm!("isb");
-        }
-        Ok(())
-    }
-
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
         if page_in_range(ptr, out.len(), USER_CODE_VA, 4096)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)

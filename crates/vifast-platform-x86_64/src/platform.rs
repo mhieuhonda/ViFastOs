@@ -258,45 +258,6 @@ fn user_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
     ptr >= base as u64 && ptr as usize + len <= base + size
 }
 
-unsafe fn invlpg(va: u64) {
-    core::arch::asm!("invlpg [{}]", in(reg) va);
-}
-
-unsafe fn map_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
-    if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
-        return Err(KError::InvalidArg);
-    }
-    if pa % 4096 != 0 {
-        return Err(KError::Alignment);
-    }
-    if rights.contains(Rights::WRITE) && rights.contains(Rights::EXEC) {
-        return Err(KError::NoRights);
-    }
-    let mut flags = PAGE_PRESENT | PAGE_USER;
-    if rights.contains(Rights::WRITE) {
-        flags |= PAGE_WRITE;
-    }
-    if !rights.contains(Rights::EXEC) {
-        flags |= PAGE_NX;
-    }
-    let user_pt = core::ptr::addr_of_mut!(PT_USER) as *mut Table;
-    let index = ((va >> 12) & 0x1ff) as usize;
-    (*user_pt).0[index] = pa | flags;
-    invlpg(va);
-    Ok(())
-}
-
-unsafe fn unmap_page(va: u64) -> Result<(), KError> {
-    if va < USER_CODE_VA as u64 || va >= USER_CODE_VA as u64 + 0x20_0000 {
-        return Err(KError::InvalidArg);
-    }
-    let user_pt = core::ptr::addr_of_mut!(PT_USER) as *mut Table;
-    let index = ((va >> 12) & 0x1ff) as usize;
-    (*user_pt).0[index] = 0;
-    invlpg(va);
-    Ok(())
-}
-
 unsafe fn setup_gdt_tss_idt() {
     let tss = core::ptr::addr_of_mut!(TSS);
     (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACK) as u64 + 16384;
@@ -445,11 +406,11 @@ struct PageOps;
 
 impl vifast_kernel::PageTableOps for PageOps {
     fn levels(&self) -> usize {
-        4
+        vifast_pte::x86_64::LEVELS
     }
 
     fn index(&self, va: u64, level: usize) -> usize {
-        ((va >> (12 + 9 * (3 - level))) & 0x1ff) as usize
+        vifast_pte::x86_64::index(va, level)
     }
 
     fn read_pte(&self, table_pa: u64, idx: usize) -> u64 {
@@ -463,52 +424,29 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn encode_leaf(&self, pa: u64, rights: Rights) -> u64 {
-        let mut flags = PAGE_PRESENT | PAGE_USER;
-        if rights.contains(Rights::WRITE) {
-            flags |= PAGE_WRITE;
-        }
-        if !rights.contains(Rights::EXEC) {
-            flags |= PAGE_NX;
-        }
-        pa | flags
+        vifast_pte::x86_64::encode_leaf(pa, rights)
     }
 
     fn encode_table(&self, pa: u64) -> u64 {
-        pa | PAGE_PRESENT | PAGE_WRITE | PAGE_USER
+        vifast_pte::x86_64::encode_table(pa)
     }
 
     fn decode(&self, entry: u64) -> vifast_kernel::Pte {
-        if entry & PAGE_PRESENT == 0 {
-            return vifast_kernel::Pte::Invalid;
-        }
-        let pa = entry & 0x000f_ffff_ffff_f000;
-        if entry & PAGE_LARGE != 0 {
-            vifast_kernel::Pte::Leaf(pa, Rights::READ)
-        } else {
-            vifast_kernel::Pte::Table(pa)
-        }
+        vifast_pte::x86_64::decode(entry)
     }
 
     fn decode_at(&self, entry: u64, level: usize) -> vifast_kernel::Pte {
-        if entry & PAGE_PRESENT == 0 {
-            return vifast_kernel::Pte::Invalid;
-        }
-        let pa = entry & 0x000f_ffff_ffff_f000;
-        if level == 3 || entry & PAGE_LARGE != 0 {
-            let mut rights = Rights::READ;
-            if entry & PAGE_WRITE != 0 {
-                rights = rights | Rights::WRITE;
-            }
-            if entry & PAGE_NX == 0 {
-                rights = rights | Rights::EXEC;
-            }
-            vifast_kernel::Pte::Leaf(pa, rights)
-        } else {
-            vifast_kernel::Pte::Table(pa)
-        }
+        vifast_pte::x86_64::decode_at(entry, level)
     }
 
     fn install_kernel(&self, _root_pa: u64) {}
+
+    fn user_va_range(&self) -> (u64, u64) {
+        (
+            vifast_abi::user_layout::WINDOW_BASE as u64,
+            (vifast_abi::user_layout::WINDOW_BASE + vifast_abi::user_layout::WINDOW_SIZE) as u64,
+        )
+    }
 
     fn flush_va(&self, va: u64) {
         unsafe {
@@ -604,14 +542,6 @@ impl Platform for X86Platform {
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps {
         &PAGE_OPS
     }
-    fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError> {
-        unsafe { map_page(va, pa, rights) }
-    }
-
-    fn unmap_user_page(va: u64) -> Result<(), KError> {
-        unsafe { unmap_page(va) }
-    }
-
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {
         if !user_range(ptr, out.len(), USER_CODE_VA, 4096)
             && !user_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)

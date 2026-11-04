@@ -68,8 +68,6 @@ pub trait Platform: Arch + Console {
     fn vspace_root() -> u64;
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps;
-    fn map_user_page(va: u64, pa: u64, rights: Rights) -> Result<(), KError>;
-    fn unmap_user_page(va: u64) -> Result<(), KError>;
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError>;
     fn write_user(ptr: u64, input: &[u8]) -> Result<(), KError>;
 
@@ -256,29 +254,6 @@ pub mod syscall {
                 label,
                 data,
             } => A::write_result(context, error, value, label, data),
-            UserAction::MapFrame {
-                vspace,
-                root,
-                va,
-                pa,
-                rights,
-            } => {
-                let mapped = root == A::vspace_root() && A::map_user_page(va, pa, rights).is_ok();
-                if mapped {
-                    A::write_result(context, KError::Ok, va, 0, [0; 4]);
-                } else {
-                    let _ = kernel.unmap_frame(vspace, va);
-                    A::write_result(context, KError::MissingPageTable, 0, 0, [0; 4]);
-                }
-            }
-            UserAction::UnmapFrame { root, va, .. } => {
-                let ok = root == A::vspace_root() && A::unmap_user_page(va).is_ok();
-                if ok {
-                    A::write_result(context, KError::Ok, 0, 0, [0; 4]);
-                } else {
-                    A::write_result(context, KError::NotMapped, 0, 0, [0; 4]);
-                }
-            }
             UserAction::ConfigureTcb { tcb, entry, stack } => {
                 let contexts = A::contexts();
                 if let Some(slot) = contexts.get_mut(tcb.index as usize) {

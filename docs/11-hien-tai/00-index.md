@@ -23,7 +23,8 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
 9. [09-testing.md](09-testing.md) — test host, QEMU và tiêu chí PASS.
 10. [10-vifast-user.md](10-vifast-user.md) — wrapper syscall và user layout chung.
 11. [11-phase-3b-decisions.md](11-phase-3b-decisions.md) — quyết định VSpace riêng,
-    TTBR1, BootInfo và PageTableMap.
+    BootInfo và PageTableMap.
+12. [12-vifast-pte.md](12-vifast-pte.md) — encode/decode PTE an toàn cho 3 arch.
 
 ## Bản đồ crate
 
@@ -34,6 +35,7 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
 | `vifast-kernel` | `crates/vifast-kernel/src/` | Object, cap, IPC, scheduler, VSpace shadow, ramfs |
 | `vifast-runtime` | `crates/vifast-runtime/src/lib.rs` | Boot, syscall dispatch, timer, context switch dùng chung |
 | `vifast-user` | `crates/vifast-user/src/lib.rs` | Syscall wrapper cho 3 kiến trúc |
+| `vifast-pte` | `crates/vifast-pte/src/lib.rs` | Encode/decode/index PTE an toàn |
 | `vifast-arch-*` | `crates/vifast-arch-*/src/lib.rs` | UART/PL011/COM1, clock, IRQ mask, shutdown |
 | `vifast-platform-*` | `crates/vifast-platform-*/src/` | MMU, trap, timer, IRQ, SMP, user entry |
 | `vifast-kernel-*` | `crates/vifast-kernel-*/src/main.rs` | Entry, linker, user image asset |

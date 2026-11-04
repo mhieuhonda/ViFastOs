@@ -43,22 +43,6 @@ pub enum UserAction {
         ptr: u64,
         len: u64,
     },
-    /// Map `pa` at `va` in a user address space.  The architecture handler
-    /// updates the page table, flushes the TLB and returns the chosen VA in
-    /// the normal result registers.
-    MapFrame {
-        vspace: ObjRef,
-        root: u64,
-        va: u64,
-        pa: u64,
-        rights: Rights,
-    },
-    /// Remove the user mapping at `va` and flush the TLB.
-    UnmapFrame {
-        vspace: ObjRef,
-        root: u64,
-        va: u64,
-    },
     /// Program a user context after a successful `TcbConfigure`.
     ConfigureTcb {
         tcb: ObjRef,
@@ -89,14 +73,7 @@ pub enum UserAction {
     Exit,
 }
 
-/// Decoded page-table entry shared by the portable walker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pte {
-    Invalid,
-    Table(u64),
-    Leaf(u64, Rights),
-}
-
+pub use vifast_pte::Pte;
 /// Platform page-table operations used by revoke/unmap, retype and the future
 /// generic walker.  unsafe PTE/TLB access stays in the platform impl.
 ///
@@ -129,6 +106,9 @@ pub trait PageTableOps {
         self.decode(pte)
     }
     fn install_kernel(&self, _root_pa: u64) {}
+    fn user_va_range(&self) -> (u64, u64) {
+        (0, 0)
+    }
     fn flush_va(&self, _va: u64) {}
     fn flush_all_user(&self) {}
     fn zero_frame(&self, _pa: u64, _size: usize) {}
@@ -258,7 +238,17 @@ impl Kernel {
         self.alloc(Kind::Notification(Notification::default()))
     }
 
+    fn tcb_count(&self) -> usize {
+        self.objs
+            .iter()
+            .filter(|object| matches!(object.kind, Kind::Tcb(_)))
+            .count()
+    }
+
     pub fn create_tcb(&mut self, name: &'static str, priority: u8) -> Option<ObjRef> {
+        if self.tcb_count() >= MAX_TCBS {
+            return None;
+        }
         self.alloc(Kind::Tcb(Tcb::new(name, priority)))
     }
 
@@ -529,6 +519,9 @@ impl Kernel {
         if objects >= max_objects {
             return Err(KError::OutOfMemory);
         }
+        if ty == ObjType::Tcb && self.tcb_count() >= MAX_TCBS {
+            return Err(KError::OutOfMemory);
+        }
         let (kind, charge, align) = match ty {
             ObjType::Endpoint => (
                 Kind::Endpoint(Endpoint::default()),
@@ -581,9 +574,9 @@ impl Kernel {
         Ok(object)
     }
 
-    /// Record a user mapping and validate W^X/alignment/overlap.  The caller
-    /// (architecture trap handler) performs the real page-table update after
-    /// this returns `UserAction::MapFrame`.
+    /// Validate and install a user mapping through the generic page-table
+    /// walk.  No platform-specific map function is used.  Intermediate page
+    /// tables must already exist; otherwise `MissingPageTable` is returned.
     pub fn map_frame(
         &mut self,
         vspace: ObjRef,
@@ -599,24 +592,38 @@ impl Kernel {
             return Err(KError::NoRights); // W^X
         }
         let frame = *self.frame(frame).ok_or(KError::WrongType)?;
-        let space = self.vspace_mut(vspace).ok_or(KError::WrongType)?;
-        let page_size = space.page_size;
+        let (root, page_size, base, end, next_va) = {
+            let space = self.vspace(vspace).ok_or(KError::WrongType)?;
+            (
+                space.root,
+                space.page_size,
+                space.base,
+                space.end,
+                space.next_va,
+            )
+        };
         if page_size == 0
-            || page_size.is_power_of_two() == false
+            || !page_size.is_power_of_two()
             || frame.pa as u64 % page_size != 0
             || (frame.size as u64) < page_size
         {
             return Err(KError::Alignment);
         }
-        let va = if hint == 0 { space.next_va } else { hint };
+        let va = if hint == 0 { next_va } else { hint };
         if va % page_size != 0 {
             return Err(KError::Alignment);
         }
-        if va < space.base || va.saturating_add(page_size) > space.end {
+        if va < base || va.saturating_add(page_size) > end {
             return Err(KError::InvalidArg);
         }
-        if space.contains(va, page_size) {
+        if self
+            .vspace(vspace)
+            .is_some_and(|space| space.contains(va, page_size))
+        {
             return Err(KError::AlreadyMapped);
+        }
+        if self.page_table_ops.is_some() {
+            self.map_page_table(root, va, frame.pa as u64, rights)?;
         }
         let mapping = Mapping {
             va,
@@ -624,17 +631,32 @@ impl Kernel {
             len: page_size,
             rights,
         };
-        space.insert(mapping)?;
+        let space = self.vspace_mut(vspace).ok_or(KError::WrongType)?;
+        if let Err(error) = space.insert(mapping) {
+            if self.page_table_ops.is_some() {
+                let _ = self.unmap_page_table(root, va);
+            }
+            return Err(error);
+        }
         Ok(mapping)
     }
 
     /// Remove a mapping from the portable shadow table.  The architecture
     /// handler clears the actual entry and flushes its TLB.
     pub fn unmap_frame(&mut self, vspace: ObjRef, va: u64) -> KResult<Mapping> {
+        let root = self
+            .vspace(vspace)
+            .map(|space| space.root)
+            .ok_or(KError::WrongType)?;
+        let index = self
+            .vspace(vspace)
+            .and_then(|space| space.mapping_index(va))
+            .ok_or(KError::NotMapped)?;
+        if self.page_table_ops.is_some() {
+            self.unmap_page_table(root, va)?;
+        }
         let space = self.vspace_mut(vspace).ok_or(KError::WrongType)?;
-        let index = space.mapping_index(va).ok_or(KError::NotMapped)?;
-        let mapping = space.mappings[index].take().ok_or(KError::NotMapped)?;
-        Ok(mapping)
+        space.mappings[index].take().ok_or(KError::NotMapped)
     }
 
     /// True if `va` is currently mapped in the shadow table.
@@ -945,30 +967,68 @@ impl Kernel {
         }
     }
 
-    pub fn unmap_page_table(&self, root: u64, va: u64) {
-        Self::unmap_va_with_ops(self.page_table_ops, root, va);
-    }
-
-    fn unmap_va_with_ops(ops: Option<&dyn PageTableOps>, root: u64, va: u64) {
-        let Some(ops) = ops else { return };
+    fn unmap_with_ops(ops: &dyn PageTableOps, root: u64, va: u64) -> KResult<()> {
+        let (lo, hi) = ops.user_va_range();
+        if va < lo || va >= hi {
+            return Err(KError::InvalidArg);
+        }
         let levels = ops.levels();
         if levels == 0 {
-            return;
+            return Err(KError::MissingPageTable);
         }
         let mut table = root;
         for level in 0..levels {
             let idx = ops.index(va, level);
             let pte = ops.read_pte(table, idx);
             match ops.decode_at(pte, level) {
-                Pte::Invalid => return,
+                Pte::Invalid => return Err(KError::NotMapped),
                 Pte::Table(pa) => table = pa,
                 Pte::Leaf(_, _) => {
                     ops.write_pte(table, idx, 0);
                     ops.flush_va(va);
-                    return;
+                    return Ok(());
                 }
             }
         }
+        Err(KError::NotMapped)
+    }
+
+    pub fn unmap_page_table(&self, root: u64, va: u64) -> KResult<()> {
+        let Some(ops) = self.page_table_ops else {
+            return Ok(());
+        };
+        Self::unmap_with_ops(ops, root, va)
+    }
+
+    fn map_page_table(&self, root: u64, va: u64, pa: u64, rights: Rights) -> KResult<()> {
+        let ops = self.page_table_ops.ok_or(KError::MissingPageTable)?;
+        let (lo, hi) = ops.user_va_range();
+        let page = self.page_table_ops.map(|_| 0u64).unwrap_or(0);
+        let _ = page;
+        if va < lo || va.saturating_add(4096) > hi {
+            return Err(KError::InvalidArg);
+        }
+        let levels = ops.levels();
+        if levels == 0 {
+            return Err(KError::MissingPageTable);
+        }
+        let mut table = root;
+        for level in 0..levels {
+            let idx = ops.index(va, level);
+            let pte = ops.read_pte(table, idx);
+            let last = level + 1 == levels;
+            match ops.decode_at(pte, level) {
+                Pte::Invalid if last => {
+                    ops.write_pte(table, idx, ops.encode_leaf(pa, rights));
+                    ops.flush_va(va);
+                    return Ok(());
+                }
+                Pte::Invalid => return Err(KError::MissingPageTable),
+                Pte::Table(next) if !last => table = next,
+                Pte::Table(_) | Pte::Leaf(_, _) => return Err(KError::AlreadyMapped),
+            }
+        }
+        Err(KError::MissingPageTable)
     }
 
     fn unmap_frame_everywhere(&mut self, frame: Frame) {
@@ -986,7 +1046,9 @@ impl Kernel {
             for slot in space.mappings.iter_mut() {
                 if let Some(mapping) = *slot {
                     if mapping.pa >= start && mapping.pa < end {
-                        Self::unmap_va_with_ops(ops, space.root, mapping.va);
+                        if let Some(ops) = ops {
+                            let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+                        }
                         *slot = None;
                     }
                 }
@@ -1001,7 +1063,9 @@ impl Kernel {
         };
         for slot in space.mappings.iter_mut() {
             if let Some(mapping) = *slot {
-                Self::unmap_va_with_ops(ops, space.root, mapping.va);
+                if let Some(ops) = ops {
+                    let _ = Self::unmap_with_ops(ops, space.root, mapping.va);
+                }
                 *slot = None;
             }
         }
@@ -1617,22 +1681,12 @@ impl Kernel {
                         error: KError::NoRights,
                     };
                 }
-                let mapping = match self.map_frame(space.obj, frame.obj, a2, rights) {
-                    Ok(mapping) => mapping,
-                    Err(error) => return UserAction::Return { value: 0, error },
-                };
-                let Some(root) = self.vspace(space.obj).map(|space| space.root) else {
-                    return UserAction::Return {
-                        value: 0,
-                        error: KError::ObjectDestroyed,
-                    };
-                };
-                UserAction::MapFrame {
-                    vspace: space.obj,
-                    root,
-                    va: mapping.va,
-                    pa: mapping.pa,
-                    rights: mapping.rights,
+                match self.map_frame(space.obj, frame.obj, a2, rights) {
+                    Ok(mapping) => UserAction::Return {
+                        value: mapping.va,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
                 }
             }
             n if n == SyscallId::FrameUnmap as u64 => {
@@ -1645,20 +1699,12 @@ impl Kernel {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
-                let mapping = match self.unmap_frame(space.obj, a1) {
-                    Ok(mapping) => mapping,
-                    Err(error) => return UserAction::Return { value: 0, error },
-                };
-                let Some(root) = self.vspace(space.obj).map(|space| space.root) else {
-                    return UserAction::Return {
+                match self.unmap_frame(space.obj, a1) {
+                    Ok(_) => UserAction::Return {
                         value: 0,
-                        error: KError::ObjectDestroyed,
-                    };
-                };
-                UserAction::UnmapFrame {
-                    vspace: space.obj,
-                    root,
-                    va: mapping.va,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
                 }
             }
             n if n == SyscallId::Open as u64 => {
@@ -1997,7 +2043,7 @@ mod tests {
     #[test]
     fn untyped_accounts_object_metadata() {
         let mut kernel = Kernel::new();
-        let untyped = kernel.create_untyped(0x100_0000, 2048).unwrap();
+        let untyped = kernel.create_untyped(0x100_0000, 8192).unwrap();
         assert!(matches!(kernel.retype(untyped, ObjType::Endpoint), Ok(_)));
         assert!(matches!(kernel.retype(untyped, ObjType::Tcb), Ok(_)));
         assert_eq!(
@@ -2219,6 +2265,15 @@ mod tests {
     }
 
     #[test]
+    fn tcb_pool_limit_is_enforced() {
+        let mut kernel = Kernel::new();
+        while kernel.tcb_count() < MAX_TCBS {
+            assert!(kernel.create_tcb("extra", 1).is_some());
+        }
+        assert!(kernel.create_tcb("overflow", 1).is_none());
+    }
+
+    #[test]
     fn retype_zeroes_frame_and_page_table_pages() {
         let mut kernel = Kernel::new();
         kernel.set_page_table_ops(&ZERO_OPS);
@@ -2260,6 +2315,9 @@ mod tests {
         fn flush_va(&self, _va: u64) {
             FAKE_FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
+        fn user_va_range(&self) -> (u64, u64) {
+            (0, u64::MAX)
+        }
     }
 
     #[test]
@@ -2272,7 +2330,7 @@ mod tests {
             table[1] = 0;
         }
         FAKE_FLUSHES.store(0, std::sync::atomic::Ordering::SeqCst);
-        kernel.unmap_page_table(0x1000, 0x4000);
+        kernel.unmap_page_table(0x1000, 0x4000).unwrap();
         assert_eq!(FAKE_PTES.lock().unwrap()[0], 0);
         assert_eq!(FAKE_FLUSHES.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
