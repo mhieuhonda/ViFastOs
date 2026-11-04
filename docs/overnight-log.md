@@ -11,6 +11,7 @@
 - `854744a` — 8.1 IPC buffer API/core.
 - `49e7b1f` — 8.1b IPC buffer demo end-to-end.
 - `82c9c11` — S2 x86 kernel data NX.
+- `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
 ## WIP còn dở
@@ -20,7 +21,8 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 ## CẦN QUYẾT ĐỊNH
 
 - 8.4 server/client Rust ELF chưa triển khai. Demo IPC buffer dài trong user.S
-  đã nối xong (8.1b); x86 kernel data NX đã bật (S2).
+  đã nối xong (8.1b); x86 kernel data NX đã bật (S2); fuzz syscall 3 PTE
+  format đã có (S1).
 - Fault endpoint tối giản: message `LABEL_FAULT` data `[addr,cause,0,0]`, không
   có Reply-to-continue trong demo; fault1/2/3 vẫn suspend.
 - Root task được nâng priority 15 để nhận fault4 khi message đến.
@@ -145,6 +147,18 @@ follow-up `62b31f4`.
 - `vifast-kernel` 77/77; PTE 11/11; ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; ROOT SWITCH 47861 / 38447 / 15977 (lần đầu).
 - Chưa nối demo chuỗi dài trong user.S; đó là phần còn lại của 3c.
+
+## S1 — syscall fuzz trên 3 PTE format
+
+- Commit `ed40921 test: fuzz syscalls across pte formats`.
+- Thêm test deterministic 10.000 bước cho mỗi RISC-V/x86_64/AArch64 PTE fake:
+  Retype, CapCopy, CapDelete, CapRevoke, FrameMap/Unmap, PageTableMap với seed
+  cố định; chạy dưới `WALK_LOCK` để không tranh fake memory với test khác.
+- Mỗi bước gọi `check_invariants()`; yêu cầu hơn 100 syscall thành công mỗi
+  format để tránh test rỗng. Không panic, không vi phạm PA uniqueness/W^X/
+  reverse-map.
+- `vifast-kernel` 78/78; PTE 11/11; ELF 17/17; build không warning; QEMU 3/3
+  PASS ×3.
 
 ## S2 — x86 kernel data NX
 

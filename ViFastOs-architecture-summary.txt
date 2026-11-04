@@ -1304,6 +1304,6 @@ scripts/test-qemu.py
 
 Nó chưa phải OS hoàn chỉnh. Root chạy từ ELF Rust; root, server và client mỗi
 task có VSpace riêng; client dùng Untyped con. 3b đã hoàn tất; khoảng trống
-lớn nhất hiện là 8.4 server/client Rust ELF, rồi S1/S3.
+lớn nhất hiện là 8.4 server/client Rust ELF; S1/S2 đã xong, S3 còn dọn sâu.
 allocator/revoke hoàn chỉnh, SMP thật (x86 AP, BKL, IPI, TLB shootdown),
 driver/FS/network và compositor/ViFastKey.
