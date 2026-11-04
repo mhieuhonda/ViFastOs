@@ -15,10 +15,11 @@ không phải một hệ điều hành production hoàn chỉnh.
 Thư mục này LÀ git repository. Các mốc hiện tại:
 - 456d5ef checkpoint: multi-arch microkernel before hardening
 - eece7c3 harden: kernel trap stack, private x86 page tables, explicit cap slots
-- commit mới nhất: root-task + pointer validation + untyped accounting.
+- 3f16fb1 feat: root task, user pointer validation, untyped accounting.
 
-Cập nhật gần nhất: root task, kiểm tra con trỏ user, Untyped accounting,
-user layout chung 64 GiB, SMEP/SMAP/PAN/sscratch hardening và vifast-user.
+Cập nhật gần nhất (commit 3f16fb1): root task, kiểm tra con trỏ user,
+Untyped accounting, user layout chung 64 GiB, SMEP/SMAP/PAN/sscratch
+hardening và vifast-user.
 
 1. MỤC TIÊU
 -----------
