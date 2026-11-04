@@ -334,12 +334,23 @@ impl VSpace {
     }
 }
 
-/// Minimal page-table object.  Ports that use multi-level page tables can
-/// attach one object to a VSpace; the current bring-up ports use static roots.
+/// Where a PageTable object is attached.  A page-table page may be installed
+/// exactly once; the location records the parent VSpace and the VA base of the
+/// range covered by this level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageTableMapping {
+    pub vspace: ObjRef,
+    pub va_base: u64,
+    pub level: u8,
+}
+
+/// Minimal page-table object.  Ports that use multi-level page tables attach
+/// one object to a VSpace with `PageTableMap`; level is assigned by the kernel.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PageTable {
     pub root: u64,
     pub level: u8,
+    pub mapped: Option<PageTableMapping>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
