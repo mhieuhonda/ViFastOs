@@ -28,6 +28,7 @@ const WRITE_TEXT: &[u8] = b"ViFastOS write\n";
 const IPC_TEXT: &[u8] = b"IPC BUF OK\n";
 const VFS_OK: &[u8] = b"VFS OK\n";
 const VFS_BAD: &[u8] = b"VFS BAD\n";
+const VFS_STAT_OK: &[u8] = b"VFS STAT OK\n";
 
 fn write(bytes: &[u8]) {
     let _ = vifast_user::debug_write(bytes.as_ptr() as u64, bytes.len() as u64);
@@ -76,6 +77,15 @@ fn vfs_write(fd: u64, offset: u64, bytes: &[u8]) -> Option<usize> {
     let reply = unsafe { vifast_user::call_message(1, vfs::WRITE, fd, offset, len as u64) };
     if reply.error == KError::Ok && reply.label != vfs::ERR {
         Some(reply.label as usize)
+    } else {
+        None
+    }
+}
+
+fn vfs_stat(fd: u64) -> Option<u64> {
+    let reply = unsafe { vifast_user::call_message(1, vfs::STAT, fd, 0, 0) };
+    if reply.error == KError::Ok && reply.label == vfs::OK {
+        Some(reply.data[0])
     } else {
         None
     }
@@ -162,6 +172,7 @@ pub extern "C" fn client_main() -> ! {
                 let _ = vifast_user::debug_write(file_buf.as_ptr() as u64, n as u64);
                 n == WRITE_TEXT.len()
             });
+            vfs_ok &= vfs_stat(fd) == Some(WRITE_TEXT.len() as u64);
             let _ = vfs_close(fd);
         } else {
             vfs_ok = false;
@@ -170,6 +181,7 @@ pub extern "C" fn client_main() -> ! {
         vfs_ok = false;
     }
     write(if vfs_ok { VFS_OK } else { VFS_BAD });
+    write(if vfs_ok { VFS_STAT_OK } else { VFS_BAD });
 
     loop {
         vifast_user::yield_now();

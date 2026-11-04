@@ -133,6 +133,16 @@ fn read_request(data: [u64; 4]) -> (u64, u64, u64, u64) {
     }
 }
 
+fn stat_request(data: [u64; 4]) -> (u64, u64, u64, u64) {
+    let fd = data[0] as usize;
+    unsafe {
+        if fd >= *core::ptr::addr_of!(FILE_COUNT) {
+            return (vfs::ERR, 0, 0, 0);
+        }
+        (vfs::OK, files()[fd].len as u64, 0, 0)
+    }
+}
+
 fn write_request(data: [u64; 4]) -> (u64, u64, u64, u64) {
     let fd = data[0] as usize;
     let offset = data[1] as usize;
@@ -164,6 +174,7 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
         vfs::OPEN => open_request(request.data),
         vfs::READ => read_request(request.data),
         vfs::WRITE => write_request(request.data),
+        vfs::STAT => stat_request(request.data),
         vfs::CLOSE => {
             let fd = request.data[0] as usize;
             if fd < unsafe { *core::ptr::addr_of!(FILE_COUNT) } {

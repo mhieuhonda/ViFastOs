@@ -153,6 +153,7 @@ pub mod vfs {
     pub const READ: u64 = 0x2002;
     pub const WRITE: u64 = 0x2003;
     pub const CLOSE: u64 = 0x2004;
+    pub const STAT: u64 = 0x2005;
 
     /// Successful open/close reply label.  Read/write replies use the byte
     /// count as the label so zero-length operations remain distinguishable.
