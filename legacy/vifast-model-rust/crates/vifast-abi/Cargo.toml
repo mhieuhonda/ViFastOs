@@ -1,0 +1,9 @@
+[package]
+name = "vifast-abi"
+description = "ABI dùng chung giữa kernel ViFastOs và user space (no_std)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]

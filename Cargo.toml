@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+default-members = [
+    "crates/vifast-abi",
+    "crates/vifast-arch",
+    "crates/vifast-kernel",
+    "crates/vifast-runtime",
+]
+
+members = [
+    "crates/vifast-abi",
+    "crates/vifast-arch",
+    "crates/vifast-kernel",
+    "crates/vifast-runtime",
+    "crates/vifast-arch-x86_64",
+    "crates/vifast-arch-aarch64",
+    "crates/vifast-arch-riscv64",
+    "crates/vifast-platform-riscv64",
+    "crates/vifast-platform-aarch64",
+    "crates/vifast-platform-x86_64",
+    "crates/vifast-kernel-x86_64",
+    "crates/vifast-kernel-x86_64-uefi",
+    "crates/vifast-kernel-aarch64",
+    "crates/vifast-kernel-riscv64",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99.1"
+license = "MIT OR Apache-2.0"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = "s"
+debug = true
+
+[profile.dev]
+panic = "unwind"

@@ -1,0 +1,16 @@
+[package]
+name = "vifast-sim"
+description = "Máy RISC-V giả lập chạy trên host để kiểm thử vifast-kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vifast-abi = { path = "../vifast-abi" }
+vifast-kernel = { path = "../vifast-kernel" }
+toml = "0.8"
+
+[[bin]]
+name = "vifast-sim"
+path = "src/main.rs"

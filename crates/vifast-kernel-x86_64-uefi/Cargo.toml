@@ -1,0 +1,11 @@
+[package]
+name = "vifast-kernel-x86_64-uefi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vifast-arch = { path = "../vifast-arch" }
+vifast-platform-x86_64 = { path = "../vifast-platform-x86_64" }
+vifast-runtime = { path = "../vifast-runtime" }

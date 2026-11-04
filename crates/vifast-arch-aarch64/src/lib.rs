@@ -1,0 +1,89 @@
+//! AArch64 architecture port.
+//!
+//! Target: QEMU `virt` (PL011 UART at 0x0900_0000).  The port starts at EL1
+//! or drops from EL2 to EL1 before entering Rust.  MMU, GIC and the generic
+//! timer interrupt path are the next layer.
+
+#![no_std]
+
+use vifast_arch::Arch;
+
+pub struct Aarch64;
+
+const PL011_BASE: usize = 0x0900_0000;
+const PL011_DR: usize = 0x00;
+const PL011_FR: usize = 0x18;
+const FR_TXFF: u32 = 1 << 5;
+
+impl Arch for Aarch64 {
+    const NAME: &'static str = "aarch64";
+
+    fn init() {
+        // Mask interrupts until the interrupt controller and vector table are
+        // ready.  The user-mode bring-up only uses synchronous SVC traps.
+        unsafe {
+            core::arch::asm!("msr daifset, #0xf");
+        }
+        // Enable FP/SIMD at EL1.  The compiler is allowed to use SIMD registers
+        // for bulk memory operations; without this, such an access traps and
+        // there is no vector handler yet.
+        unsafe {
+            let mut cpacr: u64;
+            core::arch::asm!("mrs {}, cpacr_el1", out(reg) cpacr);
+            cpacr |= 3 << 20;
+            core::arch::asm!("msr cpacr_el1, {}", in(reg) cpacr);
+            core::arch::asm!("isb");
+        }
+    }
+
+    fn putc(byte: u8) {
+        unsafe {
+            let fr = (PL011_BASE + PL011_FR) as *const u32;
+            while core::ptr::read_volatile(fr) & FR_TXFF != 0 {
+                core::hint::spin_loop();
+            }
+            core::ptr::write_volatile((PL011_BASE + PL011_DR) as *mut u32, byte as u32);
+        }
+    }
+
+    fn now() -> u64 {
+        let value: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntpct_el0", out(reg) value);
+        }
+        value
+    }
+
+    fn irq_disable() {
+        unsafe {
+            core::arch::asm!("msr daifset, #2");
+        }
+    }
+
+    fn irq_enable() {
+        unsafe {
+            core::arch::asm!("msr daifclr, #2");
+        }
+    }
+
+    fn send_ipi(_hart: usize) {
+        // GIC SGI will be added with SMP support.
+    }
+
+    fn halt() -> ! {
+        loop {
+            unsafe {
+                core::arch::asm!("wfi");
+            }
+        }
+    }
+
+    fn exit(code: u8) -> ! {
+        // PSCI SYSTEM_OFF.
+        let _ = code;
+        unsafe {
+            core::arch::asm!("hvc #0", in("x0") 0x8400_0008u64);
+        }
+        Self::halt()
+    }
+}

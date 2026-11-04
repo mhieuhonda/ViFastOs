@@ -1,0 +1,84 @@
+# ViFastOs Space: máy tính bay, cấu hình tĩnh, 2 hart.
+# Không task nào có untyped/IRQ control/sched control -> sau boot không tạo được object mới.
+# Quy ước: fault badge = slot TCB cap tương ứng trong supervisor.
+profile = "space"
+memory = 1048576
+harts = 2
+
+[objects]
+fault_ep = "endpoint"
+imu_ep = "endpoint"
+imu_ntfn = "notification"
+shared_buf = "frame"
+data_ready = "notification"
+data_ack = "notification"
+
+[[tasks]]
+name = "supervisor"
+image = "supervisor"
+priority = 250
+core = 0
+env = { max_restarts = 3, window = 1000 }
+caps = [
+  { name = "fault_ep", slot = 1, obj = "fault_ep", rights = "R" },
+  { name = "tcb_imu_driver", slot = 10, tcb = "imu_driver" },
+  { name = "tcb_attitude", slot = 11, tcb = "attitude" },
+  { name = "tcb_payload", slot = 12, tcb = "payload" },
+]
+
+[[tasks]]
+name = "imu_driver"
+image = "imu_driver"
+priority = 200
+core = 0
+fault = { obj = "fault_ep", badge = 10 }
+bind_notification = "imu_ntfn"
+caps = [
+  { name = "imu_ep", slot = 1, obj = "imu_ep", rights = "R" },
+  { name = "imu_irq", slot = 2, irq = 5, notification = "imu_ntfn" },
+]
+
+[[tasks]]
+name = "attitude"
+image = "attitude_ctrl"
+priority = 150
+core = 0
+fault = { obj = "fault_ep", badge = 11 }
+env = { iterations = 40 }
+caps = [
+  { name = "imu", slot = 1, obj = "imu_ep", rights = "W" },
+]
+
+# Payload chạy ở hart 1, ưu tiên cao hơn producer/consumer nhưng bị giới hạn
+# 3 tick CPU mỗi 10 tick -> không thể chiếm hết hart dù có vòng lặp nặng.
+[[tasks]]
+name = "payload"
+image = "payload"
+priority = 120
+core = 1
+budget = 3
+period = 10
+fault = { obj = "fault_ep", badge = 12 }
+env = { crash_after = 6 }
+
+[[tasks]]
+name = "producer"
+image = "producer"
+priority = 80
+core = 1
+caps = [
+  { name = "buf", slot = 1, obj = "shared_buf", rights = "RW", map = 0x200000 },
+  { name = "data_ready", slot = 2, obj = "data_ready", rights = "W" },
+  { name = "data_ack", slot = 3, obj = "data_ack", rights = "R" },
+]
+
+[[tasks]]
+name = "consumer"
+image = "consumer"
+priority = 80
+core = 1
+caps = [
+  { name = "buf", slot = 1, obj = "shared_buf", rights = "R", map = 0x300000 },
+  { name = "data_ready", slot = 2, obj = "data_ready", rights = "R" },
+  { name = "data_ack", slot = 3, obj = "data_ack", rights = "W" },
+]

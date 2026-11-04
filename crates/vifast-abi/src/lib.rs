@@ -1,0 +1,339 @@
+//! ViFastOs wire ABI.
+//!
+//! This crate is deliberately free of `std`, `alloc`, architecture-specific
+//! types and Rust-only layout assumptions.  Every type here has a stable
+//! `#[repr(C)]` or integer representation so the same definitions can be used
+//! by the kernel, the architecture ports and user space.
+//!
+//! Syscall *numbers* and error values are architecture independent.  The
+//! mapping between a syscall and CPU registers lives in the per-architecture
+//! crates, not here.
+
+#![no_std]
+#![forbid(unsafe_code)]
+
+pub const MSG_MAX_WORDS: usize = 8;
+pub const DEFAULT_PAGE_SIZE: u64 = 4096;
+pub const LABEL_FAULT: u64 = 0xFFFF_0001;
+pub const LABEL_NOTIFICATION: u64 = 0xFFFF_0002;
+/// Sentinel used instead of `Option<u64>` in the wire message.
+pub const CAP_NONE: u64 = u64::MAX;
+
+/// File open flags for the tiny ramfs.
+pub const O_RDONLY: u64 = 0;
+pub const O_WRONLY: u64 = 1;
+pub const O_RDWR: u64 = 2;
+pub const O_CREATE: u64 = 4;
+
+/// Kernel error codes.  These values are part of the ABI and must never be
+/// renumbered.
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum KError {
+    #[default]
+    Ok = 0,
+    InvalidCap = 1,
+    WrongType = 2,
+    NoRights = 3,
+    SlotOccupied = 4,
+    OutOfMemory = 5,
+    InvalidArg = 6,
+    Alignment = 7,
+    AlreadyMapped = 8,
+    NotMapped = 9,
+    NoCaller = 10,
+    ObjectDestroyed = 11,
+    IrqInUse = 12,
+    PrioTooHigh = 13,
+    Cancelled = 14,
+    MissingPageTable = 15,
+    IllegalOperation = 16,
+    NotImplemented = 17,
+    WouldBlock = 18,
+    NotFound = 19,
+}
+
+impl KError {
+    pub const fn name(self) -> &'static str {
+        match self {
+            KError::Ok => "OK",
+            KError::InvalidCap => "INVALID_CAP",
+            KError::WrongType => "WRONG_TYPE",
+            KError::NoRights => "NO_RIGHTS",
+            KError::SlotOccupied => "SLOT_OCCUPIED",
+            KError::OutOfMemory => "OUT_OF_MEMORY",
+            KError::InvalidArg => "INVALID_ARG",
+            KError::Alignment => "ALIGNMENT",
+            KError::AlreadyMapped => "ALREADY_MAPPED",
+            KError::NotMapped => "NOT_MAPPED",
+            KError::NoCaller => "NO_CALLER",
+            KError::ObjectDestroyed => "OBJECT_DESTROYED",
+            KError::IrqInUse => "IRQ_IN_USE",
+            KError::PrioTooHigh => "PRIO_TOO_HIGH",
+            KError::Cancelled => "CANCELLED",
+            KError::MissingPageTable => "MISSING_PAGE_TABLE",
+            KError::IllegalOperation => "ILLEGAL_OPERATION",
+            KError::NotImplemented => "NOT_IMPLEMENTED",
+            KError::WouldBlock => "WOULD_BLOCK",
+            KError::NotFound => "NOT_FOUND",
+        }
+    }
+}
+
+pub type KResult<T> = Result<T, KError>;
+
+/// Capability rights.  The numeric values are part of the ABI.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Rights(pub u8);
+
+impl Rights {
+    pub const NONE: Rights = Rights(0);
+    pub const READ: Rights = Rights(1);
+    pub const WRITE: Rights = Rights(2);
+    pub const EXEC: Rights = Rights(4);
+    pub const GRANT: Rights = Rights(8);
+    pub const ALL: Rights = Rights(15);
+    pub const RW: Rights = Rights(3);
+
+    pub const fn contains(self, other: Rights) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    pub const fn intersects(self, other: Rights) -> bool {
+        (self.0 & other.0) != 0
+    }
+
+    pub const fn without(self, other: Rights) -> Rights {
+        Rights(self.0 & !other.0)
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl core::ops::BitOr for Rights {
+    type Output = Rights;
+    fn bitor(self, rhs: Rights) -> Rights {
+        Rights(self.0 | rhs.0)
+    }
+}
+
+impl core::ops::BitAnd for Rights {
+    type Output = Rights;
+    fn bitand(self, rhs: Rights) -> Rights {
+        Rights(self.0 & rhs.0)
+    }
+}
+
+impl core::ops::BitOrAssign for Rights {
+    fn bitor_assign(&mut self, rhs: Rights) {
+        self.0 |= rhs.0;
+    }
+}
+
+/// Kernel object kinds.
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ObjType {
+    Untyped = 0,
+    Tcb = 1,
+    Endpoint = 2,
+    Notification = 3,
+    CNode = 4,
+    Frame = 5,
+    VSpace = 6,
+    PageTable = 7,
+    SchedContext = 8,
+}
+
+/// Thread states are exposed to the ABI for introspection and fault reports.
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ThreadState {
+    #[default]
+    Inactive = 0,
+    Ready = 1,
+    Running = 2,
+    BlockedSend = 3,
+    BlockedRecv = 4,
+    BlockedReply = 5,
+    BlockedNotification = 6,
+    Faulted = 7,
+}
+
+impl ThreadState {
+    pub const fn is_blocked(self) -> bool {
+        matches!(
+            self,
+            ThreadState::BlockedSend
+                | ThreadState::BlockedRecv
+                | ThreadState::BlockedReply
+                | ThreadState::BlockedNotification
+        )
+    }
+}
+
+#[repr(u64)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FaultKind {
+    VmFault = 1,
+    UserException = 2,
+    Exited = 3,
+    BadSyscall = 4,
+}
+
+/// Fixed-size IPC message.  No Rust `Option`, `String`, `Vec` or heap is used
+/// on the wire.  `len` is validated by the kernel and clamped by `words()`.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Message {
+    pub label: u64,
+    pub len: u8,
+    pub _pad: [u8; 7],
+    /// Slot number of a transferred capability, or `CAP_NONE`.
+    pub cap: u64,
+    pub data: [u64; MSG_MAX_WORDS],
+}
+
+impl Default for Message {
+    fn default() -> Self {
+        Self {
+            label: 0,
+            len: 0,
+            _pad: [0; 7],
+            cap: CAP_NONE,
+            data: [0; MSG_MAX_WORDS],
+        }
+    }
+}
+
+impl Message {
+    pub const fn empty(label: u64) -> Message {
+        Message {
+            label,
+            len: 0,
+            _pad: [0; 7],
+            cap: CAP_NONE,
+            data: [0; MSG_MAX_WORDS],
+        }
+    }
+
+    pub fn new(label: u64, words: &[u64]) -> KResult<Message> {
+        if words.len() > MSG_MAX_WORDS {
+            return Err(KError::InvalidArg);
+        }
+        let mut data = [0u64; MSG_MAX_WORDS];
+        let mut i = 0;
+        while i < words.len() {
+            data[i] = words[i];
+            i += 1;
+        }
+        Ok(Message {
+            label,
+            len: words.len() as u8,
+            _pad: [0; 7],
+            cap: CAP_NONE,
+            data,
+        })
+    }
+
+    pub const fn with_cap(mut self, slot: u64) -> Message {
+        self.cap = slot;
+        self
+    }
+
+    pub fn words(&self) -> &[u64] {
+        let n = if (self.len as usize) > MSG_MAX_WORDS {
+            MSG_MAX_WORDS
+        } else {
+            self.len as usize
+        };
+        &self.data[..n]
+    }
+
+    pub fn cap_slot(&self) -> Option<u64> {
+        if self.cap == CAP_NONE {
+            None
+        } else {
+            Some(self.cap)
+        }
+    }
+}
+
+/// Syscall numbers.  They are stable across architectures; the register
+/// mapping is provided by `vifast-arch-*` and `vifast-user-*`.
+#[repr(u64)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SyscallId {
+    Send = 0,
+    Call = 1,
+    Recv = 2,
+    Reply = 3,
+    ReplyRecv = 4,
+    Signal = 5,
+    Wait = 6,
+    Poll = 7,
+    Yield = 8,
+    Retype = 9,
+    CapCopy = 10,
+    CapMint = 11,
+    CNodeMint = 12,
+    CapDelete = 13,
+    CapRevoke = 14,
+    TcbConfigure = 15,
+    TcbResume = 16,
+    TcbSuspend = 17,
+    TcbRestart = 18,
+    TcbSetPriority = 19,
+    TcbSetAffinity = 20,
+    TcbBindNotification = 21,
+    SchedContextConfigure = 22,
+    SchedContextBind = 23,
+    PageTableMap = 24,
+    FrameMap = 25,
+    FrameUnmap = 26,
+    IoMap = 27,
+    IoUnmap = 28,
+    IrqGet = 29,
+    IrqSetNotification = 30,
+    IrqAck = 31,
+    DebugWrite = 32,
+    GetTime = 33,
+    Exit = 34,
+    Open = 35,
+    Read = 36,
+    Write = 37,
+    Close = 38,
+    Stat = 39,
+    Seek = 40,
+}
+
+/// Generic register arguments for a syscall.  Architecture ports decode
+/// `SyscallId` + these words; the kernel validates them.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SyscallArgs {
+    pub number: u64,
+    pub a0: u64,
+    pub a1: u64,
+    pub a2: u64,
+    pub a3: u64,
+    pub a4: u64,
+    pub a5: u64,
+}
+
+impl SyscallArgs {
+    pub const fn new(number: u64) -> Self {
+        Self {
+            number,
+            a0: 0,
+            a1: 0,
+            a2: 0,
+            a3: 0,
+            a4: 0,
+            a5: 0,
+        }
+    }
+}

@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Boot each architecture port under QEMU and check the portable self-tests.
+
+This is intentionally a small, dependency-free harness so it also works on
+macOS and in CI.  Each QEMU process is killed after a timeout; success is
+defined by the kernel printing its banner and SELFTEST PASS.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import glob
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+QEMU_RV = "qemu-system-riscv64"
+QEMU_ARM = "qemu-system-aarch64"
+QEMU_X86 = "qemu-system-x86_64"
+
+
+def find_ovmf_code() -> str | None:
+    candidates = [
+        os.environ.get("OVMF_CODE"),
+        "/opt/homebrew/Cellar/qemu/11.1.3/share/qemu/edk2-x86_64-code.fd",
+        "/opt/homebrew/share/qemu/edk2-x86_64-code.fd",
+        "/usr/share/OVMF/OVMF_CODE.fd",
+        "/usr/share/qemu/OVMF_CODE.fd",
+    ]
+    candidates += sorted(glob.glob("/opt/homebrew/Cellar/qemu/*/share/qemu/edk2-x86_64-code.fd"))
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def run_qemu(
+    name: str,
+    cmd: list[str],
+    serial: str,
+    timeout: int,
+    ok_codes: set[int],
+    require_smp: bool = False,
+) -> bool:
+    if os.path.exists(serial):
+        os.unlink(serial)
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    started = time.time()
+    timed_out = False
+    try:
+        rc = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc.kill()
+        rc = proc.wait()
+    elapsed = time.time() - started
+    output = ""
+    if os.path.exists(serial):
+        output = open(serial, "rb").read().decode("utf-8", errors="replace")
+    print(f"\n--- {name} (rc={rc}, {elapsed:.1f}s) ---")
+    print(output[-1800:])
+    ok = (
+        "SELFTEST PASS" in output
+        and "booting on" in output
+        and "PREEMPT OK" in output
+        and "Server" in output
+        and "Client" in output
+        and "Mapped" in output
+        and "Cap OK" in output
+        and "ViFastOS ramfs" in output
+        and "ViFastOS write" in output
+        and "Reply OK" in output
+        and (not require_smp or "SMP OK" in output)
+    )
+    if timed_out:
+        print("FAIL: timeout")
+        return False
+    if rc not in ok_codes:
+        print(f"FAIL: unexpected QEMU exit code {rc}")
+        return False
+    if not ok:
+        print("FAIL: banner or SELFTEST PASS missing")
+        return False
+    print("PASS")
+    return True
+
+
+def test_riscv() -> bool:
+    kernel = os.path.join(
+        ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
+    )
+    serial = os.path.join(tempfile.gettempdir(), "vifast-riscv64.serial")
+    cmd = [
+        QEMU_RV,
+        "-machine", "virt",
+        "-smp", "2",
+        "-m", "128M",
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", f"file:{serial}",
+        "-bios", "default",
+        "-kernel", kernel,
+    ]
+    return run_qemu("riscv64", cmd, serial, 20, {0}, require_smp=True)
+
+
+def test_aarch64() -> bool:
+    kernel = os.path.join(
+        ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64"
+    )
+    serial = os.path.join(tempfile.gettempdir(), "vifast-aarch64.serial")
+    cmd = [
+        QEMU_ARM,
+        "-machine", "virt,gic-version=2",
+        "-cpu", "cortex-a57",
+        "-smp", "2",
+        "-m", "128M",
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", f"file:{serial}",
+        "-kernel", kernel,
+    ]
+    return run_qemu("aarch64", cmd, serial, 20, {0}, require_smp=True)
+
+
+def test_x86_64() -> bool:
+    code = find_ovmf_code()
+    if not code:
+        print("SKIP x86_64: OVMF firmware not found (set OVMF_CODE)")
+        return False
+    efi = os.path.join(
+        ROOT,
+        "target",
+        "x86_64-unknown-uefi",
+        "release",
+        "vifast-kernel-x86_64-uefi.efi",
+    )
+    tmp = tempfile.mkdtemp(prefix="vifast-uefi-")
+    esp = os.path.join(tmp, "esp")
+    os.makedirs(os.path.join(esp, "EFI", "BOOT"), exist_ok=True)
+    shutil.copyfile(efi, os.path.join(esp, "EFI", "BOOT", "BOOTX64.EFI"))
+    vars_src = None
+    for candidate in [
+        "/opt/homebrew/Cellar/qemu/11.1.3/share/qemu/edk2-i386-vars.fd",
+        "/opt/homebrew/share/qemu/edk2-i386-vars.fd",
+        "/usr/share/OVMF/OVMF_VARS.fd",
+    ] + sorted(glob.glob("/opt/homebrew/Cellar/qemu/*/share/qemu/edk2-i386-vars.fd")):
+        if os.path.exists(candidate):
+            vars_src = candidate
+            break
+    if not vars_src:
+        print("SKIP x86_64: OVMF vars not found")
+        return False
+    vars_path = os.path.join(tmp, "vars.fd")
+    shutil.copyfile(vars_src, vars_path)
+    serial = os.path.join(tmp, "serial.txt")
+    cmd = [
+        QEMU_X86,
+        "-machine", "q35",
+        "-smp", "2",
+        "-m", "256M",
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", f"file:{serial}",
+        "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
+        "-drive", f"if=pflash,format=raw,file={vars_path}",
+        "-drive", f"format=raw,file=fat:rw:{esp}",
+        "-device", "isa-debug-exit,iobase=0x501,iosize=0x03",
+    ]
+    # The kernel writes 0x501 with value 1, which QEMU turns into exit code 3.
+    return run_qemu("x86_64", cmd, serial, 40, {3})
+
+
+def main() -> int:
+    if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
+        print("missing QEMU binaries")
+        return 2
+    results = {
+        "riscv64": test_riscv(),
+        "aarch64": test_aarch64(),
+        "x86_64": test_x86_64(),
+    }
+    print("\n=== summary ===")
+    for name, ok in results.items():
+        print(f"{name:8} {'PASS' if ok else 'FAIL'}")
+    return 0 if all(results.values()) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

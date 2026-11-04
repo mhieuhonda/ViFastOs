@@ -1,0 +1,13 @@
+[package]
+name = "vifast-platform-aarch64"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vifast-abi = { path = "../vifast-abi" }
+vifast-arch = { path = "../vifast-arch" }
+vifast-arch-aarch64 = { path = "../vifast-arch-aarch64" }
+vifast-kernel = { path = "../vifast-kernel" }
+vifast-runtime = { path = "../vifast-runtime" }
