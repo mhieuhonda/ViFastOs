@@ -49,6 +49,7 @@ chưa thay thế chương trình mẫu.
 | `vifast-runtime` | Boot sequence, syscall dispatch, timer/preemption dùng chung | có | cấm |
 | `vifast-user` | Syscall wrapper + user layout cho 3 arch | có | có (asm syscall) |
 | `vifast-pte` | Encode/decode PTE Sv39/x86/AArch64 | có | cấm |
+| `vifast-elf` | Parser ELF64 PT_LOAD, validation W^X/range/overlap | có | cấm |
 | `vifast-arch-riscv64` | UART 16550, `rdtime`, SBI shutdown | có | có (MMIO/asm) |
 | `vifast-arch-aarch64` | PL011, `cntpct_el0`, PSCI shutdown | có | có (MMIO/asm) |
 | `vifast-arch-x86_64` | COM1, `rdtsc`, QEMU debug-exit | có | có (port I/O) |
@@ -182,6 +183,7 @@ bật feature `test-exit` để sau 20 tick in `PREEMPT OK` và thoát QEMU. Ch�
 ```bash
 cargo test -p vifast-kernel
 cargo test -p vifast-pte
+cargo test -p vifast-elf
 ```
 
 ## Những gì **chưa** có
@@ -190,14 +192,14 @@ cargo test -p vifast-pte
 
 - User mode vẫn là **bring-up tối giản**, chưa phải userland đầy đủ; đã có
   crate `vifast-user` với syscall wrapper 3 kiến trúc, nhưng chương trình mẫu
-  vẫn là assembly; chưa có ELF loader.
+  vẫn là assembly; `vifast-elf` đã parse/host-test ELF64 nhưng chưa nạp root.
 - IPC user có subset `Send/Call/Recv/Reply/Signal/Wait/Poll`; chuyển cap đã có
   end-to-end cho `Send`/`Call` (không cho `Reply`), chưa có shared memory,
   reply object/ReplyRecv, IPC buffer hay fault endpoint.
-- VSpace/PageTable object, generic map/unmap và PageTableMap đã có, nhưng
-  page-table root vẫn là bảng tĩnh của từng port; retype VSpace/install_kernel
-  chưa làm; root/server/client hiện dùng chung VSpace và stack mapping, nên chưa
-  cách ly bộ nhớ giữa các task; chưa có page-table page allocator tổng quát,
+- VSpace/PageTable object, generic map/unmap, PageTableMap và retype VSpace
+  đã có; root và server có VSpace riêng, stack server cách ly. Client vẫn dùng
+  root VSpace nên root/fault stack chưa cách ly hoàn toàn; chưa có page-table
+  allocator tổng quát,
   TLB shootdown đa hart, hay cấp phát địa chỉ ảo tự động theo range lớn.
 - Untyped/retype đã tính phí Endpoint/Notification/Tcb và reset bump khi revoke
   Untyped; chưa có allocator vật lý đầy đủ, IOMMU hay thu hồi object.
@@ -235,8 +237,8 @@ bare-metal này.
    x86_64 AP, BKL, per-hart runqueue, IPI scheduler và TLB shootdown.
 5. ~~Untyped/retype cơ bản~~ — đã có frame/page-table page + accounting metadata;
    còn allocator vật lý đầy đủ và thu hồi object.
-6. **Root task + vifast-user** — root task đã có; crate wrapper đã có; còn
-   chuyển user mẫu sang Rust, ELF loader, IPC buffer/shared memory.
+6. **Root task + vifast-user** — root task đã có; crate wrapper + vifast-elf
+   parser đã có; còn nạp root ELF, BootInfo, IPC buffer/shared memory.
 7. **Driver framework** user space: VirtIO console/block/net.
 8. **FS thật + block driver, name server, pager, supervisor, compositor,
    ViFastKey** — ramfs phẳng đã có.

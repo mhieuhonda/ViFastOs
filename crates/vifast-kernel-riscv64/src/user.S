@@ -87,14 +87,14 @@ user_root:
     li a7, 15
     li a0, 5
     la a1, user_thread_a
-    li a2, 0x1000003000
-    li a3, 12
+    li a2, {SERVER_STACK_TOP}
+    li a3, {SERVER_VSPACE_SLOT}
     li a4, 5
     ecall
     li a7, 15
     li a0, 6
     la a1, user_thread_b
-    li a2, 0x1000009000
+    li a2, {CLIENT_STACK_TOP}
     li a3, 1
     li a4, 5
     ecall
@@ -107,7 +107,7 @@ user_root:
     li a7, 15
     li a0, 9
     la a1, user_thread_fault
-    li a2, 0x1000006000
+    li a2, {FAULT1_STACK_TOP}
     li a3, 1
     li a4, 6
     ecall
@@ -117,7 +117,7 @@ user_root:
     li a7, 15
     li a0, 10
     la a1, user_thread_fault2
-    li a2, 0x1000007000
+    li a2, {FAULT2_STACK_TOP}
     li a3, 1
     li a4, 6
     ecall
@@ -127,7 +127,7 @@ user_root:
     li a7, 15
     li a0, 11
     la a1, user_thread_fault3
-    li a2, 0x1000008000
+    li a2, {FAULT3_STACK_TOP}
     li a3, 1
     li a4, 6
     ecall
@@ -170,7 +170,7 @@ user_thread_fault3:
     ecall
     /* The server stack page is private to the server VSpace.  A root-VSpace
        thread writing here must fault instead of touching an orphan page. */
-    li t0, 0x1000002000
+    li t0, {SERVER_STACK_BASE}
     sw zero, 0(t0)
 1:
     j 1b
@@ -285,7 +285,7 @@ user_thread_b:
     li a7, 25
     li a0, 2
     li a1, 4
-    li a2, 0x100000a000
+    li a2, {DATA_VA}
     li a3, 3
     ecall
     mv t3, a1

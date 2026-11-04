@@ -4602,6 +4602,24 @@ mod tests {
         assert_eq!(kernel.untyped(small).unwrap().objects, before_objects);
     }
 
+    fn count_user_leaves(ops: &dyn PageTableOps, table_pa: u64, level: usize) -> usize {
+        let levels = ops.levels();
+        let mut count = 0;
+        for index in 0..512 {
+            let pte = ops.read_pte(table_pa, index);
+            match ops.decode_at(pte, level) {
+                Pte::Table(next) if level + 1 < levels => {
+                    count += count_user_leaves(ops, next, level + 1);
+                }
+                Pte::Leaf(_, _) if level + 1 == levels && ops.leaf_is_user(pte) => {
+                    count += 1;
+                }
+                _ => {}
+            }
+        }
+        count
+    }
+
     #[test]
     fn shared_code_builder_maps_the_same_frame_in_two_vspaces() {
         let _guard = WALK_LOCK.lock().unwrap();
@@ -4644,6 +4662,13 @@ mod tests {
             Rights::READ | Rights::WRITE
         );
         assert!(kernel.mapping_at(server_space, 0x10_0000_3000).is_none());
+        // The server VSpace must contain exactly two user leaves: shared code
+        // and its private stack.  An accidental extra root-stack mapping here
+        // would make the isolation test pass for the wrong reason later.
+        let root_pa = kernel.vspace(root_space).unwrap().root;
+        let server_pa = kernel.vspace(server_space).unwrap().root;
+        assert_eq!(count_user_leaves(&MAP_OPS, root_pa, 0), 1);
+        assert_eq!(count_user_leaves(&MAP_OPS, server_pa, 0), 2);
     }
 
     #[test]

@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 echo "== host portable-kernel tests =="
 cargo test -p vifast-kernel
 cargo test -p vifast-pte
+cargo test -p vifast-elf
 cargo test -p vifast-runtime
 cargo test -p vifast-user
 

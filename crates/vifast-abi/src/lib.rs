@@ -24,6 +24,28 @@ pub mod user_layout {
     pub const STACK_B_TOP: usize = CODE_VA + 0x9000;
     pub const STACK_BASE: usize = CODE_VA + 0x1000;
     pub const STACK_LEN: usize = 0x8000;
+
+    /// Per-thread stack tops used by the bootstrap user image.  The layout is
+    /// deliberately disjoint: the server page at +0x2000 is not mapped in the
+    /// root VSpace so the isolation test can fault on it.
+    pub const ROOT_STACK_BASE: usize = CODE_VA + 0x4000;
+    pub const ROOT_STACK_TOP: usize = CODE_VA + 0x5000;
+    pub const SERVER_STACK_BASE: usize = CODE_VA + 0x2000;
+    pub const SERVER_STACK_TOP: usize = CODE_VA + 0x3000;
+    pub const CLIENT_STACK_BASE: usize = CODE_VA + 0x8000;
+    pub const CLIENT_STACK_TOP: usize = CODE_VA + 0x9000;
+    pub const FAULT1_STACK_BASE: usize = CODE_VA + 0x5000;
+    pub const FAULT1_STACK_TOP: usize = CODE_VA + 0x6000;
+    pub const FAULT2_STACK_BASE: usize = CODE_VA + 0x6000;
+    pub const FAULT2_STACK_TOP: usize = CODE_VA + 0x7000;
+    pub const FAULT3_STACK_BASE: usize = CODE_VA + 0x7000;
+    pub const FAULT3_STACK_TOP: usize = CODE_VA + 0x8000;
+
+    /// Bootstrap capability slots.  BootInfo will replace these constants.
+    pub const ROOT_VSPACE_SLOT: usize = 1;
+    pub const META_UNTYPED_SLOT: usize = 2;
+    pub const DATA_UNTYPED_SLOT: usize = 3;
+    pub const SERVER_VSPACE_SLOT: usize = 12;
     /// Maximum user virtual window reserved for code/data/stack/IPC buffers.
     pub const WINDOW_BASE: usize = CODE_VA;
     pub const WINDOW_SIZE: usize = 0x20_0000;

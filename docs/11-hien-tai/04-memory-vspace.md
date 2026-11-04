@@ -107,7 +107,8 @@ File: `crates/vifast-platform-aarch64/src/platform.rs`.
 - Code: EL0 read-only + executable (`AP_USER_RO`, UXN=0).
 - Stack: EL0 read-write + NX (`AP_USER_RW`, UXN=1).
 - Data: EL0 read-write + NX.
-- Map/unmap dùng `tlbi vae1is`, `dsb ish`, `isb`.
+- Map/unmap dùng `tlbi vae1is`, `dsb ish`, `isb`; `switch_root` dùng
+  `tlbi vmalle1is`, `dsb ish`, `isb` (full flush).
 - PAN nếu CPU hỗ trợ; read/write user tạm clear PAN.
 
 Lưu ý encoding `AP[2:1]`:
@@ -138,7 +139,8 @@ File: `crates/vifast-platform-x86_64/src/platform.rs`.
 Hiện tại:
 
 - RISC-V: `sfence.vma` một hart.
-- AArch64: `tlbi vae1is` một hart.
+- AArch64: map/unmap `tlbi vae1is`; đổi root `tlbi vmalle1is`; cả hai kèm
+  `dsb ish`/`isb`.
 - x86: `invlpg`.
 
 Chưa có IPI shootdown đa hart. Khi thêm SMP scheduler, cần:

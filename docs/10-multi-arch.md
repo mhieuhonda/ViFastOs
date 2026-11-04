@@ -64,7 +64,7 @@ nếu không có VM/emulation. Vì vậy:
 | Cap transfer user | Send/Call + Signal | Send/Call + Signal | Send/Call + Signal |
 | ramfs + file syscall | có | có | có |
 | SMP bootstrap | HSM | PSCI | chưa AP; ACPI MADT + LAPIC/SIPI |
-| User page table | Sv39 tĩnh | 4-level tĩnh | PML4/PT 4 KiB riêng |
+| User page table | Sv39 retyped; server riêng, client root | 4-level retyped tương ứng | PML4/PT 4 KiB riêng |
 | Trap stack | kernel stack qua `sscratch` | `SP_EL1` | TSS.RSP0 |
 | Stack | linker `.stack` 256 KiB | linker `.stack` 256 KiB | UEFI stack |
 | Exit code test | 0 | 0 | 3 |
@@ -73,6 +73,7 @@ nếu không có VM/emulation. Vì vậy:
 
 - `cargo test -p vifast-kernel`: 49 test portable trên host.
 - `cargo test -p vifast-pte`: 10 test host cho cả 3 format PTE.
+- `cargo test -p vifast-elf`: 9 test parser ELF64 PT_LOAD.
 - `cargo test -p vifast-user`: wrapper compile.
 - QEMU RISC-V64 (`-smp 2`): self-test + U-mode IPC + frame map/unmap + SMP
   bootstrap + timer preemption.
@@ -98,7 +99,7 @@ Thứ tự đề xuất:
 5. ~~Untyped/retype cơ bản~~ — đã có Frame/PageTable page; còn allocator vật lý
    đầy đủ và thu hồi object.
 6. **vifast-user + ABI wire format** — wrapper đã có; còn root task Rust,
-   ELF loader, IPC buffer/shared memory.
+   nạp root ELF bằng vifast-elf, IPC buffer/shared memory.
 7. **VFS đầy đủ, block driver, net, compositor, ViFastKey** — ramfs đã có.
 
 Mỗi bước phải chạy cùng bộ test trên cả ba arch trước khi coi là “hỗ trợ”.

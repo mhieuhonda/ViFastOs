@@ -78,18 +78,14 @@ user_root:
     mov x8, #15
     mov x0, #5
     adr x1, user_thread_a
-    mov x2, #0x10
-    lsl x2, x2, #32
-    add x2, x2, #0x3000
-    mov x3, #12
+    ldr x2, ={SERVER_STACK_TOP}
+    mov x3, {SERVER_VSPACE_SLOT}
     mov x4, #5
     svc #0
     mov x8, #15
     mov x0, #6
     adr x1, user_thread_b
-    mov x2, #0x10
-    lsl x2, x2, #32
-    add x2, x2, #0x9000
+    ldr x2, ={CLIENT_STACK_TOP}
     mov x3, #1
     mov x4, #5
     svc #0
@@ -102,9 +98,7 @@ user_root:
     mov x8, #15
     mov x0, #9
     adr x1, user_thread_fault
-    mov x2, #0x10
-    lsl x2, x2, #32
-    add x2, x2, #0x6000
+    ldr x2, ={FAULT1_STACK_TOP}
     mov x3, #1
     mov x4, #6
     svc #0
@@ -114,9 +108,7 @@ user_root:
     mov x8, #15
     mov x0, #10
     adr x1, user_thread_fault2
-    mov x2, #0x10
-    lsl x2, x2, #32
-    add x2, x2, #0x7000
+    ldr x2, ={FAULT2_STACK_TOP}
     mov x3, #1
     mov x4, #6
     svc #0
@@ -126,9 +118,7 @@ user_root:
     mov x8, #15
     mov x0, #11
     adr x1, user_thread_fault3
-    mov x2, #0x10
-    lsl x2, x2, #32
-    add x2, x2, #0x8000
+    ldr x2, ={FAULT3_STACK_TOP}
     mov x3, #1
     mov x4, #6
     svc #0
@@ -169,9 +159,7 @@ user_thread_fault3:
     adr x0, user_isolation_msg
     mov x1, #10
     svc #0
-    mov x1, #0x10
-    lsl x1, x1, #32
-    add x1, x1, #0x2000
+    ldr x1, ={SERVER_STACK_BASE}
     str xzr, [x1]
 1:
     b 1b
@@ -282,9 +270,7 @@ user_thread_b:
     mov x8, #25
     mov x0, #2
     mov x1, #4
-    mov x2, #0x10
-    lsl x2, x2, #32
-    add x2, x2, #0xa000
+    ldr x2, ={DATA_VA}
     mov x3, #3
     svc #0
     mov x19, x1

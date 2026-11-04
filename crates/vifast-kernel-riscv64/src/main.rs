@@ -7,7 +7,17 @@ use vifast_platform_riscv64::RiscvPlatform;
 use vifast_runtime::{boot, PlatformInfo, UserImage};
 
 core::arch::global_asm!(include_str!("boot.S"));
-core::arch::global_asm!(include_str!("user.S"));
+core::arch::global_asm!(
+    include_str!("user.S"),
+    DATA_VA = const vifast_abi::user_layout::DATA_VA,
+    SERVER_STACK_BASE = const vifast_abi::user_layout::SERVER_STACK_BASE,
+    SERVER_STACK_TOP = const vifast_abi::user_layout::SERVER_STACK_TOP,
+    CLIENT_STACK_TOP = const vifast_abi::user_layout::CLIENT_STACK_TOP,
+    FAULT1_STACK_TOP = const vifast_abi::user_layout::FAULT1_STACK_TOP,
+    FAULT2_STACK_TOP = const vifast_abi::user_layout::FAULT2_STACK_TOP,
+    FAULT3_STACK_TOP = const vifast_abi::user_layout::FAULT3_STACK_TOP,
+    SERVER_VSPACE_SLOT = const vifast_abi::user_layout::SERVER_VSPACE_SLOT,
+);
 
 extern "C" {
     static user_program_start: u8;

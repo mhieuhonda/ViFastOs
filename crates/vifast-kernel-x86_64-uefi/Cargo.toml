@@ -10,6 +10,7 @@ default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
 
 [dependencies]
+vifast-abi = { path = "../vifast-abi" }
 vifast-arch = { path = "../vifast-arch" }
 vifast-platform-x86_64 = { path = "../vifast-platform-x86_64" }
 vifast-runtime = { path = "../vifast-runtime" }

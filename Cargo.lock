@@ -35,6 +35,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vifast-elf"
+version = "0.1.0"
+dependencies = [
+ "vifast-abi",
+]
+
+[[package]]
 name = "vifast-kernel"
 version = "0.1.0"
 dependencies = [
@@ -46,6 +53,7 @@ dependencies = [
 name = "vifast-kernel-aarch64"
 version = "0.1.0"
 dependencies = [
+ "vifast-abi",
  "vifast-arch",
  "vifast-platform-aarch64",
  "vifast-runtime",
@@ -55,6 +63,7 @@ dependencies = [
 name = "vifast-kernel-riscv64"
 version = "0.1.0"
 dependencies = [
+ "vifast-abi",
  "vifast-arch",
  "vifast-platform-riscv64",
  "vifast-runtime",
@@ -64,6 +73,7 @@ dependencies = [
 name = "vifast-kernel-x86_64-uefi"
 version = "0.1.0"
 dependencies = [
+ "vifast-abi",
  "vifast-arch",
  "vifast-platform-x86_64",
  "vifast-runtime",

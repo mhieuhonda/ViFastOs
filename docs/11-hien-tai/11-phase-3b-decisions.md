@@ -34,9 +34,11 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 
 ## 4. Boot modules và ảnh task
 
-- Runtime nhúng ảnh từng task thành boot module page-aligned.
-- Mỗi ảnh có Frame cap; danh sách nằm trong BootInfo frame map read-only.
-- Root map Frame code RX vào VSpace từng task; không copy code.
+- Root task và về sau server/client là ELF boot module page-aligned; dùng
+  `vifast-elf` parse PT_LOAD, không dùng ảnh phẳng.
+- Mỗi module có Frame cap; BootInfo chứa danh sách module và frame cap read-only.
+- Map từng PT_LOAD RX/RW theo quyền; không map W+X; không copy code.
+- Root stack 4 trang + một trang guard; server/client/fault tạm giữ user.S ở Bước 6.
 - 4.5 dùng `build_task_space_shared_code`: root và server map cùng Frame code.
 - Root VSpace map stack root/client/fault1/2/3; stack server +0x2000 chỉ nằm
   trong VSpace server. Fault3 ghi +0x2000 phải USER FAULT.
@@ -60,7 +62,7 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
   lưu vị trí gắn và trả `AlreadyMapped` khi gắn lại.
 - Retype PageTable và VSpace từ Untyped đã có; 4.3 runtime root chuyển sang
   VSpace mới, 4.5 thêm VSpace server. Cap VSpace server tạm ở root slot 12;
-  BootInfo sẽ thay hard-code ở Bước 6.
+  BootInfo sẽ thay hard-code ở Bước 7.
 - FrameUnmap cần VSpace WRITE + Frame cap khớp PA; chỉ VSpace cap không thể
   unmap mapping của frame không sở hữu.
 - Object có `creator: CapRef { addr, id }` để revoke Untyped copy không phá
@@ -69,7 +71,7 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 - Khi TCB bị hủy, object creator/cap con được reparent lên cap cha còn sống;
   delete Untyped cap trả IllegalOperation khi còn object/cap con.
 - x86 assert LoadedImage base/end nằm trong identity 0..1 GiB.
-- CapCopy Untyped vẫn chia sẻ vùng nhớ, chưa có Untyped con; Untyped con để Bước 6,
+- CapCopy Untyped vẫn chia sẻ vùng nhớ, chưa có Untyped con; Untyped con để Bước 7,
   khi root phát tài nguyên cho task. 4.5 server không retype.
 - Platform chỉ encode/decode PTE; walk page table làm generic trong portable
   kernel.
@@ -83,8 +85,11 @@ retype; 4.5 server có VSpace riêng, client vẫn dùng root VSpace.
 ## 8. Thứ tự triển khai
 
 1. Hoàn tất kiểm tra fault origin/self-revoke/zero frame.
-2. Chuyển AArch64 sang TTBR1.
-3. VSpace động + code/stack mapping + PageTableMap.
-4. Rust root task + BootInfo + từng task một VSpace.
-5. Test cách ly stack client/server.
-6. ELF loader trong root task; IPC buffer bằng Frame cap.
+2. VSpace động + code/stack mapping + PageTableMap (đã xong 4.3).
+3. Root/server VSpace riêng + stack isolation (đã xong 4.5).
+4. vifast-elf parser + host test (đã xong, chưa nối boot).
+5. Bước 6: root task Rust nạp từ ELF; stack 4 trang + guard; server/client/fault
+   tạm giữ user.S.
+6. Bước 7: BootInfo, Untyped con, client VSpace riêng; bỏ slot hard-code.
+7. 3c: server/client Rust ELF, IPC buffer, ReplyRecv, fault endpoint.
+8. AArch64 TTBR1 là giai đoạn riêng sau 3b.

@@ -51,4 +51,4 @@ tables tại đúng VA; không tự định nghĩa lại địa chỉ user.
 - Chưa có wrapper `Send/Call/Recv/Reply` dạng typed message.
 - Chưa có IPC buffer/shared memory.
 - Chưa có runtime/allocator cho user Rust binary.
-- Chưa thay thế assembly mẫu; chưa có ELF loader.
+- Chưa thay thế assembly mẫu; `vifast-elf` đã có parser host-test nhưng chưa nạp root.

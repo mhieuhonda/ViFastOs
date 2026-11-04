@@ -78,14 +78,14 @@ user_root:
     mov rax, 15
     mov rdi, 5
     lea rsi, [rip + user_thread_a]
-    movabs rdx, 0x1000003000
-    mov rcx, 12
+    movabs rdx, {SERVER_STACK_TOP}
+    mov rcx, {SERVER_VSPACE_SLOT}
     mov r8, 5
     int 0x80
     mov rax, 15
     mov rdi, 6
     lea rsi, [rip + user_thread_b]
-    movabs rdx, 0x1000009000
+    movabs rdx, {CLIENT_STACK_TOP}
     mov rcx, 1
     mov r8, 5
     int 0x80
@@ -98,7 +98,7 @@ user_root:
     mov rax, 15
     mov rdi, 9
     lea rsi, [rip + user_thread_fault]
-    movabs rdx, 0x1000006000
+    movabs rdx, {FAULT1_STACK_TOP}
     mov rcx, 1
     mov r8, 6
     int 0x80
@@ -108,7 +108,7 @@ user_root:
     mov rax, 15
     mov rdi, 10
     lea rsi, [rip + user_thread_fault2]
-    movabs rdx, 0x1000007000
+    movabs rdx, {FAULT2_STACK_TOP}
     mov rcx, 1
     mov r8, 6
     int 0x80
@@ -118,7 +118,7 @@ user_root:
     mov rax, 15
     mov rdi, 11
     lea rsi, [rip + user_thread_fault3]
-    movabs rdx, 0x1000008000
+    movabs rdx, {FAULT3_STACK_TOP}
     mov rcx, 1
     mov r8, 6
     int 0x80
@@ -158,7 +158,7 @@ user_thread_fault3:
     lea rdi, [rip + user_isolation_msg]
     mov rsi, 10
     int 0x80
-    movabs rax, 0x1000002000
+    movabs rax, {SERVER_STACK_BASE}
     mov qword ptr [rax], 0
 1:
     jmp 1b
@@ -270,7 +270,7 @@ user_thread_b:
     mov rax, 25
     mov rdi, 2
     mov rsi, 4
-    movabs rdx, 0x100000a000
+    movabs rdx, {DATA_VA}
     mov rcx, 3
     int 0x80
     mov r12, rdi

@@ -225,7 +225,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     if kernel
         .install_cap(
             root,
-            2,
+            vifast_abi::user_layout::META_UNTYPED_SLOT as u8,
             Cap::new(
                 meta_untyped,
                 ObjType::Untyped,
@@ -236,7 +236,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         || kernel
             .install_cap(
                 root,
-                3,
+                vifast_abi::user_layout::DATA_UNTYPED_SLOT as u8,
                 Cap::new(
                     data_untyped,
                     ObjType::Untyped,
@@ -273,23 +273,24 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         space.next_va = vifast_abi::user_layout::DATA_VA as u64;
     }
     /* Root VSpace maps only the root, client and fault-thread stacks.  The
-    page at +0x2000 belongs to the server VSpace and must stay invalid here. */
-    const ROOT_STACK_OFFSETS: [u64; 5] = [0x4000, 0x5000, 0x6000, 0x7000, 0x8000];
-    for offset in ROOT_STACK_OFFSETS {
+    page at SERVER_STACK_BASE belongs to the server VSpace and stays invalid. */
+    const ROOT_STACK_BASES: [usize; 5] = [
+        vifast_abi::user_layout::ROOT_STACK_BASE,
+        vifast_abi::user_layout::FAULT1_STACK_BASE,
+        vifast_abi::user_layout::FAULT2_STACK_BASE,
+        vifast_abi::user_layout::FAULT3_STACK_BASE,
+        vifast_abi::user_layout::CLIENT_STACK_BASE,
+    ];
+    for va in ROOT_STACK_BASES {
         let Ok(frame) = kernel.retype(boot_untyped, ObjType::Frame) else {
             vifast_kernel::klog!(A, "ROOT STACK RETYPE FAILED");
             A::exit(1);
         };
         if kernel
-            .map_frame(
-                vspace,
-                frame,
-                vifast_abi::user_layout::CODE_VA as u64 + offset,
-                Rights::READ | Rights::WRITE,
-            )
+            .map_frame(vspace, frame, va as u64, Rights::READ | Rights::WRITE)
             .is_err()
         {
-            vifast_kernel::klog!(A, "ROOT STACK MAP FAILED offset={:#x}", offset);
+            vifast_kernel::klog!(A, "ROOT STACK MAP FAILED va={:#x}", va);
             A::exit(1);
         }
     }
@@ -306,7 +307,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     };
     let server_layout = TaskLayout {
         code_va: vifast_abi::user_layout::CODE_VA as u64,
-        stack_va: vifast_abi::user_layout::CODE_VA as u64 + 0x2000,
+        stack_va: vifast_abi::user_layout::SERVER_STACK_BASE as u64,
         stack_pages: 1,
         data: None,
     };
@@ -332,14 +333,14 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         || kernel
             .install_cap(
                 root,
-                1,
+                vifast_abi::user_layout::ROOT_VSPACE_SLOT as u8,
                 Cap::new(vspace, ObjType::VSpace, Rights::READ | Rights::WRITE),
             )
             .is_err()
         || kernel
             .install_cap(
                 root,
-                12,
+                vifast_abi::user_layout::SERVER_VSPACE_SLOT as u8,
                 Cap::new(server_space, ObjType::VSpace, Rights::READ | Rights::WRITE),
             )
             .is_err()
