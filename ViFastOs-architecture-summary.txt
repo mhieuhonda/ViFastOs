@@ -202,7 +202,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 253264 byte (`kernel_end=0x803c22b0`)
+- RISC-V headroom: 249168 byte (`kernel_end=0x803c32b0`)
 - `Kernel = 694744`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
@@ -890,6 +890,8 @@ Số syscall chính:
   ngay bit `1 << (irq & 63)`, tránh mất edge trước khi user bind.
 - `IrqAck` (31): xoá pending; timer tick raise logical IRQ 0 mỗi lần, pending
   được coalesce đến khi ack.
+- `CNodeInstall` (48): cài/bỏ CNode phẳng cho TCB; CNode đang dùng bị cấm
+  destroy. Root demo dùng CNodeMint endpoint slot 1 + CNODE OK.
 - Root tạo timer IRQ + notification và UART IRQ + notification trước khi
   resume client; client Wait/Ack timer IRQ, in `IRQ OK`. UART IRQ được route
   thật: RISC-V PLIC source 10 (context 1), AArch64 GIC SPI 33 target CPU0,
@@ -957,6 +959,8 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
 - TcbResume(server/client), fault1/2/3 root VSpace, fault4 client VSpace
 - Tạo idle TCB hart 0 (`idle_main`, priority 0, stack `IDLE_STACK_BASE..TOP`)
   để scheduler BSP luôn có task chạy khi mọi task khác block.
+- Tạo CNode phẳng + TCB demo: mint endpoint vào slot 1, CNodeInstall, resume;
+  worker gửi label `CNODE` để root in `CNODE OK`.
 - Wait trên notification root.
 - Retype(data Untyped) → VSpace client; lặp PageTableMap + FrameMap cho code
   BootInfo RX; retype Frame client stack +0x8000 và fault4 stack +0x9000, map
@@ -1218,6 +1222,7 @@ Mỗi dòng sau đúng một lần:
 - `HARD LINK OK` — exactly once
 - `SYMLINK OK` — exactly once
 - `IRQ OK` — exactly once
+- `CNODE OK` — exactly once
 
 Cấm xuất hiện:
 - `PERCPU CLOBBER BAD` — forbidden

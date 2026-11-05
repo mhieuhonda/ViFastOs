@@ -13,8 +13,8 @@ software IOMMU, **VFS server user-space** với FS v3 journal, **hard link,
 symlink, double-indirect, block cache, fsync/flush thật**, persistence 7 phase,
 **Sleep deadline + BSP idle TCB**, **SchedContext budget/period**, `TcbRestart`,
 `TcbBindNotification`, và **console input + shell nhỏ** (`ls`, `cat`, `stat`,
-`sync`...). Có 49 syscall number (49 implemented, 0 placeholder). CNode phẳng,
-Timer IRQ
+`sync`...). Có 49 syscall number (49 implemented, 0 placeholder). CNode phẳng
++ CNodeInstall, Timer IRQ
 và UART IRQ dùng object IRQ + notification; shell block trên UART IRQ.
 
 Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: chưa có driver

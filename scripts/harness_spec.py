@@ -57,6 +57,7 @@ EXACT_ONE = [
     "HARD LINK OK",
     "SYMLINK OK",
     "IRQ OK",
+    "CNODE OK",
 ]
 
 FORBIDDEN = [

@@ -729,3 +729,11 @@ follow-up `62b31f4`.
   Inactive/Suspended/Faulted; CNode đang dùng không destroy được.
 - CNode revoke/delete/invariant/accounting được nối vào đường cap hiện có.
 - Host test 110/110; QEMU 3/3; ABI 49/49 implemented, 0 placeholder.
+
+## 8.995 — CNode demo trong QEMU (vòng 22)
+
+- Root tạo CNode 64 slot, mint endpoint vào slot 1, CNodeInstall lên TCB
+  demo và resume.
+- Worker chỉ có một cap trong CNode, gửi `CNODE` label; root in `CNODE OK`.
+- Harness yêu cầu đúng một `CNODE OK`; TCB/object quota còn dư
+  (DATA UNTYPED 68/72 object 64/72).

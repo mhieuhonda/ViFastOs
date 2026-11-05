@@ -27,6 +27,7 @@ chưa được port sang bản bare-metal này.
 | Software IOMMU + DMA map | có | có | có |
 | Sleep deadline (BlockedSleep) | có | có | có |
 | Console input IRQ + shell | có | có | có |
+| CNode phẳng + CNodeInstall demo | có | có | có |
 | User fault suspend (không panic) | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
