@@ -40,7 +40,7 @@ def fixture(arch: str) -> str:
             "AP TRAMPOLINE OK (page=0x90000)",
             "AP REAL MODE OK (apic=1)",
             "AP LONG MODE OK (cpu=1)",
-            "SMP SKIP (x86 AP bootstrap pending)",
+            "SMP OK (harts=2, ipi=1)",
         ]
     for address in [0] + spec.FAULT_ADDRESSES:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")

@@ -85,7 +85,8 @@ ARCH = {
         ("AP TRAMPOLINE OK (page=0x...)", "AP trampoline allocated below 1 MiB"),
         ("AP REAL MODE OK (apic=...)", "AP executed real-mode trampoline"),
         ("AP LONG MODE OK (cpu=1)", "AP entered long mode"),
-        ("SMP SKIP", "x86 AP bootstrap pending"),
+        ("SMP OK", "both CPUs online"),
+        ("ipi=1", "AP maintenance mailbox acknowledged"),
     ],
 }
 
@@ -106,7 +107,7 @@ ARCH_EXACT_ONE = {
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP SKIP"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK"],
 }
 
 NUMERIC = {

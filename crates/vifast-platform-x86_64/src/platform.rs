@@ -1,5 +1,7 @@
 //! x86_64 UEFI platform: GDT/TSS/IDT, ring3, legacy PIC/PIT and user paging.
 
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+
 use vifast_abi::{KError, Rights};
 use vifast_arch::bkl::BigKernelLock;
 use vifast_arch::{Arch, CpuState, MAX_HARTS};
@@ -81,6 +83,12 @@ static mut AP_TRAMPOLINE: u64 = 0;
 static mut AP_APIC_ID: u32 = 0;
 static mut AP_STARTED: bool = false;
 static mut AP_LONG_ONLINE: bool = false;
+static AP_ONLINE: AtomicBool = AtomicBool::new(false);
+static AP_MAINT_SEQ: AtomicUsize = AtomicUsize::new(0);
+static AP_MAINT_ACK: AtomicUsize = AtomicUsize::new(0);
+static AP_MAINT_KIND: AtomicU32 = AtomicU32::new(0);
+const AP_MAINT_TLB: u32 = 1;
+const AP_MAINT_ICACHE: u32 = 2;
 const TRAMPOLINE_MAGIC: u16 = 0xA55A;
 const TRAMPOLINE_MAGIC_OFFSET: u64 = 0x800;
 
@@ -757,6 +765,23 @@ unsafe fn init_lapic() {
     vifast_kernel::klog!(X86Platform, "LAPIC OK (id={})", id);
 }
 
+unsafe fn ap_maintenance_loop() -> ! {
+    loop {
+        let seq = AP_MAINT_SEQ.load(Ordering::Acquire);
+        if AP_MAINT_ACK.load(Ordering::Acquire) < seq {
+            let kind = AP_MAINT_KIND.swap(0, Ordering::AcqRel);
+            if kind & AP_MAINT_TLB != 0 {
+                core::arch::asm!("invlpg [{}]", in(reg) 0u64);
+            }
+            if kind & AP_MAINT_ICACHE != 0 {
+                core::arch::asm!("wbinvd");
+            }
+            AP_MAINT_ACK.store(seq, Ordering::Release);
+        }
+        core::arch::asm!("pause");
+    }
+}
+
 unsafe fn install_real_trampoline() {
     let base = AP_TRAMPOLINE;
     if base == 0 || base >= 0xA0000 || base & 0xfff != 0 {
@@ -872,11 +897,14 @@ pub extern "C" fn ap_entry() -> ! {
     unsafe {
         core::arch::asm!("cli");
         init_cpu(1);
+        core::arch::asm!("lgdt [{}]", in(reg) core::ptr::addr_of!(GDT_PTR));
+        core::arch::asm!("lidt [{}]", in(reg) core::ptr::addr_of!(IDT_PTR));
+        let _ = configure_lapic();
+        enable_smep_smap();
+        AP_ONLINE.store(true, Ordering::SeqCst);
         AP_LONG_ONLINE = true;
         vifast_kernel::klog!(X86Platform, "AP LONG MODE OK (cpu=1)");
-        loop {
-            core::arch::asm!("pause");
-        }
+        ap_maintenance_loop()
     }
 }
 
@@ -956,7 +984,17 @@ unsafe fn start_ap_real() {
     }
     for _ in 0..20 {
         tsc_delay(1_000_000);
-        if AP_LONG_ONLINE {
+        if AP_ONLINE.load(Ordering::SeqCst) {
+            let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+            AP_MAINT_KIND.fetch_or(AP_MAINT_TLB | AP_MAINT_ICACHE, Ordering::AcqRel);
+            for _ in 0..100_000 {
+                if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
+                    vifast_kernel::klog!(X86Platform, "SMP OK (harts=2, ipi=1)");
+                    return;
+                }
+                core::arch::asm!("pause");
+            }
+            X86_64::write_str("SMP FAIL (ap maintenance timeout)\r\n");
             return;
         }
     }
@@ -1668,7 +1706,8 @@ impl Platform for X86Platform {
     }
 
     fn start_smp() {
-        X86_64::write_str("SMP SKIP (x86 AP bootstrap pending)\r\n");
+        // The AP is started from switch_root after the kernel page tables and
+        // LAPIC are active.  D2: AP kernel IF=0, idle/poll via pause.
     }
 }
 
