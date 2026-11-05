@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `03cb048` (x86 AP TSS/GS, real IPI, LAPIC timer/idle)
+**Mốc code hiện tại:** `58016c8` (x86 AP scheduler/worker, D4 idle, stage trampoline)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.

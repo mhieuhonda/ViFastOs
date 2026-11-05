@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `584c2df2d2b5dad1168cb368b6f65d9f8dde6bff076d75e25279663b8e9e03e3`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `d503fe373f388951d550bae9f13bfd8e0c6a1d7c8dc2f89213b54ab041259201`.
 
 ---
 
@@ -211,6 +211,14 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.26 — x86 AP scheduler/worker, D4, stage (vòng 15)
+
+- `58016c8`: TSC/PIT + LAPIC timer calibrated, D4 `sti; hlt; cli`, BKL/pick_on AP.
+- AP worker A/B, `sched_harts=0b11`, `SMP WORKERS OK`, `SMP POST IDLE OK`; x86 50/50.
+- Fix stack AP `TRAP_STACKS[1]+0x4000`; stage 1..4 + `test-ap-stall`.
+- D3 hủy vì IRR không xóa khi IF=0; IRR DIAG thực tế after=0, isr=0.
+- Docs R6/R7, ORDER generated, 201 negative cases; QEMU 10/10 all.
 
 ## 8.25 — x86 AP timer/IPI, docs (vòng 14)
 
