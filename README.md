@@ -15,7 +15,7 @@ fsync/flush thật**, persistence 7 phase,
 **Sleep deadline + BSP idle TCB**, **SchedContext budget/period**, `TcbRestart`,
 `TcbBindNotification`, và **console input + shell nhỏ** (`ls`, `cat`, `stat`,
 `sync`...). Có 49 syscall number (49 implemented, 0 placeholder). CNode phẳng
-+ CNodeInstall, demand-paging/fault-resume, Timer IRQ
++ CNodeInstall, user-space pager/fault-resume, Timer IRQ
 và UART IRQ dùng object IRQ + notification; shell block trên UART IRQ.
 
 Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: chưa có driver
@@ -213,12 +213,12 @@ cargo test -p vifast-elf
 - Chưa có hardware IOMMU (VT-d/SMMU); `IoMap`/`IoUnmap` chỉ là mô hình phần mềm.
 - Chưa có network, GPU/framebuffer, compositor hay ViFastKey. Shell đã
   IRQ-driven cho input nhưng chưa có job control.
-- FS còn giới hạn: ảnh 4 MiB, 64 inode, tên 28 byte, chưa có mount/pager
+- FS còn giới hạn: ảnh 4 MiB, 64 inode, tên 28 byte, chưa có mount/pager tổng quát
   hay barrier phần cứng thật; driver disk là
   VirtIO-MMIO/ATA PIO QEMU-specific.
 - SMP mới test 2 hart (`MAX_HARTS = 4`); BSP có idle TCB, hart phụ vẫn dùng
   platform idle loop; chưa có khóa mịn/x2APIC.
-- Object table cố định (144 object), chưa có allocator vật lý tổng quát hay
+- Object table cố định (148 object), chưa có allocator vật lý tổng quát hay
   free object ngoài đường revoke.
 - x86_64 vẫn identity map 0..1 GiB; chưa có memory map đầy đủ.
 - Chưa có CI (GitHub không dùng), formal verification/Kani/Verus; mới có

@@ -28,7 +28,7 @@ chưa được port sang bản bare-metal này.
 | Sleep deadline (BlockedSleep) | có | có | có |
 | Console input IRQ + shell | có | có | có |
 | CNode phẳng + CNodeInstall demo | có | có | có |
-| Demand paging + fault resume demo | có | có | có |
+| Demand paging + user-space pager server | có | có | có |
 | User fault suspend (không panic) | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
@@ -37,7 +37,7 @@ Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
 
 Kernel portable hiện có:
 
-- object table cố định **144 object**, 16 TCB, 96 cap root / 64 cap task,
+- object table cố định **148 object**, 16 TCB, 96 cap root / 64 cap task,
   CNode phẳng 64 slot, 64 mapping/VSpace, queue 8; `Kernel` nằm trong static storage của platform;
 - capability install/copy/derive/revoke, badge, chuyển cap qua IPC với `GRANT`;
 - endpoint Send/Recv, Call/Reply/ReplyRecv, notification signal/wait/poll;
@@ -57,14 +57,15 @@ Kernel portable hiện có:
   budget/period, timer IRQ và UART IRQ delivery đã chạy;
 - console input IRQ qua UART 16550/PL011/COM1, RxQueue lock-free và shell
   block trên notification UART thay vì polling.
-- fault endpoint → root map Frame → TcbResume; pager TCB retry và in `PAGER OK`.
+- fault endpoint → user-space pager server map Frame → TcbResume; pager TCB
+  retry và in `PAGER OK`.
 
 ## Chưa có
 
 - Hardware IOMMU (VT-d/SMMU); chỉ có mô hình software.
 - CNode nhiều cấp; UART IRQ hiện chỉ route BSP/hart 0.
 - Network, GPU/framebuffer, compositor, ViFastKey; shell chưa có job control.
-- Mount/pager, barrier phần cứng thật, driver disk
+- Mount/pager tổng quát, barrier phần cứng thật, driver disk
   ngoài QEMU.
 - Khóa mịn/x2APIC; scheduler mới test 2 hart.
 - Allocator vật lý tổng quát/free object ngoài revoke.

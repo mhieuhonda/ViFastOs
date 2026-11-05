@@ -207,8 +207,8 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 249168 byte (`kernel_end=0x803c32b0`)
-- `Kernel = 694744`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
+- RISC-V headroom: 212304 byte (`kernel_end=0x803cc2b0`)
+- `Kernel = 713720`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
@@ -514,7 +514,7 @@ Root task sau đó tự:
 7. OBJECT MODEL VÀ CAPABILITY
 -----------------------------
 Giới hạn cố định:
-- MAX_OBJECTS = 144
+- MAX_OBJECTS = 148
 - MAX_TCBS = 16
 - MAX_CAPS_ROOT = 96
 - MAX_CAPS_TASK = 64
@@ -969,9 +969,10 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
   để scheduler BSP luôn có task chạy khi mọi task khác block.
 - Tạo CNode phẳng + TCB demo: mint endpoint vào slot 1, CNodeInstall, resume;
   worker gửi label `CNODE` để root in `CNODE OK`.
-- Tạo pager TCB root VSpace; đọc `PAGER_VA` chưa map → fault endpoint;
-  root map Frame bằng `map_with_tables` rồi `TcbResume`; pager retry và in
-  `PAGER OK`. Đây là demand paging/fault-resume end-to-end đầu tiên.
+- Tạo pager TCB root VSpace; đọc `PAGER_VA` chưa map → fault endpoint riêng.
+  User-space pager server nhận fault, `FrameMap` vào VSpace, `TcbResume`;
+  pager retry và gửi label; server in `PAGER OK`. Đây là user-space pager
+  service end-to-end đầu tiên (chưa có pager tổng quát).
 - Wait trên notification root.
 - Retype(data Untyped) → VSpace client; lặp PageTableMap + FrameMap cho code
   BootInfo RX; retype Frame client stack +0x8000 và fault4 stack +0x9000, map
@@ -1455,9 +1456,9 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - Boot-time check walk leaf thật từ root: trap entry có X, stack/IST/GDT/TSS/IDT/
   KERNEL_STORAGE có W, tất cả non-user; kiểm tra toàn bộ kernel_accessible_range.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
-- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (144);
-  data Untyped 72 object.
-- Data Untyped 288 KiB/max72; metadata Untyped 64 KiB/max32; boot Untyped 128 KiB/max32.
+- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (148);
+  data Untyped 76 object.
+- Data Untyped 304 KiB/max76; metadata Untyped 64 KiB/max32; boot Untyped 128 KiB/max32.
 - vifast-kernel bỏ dependency vifast-arch; dùng Console trait.
 - x86 page-fault/exception entry dùng efiapi rcx/rdx/r8; vector 0..31 có handler.
 - #DF/NMI/#MC dùng IST1 và luôn panic, kể cả khi CS là user.

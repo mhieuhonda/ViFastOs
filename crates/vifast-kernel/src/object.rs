@@ -6,7 +6,7 @@
 
 use vifast_abi::*;
 
-pub const MAX_OBJECTS: usize = 144;
+pub const MAX_OBJECTS: usize = 148;
 pub const MAX_TCBS: usize = 16;
 /// Root task cspace capacity.  Root owns the large slot range used while it
 /// builds the initial task graph.

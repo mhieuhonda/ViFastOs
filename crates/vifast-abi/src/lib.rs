@@ -64,6 +64,9 @@ pub mod user_layout {
     /// Stack for the demand-paging/fault-resume demo task.
     pub const PAGER_STACK_BASE: usize = CODE_VA + 0x18000;
     pub const PAGER_STACK_TOP: usize = CODE_VA + 0x19000;
+    /// Separate stack for the user-space pager service.
+    pub const PAGER_SERVER_STACK_BASE: usize = CODE_VA + 0x1a000;
+    pub const PAGER_SERVER_STACK_TOP: usize = CODE_VA + 0x1b000;
     const _: () = assert!(WORKER_A_STACK_BASE > DATA_VA);
     const _: () = assert!(WORKER_A_STACK_TOP <= WORKER_B_STACK_BASE);
     const _: () = assert!(WORKER_B_STACK_TOP <= WORKER_C_STACK_BASE);
@@ -72,6 +75,7 @@ pub mod user_layout {
     const _: () = assert!(WORKER_E_STACK_TOP <= IDLE_STACK_BASE);
     const _: () = assert!(IDLE_STACK_TOP <= CNODE_STACK_BASE);
     const _: () = assert!(CNODE_STACK_TOP <= PAGER_STACK_BASE);
+    const _: () = assert!(PAGER_STACK_TOP <= PAGER_SERVER_STACK_BASE);
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one

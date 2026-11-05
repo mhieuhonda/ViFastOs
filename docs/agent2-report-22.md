@@ -31,7 +31,7 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
 | `e9b8286` | VFS O_APPEND |
 | `363574a` | Write-back data block cache |
 | `801fb13` | Test CNode delete/revoke |
-| pending | Pager fault-resume demo (`PAGER OK`) |
+| pending | User-space pager server (`PAGER OK`) |
 | docs | Các commit `docs: sync ...` sau mỗi mốc |
 
 ## 3. Chi tiết
@@ -89,11 +89,14 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
 
 ### 3.6 Pager/fault resume
 
-- Thêm pager TCB root VSpace, stack riêng; đọc `PAGER_VA` chưa map.
-- Fault endpoint gửi root; root `map_with_tables` Frame vào `PAGER_VA`,
-  `TcbResume` pager TCB; pager chạy lại entry, đọc value và gửi `PAGER` label.
+- Pager TCB root VSpace đọc `PAGER_VA` chưa map; fault endpoint riêng.
+- User-space pager server (TCB riêng) nhận fault, `FrameMap` frame vào
+  VSpace, `TcbResume` pager; pager chạy lại entry, đọc value, gửi label;
+  server in `PAGER OK`.
+- Root cấp cho server endpoint/TCB/VSpace/Frame caps; page table được tạo
+  trước bằng map/unmap để FrameMap của server không cần PageTable mới.
 - Harness yêu cầu 5 USER FAULT (4 cũ + pager), `PAGER OK` đúng một lần.
-- Chưa có user-space pager server; đây là demo trong root.
+- Chưa có pager server tổng quát cho mọi VSpace/fault.
 
 ## 4. Kiểm tra
 
@@ -111,13 +114,13 @@ cargo fmt/check  PASS, 0 warning
 ```
 
 RISC-V headroom khoảng 249 KiB sau CNode/IRQ; `Kernel ≈ 694.7 KiB`.
-Root data untyped 71/72 page, 67/72 object.
+Root data untyped 72/76 page, 68/76 object.
 
 ## 5. Còn lại
 
 - Hardware IOMMU (VT-d/SMMU); `IoMap` vẫn software.
 - Network, GPU/framebuffer, compositor, ViFastKey.
-- CNode guard/nhiều cấp/zombie; user-space pager/mount; barrier phần cứng.
+- CNode guard/nhiều cấp/zombie; pager tổng quát/mount; barrier phần cứng.
 - Khóa mịn/x2APIC, test >2 hart.
 - Formal verification/CI hosted.
 - Userland đầy đủ (libc, shell hệ thống, dynamic linking).

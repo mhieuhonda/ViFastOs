@@ -763,3 +763,13 @@ follow-up `62b31f4`.
 - Harness yêu cầu 5 USER FAULT (4 fault cũ + pager) và `PAGER OK` đúng một lần;
   `PAGER BAD` bị cấm.
 - QEMU --repeat 3 3/3; persistence 7 phase ×3; host kernel 111/111.
+
+## 9.00 — User-space pager server (vòng 22)
+
+- Tăng Data Untyped 288→304 KiB (`DATA_MAX_OBJECTS` 72→76,
+  `MAX_OBJECTS` 144→148) để chứa server/stack/page table.
+- Pager TCB dùng fault endpoint riêng; user-space pager server nhận message,
+  FrameMap vào root VSpace, TcbResume pager, rồi nhận label và in `PAGER OK`.
+- Root pre-map/unmap page để tạo page table trước; server không cần
+  PageTable mới khi xử lý fault.
+- QEMU 3/3; persistence 7 phase ×3; harness 387 case; 0 warning.
