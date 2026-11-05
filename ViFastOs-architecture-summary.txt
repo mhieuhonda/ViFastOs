@@ -829,7 +829,13 @@ Cap transfer:
 - Timer/scheduler vẫn một hart.
 - Đã có IPI maintenance và full TLB shootdown user trên RISC-V/AArch64;
   secondary hart vẫn chỉ xử lý maintenance, chưa vào scheduler.
-- Chưa có per-hart runqueue, BKL, timer đa hart, per-VA TLB shootdown,
+- Đã có BigKernelLock (BKL) dạng test-and-set + RAII guard, bọc trap/syscall/IRQ
+  entry trên cả 3 platform; single-hart xanh. BKL chưa phải ticket lock/fair lock.
+- `static mut` toàn cục vẫn còn: page table, pool, CONTEXTS, KERNEL_PTR,
+  ACTIVE_ROOT/ASID, trap/IST stacks, KERNEL_STORAGE, FILES/FILE_COUNT,
+  VirtIO QUEUE/BASE/READY. Chúng được bảo vệ bởi BKL khi đi qua trap, nhưng
+  chưa phải per-CPU; server/virtio cần khóa riêng khi SMP.
+- Chưa có per-hart runqueue, timer đa hart, per-VA TLB shootdown,
   remote I-cache shootdown.
 
 14. TEST VÀ TIÊU CHÍ PASS
@@ -837,6 +843,7 @@ Cap transfer:
 Lệnh:
     ./scripts/build.sh
     cargo test -p vifast-kernel
+    cargo test -p vifast-arch
     cargo test -p vifast-pte
     cargo test -p vifast-elf
     cargo test -p vifast-runtime
@@ -845,8 +852,8 @@ Lệnh:
     python3 scripts/test-qemu.py
     python3 scripts/test-persist.py
 
-Host test hiện có 83 test `vifast-kernel` + 11 test `vifast-pte` +
-17 test `vifast-elf`:
+Host test hiện có 83 test `vifast-kernel` + 2 test `vifast-arch` +
+11 test `vifast-pte` + 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -973,6 +980,8 @@ Exit code:
 
 15. CÁC THAY ĐỔI HARDENING GẦN NHẤT
 -------------------------------------
+- Task 4: BigKernelLock trong `vifast-arch::bkl`, guard bọc trap/syscall/IRQ
+  entry ở 3 platform; host test chống re-entry; chưa bật scheduler đa hart.
 - Git repo đã có; commit hardening và root-task.
 - RISC-V dùng kernel trap stack qua sscratch; sscratch=0 khi kernel;
   SUM=0, chỉ bật SUM quanh copy user.

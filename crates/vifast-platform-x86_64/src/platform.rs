@@ -1,6 +1,7 @@
 //! x86_64 UEFI platform: GDT/TSS/IDT, ring3, legacy PIC/PIT and user paging.
 
 use vifast_abi::{KError, Rights};
+use vifast_arch::bkl::BigKernelLock;
 use vifast_arch::Arch;
 use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
@@ -66,6 +67,7 @@ static mut SMAP_ENABLED: bool = false;
 static mut ACTIVE_ROOT: u64 = 0;
 static mut ACTIVE_ASID: u16 = 0;
 static mut PCID_ENABLED: bool = false;
+static BKL: BigKernelLock = BigKernelLock::new();
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -1204,6 +1206,7 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
 
 #[no_mangle]
 extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
+    let _bkl = BKL.lock();
     let frame = unsafe { &mut *frame };
     let number = frame.rax;
     let args = [
@@ -1214,6 +1217,7 @@ extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
 
 #[no_mangle]
 extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
+    let _bkl = BKL.lock();
     let frame = unsafe { &mut *frame };
     vifast_runtime::timer::on_timer::<X86Platform>(frame);
 }

@@ -17,8 +17,10 @@
 //! `vifast-platform-*` crates, which implement the higher-level
 //! `vifast_runtime::Platform` trait.
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
+
+pub mod bkl;
 
 /// Information passed from the early boot code to the portable kernel.
 #[derive(Clone, Copy, Debug, Default)]

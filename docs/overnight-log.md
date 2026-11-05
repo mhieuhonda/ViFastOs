@@ -24,6 +24,7 @@
 - `1d4f0ea` — persistent VFS scratch on block storage.
 - `fe569c1` — x86 ATA block backend for persistent VFS.
 - `test: hermetic two-boot persistence check` — Task 2 (Agent 2).
+- `refactor: add big kernel lock and per-cpu state groundwork` — Task 4 (Agent 2).
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -50,7 +51,8 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 
 ## Số liệu cuối
 
-- `vifast-kernel` 83/83, PTE 11/11, ELF 17/17; runtime/user compile.
+- `vifast-kernel` 83/83, `vifast-arch` 2/2, PTE 11/11, ELF 17/17;
+  runtime/user compile.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
   `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`,
   `IOMMU OK`; RISC-V/AArch `SMP OK (... ipi=1)`; AArch/x86 `BLOCK OK`,
@@ -62,7 +64,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `aeb1e034d6ee106bf9f004e7c7d4989de43a0177b45884839fc39f04cb107fef`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `6788309537024a3e3cdc64e2fdf13cdf1c252ad7425e9e8eecadac43718de25a`.
 
 ---
 
@@ -220,6 +222,28 @@ follow-up `62b31f4`.
   `/tmp/vifast-*.disk` cố định; vì vậy output chính chỉ cần `FS DISK OK`.
 - `./scripts/build.sh` PASS; `vifast-kernel` 83/83; QEMU 3/3 PASS ×3; persist
   test PASS.
+
+## 8.13 — BigKernelLock groundwork (Task 4)
+
+- Commit: `refactor: add big kernel lock and per-cpu state groundwork`.
+- Thêm `vifast-arch::bkl::BigKernelLock`: test-and-set AtomicBool + RAII guard;
+  host test `vifast-arch` 2/2 PASS, gồm kiểm tra không re-enter khi đang giữ.
+- Bọc `riscv_trap_handler`, `aarch64_trap_handler`/IRQ, `x86_trap_handler`/IRQ
+  bằng BKL. Chưa bọc x86 exception/page-fault vì nhánh đó gọi `enter_user`
+  trực tiếp; sẽ xử lý khi làm SMP.
+- Chưa cho hart phụ chạy scheduler; single-hart behavior không đổi.
+- Phân loại `static mut`:
+  - boot-only/page-table: ROOT/KERNEL_L1/DEVICE_L1, L0/L1/L2, PML4/PDPT/PD,
+    SPLIT_TABLES, GDT/IDT/TSS, NX/SMAP/PCID flags.
+  - kernel state dưới BKL: KERNEL_PTR/KERNEL_STORAGE, ACTIVE_ROOT/ACTIVE_ASID,
+    CONTEXTS, USER_DATA/METADATA/BOOT_POOL, timer interval.
+  - per-CPU tương lai: TRAP_STACK/IST_STACK; hiện mỗi máy một bản.
+  - user-space service: FILES/FILE_COUNT/DISK_OK/PERSISTED; cần khóa riêng
+    khi server chạy đa luồng.
+  - driver: VirtIO QUEUE/BASE/READY/LAST_*; một request/lần, cần khóa driver
+    khi SMP.
+- `./scripts/build.sh` PASS (thêm `cargo test -p vifast-arch`); QEMU 3/3 PASS ×3;
+  persist test PASS.
 
 ## 8.10 — AArch64 VirtIO block + FS scratch bền vững
 

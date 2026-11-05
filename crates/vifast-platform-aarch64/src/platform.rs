@@ -3,6 +3,7 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
+use vifast_arch::bkl::BigKernelLock;
 use vifast_arch::Arch;
 use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
@@ -64,6 +65,7 @@ static mut ACTIVE_ASID: u16 = 0;
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static IPI_PENDING: AtomicBool = AtomicBool::new(false);
 static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
+static BKL: BigKernelLock = BigKernelLock::new();
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -780,6 +782,7 @@ extern "C" {
 
 #[no_mangle]
 extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
+    let _bkl = BKL.lock();
     let frame = unsafe { &mut *frame };
     let ec = (frame.esr >> 26) & 0x3f;
     if ec != 0x15 {
@@ -800,6 +803,7 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
 
 #[no_mangle]
 extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
+    let _bkl = BKL.lock();
     let frame = unsafe { &mut *frame };
     let iar = read32(GICC + 0x00C);
     let irq = iar & 0x3FF;

@@ -3,6 +3,7 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
+use vifast_arch::bkl::BigKernelLock;
 use vifast_arch::Arch;
 use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
@@ -54,6 +55,7 @@ static mut TRAP_STACK: TrapStack = TrapStack([0; 32768]);
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static IPI_PENDING: AtomicBool = AtomicBool::new(false);
 static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
+static BKL: BigKernelLock = BigKernelLock::new();
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -631,6 +633,7 @@ extern "C" {
 
 #[no_mangle]
 extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
+    let _bkl = BKL.lock();
     let frame = unsafe { &mut *frame };
     if frame.scause == 0x8000_0000_0000_0005 {
         vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
