@@ -13,11 +13,12 @@ software IOMMU, **VFS server user-space** với FS v3 journal, **hard link,
 symlink, double-indirect, block cache, fsync/flush thật**, persistence 7 phase,
 **Sleep deadline + BSP idle TCB**, **SchedContext budget/period**, `TcbRestart`,
 `TcbBindNotification`, và **console input + shell nhỏ** (`ls`, `cat`, `stat`,
-`sync`...). Có 48 syscall number (47 implemented, 1 placeholder).
+`sync`...). Có 48 syscall number (47 implemented, 1 placeholder). Timer IRQ
+và UART IRQ dùng object IRQ + notification; shell block trên UART IRQ.
 
 Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: chưa có driver
-network/input IRQ/GPU, compositor, hardware IOMMU, CNode hoàn chỉnh, IRQ
-external/UART delivery, ứng dụng desktop hay formal verification. Phần lớn driver
+network/GPU, compositor, hardware IOMMU, CNode hoàn chỉnh, ứng dụng desktop
+hay formal verification. Phần lớn driver
 hiện tại là QEMU-specific và userland vẫn là chương trình demo.
 
 ## Kiến trúc
@@ -204,12 +205,12 @@ cargo test -p vifast-elf
 - Userland vẫn là chương trình demo (root/server/client/fault/worker/shell),
   chưa có libc, shell hệ thống đầy đủ, dynamic linking hay ứng dụng thật.
 - 1 syscall còn placeholder: `CNodeMint`; CNode chưa có object model hoàn
-  chỉnh. IRQ timer đã có object/notification/ack; UART IRQ mới có logical
-  number và API, chưa route interrupt phần cứng. SchedContext budget/period đã
-  có object và scheduler thật.
+  chỉnh. Timer IRQ và UART IRQ đã có object/notification/ack + platform
+  routing trên cả 3 kiến trúc. SchedContext budget/period đã có object và
+  scheduler thật.
 - Chưa có hardware IOMMU (VT-d/SMMU); `IoMap`/`IoUnmap` chỉ là mô hình phần mềm.
-- Chưa có network, input IRQ, GPU/framebuffer, compositor hay ViFastKey.
-  Console hiện chỉ polling; shell chưa có job control.
+- Chưa có network, GPU/framebuffer, compositor hay ViFastKey. Shell đã
+  IRQ-driven cho input nhưng chưa có job control.
 - FS còn giới hạn: ảnh 4 MiB, 64 inode, tên 28 byte, chưa có block cache
   write-back, mount/pager hay barrier phần cứng thật; driver disk là
   VirtIO-MMIO/ATA PIO QEMU-specific.

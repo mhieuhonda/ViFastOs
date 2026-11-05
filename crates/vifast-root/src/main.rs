@@ -9,15 +9,18 @@
 
 use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
-    CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_STACK_BASE, CLIENT_STACK_TOP, CODE_VA,
-    FAULT1_STACK_TOP, FAULT2_STACK_TOP, FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP,
-    IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, SERVER_STACK_TOP,
-    USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
-    WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
-    WORKER_C_STACK_BASE, WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP,
-    WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
+    CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_STACK_BASE, CLIENT_STACK_TOP,
+    CLIENT_UART_IRQ_SLOT, CLIENT_UART_NOTIFICATION_SLOT, CODE_VA, FAULT1_STACK_TOP,
+    FAULT2_STACK_TOP, FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IDLE_STACK_BASE,
+    IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, SERVER_STACK_TOP, USER_ENTRY_FAULT1,
+    USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE,
+    WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE,
+    WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE,
+    WORKER_E_STACK_TOP,
 };
-use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER};
+use vifast_abi::{
+    BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
+};
 use vifast_user::SyscallResult;
 
 #[cfg(target_arch = "x86_64")]
@@ -683,6 +686,27 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     check(vifast_user::irq_set_notification(
         irq_slot,
         irq_notification,
+    ));
+
+    let uart_notification = slots.alloc();
+    retype(meta_untyped, ObjType::Notification, uart_notification);
+    let uart_irq_slot = slots.alloc();
+    check(vifast_user::irq_get(IRQ_UART, uart_irq_slot));
+    copy(
+        uart_irq_slot,
+        client_tcb,
+        CLIENT_UART_IRQ_SLOT,
+        Rights::READ | Rights::WRITE,
+    );
+    copy(
+        uart_notification,
+        client_tcb,
+        CLIENT_UART_NOTIFICATION_SLOT,
+        Rights::READ | Rights::WRITE | Rights::GRANT,
+    );
+    check(vifast_user::irq_set_notification(
+        uart_irq_slot,
+        uart_notification,
     ));
     check(vifast_user::tcb_resume(client_tcb));
 

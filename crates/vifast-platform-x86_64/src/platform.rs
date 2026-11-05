@@ -1473,6 +1473,16 @@ unsafe fn setup_gdt_tss_idt() {
         offset_high: (timer >> 32) as u32,
         zero: 0,
     };
+    let uart = irq4_entry as *const () as u64;
+    (*idt)[0x24] = IdtEntry {
+        offset_low: uart as u16,
+        selector: 0x08,
+        ist: 0,
+        type_attr: 0x8E,
+        offset_mid: (uart >> 16) as u16,
+        offset_high: (uart >> 32) as u32,
+        zero: 0,
+    };
     for (vector, handler) in [
         (APIC_MAINT_VECTOR, ap_ipi_entry as *const () as u64),
         (APIC_TIMER_VECTOR, ap_timer_entry as *const () as u64),
@@ -1507,8 +1517,9 @@ unsafe fn setup_pic_pit() {
     outb(0xA1, 0x02);
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
-    outb(0x21, 0xFE);
+    outb(0x21, 0xEE);
     outb(0xA1, 0xFF);
+    outb(0x3F9, 0x01); // COM1 RX interrupt
     let divisor: u16 = 11932;
     outb(0x43, 0x36);
     outb(0x40, divisor as u8);
@@ -1522,6 +1533,12 @@ impl Arch for X86Platform {
     }
     fn putc(byte: u8) {
         X86_64::putc(byte);
+    }
+    fn getc() -> Option<u8> {
+        X86_64::getc()
+    }
+    fn stash_rx(byte: u8) {
+        X86_64::stash_rx(byte);
     }
     fn now() -> u64 {
         X86_64::now()
@@ -2323,6 +2340,7 @@ impl Platform for X86Platform {
 extern "efiapi" {
     fn int80_entry();
     fn irq0_entry();
+    fn irq4_entry();
     fn ap_ipi_entry();
     fn ap_timer_entry();
     fn ap_halt_entry();
@@ -2436,6 +2454,32 @@ extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
     }
     assert_bkl_released();
     count_user_entry();
+}
+
+#[no_mangle]
+extern "efiapi" fn x86_uart_irq_handler(_frame: *mut TrapFrame) {
+    if vifast_arch::panic::is_panicking() {
+        X86_64::halt();
+    }
+    if X86Platform::hart_id() != 0 {
+        panic!("AP COM1 IRQ");
+    }
+    assert_irqs_disabled();
+    let bkl = bkl_lock();
+    assert_current_tcb("irq4");
+    unsafe {
+        while inb(0x3FD) & 0x01 != 0 {
+            let byte = inb(0x3F8);
+            X86_64::stash_rx(byte);
+        }
+        outb(0x20, 0x20);
+    }
+    let woke = X86Platform::kernel().irq_raise(vifast_abi::IRQ_UART);
+    if woke && X86Platform::kernel().has_ready_on(1) {
+        X86Platform::wake_hart(1);
+    }
+    drop(bkl);
+    assert_bkl_released();
 }
 
 #[no_mangle]

@@ -4,7 +4,8 @@
 
 use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
-    CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, DATA_VA, IPC_BUF_CLIENT_VA,
+    CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_UART_IRQ_SLOT,
+    CLIENT_UART_NOTIFICATION_SLOT, DATA_VA, IPC_BUF_CLIENT_VA,
 };
 use vifast_abi::vfs;
 use vifast_abi::{KError, ObjType, Rights};
@@ -466,7 +467,12 @@ fn shell() -> ! {
     loop {
         let input = vifast_user::console_read();
         if input.error == KError::WouldBlock {
-            let _ = vifast_user::yield_now();
+            let notified = vifast_user::wait(CLIENT_UART_NOTIFICATION_SLOT);
+            if notified.error == KError::Ok {
+                let _ = vifast_user::irq_ack(CLIENT_UART_IRQ_SLOT);
+            } else {
+                let _ = vifast_user::yield_now();
+            }
             continue;
         }
         if input.error != KError::Ok {

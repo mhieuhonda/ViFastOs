@@ -6,9 +6,11 @@
 
 #![no_std]
 
-use vifast_arch::Arch;
+use vifast_arch::{Arch, RxQueue};
 
 pub struct X86_64;
+
+static RX_QUEUE: RxQueue = RxQueue::new();
 
 const COM1: u16 = 0x3F8;
 const COM1_LSR: u16 = 0x3FD;
@@ -52,12 +54,19 @@ impl Arch for X86_64 {
     }
 
     fn getc() -> Option<u8> {
+        if let Some(byte) = RX_QUEUE.pop() {
+            return Some(byte);
+        }
         unsafe {
             if inb(COM1_LSR) & LSR_DR == 0 {
                 return None;
             }
             Some(inb(COM1))
         }
+    }
+
+    fn stash_rx(byte: u8) {
+        RX_QUEUE.push(byte);
     }
 
     fn now() -> u64 {

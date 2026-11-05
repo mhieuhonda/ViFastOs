@@ -20,7 +20,14 @@ const USER_SPSR: u64 = 0x340;
 const GICD: u64 = 0x0800_0000;
 const GICC: u64 = 0x0801_0000;
 const TIMER_IRQ: u32 = 30;
+const UART_IRQ: u32 = 33;
 const TIMER_HZ: u64 = 100;
+const PL011_BASE: u64 = 0x0900_0000;
+const PL011_DR: u64 = 0x00;
+const PL011_FR: u64 = 0x18;
+const PL011_IMSC: u64 = 0x38;
+const PL011_ICR: u64 = 0x44;
+const FR_RXFE: u32 = 1 << 4;
 
 const DESC_TABLE: u64 = 0b11;
 const DESC_BLOCK: u64 = 0b1;
@@ -323,10 +330,31 @@ fn write8(addr: u64, value: u8) {
 fn init_gic() {
     write32(GICD + 0x000, 1);
     write32(GICD + 0x100, (1 << TIMER_IRQ) | 0b11);
+    write32(GICD + 0x104, 1 << (UART_IRQ - 32));
     write8(GICD + 0x400 + TIMER_IRQ as u64, 0xA0);
+    write8(GICD + 0x400 + UART_IRQ as u64, 0xA0);
     write8(GICD + 0x800 + TIMER_IRQ as u64, 1);
+    // UART interrupts are handled on CPU0; CPU1 must not consume the level.
+    write8(GICD + 0x800 + UART_IRQ as u64, 1);
     write32(GICC + 0x004, 0xFF);
     write32(GICC + 0x000, 1);
+    init_uart_irq();
+}
+
+fn init_uart_irq() {
+    write32(PL011_BASE + PL011_ICR, 0x7FF);
+    write32(PL011_BASE + PL011_IMSC, 1 << 4);
+}
+
+fn drain_uart_rx() {
+    loop {
+        if read32(PL011_BASE + PL011_FR) & FR_RXFE != 0 {
+            break;
+        }
+        let byte = read32(PL011_BASE + PL011_DR) as u8;
+        Aarch64::stash_rx(byte);
+    }
+    write32(PL011_BASE + PL011_ICR, 0x7FF);
 }
 
 unsafe fn init_cpu(hartid: usize) {
@@ -575,6 +603,12 @@ impl Arch for Aarch64Platform {
     }
     fn putc(byte: u8) {
         Aarch64::putc(byte);
+    }
+    fn getc() -> Option<u8> {
+        Aarch64::getc()
+    }
+    fn stash_rx(byte: u8) {
+        Aarch64::stash_rx(byte);
     }
     fn now() -> u64 {
         Aarch64::now()
@@ -1426,6 +1460,17 @@ extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
     count_user_trap();
     let iar = read32(GICC + 0x00C);
     let irq = iar & 0x3FF;
+    if irq == UART_IRQ {
+        drain_uart_rx();
+        let woke = Aarch64Platform::kernel().irq_raise(vifast_abi::IRQ_UART);
+        if woke && Aarch64Platform::hart_id() == 0 && Aarch64Platform::kernel().has_ready_on(1) {
+            Aarch64Platform::wake_hart(1);
+        }
+        write32(GICC + 0x010, irq);
+        drop(bkl);
+        assert_bkl_released();
+        return;
+    }
     if irq != TIMER_IRQ {
         write32(GICC + 0x010, irq);
         if irq == 1 {

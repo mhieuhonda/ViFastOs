@@ -143,6 +143,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - af197ea feat: expand shell and raise object capacity
 - 72301ff chore: add local regression gate
 - aaafbe0 feat: implement sched context budget scheduler
+- 814e28f feat: add irq objects and timer irq delivery
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -188,8 +189,8 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 106/106 PASS
-- `cargo test -p vifast-arch`: 6/6 PASS
+- `cargo test -p vifast-kernel`: 108/108 PASS
+- `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
@@ -199,9 +200,9 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 253344 byte (`kernel_end=0x803c2260`)
+- RISC-V headroom: 253264 byte (`kernel_end=0x803c22b0`)
 - `Kernel = 693592`, `Object = 4736`, `Tcb = 4688`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
+- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -873,9 +874,13 @@ Số syscall chính:
   ngay bit `1 << (irq & 63)`, tránh mất edge trước khi user bind.
 - `IrqAck` (31): xoá pending; timer tick raise logical IRQ 0 mỗi lần, pending
   được coalesce đến khi ack.
-- Root tạo timer IRQ + notification trước khi resume client; client Wait, Ack,
-  in `IRQ OK`. External UART IRQ mới có logical number/API, platform routing
-  thật sẽ làm ở bước driver input.
+- Root tạo timer IRQ + notification và UART IRQ + notification trước khi
+  resume client; client Wait/Ack timer IRQ, in `IRQ OK`. UART IRQ được route
+  thật: RISC-V PLIC source 10 (context 1), AArch64 GIC SPI 33 target CPU0,
+  x86 PIC IRQ4; handler drain UART vào `RxQueue` lock-free rồi raise logical
+  `IRQ_UART`. Shell client block trên notification UART thay vì polling.
+- RISC-V device map thêm block 0x0c20_0000 cho PLIC context; x86 thêm IDT
+  vector 0x24, unmask PIC IRQ4, bật COM1 IER RX.
 - `ConsoleRead` (47): poll UART 16550 / PL011 / COM1, trả một byte hoặc
   `WouldBlock`. Client chạy shell nhỏ sau demo (`help`, `time`, `echo`, `ls`,
   `cat`, `mkdir`, `rm`, `mv`, `ln`, `stat`, `sync`, `truncate`, `fsck`);
@@ -1470,8 +1475,8 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   Thành công ghi `0x5555`; không còn nợ R2.
 - AArch64 có VirtIO-MMIO block, x86_64 có ATA PIO và RISC-V có VirtIO-MMIO
   block; FS v2 persistence đã có trên cả 3 kiến trúc.
-- Task 9 (user IRQ AArch64) vẫn là stretch, chưa làm; per-hart runqueue đã xong.
-- Chưa có driver network/GPU/input.
+- Task 9 (user IRQ AArch64) đã hoàn thành; per-hart runqueue đã xong.
+- Chưa có driver network/GPU; input UART IRQ đã có.
 - Chưa có compositor, ViFastKey.
 - Fuzz syscall seed cố định 100.000 bước x 3 PTE format (bản dài `--ignored`)
   với invariant badge/VSpace mask/current; bản ngắn 10.000 bước mặc định.

@@ -26,7 +26,7 @@ chưa được port sang bản bare-metal này.
 | Persistence 7 phase | có | có | có |
 | Software IOMMU + DMA map | có | có | có |
 | Sleep deadline (BlockedSleep) | có | có | có |
-| Console input polling + shell | có | có | có |
+| Console input IRQ + shell | có | có | có |
 | User fault suspend (không panic) | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
@@ -52,13 +52,14 @@ Kernel portable hiện có:
 - software IOMMU domain + `IoMap`/`IoUnmap`;
 - 48 syscall number: 47 implemented, 1 placeholder (`CNodeMint`); SchedContext
   budget/period và timer IRQ delivery đã chạy;
-- console input polling qua UART/PL011/COM1 và shell nhỏ trong client.
+- console input IRQ qua UART 16550/PL011/COM1, RxQueue lock-free và shell
+  block trên notification UART thay vì polling.
 
 ## Chưa có
 
 - Hardware IOMMU (VT-d/SMMU); chỉ có mô hình software.
-- CNode nhiều cấp, IRQ external delivery.
-- Network, input IRQ, GPU/framebuffer, compositor, ViFastKey.
+- CNode nhiều cấp; UART IRQ hiện chỉ route BSP/hart 0.
+- Network, GPU/framebuffer, compositor, ViFastKey; shell chưa có job control.
 - Block cache write-back, mount/pager, barrier phần cứng thật, driver disk
   ngoài QEMU.
 - Khóa mịn/x2APIC; scheduler mới test 2 hart.

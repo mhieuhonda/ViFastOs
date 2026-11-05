@@ -6,9 +6,11 @@
 
 #![no_std]
 
-use vifast_arch::Arch;
+use vifast_arch::{Arch, RxQueue};
 
 pub struct Aarch64;
+
+static RX_QUEUE: RxQueue = RxQueue::new();
 
 const PL011_BASE: usize = 0x0900_0000;
 const PL011_DR: usize = 0x00;
@@ -48,6 +50,9 @@ impl Arch for Aarch64 {
     }
 
     fn getc() -> Option<u8> {
+        if let Some(byte) = RX_QUEUE.pop() {
+            return Some(byte);
+        }
         unsafe {
             let fr = (PL011_BASE + PL011_FR) as *const u32;
             if core::ptr::read_volatile(fr) & FR_RXFE != 0 {
@@ -55,6 +60,10 @@ impl Arch for Aarch64 {
             }
             Some(core::ptr::read_volatile((PL011_BASE + PL011_DR) as *const u32) as u8)
         }
+    }
+
+    fn stash_rx(byte: u8) {
+        RX_QUEUE.push(byte);
     }
 
     fn now() -> u64 {

@@ -20,8 +20,58 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
 pub mod bkl;
 pub mod panic;
+
+/// Small single-producer/single-consumer byte queue used by UART RX IRQ
+/// handlers.  It is lock-free and safe to read from the syscall path while an
+/// interrupt handler pushes bytes.
+pub struct RxQueue {
+    bytes: [AtomicU8; 64],
+    head: AtomicUsize,
+    tail: AtomicUsize,
+}
+
+impl RxQueue {
+    pub const fn new() -> Self {
+        Self {
+            bytes: [const { AtomicU8::new(0) }; 64],
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn push(&self, byte: u8) {
+        let head = self.head.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Acquire);
+        let next = (head + 1) % self.bytes.len();
+        if next == tail {
+            return;
+        }
+        self.bytes[head].store(byte, Ordering::Relaxed);
+        self.head.store(next, Ordering::Release);
+    }
+
+    pub fn pop(&self) -> Option<u8> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+        if tail == head {
+            return None;
+        }
+        let byte = self.bytes[tail].load(Ordering::Relaxed);
+        self.tail
+            .store((tail + 1) % self.bytes.len(), Ordering::Release);
+        Some(byte)
+    }
+}
+
+impl Default for RxQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Small per-CPU array bound used by the platform ports.  The secondary harts
 /// are still maintenance-only, but trap stacks and CPU state are already
@@ -94,6 +144,10 @@ pub trait Arch {
         None
     }
 
+    /// Push a byte observed by a UART RX interrupt handler.  The default
+    /// implementation drops it for ports without interrupt-driven console.
+    fn stash_rx(_byte: u8) {}
+
     /// Monotonic timestamp.  The unit is architecture specific; the portable
     /// scheduler only needs monotonicity for now.
     fn now() -> u64;
@@ -119,5 +173,25 @@ pub trait Arch {
         for byte in text.bytes() {
             Self::putc(byte);
         }
+    }
+}
+
+#[cfg(test)]
+mod rx_queue_tests {
+    use super::RxQueue;
+
+    #[test]
+    fn rx_queue_is_fifo_and_drops_when_full() {
+        let queue = RxQueue::new();
+        for byte in 0..63u8 {
+            queue.push(byte);
+        }
+        assert_eq!(queue.pop(), Some(0));
+        queue.push(200);
+        for byte in 1..63u8 {
+            assert_eq!(queue.pop(), Some(byte));
+        }
+        assert_eq!(queue.pop(), Some(200));
+        assert_eq!(queue.pop(), None);
     }
 }

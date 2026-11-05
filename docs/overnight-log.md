@@ -706,3 +706,16 @@ follow-up `62b31f4`.
   yêu cầu `IRQ OK`, cấm `IRQ BAD`.
 - Host test 108/108; QEMU 3/3 (một lần), persistence giữ 7 phase ×3 dự kiến.
 - UART external IRQ mới có API/logical number, chưa route PLIC/GIC/PIC.
+
+## 8.98 — UART IRQ + IRQ-driven shell (vòng 22)
+
+- `RxQueue` lock-free 64 byte trong `vifast-arch`, `stash_rx` cho cả 3 port.
+- RISC-V: map PLIC 0x0c000000 + context 0x0c200000, source 10 context 1,
+  claim/complete đúng offset +4; handler drain UART → `IRQ_UART`.
+- AArch64: GIC SPI 33 target CPU0, PL011 RXIM; handler drain/ICR/EOI.
+- x86_64: IDT vector 0x24, unmask PIC IRQ4, COM1 IER bit0; handler drain/EOI.
+- Root tạo thêm UART IRQ + notification, copy cap cho client; shell block trên
+  notification UART rồi Ack/ConsoleRead thay vì yield-poll.
+- Manual `-serial stdio -monitor none` với kernel no-default: input được echo
+  trên RISC-V, AArch64, x86_64.
+- Host test `vifast-arch` 7/7; QEMU chuẩn 3/3 (không input); 0 warning.

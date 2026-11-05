@@ -246,6 +246,22 @@ irq0_entry:
     RESTORE_REGS
     iretq
 
+    .globl irq4_entry
+irq4_entry:
+    SAVE_REGS
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
+    mov rcx, rsp          # efiapi arg1: *mut TrapFrame
+    call x86_uart_irq_handler
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
+    RESTORE_REGS
+    iretq
+
     .globl ap_ipi_entry
 ap_ipi_entry:
     mov rdx, 0x30

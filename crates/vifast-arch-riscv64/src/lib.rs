@@ -6,9 +6,11 @@
 
 #![no_std]
 
-use vifast_arch::Arch;
+use vifast_arch::{Arch, RxQueue};
 
 pub struct Riscv64;
+
+static RX_QUEUE: RxQueue = RxQueue::new();
 
 const UART_BASE: usize = 0x1000_0000;
 const UART_THR: usize = 0;
@@ -39,6 +41,9 @@ impl Arch for Riscv64 {
     }
 
     fn getc() -> Option<u8> {
+        if let Some(byte) = RX_QUEUE.pop() {
+            return Some(byte);
+        }
         unsafe {
             let lsr = (UART_BASE + UART_LSR) as *const u8;
             if core::ptr::read_volatile(lsr) & LSR_DR == 0 {
@@ -48,6 +53,10 @@ impl Arch for Riscv64 {
                 (UART_BASE + UART_THR) as *const u8,
             ))
         }
+    }
+
+    fn stash_rx(byte: u8) {
+        RX_QUEUE.push(byte);
     }
 
     fn now() -> u64 {

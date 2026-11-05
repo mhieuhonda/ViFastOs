@@ -18,6 +18,13 @@ pub const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
 pub const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
 const USER_SSTATUS: u64 = 1 << 5;
 const TIMER_INTERVAL: u64 = 100_000;
+const UART_BASE: usize = 0x1000_0000;
+const UART_IER: usize = 1;
+const UART_LSR: usize = 5;
+const UART_RBR: usize = 0;
+const UART_LSR_DR: u8 = 0x01;
+const PLIC_BASE: usize = 0x0c00_0000;
+const PLIC_UART_IRQ: u32 = 10;
 const PTE_V: u64 = 1;
 const PTE_R: u64 = 2;
 const PTE_W: u64 = 4;
@@ -474,7 +481,50 @@ unsafe fn build_kernel_page_tables() {
     (*kernel_l1).0[0] = pte(0x8000_0000, PTE_V | PTE_R | PTE_W | PTE_X);
     (*kernel_l1).0[1] = pte(0x8020_0000, PTE_V | PTE_R | PTE_W | PTE_X);
     (*device_l1).0[0] = pte(0x0, PTE_V | PTE_R | PTE_W);
+    (*device_l1).0[96] = pte(PLIC_BASE as u64, PTE_V | PTE_R | PTE_W);
+    // PLIC context registers start at +2 MiB (a second 2 MiB block).
+    (*device_l1).0[97] = pte((PLIC_BASE + 0x20_0000) as u64, PTE_V | PTE_R | PTE_W);
     (*device_l1).0[128] = pte(0x1000_0000, PTE_V | PTE_R | PTE_W);
+}
+
+fn plic_read(offset: usize) -> u32 {
+    unsafe { core::ptr::read_volatile((PLIC_BASE + offset) as *const u32) }
+}
+
+fn plic_write(offset: usize, value: u32) {
+    unsafe { core::ptr::write_volatile((PLIC_BASE + offset) as *mut u32, value) };
+}
+
+fn plic_claim() -> u32 {
+    plic_read(0x200000 + 0x1000 + 0x4)
+}
+
+fn plic_complete(irq: u32) {
+    plic_write(0x200000 + 0x1000 + 0x4, irq);
+}
+
+fn init_plic() {
+    // Priority 1 for UART0, enable it for S-mode context 1 (hart 0), and
+    // accept all priorities at the threshold.
+    plic_write(PLIC_UART_IRQ as usize * 4, 1);
+    plic_write(0x2000 + 0x80, 1 << PLIC_UART_IRQ);
+    plic_write(0x200000 + 0x1000, 0);
+    unsafe {
+        core::ptr::write_volatile((UART_BASE + UART_IER) as *mut u8, 0x01);
+    }
+}
+
+fn drain_uart_rx() {
+    unsafe {
+        loop {
+            let lsr = core::ptr::read_volatile((UART_BASE + UART_LSR) as *const u8);
+            if lsr & UART_LSR_DR == 0 {
+                break;
+            }
+            let byte = core::ptr::read_volatile((UART_BASE + UART_RBR) as *const u8);
+            Riscv64::stash_rx(byte);
+        }
+    }
 }
 
 unsafe fn init_cpu(hartid: usize) {
@@ -552,6 +602,12 @@ impl Arch for RiscvPlatform {
     }
     fn putc(byte: u8) {
         Riscv64::putc(byte);
+    }
+    fn getc() -> Option<u8> {
+        Riscv64::getc()
+    }
+    fn stash_rx(byte: u8) {
+        Riscv64::stash_rx(byte);
     }
     fn now() -> u64 {
         Riscv64::now()
@@ -812,6 +868,7 @@ impl Platform for RiscvPlatform {
             build_kernel_page_tables();
             init_cpu(info.hartid);
         }
+        init_plic();
     }
 
     fn set_current_tcb(tcb: Option<usize>) {
@@ -1216,7 +1273,7 @@ impl Platform for RiscvPlatform {
             if let Some(counter) = USER_ENTRIES.get(hart) {
                 counter.fetch_add(1, Ordering::Relaxed);
             }
-            core::arch::asm!("csrs sie, {}", in(reg) 1u64 << 5);
+            core::arch::asm!("csrs sie, {}", in(reg) (1u64 << 5) | (1u64 << 9));
             core::arch::asm!("mv tp, {}", in(reg) context.regs[4]);
             core::arch::asm!("mv sp, {}", in(reg) context.regs[2]);
             core::arch::asm!("mv a0, {}", in(reg) context.regs[10]);
@@ -1380,6 +1437,22 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         let changed = vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
         if hart == 1 && user && changed {
             SECONDARY_PREEMPTS.fetch_add(1, Ordering::Relaxed);
+        }
+        drop(bkl);
+        assert_bkl_released();
+        return;
+    }
+    if frame.scause == 0x8000_0000_0000_0009 {
+        let irq = plic_claim();
+        if irq == PLIC_UART_IRQ {
+            drain_uart_rx();
+            let woke = RiscvPlatform::kernel().irq_raise(vifast_abi::IRQ_UART);
+            if woke && RiscvPlatform::hart_id() == 0 && RiscvPlatform::kernel().has_ready_on(1) {
+                RiscvPlatform::wake_hart(1);
+            }
+        }
+        if irq != 0 {
+            plic_complete(irq);
         }
         drop(bkl);
         assert_bkl_released();

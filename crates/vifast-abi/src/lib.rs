@@ -107,9 +107,11 @@ pub mod user_layout {
     pub const FAULT1_TCB_SLOT: usize = 9;
     pub const FAULT2_TCB_SLOT: usize = 10;
     pub const FAULT3_TCB_SLOT: usize = 11;
-    /// Client cspace slots used for the timer IRQ demo/notification.
+    /// Client cspace slots used for the IRQ demos/notifications.
     pub const CLIENT_IRQ_SLOT: u8 = 8;
     pub const CLIENT_IRQ_NOTIFICATION_SLOT: u8 = 9;
+    pub const CLIENT_UART_IRQ_SLOT: u8 = 10;
+    pub const CLIENT_UART_NOTIFICATION_SLOT: u8 = 11;
     /// Maximum user virtual window reserved for code/data/stack/IPC buffers.
     pub const WINDOW_BASE: usize = CODE_VA;
     pub const WINDOW_SIZE: usize = 0x20_0000;
