@@ -148,6 +148,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6d3129f feat: add flat cnode cspace and cnode install
 - b014c8b feat: add end-to-end cnode demo task
 - e9b8286 feat: implement o_append for vfs
+- 363574a feat: add write-back block cache for file data
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -206,7 +207,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 249168 byte (`kernel_end=0x803c32b0`)
 - `Kernel = 694744`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
+- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
