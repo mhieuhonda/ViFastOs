@@ -2,7 +2,7 @@
 
 **Ngày:** 2026-11-05  
 **Baseline:** `58016c8` (code), bundle vòng 15  
-**Code commit:** `7196a4e`
+**Code commit:** `225ccdb` (nhóm chính `7196a4e`, thêm fix panic-halt)
 
 ## 1. Bảng task
 
@@ -11,11 +11,11 @@
 | 1. BKL owner + assert theo hart | ✅ | `7196a4e`; host test 6/6 |
 | 2. Mask PIC/LINT trên AP | ✅ | `7196a4e`; x86 50/50 |
 | 3. Preempt worker trên CPU phụ | ✅ | `7196a4e`; 50/50 cả 3 |
-| 4. Panic dừng toàn hệ thống | ✅ feature | `test-panic-hart1` 5/5 cả 3 |
+| 4. Panic dừng toàn hệ thống | ✅ feature | `225ccdb`; `test-panic-hart1` 5/5 cả 3 |
 | 5. BKL stats | ✅ | line ở test-exit, không assertion |
 | 6. Docs R1/R7 | ✅ | bundle/commit lấy từ git log |
 
-Task 1–5 nằm một commit code `7196a4e` vì cùng sửa các file platform lớn; test
+Task 1–5 nằm commit chính `7196a4e`, Task 4 thêm fix `225ccdb` vì cùng sửa file platform lớn; test
 riêng từng task được ghi dưới đây (đúng quy tắc mục 3 của quyết định).
 
 ## 2. Kết quả test

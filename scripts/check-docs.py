@@ -65,6 +65,9 @@ def main() -> int:
         "458.336",
         "SMP SKIP (x86 AP bootstrap pending)",
         "start_smp chỉ in SMP SKIP",
+        "timer đa hart",
+        "x86 sẽ theo D2",
+        "x86 AP scheduler/user",
     ]
     for value in forbidden:
         if value in summary or value in handoff:

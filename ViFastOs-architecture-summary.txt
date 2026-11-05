@@ -114,9 +114,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 03cb048 feat: x86 ap lapic timer and idle via irr polling
 - 58016c8 feat: x86 ap scheduler workers and trampoline stages
 - 7196a4e feat: smp hardening bkl owner ap preempt panic halt stats
+- 225ccdb fix: mask interrupts on panic halt
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit 7196a4e): BKL owner theo hart, AP mask LINT;
+Cập nhật code gần nhất (commit 225ccdb): BKL owner theo hart, AP mask LINT;
 worker c busy chứng minh preempt; panic-halt đa hart; BKL stats; x86 50/50 và
 QEMU 10/10 cả 3 kiến trúc.
 VFS scratch trên cả 3 kiến trúc,
@@ -167,7 +168,7 @@ Test hiện tại:
 ### END GENERATED tests
 ### BEGIN GENERATED status
 - RISC-V headroom: 454192 byte (`kernel_end=0x803911d0`)
-- QEMU lần chạy gần nhất (`--repeat 1`): aarch64 1/1
+- QEMU lần chạy gần nhất (`--repeat 10`): riscv64 10/10, aarch64 10/10, x86_64 10/10
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
