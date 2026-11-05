@@ -135,6 +135,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - debcf57 feat: add vfs write-through block cache
 - 6e415a7 feat: add real fsync and block flush
 - b9ed3bc feat: add vf04 double indirect files
+- 8f7ece9 feat: add sleep deadline primitive
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
