@@ -616,3 +616,15 @@ follow-up `62b31f4`.
 - `BlockDev::flush` + `Fs::fsync`; server `FSYNC` không còn trả OK giả.
 - Client gọi FSYNC sau khi ghi file lớn, hard link và symlink.
 - Host test kiểm `fsync` gọi flush; QEMU 3/3; persist 7 phase ×3; 0 warning.
+
+## 8.65 — VF04 double-indirect (vòng 21)
+
+- Format mới `VF04`: 10 direct + single-indirect + double-indirect; file tối
+  đa 16.522 block (8,4 MiB lý thuyết, thực tế bị giới hạn bởi ảnh 4 MiB).
+- `VF03` cũ vẫn mount với geometry 11 direct + single (69 KiB), không migrate
+  âm thầm.
+- `file_block`/`set_file_block`/`truncate`/`free_inode_blocks`/`fsck` xử lý
+  bảng cấp hai; host test mới đọc/ghi 200 block, truncate qua ranh giới single
+  và double, kiểm table được giải phóng.
+- `cargo test -p vifast-fs`: 21/21; QEMU 3/3; persist phase 7 dùng file 80 KiB
+  (double-indirect) trên cả 3 kiến trúc; 0 warning.

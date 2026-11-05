@@ -186,11 +186,11 @@ Test hiện tại:
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
-- `cargo test -p vifast-fs`: 19/19 PASS
+- `cargo test -p vifast-fs`: 21/21 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 343472 byte (`kernel_end=0x803ac250`)
+- RISC-V headroom: 339376 byte (`kernel_end=0x803ad250`)
 - `Kernel = 651352`, `Object = 4704`, `Tcb = 4656`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
@@ -729,11 +729,14 @@ User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
   buffer cố định. Server giữ `Fs` trong `.bss`, không đặt journal 8 KiB trên
   stack; stack server là 3 trang `CODE_VA+0x2000..+0x5000`.
 - Layout 4 MiB: LBA0 legacy `VF01` (chỉ đọc để migrate), LBA1 superblock
-  `VF03` (mount đọc được `VF02` cũ), LBA2..3 bitmap, LBA4..11 64 inode x 64
-  byte, LBA12..29 journal 1 header + 16 data + 1 commit, LBA30.. data.
-  Inode file có 11 block trực tiếp + 1 single-indirect 128 entry, file tối đa
-  139 block = 69 KiB; thư mục tối đa 11 block, entry 32 byte, tên tối đa 28.
-  Ghi file lớn chia transaction theo block; mỗi phần nguyên tử, cả file không.
+  `VF04` (mount đọc được `VF03`/`VF02` cũ), LBA2..3 bitmap, LBA4..11 64 inode x
+  64 byte, LBA12..29 journal 1 header + 16 data + 1 commit, LBA30.. data.
+  `VF04` dùng 10 block trực tiếp + 1 single-indirect 128 entry + 1
+  double-indirect (128 bảng con x 128 entry), tối đa 16.522 block = 8,4 MiB
+  theo lý thuyết nhưng bị giới hạn bởi ảnh 4 MiB. Ảnh `VF03` cũ vẫn mount với
+  geometry 11 direct + single-indirect, file tối đa 139 block = 69 KiB. Thư mục
+  tối đa 11 block, entry 32 byte, tên tối đa 28. Ghi file lớn chia transaction
+  theo block; mỗi phần nguyên tử, cả file không.
 - Journal write-ahead: mỗi thao tác là một transaction tối đa 16 block; ghi
   data journal, header, commit một sector có CRC32, ghi target, rồi xóa commit.
   Mount replay commit hợp lệ; commit hỏng bị bỏ, dữ liệu cũ giữ nguyên.
