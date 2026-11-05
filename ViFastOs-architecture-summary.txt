@@ -103,11 +103,12 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 32c2e03 chore: syscall status and generated status block
 - 1ff8644 fix: bounded boot handoff fails loudly
 - 9b8f031 feat: parse acpi madt on x86
+- 627f054 feat: map and enable x86 local apic
+- 83875a7 fix: use madt lapic base before mapping
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit 32c2e03): harness spec + 166 case âm, post-worker
-timer WFI, boot-handoff injection, syscall status; RISC-V 100/100, AArch64
-50/50, persistent
+Cập nhật code gần nhất (commit 83875a7): ACPI MADT + LAPIC x86, docs rules,
+bounded boot handoff; RISC-V/AArch64 10/10, x86 10/10; persistent
 VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
@@ -167,6 +168,7 @@ Test hiện tại:
 Output tiêu biểu:
 - SELFTEST PASS
 - SMP OK (harts=2, ipi=1) trên RISC-V/AArch64
+- ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000), LAPIC OK (id=0) trên x86_64
 - SMP SKIP (x86 AP bootstrap pending) trên x86_64
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
@@ -1111,6 +1113,7 @@ Theo kiến trúc:
 - x86_64:
   - `KERNEL DATA NX OK` — kernel data is non-executable
   - `ACPI MADT OK (cpus=C, bsp=ID, lapic=0x...)` — ACPI MADT parsed
+  - `LAPIC OK` — BSP local APIC enabled
   - `SMP SKIP` — x86 AP bring-up is not enabled yet
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1

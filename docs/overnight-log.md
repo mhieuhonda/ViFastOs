@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `dbbe76db3a88ba0a987fac48e19c10b64b2a02f3574d6c25a509c99198ac74d4`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `08e774bf4de87da6f7304c35b92c642829a1322ea398261bf887cdf076830bee`.
 
 ---
 
@@ -211,6 +211,15 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.23 — ACPI MADT và LAPIC x86 (vòng 12)
+
+- `1ff8644`: boot handoff hết retry in `BOOT HANDOFF FAIL` rồi SRST.
+- `9b8f031`: crate `vifast-acpi` 8 test; x86 đọc RSDP từ UEFI config table,
+  in `ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000)`.
+- `627f054`/`83875a7`: map/bật LAPIC BSP, `LAPIC OK (id=0)`.
+- 3b/3c AP trampoline chưa làm; x86 vẫn `SMP SKIP`.
+- QEMU 10/10 all; feature 10/10; persist 3/3; docs checker PASS.
 
 ## 8.22 — Harness spec, post-worker timer, boot handoff (vòng 11)
 
