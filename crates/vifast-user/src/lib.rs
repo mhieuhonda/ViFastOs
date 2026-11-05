@@ -430,6 +430,16 @@ pub fn block_write(cap_slot: u8, lba: u64, ptr: u64) -> SyscallResult {
     result(e, v)
 }
 
+pub fn block_flush(cap_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::BlockFlush as u64,
+            [cap_slot as u64, 0, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn iommu_map(domain_slot: u8, iova: u64, frame_slot: u8, rights: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

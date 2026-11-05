@@ -132,6 +132,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 925f633 feat: vfs bulk read and fs hard links
 - 36147fb feat: fs symlinks and object capacity headroom
 - 49de105 chore: normalize ViFastOs spelling
+- debcf57 feat: add vfs write-through block cache
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -735,7 +736,9 @@ User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
 - Journal write-ahead: mỗi thao tác là một transaction tối đa 16 block; ghi
   data journal, header, commit một sector có CRC32, ghi target, rồi xóa commit.
   Mount replay commit hợp lệ; commit hỏng bị bỏ, dữ liệu cũ giữ nguyên.
-  Giả định ghi một sector 512 byte là nguyên tử; chưa có flush/barrier phần cứng.
+  `Fs::fsync()` gọi `BlockFlush` xuống backend; VirtIO dùng request type 4,
+  ATA PIO gửi lệnh `0xE7`, nên đường FSYNC của VFS thật sự flush cache thiết bị.
+  Vẫn giả định ghi một sector 512 byte là nguyên tử ở tầng thiết bị.
 - Protocol giữ OPEN/READ/WRITE/CLOSE/STAT và thêm MKDIR/READDIR/UNLINK/RENAME/
   LINK/TRUNCATE/FSYNC/FSCK. Mã lỗi FS nằm trong `vifast_abi::vfs`; path tối đa
   128 byte, `MAX_IO=128` byte. Path, WRITE và READ đều đi qua IPC buffer
@@ -746,9 +749,10 @@ User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
   File/thư mục mới có uid người tạo, mode owner rw + other r. Đọc cần r,
   ghi/truncate cần w; tạo/xóa/rename trong thư mục cần w trên thư mục cha.
   `UNLINK` thư mục chỉ khi rỗng; `RENAME` không đưa thư mục vào cây con của nó.
-- Block syscall 43/44 bắt buộc cap `ObjType::BlockDevice`; runtime cài cap
+- Block syscall 43/44/45 bắt buộc cap `ObjType::BlockDevice`; runtime cài cap
   vào root slot từ BootInfo v3, root chỉ copy cho server. Client thử
-  BlockWrite không cap và in `BLOCK DENIED OK`.
+  BlockWrite không cap và in `BLOCK DENIED OK`. `BlockFlush` (45) cần quyền
+  WRITE và gọi `Platform::block_flush`.
 - Server bọc block device trong `CachedDev<ServerDev>`: cache write-through
   8 slot x 512 byte (khoảng 4 KiB). Đọc hit không xuống thiết bị; ghi xuống
   thiết bị trước rồi cập nhật cache nên không có dirty block và thứ tự journal
@@ -813,10 +817,15 @@ Số syscall chính:
 42 FrameWrite — implemented
 43 BlockRead — implemented
 44 BlockWrite — implemented
+45 BlockFlush — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,
   `a1` = LBA, `a2` = user buffer 512 byte; thiếu/sai cap trả `InvalidCap`.
+- `BlockFlush` (45): `a0` = cap slot `BlockDevice` có quyền `WRITE`; flush
+  write cache của VirtIO/ATA rồi trả `Ok` hoặc `IllegalOperation`.
+- VFS `FSYNC` gọi `vifast_fs::Fs::fsync()` → `BlockDev::flush()` →
+  `BlockFlush`; client demo gọi FSYNC trên file lớn/hard link/symlink.
 - `CapMint` (11): `a0` source slot, `a1` TCB đích, `a2` slot đích,
   `a3` rights (chỉ giảm), `a4` badge; chỉ Endpoint/Notification **và** source
   phải có badge 0. Server nhận uid từ badge register (RISC-V a7, AArch64 x7,

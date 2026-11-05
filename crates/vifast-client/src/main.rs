@@ -180,6 +180,11 @@ fn vfs_close(fd: u64) -> Option<()> {
     vfs_reply(reply).ok().map(|_| ())
 }
 
+fn vfs_fsync(fd: u64) -> Option<()> {
+    let reply = unsafe { vifast_user::call_message(1, vfs::FSYNC, fd, 0, 0) };
+    vfs_reply(reply).ok().map(|_| ())
+}
+
 fn vfs_mkdir_via(slot: u8, path: &[u8]) -> Result<u64, u64> {
     let len = copy_path(path);
     let reply = unsafe { vifast_user::call_message(slot, vfs::MKDIR, len as u64, 0, 0) };
@@ -577,6 +582,7 @@ pub extern "C" fn client_main() -> ! {
             }
             large_ok &= vfs_write_via(1, fd, (block * vfs::MAX_IO) as u64, &chunk).is_some();
         }
+        large_ok &= vfs_fsync(fd).is_some();
         let _ = vfs_close(fd);
         if let Some((fd, _)) = vfs_open_via(1, b"/large", 0) {
             let mut out = [0u8; vfs::MAX_IO];
@@ -619,6 +625,7 @@ pub extern "C" fn client_main() -> ! {
             }
             hard_ok &= vfs_write_via(1, fd, (block * vfs::MAX_IO) as u64, &chunk).is_some();
         }
+        hard_ok &= vfs_fsync(fd).is_some();
         let _ = vfs_close(fd);
         hard_ok &= vfs_link(b"/hard_a", b"/hard_b").is_ok();
         if let Some((fd, _)) = vfs_open_via(1, b"/hard_b", 0) {
@@ -671,6 +678,7 @@ pub extern "C" fn client_main() -> ! {
             }
             sym_ok &= vfs_write_via(1, fd, (block * vfs::MAX_IO) as u64, &chunk).is_some();
         }
+        sym_ok &= vfs_fsync(fd).is_some();
         let _ = vfs_close(fd);
         if vfs_symlink(b"/sym_target", b"/sym_link").is_err() {
             sym_ok = false;

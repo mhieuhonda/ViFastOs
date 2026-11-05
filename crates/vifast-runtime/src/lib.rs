@@ -262,6 +262,9 @@ pub trait Platform: Arch + Console {
     fn block_write(_lba: u64, _input: &[u8; 512]) -> bool {
         false
     }
+    fn block_flush() -> bool {
+        false
+    }
 }
 
 fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
@@ -1019,6 +1022,13 @@ pub mod syscall {
                     A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
                 } else {
                     A::write_result(context, KError::Ok, 512, 0, [0; 4]);
+                }
+            }
+            UserAction::BlockFlush => {
+                if A::block_flush() {
+                    A::write_result(context, KError::Ok, 0, 0, [0; 4]);
+                } else {
+                    A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
                 }
             }
             UserAction::Debug { ptr, len } => {

@@ -486,9 +486,15 @@ unsafe fn ata_write(lba: u64, input: &[u8; 512]) -> bool {
         let word = input[i * 2] as u16 | ((input[i * 2 + 1] as u16) << 8);
         outw(ATA_BASE, word);
     }
-    outb(ATA_BASE + 7, 0xE7); // flush cache
-    let _ = ata_wait_bsy();
-    true
+    ata_flush()
+}
+
+unsafe fn ata_flush() -> bool {
+    if !ata_wait_bsy() {
+        return false;
+    }
+    outb(ATA_BASE + 7, 0xE7); // FLUSH CACHE
+    ata_wait_bsy()
 }
 
 fn table_pa(table: *const Table) -> u64 {
@@ -2147,6 +2153,10 @@ impl Platform for X86Platform {
 
     fn block_write(lba: u64, input: &[u8; 512]) -> bool {
         unsafe { ata_write(lba, input) }
+    }
+
+    fn block_flush() -> bool {
+        unsafe { ata_flush() }
     }
 
     fn secondary_wakeups() -> (usize, usize) {

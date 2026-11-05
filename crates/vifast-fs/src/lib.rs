@@ -109,6 +109,11 @@ pub trait BlockDev {
     fn block_count(&self) -> u32 {
         TOTAL_BLOCKS
     }
+    /// Flush the device's volatile write cache.  Backends without a cache can
+    /// keep the default no-op; real block drivers should override it.
+    fn flush(&mut self) -> Result<(), FsError> {
+        Ok(())
+    }
 }
 
 /// Number of 512-byte blocks kept in the write-through cache.
@@ -227,6 +232,10 @@ impl<D: BlockDev> BlockDev for CachedDev<D> {
 
     fn block_count(&self) -> u32 {
         self.inner.block_count()
+    }
+
+    fn flush(&mut self) -> Result<(), FsError> {
+        self.inner.flush()
     }
 }
 
@@ -1699,7 +1708,7 @@ impl<D: BlockDev> Fs<D> {
     }
 
     pub fn fsync(&mut self) -> Result<(), FsError> {
-        Ok(())
+        self.dev.flush()
     }
 
     /// Queue one complete write transaction without applying it.  This is a
@@ -1846,6 +1855,7 @@ mod tests {
         inner: MemDev,
         reads: usize,
         writes: usize,
+        flushes: usize,
     }
     impl CountingDev {
         fn new() -> Self {
@@ -1853,6 +1863,7 @@ mod tests {
                 inner: MemDev::new(),
                 reads: 0,
                 writes: 0,
+                flushes: 0,
             }
         }
     }
@@ -1867,6 +1878,10 @@ mod tests {
         }
         fn block_count(&self) -> u32 {
             self.inner.block_count()
+        }
+        fn flush(&mut self) -> Result<(), FsError> {
+            self.flushes += 1;
+            Ok(())
         }
     }
 
@@ -1957,6 +1972,8 @@ mod tests {
         assert_eq!(&out, b"through-cache");
         assert!(fs.dev().stats().hits > 0);
         assert!(fs.dev().stats().writes > 0);
+        fs.fsync().unwrap();
+        assert_eq!(fs.dev().inner().flushes, 1);
         fs.fsck().unwrap();
     }
 

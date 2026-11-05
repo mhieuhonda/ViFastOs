@@ -608,3 +608,11 @@ follow-up `62b31f4`.
 - VFS server dùng `Fs<CachedDev<ServerDev>>`; không đổi ABI/userland.
 - Host test mới: cache hit/write-through, eviction round-robin, bọc filesystem.
 - `cargo test -p vifast-fs`: 19/19; QEMU 3/3; persist 7 phase ×3; 0 warning.
+
+## 8.60 — Real fsync/block flush (vòng 21)
+
+- Thêm `BlockFlush = 45`, `UserAction::BlockFlush`, `Platform::block_flush`.
+- VirtIO: `VIRTIO_BLK_T_FLUSH` (type 4); ATA PIO: lệnh `0xE7`.
+- `BlockDev::flush` + `Fs::fsync`; server `FSYNC` không còn trả OK giả.
+- Client gọi FSYNC sau khi ghi file lớn, hard link và symlink.
+- Host test kiểm `fsync` gọi flush; QEMU 3/3; persist 7 phase ×3; 0 warning.

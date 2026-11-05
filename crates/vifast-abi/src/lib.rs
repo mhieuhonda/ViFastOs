@@ -549,6 +549,7 @@ pub enum SyscallId {
     FrameWrite = 42,
     BlockRead = 43,
     BlockWrite = 44,
+    BlockFlush = 45,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -600,6 +601,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::FrameWrite, true),
     (SyscallId::BlockRead, true),
     (SyscallId::BlockWrite, true),
+    (SyscallId::BlockFlush, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

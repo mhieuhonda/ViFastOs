@@ -1267,6 +1267,10 @@ impl Platform for RiscvPlatform {
         vifast_virtio::write_sector(lba, input)
     }
 
+    fn block_flush() -> bool {
+        vifast_virtio::flush()
+    }
+
     fn start_smp() {
         let entry = secondary_entry as *const () as usize;
         let started = unsafe {

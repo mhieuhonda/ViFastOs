@@ -91,6 +91,8 @@ pub enum UserAction {
         lba: u64,
         ptr: u64,
     },
+    /// Flush the block device's write cache.
+    BlockFlush,
     /// Copy a user buffer into a Frame at a byte offset.
     FrameWrite {
         frame: ObjRef,
@@ -3647,8 +3649,12 @@ impl Kernel {
             return UserAction::Exit;
         }
 
-        if number == SyscallId::BlockRead as u64 || number == SyscallId::BlockWrite as u64 {
-            let write = number == SyscallId::BlockWrite as u64;
+        if number == SyscallId::BlockRead as u64
+            || number == SyscallId::BlockWrite as u64
+            || number == SyscallId::BlockFlush as u64
+        {
+            let flush = number == SyscallId::BlockFlush as u64;
+            let write = number == SyscallId::BlockWrite as u64 || flush;
             let rights = if write { Rights::WRITE } else { Rights::READ };
             if self
                 .lookup_cap(
@@ -3663,6 +3669,9 @@ impl Kernel {
                     value: 0,
                     error: KError::InvalidCap,
                 };
+            }
+            if flush {
+                return UserAction::BlockFlush;
             }
             if self.validate_user_range(tcb, a2, 512, write).is_err() {
                 return UserAction::Return {

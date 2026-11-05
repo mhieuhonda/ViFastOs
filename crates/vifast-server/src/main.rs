@@ -44,6 +44,14 @@ impl BlockDev for ServerDev {
     fn block_count(&self) -> u32 {
         8192
     }
+    fn flush(&mut self) -> Result<(), FsError> {
+        let result = vifast_user::block_flush(BLOCK_CAP);
+        if result.error == KError::Ok {
+            Ok(())
+        } else {
+            Err(FsError::Io)
+        }
+    }
 }
 
 type ServerFs = Fs<CachedDev<ServerDev>>;
@@ -526,7 +534,10 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
         vfs::SYMLINK => symlink_request(request.data, uid),
         vfs::READLINK => readlink_request(request.data, uid),
         vfs::TRUNCATE => truncate_request(request.data, uid),
-        vfs::FSYNC => (vfs::OK, 0, 0, 0),
+        vfs::FSYNC => match fs().fsync() {
+            Ok(()) => (vfs::OK, 0, 0, 0),
+            Err(error) => err(error),
+        },
         vfs::FSCK => {
             let ok = fs().fsck().is_ok();
             unsafe {

@@ -303,3 +303,62 @@ pub fn write_sector(sector: u64, buffer: &[u8; SECTOR_SIZE]) -> bool {
     local.copy_from_slice(buffer);
     request_with_retry(true, sector, &mut local)
 }
+
+fn request_flush() -> bool {
+    if unsafe { !READY || BASE == 0 } {
+        return false;
+    }
+    let queue = queue_ptr();
+    unsafe {
+        let q = &mut *queue;
+        // VIRTIO_BLK_T_FLUSH has no data payload; header + status are enough.
+        q.header = [4, 0, 0, 0];
+        q.status = 0xff;
+        let base = q as *const Queue as u64;
+        q.desc[0] = Descriptor {
+            addr: base + core::mem::offset_of!(Queue, header) as u64,
+            len: 16,
+            flags: DESC_NEXT,
+            next: 1,
+        };
+        q.desc[1] = Descriptor {
+            addr: base + core::mem::offset_of!(Queue, status) as u64,
+            len: 1,
+            flags: DESC_WRITE,
+            next: 0,
+        };
+        let slot = core::ptr::read_volatile(&q.avail.idx) as usize % QUEUE_SIZE;
+        q.avail.ring[slot] = 0;
+        fence(Ordering::SeqCst);
+        let next_avail = core::ptr::read_volatile(&q.avail.idx).wrapping_add(1);
+        core::ptr::write_volatile(&mut q.avail.idx, next_avail);
+        fence(Ordering::SeqCst);
+        write32(0x50, 0);
+        let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        let mut spins = 0u64;
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < 20_000_000 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        fence(Ordering::SeqCst);
+        if core::ptr::read_volatile(&q.used.idx) != target
+            || core::ptr::read_volatile(&q.status) != 0
+        {
+            return false;
+        }
+    }
+    true
+}
+
+pub fn flush() -> bool {
+    for _ in 0..3 {
+        if request_flush() {
+            return true;
+        }
+        let base = unsafe { BASE };
+        if base != 0 && !init_at(base) {
+            break;
+        }
+    }
+    false
+}
