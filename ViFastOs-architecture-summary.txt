@@ -140,6 +140,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 3e33cfa feat: add bsp idle tcb and blocking sleep
 - bdc85e5 feat: add o_trunc and fsutil utilities
 - 5bd47c8 feat: add console input and shell commands
+- af197ea feat: expand shell and raise object capacity
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
