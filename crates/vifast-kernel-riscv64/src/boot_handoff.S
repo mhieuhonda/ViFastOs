@@ -69,7 +69,7 @@ promote_hart0:
     addi t0, t0, -1
     bnez t0, 5b
     li t0, 1000
-    bge s2, t0, 2f
+    bge s2, t0, handoff_fail
     j 4b
 6:
     mv a0, s0
@@ -79,3 +79,34 @@ promote_hart0:
 2:
     wfi
     j 2b
+
+handoff_fail:
+    /*
+     * Hart 0 never became startable.  Do not stop this hart and leave both
+     * harts parked; say why and reset the machine instead.
+     */
+    la t0, boot_handoff_fail_msg
+    li t1, 0x10000000
+7:
+    lb t2, 0(t0)
+    beqz t2, 8f
+9:
+    lb t3, 5(t1)
+    andi t3, t3, 0x20
+    beqz t3, 9b
+    sb t2, 0(t1)
+    addi t0, t0, 1
+    j 7b
+8:
+    li a7, 0x53525354
+    li a6, 0
+    li a0, 0
+    li a1, 0
+    ecall
+10:
+    wfi
+    j 10b
+
+    .section .rodata
+boot_handoff_fail_msg:
+    .asciz "BOOT HANDOFF FAIL\r\n"
