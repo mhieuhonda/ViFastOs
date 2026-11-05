@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `d324067014ff5fccc9b0ed7ed07f3e74f1f540847fa072f945cb8c314aa383a5`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `4e100dd1c6601b0674295098eded04d478a0700fea3954d3098f6ac9cbf5c67c`.
 
 ---
 

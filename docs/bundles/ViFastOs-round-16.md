@@ -6,7 +6,7 @@
 
 **Ngày:** 2026-11-05  
 **Baseline:** `58016c8` (code), bundle vòng 15  
-**Code commit:** `225ccdb` (nhóm chính `7196a4e`, thêm fix panic-halt)
+**Code commit:** `34db2e0` (nhóm chính `7196a4e`, thêm fix panic-halt/console)
 
 ## 1. Bảng task
 
@@ -15,11 +15,11 @@
 | 1. BKL owner + assert theo hart | ✅ | `7196a4e`; host test 6/6 |
 | 2. Mask PIC/LINT trên AP | ✅ | `7196a4e`; x86 50/50 |
 | 3. Preempt worker trên CPU phụ | ✅ | `7196a4e`; 50/50 cả 3 |
-| 4. Panic dừng toàn hệ thống | ✅ feature | `225ccdb`; `test-panic-hart1` 5/5 cả 3 |
+| 4. Panic dừng toàn hệ thống | ✅ feature | `225ccdb`,`34db2e0`; `test-panic-hart1` 5/5 cả 3 |
 | 5. BKL stats | ✅ | line ở test-exit, không assertion |
 | 6. Docs R1/R7 | ✅ | bundle/commit lấy từ git log |
 
-Task 1–5 nằm commit chính `7196a4e`, Task 4 thêm fix `225ccdb` vì cùng sửa file platform lớn; test
+Task 1–5 nằm commit chính `7196a4e`, Task 4 thêm fix `225ccdb`/`34db2e0` vì cùng sửa file platform lớn; test
 riêng từng task được ghi dưới đây (đúng quy tắc mục 3 của quyết định).
 
 ## 2. Kết quả test
@@ -141,11 +141,11 @@ Không assertion; số lớn chủ yếu do worker c gọi `GetTime` liên tục
 ## Part 2 - Quick status
 
 ```text
-code commit: 225ccdb
+code commit: 34db2e0
 docs commit: round 16 docs
 tests: kernel 88/88, arch 6/6, pte 11/11, elf 17/17, acpi 8/8, QEMU 10/10 all, 50/50 each, panic 5/5, handoff 10/10, persist 3/3
 RISC-V headroom: 454192 byte
-summary SHA-256: d324067014ff5fccc9b0ed7ed07f3e74f1f540847fa072f945cb8c314aa383a5
+summary SHA-256: 4e100dd1c6601b0674295098eded04d478a0700fea3954d3098f6ac9cbf5c67c
 ```
 
 ## Part 3 - Full ViFastOs-architecture-summary.txt
@@ -268,9 +268,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 58016c8 feat: x86 ap scheduler workers and trampoline stages
 - 7196a4e feat: smp hardening bkl owner ap preempt panic halt stats
 - 225ccdb fix: mask interrupts on panic halt
+- 34db2e0 fix: serialize panic console output
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit 225ccdb): BKL owner theo hart, AP mask LINT;
+Cập nhật code gần nhất (commit 34db2e0): BKL owner theo hart, AP mask LINT;
 worker c busy chứng minh preempt; panic-halt đa hart; BKL stats; x86 50/50 và
 QEMU 10/10 cả 3 kiến trúc.
 VFS scratch trên cả 3 kiến trúc,
@@ -320,7 +321,7 @@ Test hiện tại:
 - `cargo test -p vifast-acpi`: 8/8 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 454192 byte (`kernel_end=0x803911d0`)
+- RISC-V headroom: 454176 byte (`kernel_end=0x803911e0`)
 - QEMU lần chạy gần nhất (`--repeat 10`): riscv64 10/10, aarch64 10/10, x86_64 10/10
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
@@ -1775,4 +1776,4 @@ Khoảng trống tiếp theo, theo thứ tự: FS v2, per-VA TLB shootdown, hard
 IOMMU, network/input, compositor/ViFastKey.
 ```
 
-SHA-256 part1=ea6b6170d20a75fae9e75fbef11b369731455b30f7a2246c89f11bc6eb195a19 part3=d324067014ff5fccc9b0ed7ed07f3e74f1f540847fa072f945cb8c314aa383a5
+SHA-256 part1=87379a4bd6071b1dbb2d5c6e54df7c4bd425319ca15b23508e580de8c31c2c24 part3=4e100dd1c6601b0674295098eded04d478a0700fea3954d3098f6ac9cbf5c67c
