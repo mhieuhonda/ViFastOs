@@ -137,6 +137,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - b9ed3bc feat: add vf04 double indirect files
 - 8f7ece9 feat: add sleep deadline primitive
 - 26b9c2c feat: implement tcb restart and bind notification
+- 3e33cfa feat: add bsp idle tcb and blocking sleep
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
