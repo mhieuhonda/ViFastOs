@@ -204,6 +204,22 @@ def run_phases(name: str, tmp: str, boot) -> None:
     fsutil("fsck", disk)
     print(f"{name}: phase 5 torn journal PASS")
 
+    # 7. Large file through fsutil: indirect block mount/fsck + host readback.
+    make_disk(disk)
+    fsutil("mkfs", disk)
+    large_path = os.path.join(tmp, "large.bin")
+    large = bytes(((index * 31 + 7) & 0xFF) for index in range(20 * 1024))
+    with open(large_path, "wb") as handle:
+        handle.write(large)
+    fsutil("put-file", disk, "/p/large", large_path)
+    rc, output, timeout = boot(disk, serial)
+    require(not timeout and "FS LARGE OK" in output, f"{name}: large boot")
+    require("FS FSCK OK" in output, f"{name}: large fsck")
+    got = fsutil("get", disk, "/p/large").stdout
+    require(got == large, f"{name}: large host readback")
+    fsutil("fsck", disk)
+    print(f"{name}: phase 7 large indirect file PASS")
+
     # 6. Corrupt superblock forces a new format, never persistence.
     make_disk(disk)
     fsutil("mkfs", disk)

@@ -517,6 +517,52 @@ pub extern "C" fn client_main() -> ! {
     } else {
         b"BADGE SPOOF BAD\n"
     });
+    let deleted = vifast_user::cap_delete(6);
+    let denied_after_delete = vfs_open_via(6, b"/priv/f", 0).is_none();
+    write(if deleted.error == KError::Ok && denied_after_delete {
+        b"CAP DELETE OK\n"
+    } else {
+        b"CAP DELETE BAD\n"
+    });
+    let mut large_ok = true;
+    if let Some((fd, _)) = vfs_open_via(1, b"/large", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
+        let mut chunk = [0u8; vfs::MAX_IO];
+        for block in 0..40usize {
+            for (index, byte) in chunk.iter_mut().enumerate() {
+                *byte = (block * 17 + index * 7 + 3) as u8;
+            }
+            large_ok &= vfs_write_via(1, fd, (block * vfs::MAX_IO) as u64, &chunk).is_some();
+        }
+        let _ = vfs_close(fd);
+        if let Some((fd, _)) = vfs_open_via(1, b"/large", 0) {
+            let mut out = [0u8; vfs::MAX_IO];
+            for block in 0..40usize {
+                if vfs_read_via(1, fd, (block * vfs::MAX_IO) as u64, vfs::MAX_IO, &mut out)
+                    != Some(vfs::MAX_IO)
+                {
+                    large_ok = false;
+                    break;
+                }
+                for (index, byte) in out.iter().enumerate() {
+                    if *byte != (block * 17 + index * 7 + 3) as u8 {
+                        large_ok = false;
+                    }
+                }
+            }
+            let _ = vfs_close(fd);
+        } else {
+            large_ok = false;
+        }
+        let _ = vfs_unlink(b"/large");
+        large_ok &= vfs_fsck();
+    } else {
+        large_ok = false;
+    }
+    write(if large_ok {
+        b"FS LARGE OK\n"
+    } else {
+        b"FS LARGE BAD\n"
+    });
 
     loop {
         vifast_user::yield_now();

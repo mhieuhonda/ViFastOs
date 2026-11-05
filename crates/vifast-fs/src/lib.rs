@@ -1,8 +1,9 @@
-//! ViFastOs FS v2: a fixed-size, journaled filesystem for user-space VFS.
+//! ViFastOs FS v3: a fixed-size, journaled filesystem for user-space VFS.
 //!
-//! The filesystem is deliberately small: no allocation, 64 inodes, 12 direct
-//! blocks per inode (6 KiB files) and one 16-block write-ahead journal.  All
-//! mutation transactions are committed synchronously before returning.
+//! The filesystem is deliberately small: no allocation, 64 inodes, 11 direct
+//! blocks plus one single-indirect block per file (69 KiB files), and one
+//! 16-block write-ahead journal.  A large write is split into per-block
+//! atomic transactions rather than claiming whole-file atomicity.
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -20,7 +21,11 @@ pub const DATA_START: u32 = 30;
 pub const MAX_INODES: usize = 64;
 pub const INODE_SIZE: usize = 64;
 pub const MAX_BLOCKS_PER_INODE: usize = 12;
-pub const MAX_FILE_SIZE: usize = 6 * 1024;
+pub const MAX_DIRECT_BLOCKS: usize = 11;
+pub const INDIRECT_ENTRIES: usize = BLOCK_SIZE / 4;
+pub const MAX_FILE_BLOCKS: usize = MAX_DIRECT_BLOCKS + INDIRECT_ENTRIES;
+pub const MAX_FILE_SIZE: usize = MAX_FILE_BLOCKS * BLOCK_SIZE;
+pub const MAX_DIR_BLOCKS: usize = MAX_DIRECT_BLOCKS;
 pub const DIR_ENTRY_SIZE: usize = 32;
 pub const DIR_ENTRIES_PER_BLOCK: usize = 16;
 pub const MAX_NAME: usize = 28;
@@ -43,15 +48,19 @@ impl Default for FormatOptions {
         Self {
             total_blocks: 0,
             inode_limit: MAX_INODES as u16,
-            dir_block_limit: MAX_BLOCKS_PER_INODE as u8,
+            dir_block_limit: MAX_DIR_BLOCKS as u8,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct SuperInfo {
+    version: u8,
     inode_limit: usize,
     dir_block_limit: usize,
+    direct_blocks: usize,
+    max_file_blocks: usize,
+    max_file_size: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,8 +169,8 @@ fn encode_super(
     dir_block_limit: u8,
 ) -> [u8; BLOCK_SIZE] {
     let mut block = [0u8; BLOCK_SIZE];
-    block[..4].copy_from_slice(b"VF02");
-    put_u32(&mut block, 4, 2);
+    block[..4].copy_from_slice(b"VF03");
+    put_u32(&mut block, 4, 3);
     put_u32(&mut block, 8, BLOCK_SIZE as u32);
     put_u32(&mut block, 12, total_blocks);
     put_u32(&mut block, 16, inode_limit as u32);
@@ -180,7 +189,27 @@ fn encode_super(
 }
 
 fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<SuperInfo, FsError> {
-    if &block[..4] != b"VF02" || get_u32(block, 4) != 2 || get_u32(block, 8) != BLOCK_SIZE as u32 {
+    let (version, direct_blocks, max_file_blocks, max_dir_blocks, size_limit) =
+        if &block[..4] == b"VF03" && get_u32(block, 4) == 3 {
+            (
+                3u8,
+                MAX_DIRECT_BLOCKS,
+                MAX_FILE_BLOCKS,
+                MAX_DIR_BLOCKS,
+                MAX_FILE_SIZE,
+            )
+        } else if &block[..4] == b"VF02" && get_u32(block, 4) == 2 {
+            (
+                2u8,
+                MAX_BLOCKS_PER_INODE,
+                MAX_BLOCKS_PER_INODE,
+                MAX_BLOCKS_PER_INODE,
+                MAX_BLOCKS_PER_INODE * BLOCK_SIZE,
+            )
+        } else {
+            return Err(FsError::Invalid);
+        };
+    if get_u32(block, 8) != BLOCK_SIZE as u32 {
         return Err(FsError::Invalid);
     }
     let total = get_u32(block, 12);
@@ -192,7 +221,7 @@ fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<SuperInfo, 
     if inode_limit == 0
         || inode_limit > MAX_INODES
         || dir_block_limit == 0
-        || dir_block_limit > MAX_BLOCKS_PER_INODE
+        || dir_block_limit > max_dir_blocks
         || get_u32(block, 20) != BITMAP_START
         || get_u32(block, 24) != BITMAP_BLOCKS
         || get_u32(block, 28) != INODE_START
@@ -212,8 +241,12 @@ fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<SuperInfo, 
     }
     let _ = total;
     Ok(SuperInfo {
+        version,
         inode_limit,
         dir_block_limit,
+        direct_blocks,
+        max_file_blocks,
+        max_file_size: size_limit,
     })
 }
 
@@ -238,7 +271,7 @@ pub fn format_with_options<D: BlockDev>(
     if options.inode_limit == 0 || options.inode_limit as usize > MAX_INODES {
         return Err(FsError::Invalid);
     }
-    if options.dir_block_limit == 0 || options.dir_block_limit as usize > MAX_BLOCKS_PER_INODE {
+    if options.dir_block_limit == 0 || options.dir_block_limit as usize > MAX_DIR_BLOCKS {
         return Err(FsError::Invalid);
     }
     let capacity = dev.block_count();
@@ -297,6 +330,10 @@ pub struct Fs<D: BlockDev> {
     migrated: bool,
     inode_limit: usize,
     dir_block_limit: usize,
+    version: u8,
+    direct_blocks: usize,
+    max_file_blocks: usize,
+    max_file_size: usize,
 }
 
 const EMPTY_INODE: Inode = Inode {
@@ -322,7 +359,11 @@ impl<D: BlockDev> Fs<D> {
             replay_status: 0,
             migrated: false,
             inode_limit: MAX_INODES,
-            dir_block_limit: MAX_BLOCKS_PER_INODE,
+            dir_block_limit: MAX_DIR_BLOCKS,
+            version: 3,
+            direct_blocks: MAX_DIRECT_BLOCKS,
+            max_file_blocks: MAX_FILE_BLOCKS,
+            max_file_size: MAX_FILE_SIZE,
         }
     }
 
@@ -338,7 +379,11 @@ impl<D: BlockDev> Fs<D> {
         self.replay_status = 0;
         self.migrated = false;
         self.inode_limit = MAX_INODES;
-        self.dir_block_limit = MAX_BLOCKS_PER_INODE;
+        self.dir_block_limit = MAX_DIR_BLOCKS;
+        self.version = 3;
+        self.direct_blocks = MAX_DIRECT_BLOCKS;
+        self.max_file_blocks = MAX_FILE_BLOCKS;
+        self.max_file_size = MAX_FILE_SIZE;
         let capacity = self.dev.block_count();
         let mut superblock = zero_block();
         self.dev.read(1, &mut superblock)?;
@@ -356,6 +401,10 @@ impl<D: BlockDev> Fs<D> {
         let info = validate_super(&superblock, capacity)?;
         self.inode_limit = info.inode_limit;
         self.dir_block_limit = info.dir_block_limit;
+        self.version = info.version;
+        self.direct_blocks = info.direct_blocks;
+        self.max_file_blocks = info.max_file_blocks;
+        self.max_file_size = info.max_file_size;
         self.load_metadata()?;
         self.replay()?;
         if self.replay_status != 0 {
@@ -385,6 +434,23 @@ impl<D: BlockDev> Fs<D> {
 
     pub fn replayed(&self) -> u8 {
         self.replay_status
+    }
+
+    fn fsck_mark_block(
+        &self,
+        block: u32,
+        block_used: &mut [u8; (BITMAP_BLOCKS as usize) * BLOCK_SIZE],
+    ) -> Result<(), FsError> {
+        if block < DATA_START || block >= self.dev.block_count() {
+            return Err(FsError::Corrupt);
+        }
+        let byte = block as usize / 8;
+        let bit = 1u8 << (block as usize % 8);
+        if block_used[byte] & bit != 0 {
+            return Err(FsError::Corrupt);
+        }
+        block_used[byte] |= bit;
+        Ok(())
     }
 
     pub fn fsck(&mut self) -> Result<(), FsError> {
@@ -477,7 +543,7 @@ impl<D: BlockDev> Fs<D> {
             if inode.kind != INODE_FILE && inode.kind != INODE_DIR {
                 return Err(FsError::Corrupt);
             }
-            if inode.size > MAX_FILE_SIZE as u32 {
+            if inode.size as usize > self.max_file_size {
                 return Err(FsError::Corrupt);
             }
             if inode.kind == INODE_FILE {
@@ -488,25 +554,47 @@ impl<D: BlockDev> Fs<D> {
             if inode.nlink != nlink[index] {
                 return Err(FsError::Corrupt);
             }
-            let mut count = 0usize;
-            for (block_index, block) in inode.blocks.iter().enumerate() {
-                if *block == 0 {
-                    continue;
-                }
-                if block_index >= inode.blocks_used()
-                    || *block < DATA_START
-                    || *block >= self.dev.block_count()
-                {
+            let used_blocks = inode.blocks_used();
+            if inode.kind == INODE_FILE {
+                if used_blocks > self.max_file_blocks {
                     return Err(FsError::Corrupt);
                 }
-                if block_used[*block as usize / 8] & (1 << (*block as usize % 8)) != 0 {
+                for block_index in 0..used_blocks {
+                    let block = self.file_block(&inode, block_index)?;
+                    self.fsck_mark_block(block, &mut block_used)?;
+                }
+                let indirect = inode.blocks[self.direct_blocks];
+                if used_blocks > self.direct_blocks {
+                    if indirect == 0 {
+                        return Err(FsError::Corrupt);
+                    }
+                    self.fsck_mark_block(indirect, &mut block_used)?;
+                    let mut table = zero_block();
+                    self.dev.read(indirect, &mut table)?;
+                    for slot in 0..INDIRECT_ENTRIES {
+                        let block = get_u32(&table, slot * 4);
+                        if slot >= used_blocks - self.direct_blocks && block != 0 {
+                            return Err(FsError::Corrupt);
+                        }
+                    }
+                } else if indirect != 0 {
                     return Err(FsError::Corrupt);
                 }
-                block_used[*block as usize / 8] |= 1 << (*block as usize % 8);
-                count += 1;
-            }
-            if count != inode.blocks_used() {
-                return Err(FsError::Corrupt);
+            } else {
+                let mut count = 0usize;
+                for (block_index, block) in inode.blocks.iter().enumerate() {
+                    if *block == 0 {
+                        continue;
+                    }
+                    if block_index >= used_blocks {
+                        return Err(FsError::Corrupt);
+                    }
+                    self.fsck_mark_block(*block, &mut block_used)?;
+                    count += 1;
+                }
+                if count != used_blocks {
+                    return Err(FsError::Corrupt);
+                }
             }
         }
         for block in DATA_START..self.dev.block_count() {
@@ -738,6 +826,64 @@ impl<D: BlockDev> Fs<D> {
             }
         }
         Err(FsError::NoSpace)
+    }
+
+    fn file_block(&mut self, inode: &Inode, block_index: usize) -> Result<u32, FsError> {
+        if inode.kind == INODE_DIR {
+            return Ok(inode.blocks.get(block_index).copied().unwrap_or(0));
+        }
+        if block_index < self.direct_blocks {
+            return Ok(inode.blocks[block_index]);
+        }
+        let indirect = inode.blocks[self.direct_blocks];
+        if indirect == 0 {
+            return Ok(0);
+        }
+        let block = self.read_staged(indirect)?;
+        Ok(get_u32(&block, (block_index - self.direct_blocks) * 4))
+    }
+
+    fn set_file_block(
+        &mut self,
+        inode: &mut Inode,
+        block_index: usize,
+        block_no: u32,
+    ) -> Result<(), FsError> {
+        if inode.kind == INODE_DIR || block_index < self.direct_blocks {
+            inode.blocks[block_index] = block_no;
+            return Ok(());
+        }
+        let indirect = inode.blocks[self.direct_blocks];
+        let indirect = if indirect == 0 {
+            let allocated = self.alloc_block()?;
+            self.stage(allocated, &zero_block())?;
+            self.stage_bitmap()?;
+            inode.blocks[self.direct_blocks] = allocated;
+            allocated
+        } else {
+            indirect
+        };
+        let mut table = self.read_staged(indirect)?;
+        put_u32(&mut table, (block_index - self.direct_blocks) * 4, block_no);
+        self.stage(indirect, &table)
+    }
+
+    fn free_inode_blocks(&mut self, inode: &mut Inode) {
+        let used = inode.blocks_used();
+        for index in 0..used {
+            if let Ok(block) = self.file_block(inode, index) {
+                if block != 0 {
+                    self.mark_free(block);
+                }
+            }
+        }
+        if inode.kind == INODE_FILE {
+            let indirect = inode.blocks[self.direct_blocks];
+            if indirect != 0 {
+                self.mark_free(indirect);
+                inode.blocks[self.direct_blocks] = 0;
+            }
+        }
     }
 
     fn alloc_inode(&mut self) -> Result<u16, FsError> {
@@ -1008,11 +1154,12 @@ impl<D: BlockDev> Fs<D> {
         while done < count {
             let block_index = (offset + done) / BLOCK_SIZE;
             let in_block = (offset + done) % BLOCK_SIZE;
-            if block_index >= inode.blocks_used() || inode.blocks[block_index] == 0 {
+            let block_no = self.file_block(&inode, block_index)?;
+            if block_index >= inode.blocks_used() || block_no == 0 {
                 return Err(FsError::Corrupt);
             }
             let mut block = zero_block();
-            self.dev.read(inode.blocks[block_index], &mut block)?;
+            self.dev.read(block_no, &mut block)?;
             let chunk = core::cmp::min(BLOCK_SIZE - in_block, count - done);
             out[done..done + chunk].copy_from_slice(&block[in_block..in_block + chunk]);
             done += chunk;
@@ -1037,40 +1184,41 @@ impl<D: BlockDev> Fs<D> {
         if !self.can_write(&inode, uid) {
             return Err(FsError::NoAccess);
         }
+        let max_file_size = self.max_file_size;
         let end = offset.checked_add(data.len()).ok_or(FsError::Invalid)?;
-        if end > MAX_FILE_SIZE {
+        if end > max_file_size {
             return Err(FsError::NoSpace);
         }
-        self.tx_count = 0;
-        let mut current = inode;
-        let first = offset / BLOCK_SIZE;
-        let last = (end.saturating_sub(1)) / BLOCK_SIZE;
-        for block_index in first..=last {
-            if block_index >= MAX_BLOCKS_PER_INODE {
+        let mut done = 0usize;
+        while done < data.len() {
+            self.tx_count = 0;
+            let mut current = *self.inodes.get(ino as usize - 1).ok_or(FsError::BadFd)?;
+            let absolute = offset + done;
+            let block_index = absolute / BLOCK_SIZE;
+            if block_index >= self.max_file_blocks {
                 return Err(FsError::NoSpace);
             }
-            let mut block = if current.blocks[block_index] != 0 {
+            let in_block = absolute % BLOCK_SIZE;
+            let chunk = core::cmp::min(BLOCK_SIZE - in_block, data.len() - done);
+            let mut block_no = self.file_block(&current, block_index)?;
+            let mut block = if block_no != 0 {
                 let mut block = zero_block();
-                self.dev.read(current.blocks[block_index], &mut block)?;
+                self.dev.read(block_no, &mut block)?;
                 block
             } else {
-                let block_no = self.alloc_block()?;
-                current.blocks[block_index] = block_no;
+                block_no = self.alloc_block()?;
+                self.set_file_block(&mut current, block_index, block_no)?;
+                self.stage_bitmap()?;
                 zero_block()
             };
-            self.stage_bitmap()?;
-            let block_start = block_index * BLOCK_SIZE;
-            let copy_start = core::cmp::max(offset, block_start);
-            let copy_end = core::cmp::min(end, block_start + BLOCK_SIZE);
-            let in_block = copy_start - block_start;
-            block[in_block..in_block + (copy_end - copy_start)]
-                .copy_from_slice(&data[copy_start - offset..copy_end - offset]);
-            self.stage(current.blocks[block_index], &block)?;
+            block[in_block..in_block + chunk].copy_from_slice(&data[done..done + chunk]);
+            self.stage(block_no, &block)?;
+            current.size = core::cmp::max(current.size, (absolute + chunk) as u32);
+            self.inodes[ino as usize - 1] = current;
+            self.stage_inode(ino)?;
+            self.commit()?;
+            done += chunk;
         }
-        current.size = core::cmp::max(current.size, end as u32);
-        self.inodes[ino as usize - 1] = current;
-        self.stage_inode(ino)?;
-        self.commit()?;
         Ok(data.len())
     }
 
@@ -1079,51 +1227,79 @@ impl<D: BlockDev> Fs<D> {
         if inode.kind == INODE_FILE && !self.can_write(&inode, uid) {
             return Err(FsError::NoAccess);
         }
-        if size > MAX_FILE_SIZE {
+        if size > self.max_file_size {
             return Err(FsError::NoSpace);
         }
-        self.tx_count = 0;
         let mut current = inode;
         let old_size = current.size as usize;
         let old_blocks = current.blocks_used();
         let new_blocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        if new_blocks > self.max_file_blocks {
+            return Err(FsError::NoSpace);
+        }
+        self.tx_count = 0;
         if size < old_size && old_size % BLOCK_SIZE != 0 {
             let block_index = size / BLOCK_SIZE;
-            if block_index < old_blocks && current.blocks[block_index] != 0 {
+            let block_no = self.file_block(&current, block_index)?;
+            if block_no != 0 {
                 let mut block = zero_block();
-                self.dev.read(current.blocks[block_index], &mut block)?;
-                let keep = size % BLOCK_SIZE;
-                for byte in block[keep..].iter_mut() {
+                self.dev.read(block_no, &mut block)?;
+                for byte in block[size % BLOCK_SIZE..].iter_mut() {
                     *byte = 0;
                 }
-                self.stage(current.blocks[block_index], &block)?;
+                self.stage(block_no, &block)?;
             }
         } else if size > old_size && old_size % BLOCK_SIZE != 0 {
             let block_index = old_size / BLOCK_SIZE;
-            if block_index < old_blocks && current.blocks[block_index] != 0 {
+            let block_no = self.file_block(&current, block_index)?;
+            if block_no != 0 {
                 let mut block = zero_block();
-                self.dev.read(current.blocks[block_index], &mut block)?;
-                let keep = old_size % BLOCK_SIZE;
-                for byte in block[keep..].iter_mut() {
+                self.dev.read(block_no, &mut block)?;
+                for byte in block[old_size % BLOCK_SIZE..].iter_mut() {
                     *byte = 0;
                 }
-                self.stage(current.blocks[block_index], &block)?;
+                self.stage(block_no, &block)?;
             }
         }
         if new_blocks < old_blocks {
+            let indirect = current.blocks[self.direct_blocks];
+            let keep_indirect = new_blocks > self.direct_blocks;
             for index in new_blocks..old_blocks {
-                if current.blocks[index] != 0 {
-                    self.mark_free(current.blocks[index]);
+                let block = self.file_block(&current, index)?;
+                if block != 0 {
+                    self.mark_free(block);
+                }
+                if index < self.direct_blocks {
                     current.blocks[index] = 0;
+                } else if keep_indirect && indirect != 0 {
+                    self.set_file_block(&mut current, index, 0)?;
                 }
             }
-        } else if new_blocks > old_blocks {
+            if !keep_indirect && indirect != 0 {
+                self.mark_free(indirect);
+                current.blocks[self.direct_blocks] = 0;
+            }
+            current.size = size as u32;
+            self.inodes[ino as usize - 1] = current;
+            self.stage_inode(ino)?;
+            self.stage_bitmap()?;
+            return self.commit();
+        }
+        if new_blocks > old_blocks {
             for index in old_blocks..new_blocks {
+                self.tx_count = 0;
+                let mut current = self.inodes[ino as usize - 1];
                 let block = self.alloc_block()?;
-                current.blocks[index] = block;
+                self.set_file_block(&mut current, index, block)?;
                 self.stage(block, &zero_block())?;
+                self.stage_bitmap()?;
+                current.size = core::cmp::max(current.size, ((index + 1) * BLOCK_SIZE) as u32);
+                self.inodes[ino as usize - 1] = current;
+                self.stage_inode(ino)?;
+                self.commit()?;
             }
         }
+        let mut current = self.inodes[ino as usize - 1];
         current.size = size as u32;
         self.inodes[ino as usize - 1] = current;
         self.stage_inode(ino)?;
@@ -1195,12 +1371,7 @@ impl<D: BlockDev> Fs<D> {
         let mut inode = self.inodes[ino as usize - 1];
         inode.nlink = inode.nlink.saturating_sub(1);
         if inode.nlink == 0 {
-            let blocks = inode.blocks;
-            for block in blocks.iter() {
-                if *block != 0 {
-                    self.mark_free(*block);
-                }
-            }
+            self.free_inode_blocks(&mut inode);
             inode = Inode::default();
             self.inodes[ino as usize - 1] = inode;
             self.stage_inode(ino)?;
@@ -1798,17 +1969,17 @@ mod tests {
         let mut fs = small_fs(FormatOptions {
             total_blocks: 48,
             inode_limit: 64,
-            dir_block_limit: 12,
+            dir_block_limit: 11,
         });
         let full = fs.create(b"/full", 1, INODE_FILE).unwrap();
         assert_eq!(
-            fs.write(full, 0, &[0x11; MAX_FILE_SIZE], 1).unwrap(),
-            MAX_FILE_SIZE
+            fs.write(full, 0, &[0x11; 11 * BLOCK_SIZE], 1).unwrap(),
+            11 * BLOCK_SIZE
         );
         let rest = fs.create(b"/rest", 1, INODE_FILE).unwrap();
         assert_eq!(
-            fs.write(rest, 0, &[0x22; 5 * BLOCK_SIZE], 1).unwrap(),
-            5 * BLOCK_SIZE
+            fs.write(rest, 0, &[0x22; 6 * BLOCK_SIZE], 1).unwrap(),
+            6 * BLOCK_SIZE
         );
         let third = fs.create(b"/third", 1, INODE_FILE).unwrap();
         assert_eq!(
@@ -1862,15 +2033,15 @@ mod tests {
             FormatOptions {
                 total_blocks: 49,
                 inode_limit: 64,
-                dir_block_limit: 12,
+                dir_block_limit: 11,
             },
         )
         .unwrap();
         let mut fs = Fs::mount(dev).unwrap();
         let full = fs.create(b"/full", 1, INODE_FILE).unwrap();
-        fs.write(full, 0, &[0x11; MAX_FILE_SIZE], 1).unwrap();
+        fs.write(full, 0, &[0x11; 11 * BLOCK_SIZE], 1).unwrap();
         let rest = fs.create(b"/rest", 1, INODE_FILE).unwrap();
-        fs.write(rest, 0, &[0x22; 5 * BLOCK_SIZE], 1).unwrap();
+        fs.write(rest, 0, &[0x22; 6 * BLOCK_SIZE], 1).unwrap();
         fs.create(b"/spare", 1, INODE_FILE).unwrap();
         fs.fsck().unwrap();
         let baseline = fs.dev.data.clone();
@@ -1904,6 +2075,97 @@ mod tests {
                 size == 0 || size == 3,
                 "partial write at k={k}: size={size}"
             );
+        }
+    }
+
+    #[test]
+    fn large_file_uses_single_indirect_and_frees_it_on_truncate() {
+        let mut fs = fresh();
+        let ino = fs.create(b"/large", 1, INODE_FILE).unwrap();
+        let mut data = [0u8; 60 * 1024];
+        for (index, byte) in data.iter_mut().enumerate() {
+            *byte = (index * 31 + 7) as u8;
+        }
+        assert_eq!(fs.write(ino, 0, &data, 1).unwrap(), data.len());
+        assert_eq!(fs.info(ino).unwrap().size as usize, data.len());
+        {
+            let inode = fs.inodes[ino as usize - 1];
+            std::println!(
+                "DEBUG size={} used={} direct={:?}",
+                inode.size,
+                inode.blocks_used(),
+                inode.blocks
+            );
+            let ind = inode.blocks[MAX_DIRECT_BLOCKS];
+            std::println!(
+                "DEBUG indirect={} data0={} data10={} data11={}",
+                ind,
+                inode.blocks[0],
+                inode.blocks[10],
+                inode.blocks[11]
+            );
+            if ind != 0 {
+                let mut b = zero_block();
+                fs.dev.read(ind, &mut b).unwrap();
+                std::println!(
+                    "DEBUG entries {} {} {}",
+                    get_u32(&b, 0),
+                    get_u32(&b, 4),
+                    get_u32(&b, 428)
+                );
+            }
+        }
+        fs.fsck().unwrap();
+        let mut out = [0u8; 4096];
+        let mut offset = 0usize;
+        while offset < data.len() {
+            let len = core::cmp::min(out.len(), data.len() - offset);
+            assert_eq!(fs.read(ino, offset, &mut out[..len], 1).unwrap(), len);
+            assert_eq!(&out[..len], &data[offset..offset + len]);
+            offset += len;
+        }
+        fs.truncate(ino, 1000, 1).unwrap();
+        assert_eq!(fs.info(ino).unwrap().size, 1000);
+        fs.fsck().unwrap();
+        let mut small = [0u8; 1000];
+        assert_eq!(fs.read(ino, 0, &mut small, 1).unwrap(), 1000);
+        assert_eq!(&small, &data[..1000]);
+        fs.fsck().unwrap();
+    }
+
+    #[test]
+    fn crash_during_first_indirect_block_allocation_keeps_fsck_clean() {
+        let mut fs = fresh();
+        let ino = fs.create(b"/indirect", 1, INODE_FILE).unwrap();
+        fs.write(ino, 0, &[0x5a; 11 * BLOCK_SIZE], 1).unwrap();
+        fs.fsck().unwrap();
+        let baseline = fs.dev.data.clone();
+        let mut probe = Fs::mount(CrashDev {
+            data: baseline.clone(),
+            writes: 0,
+            fail_at: usize::MAX,
+            failed: false,
+        })
+        .unwrap();
+        probe
+            .write(ino, 11 * BLOCK_SIZE, &[0xa5; BLOCK_SIZE], 1)
+            .unwrap();
+        let total = probe.dev.writes;
+        assert!(total >= 5);
+        for k in 0..=total {
+            let mut crashed = Fs::mount(CrashDev {
+                data: baseline.clone(),
+                writes: 0,
+                fail_at: k,
+                failed: false,
+            })
+            .unwrap();
+            let _ = crashed.write(ino, 11 * BLOCK_SIZE, &[0xa5; BLOCK_SIZE], 1);
+            let image = crashed.dev.data;
+            let mut mounted = Fs::mount(MemDev { data: image }).unwrap();
+            mounted.fsck().unwrap();
+            let size = mounted.info(ino).unwrap().size as usize;
+            assert!(size == 11 * BLOCK_SIZE || size == 12 * BLOCK_SIZE);
         }
     }
 }
