@@ -10,7 +10,7 @@ queue theo hart + work stealing, BKL ticket, maintenance IPI và **per-VA TLB
 shootdown**. User mode có **root/server/client/fault TCB từ ELF Rust**, VSpace
 riêng, IPC + chuyển capability, W^X, ASID/PCID, Untyped/retype có accounting,
 software IOMMU, **VFS server user-space** với FS v3 journal, **hard link,
-symlink, double-indirect, block cache, fsync/flush thật**, persistence 7 phase,
+symlink, double-indirect, O_APPEND, block cache, fsync/flush thật**, persistence 7 phase,
 **Sleep deadline + BSP idle TCB**, **SchedContext budget/period**, `TcbRestart`,
 `TcbBindNotification`, và **console input + shell nhỏ** (`ls`, `cat`, `stat`,
 `sync`...). Có 49 syscall number (49 implemented, 0 placeholder). CNode phẳng

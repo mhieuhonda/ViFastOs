@@ -737,3 +737,11 @@ follow-up `62b31f4`.
 - Worker chỉ có một cap trong CNode, gửi `CNODE` label; root in `CNODE OK`.
 - Harness yêu cầu đúng một `CNODE OK`; TCB/object quota còn dư
   (DATA UNTYPED 68/72 object 64/72).
+
+## 8.997 — VFS O_APPEND (vòng 22)
+
+- ABI thêm `O_APPEND = 0x10`; server giữ flags trong fd và ghi tại
+  `Fs::info(ino).size`, bỏ qua offset client.
+- Client test `/append`: ghi "a", ghi "b" tại offset 0, stat=2, đọc "ab";
+  in `FS APPEND OK`, harness yêu cầu đúng một dòng và cấm `FS APPEND BAD`.
+- QEMU --repeat 3 3/3; persistence 7 phase ×3; 0 warning.

@@ -771,7 +771,8 @@ User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
   128 byte, `MAX_IO=128` byte. Path, WRITE và READ đều đi qua IPC buffer
   (READ copy server→client trong reply), giảm mạnh số round-trip. Server trả
   fd/size cho OPEN, read/write theo byte, READDIR trả tên qua IPC buffer.
-  `O_TRUNC` (0x8) cắt file về 0 khi mở; thư mục bị từ chối.
+  `O_TRUNC` (0x8) cắt file về 0 khi mở; `O_APPEND` (0x10) ghi tại kích thước
+  file hiện tại, bỏ qua offset client; thư mục bị O_TRUNC từ chối.
 - Quyền: uid lấy từ **badge register** của message, không lấy `value`; badge 0
   không có danh tính và bị từ chối, badge `0xFFFF` là superuser duy nhất.
   File/thư mục mới có uid người tạo, mode owner rw + other r. Đọc cần r,
@@ -1220,6 +1221,7 @@ Mỗi dòng sau đúng một lần:
 - `CAP DELETE OK` — exactly once
 - `TCB SUSPEND OK` — exactly once
 - `FS LARGE OK` — exactly once
+- `FS APPEND OK` — exactly once
 - `HARD LINK OK` — exactly once
 - `SYMLINK OK` — exactly once
 - `IRQ OK` — exactly once
@@ -1243,6 +1245,7 @@ Cấm xuất hiện:
 - `CAP DELETE BAD` — forbidden
 - `TCB SUSPEND BAD` — forbidden
 - `FS LARGE BAD` — forbidden
+- `FS APPEND BAD` — forbidden
 - `HARD LINK BAD` — forbidden
 - `SYMLINK BAD` — forbidden
 - `IRQ BAD` — forbidden

@@ -830,6 +830,34 @@ pub extern "C" fn client_main() -> ! {
     } else {
         b"FS LARGE BAD\n"
     });
+
+    let mut append_ok = true;
+    if let Some((fd, _)) = vfs_open_via(
+        1,
+        b"/append",
+        vifast_abi::O_CREATE | vifast_abi::O_RDWR | vifast_abi::O_TRUNC | vifast_abi::O_APPEND,
+    ) {
+        append_ok &= vfs_write_via(1, fd, 0, b"a").is_some();
+        append_ok &= vfs_write_via(1, fd, 0, b"b").is_some();
+        append_ok &= vfs_stat(fd) == Some(2);
+        let _ = vfs_close(fd);
+        if let Some((fd, _)) = vfs_open_via(1, b"/append", 0) {
+            let mut out = [0u8; vfs::MAX_IO];
+            append_ok &= vfs_read_via(1, fd, 0, 2, &mut out) == Some(2) && &out[..2] == b"ab";
+            let _ = vfs_close(fd);
+        } else {
+            append_ok = false;
+        }
+        append_ok &= vfs_unlink(b"/append").is_ok();
+    } else {
+        append_ok = false;
+    }
+    write(if append_ok {
+        b"FS APPEND OK\n"
+    } else {
+        b"FS APPEND BAD\n"
+    });
+
     let _ = vfs_unlink(b"/hard_a");
     let _ = vfs_unlink(b"/hard_b");
     let mut hard_ok = true;

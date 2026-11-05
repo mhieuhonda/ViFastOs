@@ -61,6 +61,7 @@ struct Fd {
     ino: u16,
     uid: u16,
     dir: bool,
+    flags: u64,
     used: bool,
 }
 
@@ -68,6 +69,7 @@ const EMPTY_FD: Fd = Fd {
     ino: 0,
     uid: 0,
     dir: false,
+    flags: 0,
     used: false,
 };
 
@@ -121,7 +123,7 @@ fn path_slice(path: &[u8; vfs::MAX_PATH], len: usize) -> &[u8] {
     &path[..len]
 }
 
-fn alloc_fd(ino: u16, uid: u16, dir: bool) -> Option<u64> {
+fn alloc_fd(ino: u16, uid: u16, dir: bool, flags: u64) -> Option<u64> {
     unsafe {
         let fds = &mut *core::ptr::addr_of_mut!(FDS);
         for (index, fd) in fds.iter_mut().enumerate() {
@@ -130,6 +132,7 @@ fn alloc_fd(ino: u16, uid: u16, dir: bool) -> Option<u64> {
                     ino,
                     uid,
                     dir,
+                    flags,
                     used: true,
                 };
                 return Some(index as u64);
@@ -292,7 +295,7 @@ fn open_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
             Err(error) => return err(error),
         };
     }
-    if let Some(fd) = alloc_fd(ino, uid, info.kind == INODE_DIR) {
+    if let Some(fd) = alloc_fd(ino, uid, info.kind == INODE_DIR, flags) {
         (vfs::OK, fd, info.size as u64, info.kind as u64)
     } else {
         (vfs::ERR, vfs::EBADF, 0, 0)
@@ -331,7 +334,13 @@ fn write_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
         Some(fd) => fd,
         None => return (vfs::ERR, vfs::EBADF, 0, 0),
     };
-    let offset = data[1] as usize;
+    let mut offset = data[1] as usize;
+    if fd.flags & vifast_abi::O_APPEND != 0 {
+        offset = match fs().info(fd.ino) {
+            Ok(info) => info.size as usize,
+            Err(error) => return err(error),
+        };
+    }
     let len = core::cmp::min(data[2] as usize, vfs::MAX_IO);
     let mut bytes = [0u8; vfs::MAX_IO];
     unsafe {

@@ -21,7 +21,7 @@ chưa được port sang bản bare-metal này.
 | IPC Call/Reply, notification, cap transfer | có | có | có |
 | Untyped con + BootInfo + TCB idle/restart/bind | có | có | có |
 | VFS v3 journal + directory + permission | có | có | có |
-| Hard link / symlink / double-indirect | có | có | có |
+| Hard link / symlink / double-indirect / O_APPEND | có | có | có |
 | Block cache + fsync/BlockFlush | có | có | có |
 | Persistence 7 phase | có | có | có |
 | Software IOMMU + DMA map | có | có | có |
