@@ -43,6 +43,9 @@ pub mod user_layout {
     /// copies IPC_BUFFER_WORDS between these pages on every endpoint send.
     pub const IPC_BUF_SERVER_VA: usize = CODE_VA + 0xb000;
     pub const IPC_BUF_CLIENT_VA: usize = CODE_VA + 0xc000;
+    /// Root-VSpace stack used by the RISC-V SMP worker demo.
+    pub const WORKER_STACK_BASE: usize = CODE_VA + 0xd000;
+    pub const WORKER_STACK_TOP: usize = CODE_VA + 0xe000;
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one

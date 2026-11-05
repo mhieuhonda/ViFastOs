@@ -118,6 +118,10 @@ fn maintenance_target_online(target: usize) -> bool {
 }
 
 fn send_maintenance(target: usize, kind: u32) -> bool {
+    assert!(
+        SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
+        "maintenance mailbox supports at most 2 online harts"
+    );
     if target >= MAX_HARTS || !maintenance_target_online(target) {
         return false;
     }

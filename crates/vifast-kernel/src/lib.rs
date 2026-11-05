@@ -521,6 +521,15 @@ impl Kernel {
         Ok(())
     }
 
+    pub fn set_tcb_affinity(&mut self, tcb: ObjRef, mask: u8) -> KResult<()> {
+        if mask == 0 || mask & !((1u8 << MAX_HARTS) - 1) != 0 {
+            return Err(KError::InvalidArg);
+        }
+        let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
+        table.affinity = mask;
+        Ok(())
+    }
+
     pub fn resume_tcb(&mut self, tcb: ObjRef) -> KResult<()> {
         let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
         if table.entry == 0 || table.vspace.is_none() {
@@ -3097,6 +3106,21 @@ impl Kernel {
         a4: u64,
         a5: u64,
     ) -> UserAction {
+        self.user_syscall_on(tcb, 0, number, a0, a1, a2, a3, a4, a5)
+    }
+
+    pub fn user_syscall_on(
+        &mut self,
+        tcb: ObjRef,
+        hart: usize,
+        number: u64,
+        a0: u64,
+        a1: u64,
+        a2: u64,
+        a3: u64,
+        a4: u64,
+        a5: u64,
+    ) -> UserAction {
         if self.tcb(tcb).is_none() {
             return UserAction::Return {
                 value: 0,
@@ -3104,7 +3128,7 @@ impl Kernel {
             };
         }
         if number == SyscallId::Yield as u64 {
-            if self.yield_current().is_some() {
+            if self.yield_current_on(hart).is_some() {
                 return UserAction::Blocked;
             }
             return UserAction::Return {
@@ -3515,6 +3539,24 @@ impl Kernel {
                             stack: a2,
                         }
                     }
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbSetAffinity as u64 => {
+                let cap = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.set_tcb_affinity(cap.obj, a1 as u8) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
@@ -7293,6 +7335,38 @@ mod tests {
         assert!(kernel.get(child).is_none());
         assert!(kernel.get(frame).is_none());
         assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn set_affinity_rejects_empty_and_unknown_harts() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let tcb = kernel.create_tcb("aff", 1).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(tcb, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbSetAffinity as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbSetAffinity as u64, 1, 0x80, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbSetAffinity as u64, 1, 0b10, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(kernel.tcb(tcb).unwrap().affinity, 0b10);
     }
 
     #[test]

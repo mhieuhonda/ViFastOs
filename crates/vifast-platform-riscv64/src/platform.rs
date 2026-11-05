@@ -56,6 +56,13 @@ static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SCHED_READY: AtomicBool = AtomicBool::new(false);
+static RESCHED_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
+static USER_ENTRIES: [AtomicUsize; MAX_HARTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
 const MAINT_TLB: u32 = 1;
 const MAINT_ICACHE: u32 = 2;
 const MAINT_RESCHEDULE: u32 = 4;
@@ -135,6 +142,9 @@ fn poll_maintenance() {
         return;
     }
     let kind = MAINT_KIND[hart].swap(0, Ordering::AcqRel);
+    if kind & MAINT_RESCHEDULE != 0 {
+        RESCHED_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+    }
     if kind & MAINT_TLB != 0 {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
@@ -153,6 +163,10 @@ fn maintenance_target_online(target: usize) -> bool {
 }
 
 fn send_maintenance(target: usize, kind: u32) -> bool {
+    assert!(
+        SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
+        "maintenance mailbox supports at most 2 online harts"
+    );
     if target >= MAX_HARTS || !maintenance_target_online(target) {
         return false;
     }
@@ -264,11 +278,24 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
             core::hint::spin_loop();
             continue;
         }
-        // Affinity defaults to hart 0, so this is expected to stay None in
-        // step D.  Taking BKL also services mailbox IPIs while spinning.
-        let bkl = bkl_lock();
-        let _ = RiscvPlatform::kernel().pick_on(1);
-        drop(bkl);
+        // Take BKL, pick a hart-1 task, publish current state and switch the
+        // root while still protected.  Enter user only after dropping BKL.
+        let picked = {
+            let bkl = bkl_lock();
+            let picked = RiscvPlatform::kernel().pick_on(1);
+            if let Some(tcb) = picked {
+                publish_current_tcb(Some(tcb.index as usize));
+                if vifast_runtime::ensure_current_root::<RiscvPlatform>().is_err() {
+                    drop(bkl);
+                    Riscv64::exit(1);
+                }
+            }
+            picked
+        };
+        if let Some(tcb) = picked {
+            let context = RiscvPlatform::contexts()[tcb.index as usize];
+            <RiscvPlatform as Platform>::enter_user(&context);
+        }
         // BKL is released before the idle poll.  Pending SSIP/STIP are
         // deliberately left set until after the idle step; they are consumed
         // below.  QEMU/OpenSBI on this hart does not reliably wake WFI with
@@ -348,8 +375,9 @@ fn set_active_root(root: u64, asid: u16) {
 
 fn assert_current_tcb() {
     let state = cpu_state();
+    let hart = unsafe { (*state).hart_id };
     let expected = RiscvPlatform::kernel()
-        .current()
+        .current_on(hart)
         .map(|tcb| tcb.index as usize)
         .unwrap_or(usize::MAX);
     assert_eq!(
@@ -600,9 +628,24 @@ impl Platform for RiscvPlatform {
     }
 
     fn wake_hart(hart: usize) {
+        assert!(
+            SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
+            "reschedule mailbox supports at most 2 online harts"
+        );
         if hart == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
             let _ = send_maintenance(1, MAINT_RESCHEDULE);
         }
+    }
+
+    fn user_entries(hart: usize) -> usize {
+        USER_ENTRIES
+            .get(hart)
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    fn resched_ipi_wakes() -> usize {
+        RESCHED_IPI_WAKES.load(Ordering::Relaxed)
     }
 
     fn init_block() {
@@ -841,6 +884,10 @@ impl Platform for RiscvPlatform {
             assert!(!cpu.is_null(), "RISC-V per-CPU pointer is null");
             // Kernel-only register: user code cannot redirect this pointer.
             core::arch::asm!("csrw sscratch, {}", in(reg) cpu);
+            let hart = (*cpu).hart_id;
+            if let Some(counter) = USER_ENTRIES.get(hart) {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
             core::arch::asm!("csrs sie, {}", in(reg) 1u64 << 5);
             core::arch::asm!("mv tp, {}", in(reg) context.regs[4]);
             core::arch::asm!("mv sp, {}", in(reg) context.regs[2]);
@@ -940,10 +987,17 @@ extern "C" {
 
 #[no_mangle]
 extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
+    let frame = unsafe { &mut *frame };
+    if frame.scause == 0x8000_0000_0000_0001 {
+        unsafe {
+            core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
+        }
+        poll_maintenance();
+        return;
+    }
     assert_irqs_disabled();
     let bkl = bkl_lock();
     assert_current_tcb();
-    let frame = unsafe { &mut *frame };
     if frame.scause == 0x8000_0000_0000_0005 {
         vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
         drop(bkl);
@@ -951,6 +1005,17 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         return;
     }
     if frame.scause != 8 {
+        vifast_kernel::klog!(
+            RiscvPlatform,
+            "TRAP hart={} cause={:#x} sepc={:#x}",
+            if let Some(state) = unsafe { cpu_state().as_ref() } {
+                state.hart_id
+            } else {
+                99
+            },
+            frame.scause,
+            frame.sepc
+        );
         /* SPP=1 means the fault came from S-mode.  That is a kernel bug,
         not a user fault, and must not be suspended. */
         if frame.sstatus & (1 << 8) != 0 {
@@ -967,6 +1032,16 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         return;
     }
     let number = frame.regs[17];
+    if let Some(state) = unsafe { cpu_state().as_ref() } {
+        if state.hart_id == 1 {
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "SYSCALL hart1 n={} sepc={:#x}",
+                number,
+                frame.sepc
+            );
+        }
+    }
     frame.sepc = frame.sepc.wrapping_add(4);
     let args = [
         frame.regs[10],

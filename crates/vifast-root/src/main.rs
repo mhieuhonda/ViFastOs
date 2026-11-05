@@ -43,6 +43,22 @@ const USER_ELF_MACHINE: u16 = 62;
 const CLIENT_UNTYPED_SIZE: usize = 0x1_0000;
 const CLIENT_UNTYPED_OBJECTS: usize = 8;
 
+#[cfg(target_arch = "riscv64")]
+#[no_mangle]
+pub extern "C" fn smp_worker_entry() -> ! {
+    // Small scheduler probe: force context switches on hart 1, then exit.
+    let mut i = 0;
+    while i < 50 {
+        let _ = vifast_user::yield_now();
+        i += 1;
+    }
+    // Do not call Exit: the identity used by this demo would shut down the
+    // whole machine.  Keep yielding until the hart-0 harness exits.
+    loop {
+        let _ = vifast_user::yield_now();
+    }
+}
+
 fn check(result: SyscallResult) {
     if result.error != KError::Ok {
         panic!("root syscall failed: {:?}", result.error);
@@ -413,6 +429,31 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         6,
     ));
     check(vifast_user::tcb_resume(fault4_tcb));
+
+    #[cfg(target_arch = "riscv64")]
+    {
+        let worker_tcb = slots.alloc();
+        retype(meta_untyped, ObjType::Tcb, worker_tcb);
+        let worker_stack = slots.alloc();
+        retype(data_untyped, ObjType::Frame, worker_stack);
+        map_with_tables(
+            data_untyped,
+            root_vspace,
+            worker_stack,
+            vifast_abi::user_layout::WORKER_STACK_BASE as u64,
+            Rights::READ | Rights::WRITE,
+            &mut slots,
+        );
+        check(vifast_user::tcb_configure(
+            worker_tcb,
+            smp_worker_entry as *const () as usize as u64,
+            vifast_abi::user_layout::WORKER_STACK_TOP as u64,
+            root_vspace,
+            5,
+        ));
+        check(vifast_user::tcb_set_affinity(worker_tcb, 0b10));
+        check(vifast_user::tcb_resume(worker_tcb));
+    }
     write(ROOT_READY);
 
     loop {

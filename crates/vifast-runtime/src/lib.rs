@@ -137,6 +137,14 @@ pub trait Platform: Arch + Console {
     /// Nudge an idle hart when a TCB with matching affinity becomes ready.
     fn wake_hart(_hart: usize) {}
 
+    fn user_entries(_hart: usize) -> usize {
+        0
+    }
+
+    fn resched_ipi_wakes() -> usize {
+        0
+    }
+
     fn block_read(_lba: u64, _out: &mut [u8; 512]) -> bool {
         false
     }
@@ -734,8 +742,8 @@ pub mod syscall {
         let Some(tcb) = kernel.current_on(hart) else {
             A::exit(1);
         };
-        let action = kernel.user_syscall(
-            tcb, number, args[0], args[1], args[2], args[3], args[4], args[5],
+        let action = kernel.user_syscall_on(
+            tcb, hart, number, args[0], args[1], args[2], args[3], args[4], args[5],
         );
         if hart == 0 && kernel.has_ready_on(1) {
             A::wake_hart(1);
@@ -966,6 +974,16 @@ pub mod timer {
             let (timer_wakes, ipi_wakes) = A::secondary_wakeups();
             if timer_wakes + ipi_wakes > 0 {
                 vifast_kernel::klog!(A, "SMP IDLE OK (hart1_wakeups={})", timer_wakes + ipi_wakes);
+            }
+            let entries1 = A::user_entries(1);
+            if entries1 > 0 {
+                vifast_kernel::klog!(
+                    A,
+                    "SMP SCHED OK (hart0={}, hart1={}, resched={})",
+                    A::user_entries(0),
+                    entries1,
+                    A::resched_ipi_wakes()
+                );
             }
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
             if let Some((size, bump, objects, max_objects)) =
