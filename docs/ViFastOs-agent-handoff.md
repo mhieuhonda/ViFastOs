@@ -2,8 +2,8 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code được đánh giá:** `1b3dc12` (`docs: record x86 block and persistent fs`)  
-**Commit tính năng gần nhất:** `fe569c1` (`feat: add x86 ata block backend for persistent vfs`)  
+**Mốc code hiện tại:** `23d8dfb` (`feat: riscv virtio-mmio block backend`)
+**Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
 
@@ -28,34 +28,33 @@
 - Block device:
   - AArch64: VirtIO-MMIO, polling.
   - x86_64: ATA PIO, polling.
-  - RISC-V: **chưa có**, fallback RAM.
-- `/scratch` bền vững trên AArch64 và x86_64 qua sector 0.
+  - RISC-V: VirtIO-MMIO, polling; slot `0x10008000`, version 2.
+- `/scratch` bền vững trên cả 3 kiến trúc qua sector 0.
 - Software IOMMU: domain, reverse map, `IoMap`/`IoUnmap`, 32 mapping/domain.
 - SMP mức "maintenance": RISC-V/AArch64 có 2 hart, IPI và full TLB shootdown; hart phụ **chưa chạy scheduler**.
+- BigKernelLock (BKL) test-and-set + RAII đã bọc trap/syscall/IRQ entry; chưa fair lock.
 - ASID/PCID tagging; x86 PCID chỉ bật khi CPUID hỗ trợ, QEMU TCG thường fallback CR3.
 
 ### Chưa có / còn yếu
 
-- RISC-V block device và FS bền vững.
-- Full SMP scheduler; x86 AP bootstrap; per-hart runqueue/BKL.
+- Full SMP scheduler; x86 AP bootstrap; per-hart runqueue.
+- BKL chưa phải ticket/fair lock; x86 fault path/BKL đang được audit.
 - Per-VA TLB shootdown; cross-hart I-cache shootdown.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
 - Hệ thống file thật: mới là một sector `/scratch`, chưa có directory/permission/journal.
 - VirtIO network/input.
 - Compositor/ViFastKey/GUI.
-- Test persistence thực sự qua reboot; hiện harness chỉ kiểm tra `FS DISK OK`.
+- Test persistence đã hermetic cho cả 3 kiến trúc (`scripts/test-persist.py`).
 - Dọn dẹp các phần ABI placeholder như CNode/SchedContext/Irq.
 
 ### Việc nên làm ngay, theo thứ tự
 
-1. **Làm RISC-V block + FS bền vững**, hoặc quyết định rõ là tạm bỏ.
-2. **Làm test persistence hermetic**: boot 2 lần, kiểm tra dữ liệu sống qua reboot.
-3. **Full SMP**: x86 AP + scheduler đa hart + BKL; RISC/AArch hart phụ phải chạy task.
-4. **FS v2**: metadata, nhiều file, directory, permission, crash-safe.
-5. **Per-VA TLB + remote I-cache**.
-6. **Hardware IOMMU**.
-7. **VirtIO net/input**.
-8. **Compositor/ViFastKey**.
+1. **Full SMP**: x86 AP + scheduler đa hart + BKL audit; RISC/AArch hart phụ phải chạy task.
+2. **FS v2**: metadata, nhiều file, directory, permission, crash-safe.
+3. **Per-VA TLB + remote I-cache**.
+4. **Hardware IOMMU**.
+5. **VirtIO net/input**.
+6. **Compositor/ViFastKey**.
 
 ---
 
@@ -102,22 +101,22 @@ cargo fmt --all -- --check
 ```text
 RISC-V : SELFTEST PASS
          SMP OK (harts=2, ipi=1)
-         FS DISK RAM
+         BLOCK OK
+         FS DISK OK
 
 AArch64: SELFTEST PASS
          SMP OK (harts=2, psci=0, ipi=1)
          BLOCK OK
          FS DISK OK
-         FS PERSIST OK
 
 x86_64 : SELFTEST PASS
          SMP SKIP (x86 AP bootstrap pending)
          BLOCK OK
          FS DISK OK
-         FS PERSIST OK
 ```
 
-Lưu ý: `FS PERSIST OK` chỉ xuất hiện khi file disk đã có magic `VF01` từ lần chạy trước. Harness hiện chỉ bắt buộc `FS DISK OK`, nên **chưa có test reboot thực sự**.
+`test-qemu.py` dùng disk mới nên không yêu cầu `FS PERSIST OK`.
+`scripts/test-persist.py` kiểm tra 2 lần boot + nonce + negative cho cả 3 kiến trúc.
 
 ---
 
@@ -188,9 +187,9 @@ Kernel không biết chi tiết phần cứng. Nó gọi các trait/primitive do
 | VFS đầy đủ | ❌ | chưa directory/permission/nhiều file |
 | Block AArch64 | ✅ | VirtIO-MMIO, polling |
 | Block x86_64 | ✅ | ATA PIO, polling |
-| Block RISC-V | ❌ | virtio-mmio ngoài PMP/OpenSBI |
-| FS bền vững AArch64/x86 | ✅ | sector 0, magic `VF01` |
-| FS bền vững RISC-V | ❌ | fallback RAM |
+| Block RISC-V | ✅ | VirtIO-MMIO slot `0x10008000` |
+| FS bền vững 3 kiến trúc | ✅ | sector 0, magic `VF01`, test-persist |
+| BKL | ✅ groundwork | test-and-set + RAII; trap/syscall/IRQ |
 | IOMMU phần mềm | ✅ | domain, 32 mapping, `IoMap`/`IoUnmap` |
 | IOMMU phần cứng | ❌ | chưa VT-d/SMMU |
 | VirtIO net | ❌ | chưa có |
@@ -244,7 +243,10 @@ QEMU -bios default (OpenSBI)
 - Không UEFI.
 - OpenSBI cung cấp SBI console/timer/IPI/HSM.
 - `-smp 2`; hart 1 được start bằng SBI HSM.
-- VirtIO-MMIO tại `0x10001000` đọc ra `0xffffffff`; nghi do PMP/OpenSBI giới hạn vùng UART `0x10000000..0x10000fff`.
+- OpenSBI PMP Region07 cho S/U `R,W,X` toàn bộ; **không có PMP chặn**.
+- 8 slot VirtIO-MMIO cách nhau `0x1000`; QEMU đặt `virtio-blk-device` ở slot cuối
+  `0x10008000`. Driver scan `0x10001000..0x10009000`, yêu cầu version 2/device 2.
+- Legacy chỉ log `BLOCK SKIP (virtio legacy)`; không fallback RAM.
 
 ---
 
@@ -330,8 +332,8 @@ Chưa có:
 
 - x86 AP bootstrap.
 - Per-hart runqueue.
-- BKL/khóa toàn cục cho kernel.
 - Hart phụ chạy task người dùng.
+- BKL fair/ticket; audit mọi đường ra và x86 fault path.
 - Timer đa hart.
 - Per-VA TLB shootdown.
 - Remote I-cache shootdown.
@@ -367,8 +369,8 @@ VFS server:
   - magic `VF01`
   - độ dài `u32` little-endian
   - dữ liệu tối đa 64 byte
-- AArch64/x86_64 in `FS DISK OK`, `FS DISK OK + FS PERSIST OK`.
-- RISC-V in `FS DISK RAM`.
+- Cả 3 kiến trúc in `FS DISK OK`; persistence do `test-persist.py` kiểm tra
+  (`FS PERSIST OK` và `FS PERSIST DATA <nonce>`).
 
 Đây **chưa phải filesystem thật**:
 - Không có superblock nhiều block.
@@ -414,9 +416,10 @@ x86_64:
 
 RISC-V:
 
-- Không có block backend.
-- `Platform::block_read` mặc định trả `false`.
-- VFS fallback RAM.
+- VirtIO-MMIO block backend dùng chung `vifast-virtio`.
+- Scan `0x10001000..0x10009000`, stride `0x1000`; device slot `0x10008000`.
+- Polling, queue tĩnh; DMA range kiểm tra nằm trong `kernel_accessible_range()`.
+- Legacy version 1 chỉ log `BLOCK SKIP (virtio legacy)`.
 
 ### 5.6 IOMMU
 
@@ -449,10 +452,8 @@ Chưa có:
 
 | Mức | Vấn đề | Hệ quả | Ghi chú |
 |---|---|---|---|
-| P0 | RISC-V không có block | Không có FS bền vững trên RISC | PMP/OpenSBI hoặc PCI VirtIO |
 | P0 | SMP chưa thật | Chưa dùng đa nhân để chạy task | Hart phụ chỉ IPI/TLB |
 | P0 | x86 AP chưa boot | x86 vẫn một scheduler hart | ACPI MADT + INIT/SIPI |
-| P0 | Persistence test chưa hermetic | `FS PERSIST OK` có thể chỉ là dữ liệu cũ | Cần test 2 lần boot |
 | P1 | FS quá nhỏ | Không lưu được file/thư mục thật | Một sector, 4 file × 64 B |
 | P1 | Chưa per-VA TLB | Full flush tốn kém, chưa tối ưu | Cần range + ASID |
 | P1 | Chưa remote I-cache | Code mới có thể chạy sai trên hart khác | Cần IPI + fence |
@@ -462,7 +463,7 @@ Chưa có:
 | P1 | Object table cố định | Hết object là `OutOfMemory` | 128 object; TCB 16 |
 | P1 | QEMU-specific driver | Không chạy được máy thật | ATA legacy, VirtIO-MMIO |
 | P2 | x86 identity map 0..1 GiB | RAM/UEFI vượt 1 GiB có thể hỏng | Cần memory map |
-| P2 | RISC kernel accessible 4 MiB | Headroom khoảng 565 KB | Theo dõi kích thước |
+| P2 | RISC kernel accessible 4 MiB | Headroom 561.072 B | Theo dõi kích thước |
 | P2 | Tài liệu có chỗ cũ | Agent dễ làm sai | Summary có mục stale |
 | P2 | CNode/SchedContext/Irq placeholder | ABI trông đầy đủ nhưng chưa chạy | Implement hoặc đánh dấu rõ |
 | P2 | Chưa có CI | Dễ commit đỏ | Thêm CI chạy build + QEMU |
@@ -472,7 +473,7 @@ Chưa có:
 
 1. **SMP + `static mut`**: nếu bật scheduler đa hart trước khi có khóa, kernel có thể hỏng dữ liệu ngẫu nhiên.
 2. **FS một sector**: dễ mất dữ liệu nếu ghi dở; chưa có journal.
-3. **RISC-V PMP**: có thể mất nhiều thời gian nếu đi sai hướng; cần thí nghiệm nhỏ trước.
+3. **BKL/IPI**: không được để hart phụ lấy BKL khi hart 0 đang chờ TLB ACK.
 4. **QEMU-specific**: pass QEMU không đảm bảo pass máy thật.
 5. **Harness dễ bị "làm yếu"**: không được sửa test cho dễ pass.
 
@@ -482,58 +483,18 @@ Chưa có:
 
 ### P0 — Parity và độ tin cậy baseline
 
-#### P0.1 RISC-V block + FS bền vững
+#### P0.1 RISC-V block + FS bền vững — DONE (`23d8dfb`)
 
-**Mục tiêu:** RISC-V in:
+- VirtIO-MMIO scan `0x10001000..0x10009000`, stride `0x1000`.
+- QEMU đặt device ở slot `0x10008000`; `force-legacy=false` cho version 2/device 2.
+- OpenSBI Region07 cho S/U RWX toàn bộ; PMP không phải nguyên nhân cũ.
+- Block/FS/persist PASS trên RISC-V; harness bật `require_block/require_disk`.
 
-```text
-BLOCK OK
-FS DISK OK
-FS PERSIST OK
-```
+#### P0.2 Test persistence hermetic — DONE (`096faf8`)
 
-**Hướng A — custom OpenSBI/PMP:**
-
-- Build OpenSBI có PMP cho vùng VirtIO-MMIO `0x10001000..0x10008000`.
-- QEMU dùng `-bios <fw_dynamic.bin>` thay `-bios default`.
-- Thêm `-drive` + `-device virtio-blk-device`.
-- Map page device VirtIO trong page table RISC-V (hiện chỉ map UART `0x10000000`).
-- Dùng lại `vifast-virtio` nếu địa chỉ/transport tương thích.
-
-**Hướng B — PCI VirtIO:**
-
-- QEMU `-device virtio-blk-pci`.
-- Đọc ECAM `0x30000000`; cấp BAR MMIO `0x40000000`.
-- Modern virtio-pci: common cfg, notify, ISR, device cfg.
-- Không cần custom firmware nhưng code PCI/VirtIO-PCI nhiều hơn.
-
-**Trước khi chọn:** làm thí nghiệm nhỏ:
-
-1. Map `0x10001000` vào page table RISC-V.
-2. Đọc magic.
-3. Nếu vẫn `0xffffffff`/access fault → PMP; chọn A hoặc B.
-4. Nếu đọc được → lỗi page table/driver; sửa trước.
-
-**Acceptance:**
-
-- RISC-V harness bật `require_block=True`, `require_disk=True`.
-- QEMU chạy 2 lần liên tiếp; lần 2 phải `FS PERSIST OK`.
-- Không fallback RAM.
-- Docs + log cập nhật.
-
-#### P0.2 Test persistence hermetic
-
-Hiện tại harness chỉ kiểm tra `FS DISK OK`; `FS PERSIST OK` phụ thuộc file disk cũ.
-
-**Cần:**
-
-- Xóa disk trước lần boot 1.
-- Boot 1: ghi giá trị mới.
-- Boot 2: đọc lại, kiểm tra đúng giá trị.
-- Chỉ pass nếu dữ liệu sống qua reboot.
-- Làm cho AArch64 và x86_64; RISC-V sau khi có block.
-
-Có thể thêm script `scripts/test-persist.py` hoặc mở rộng `test-qemu.py` có chế độ 2 phase. Không được làm yếu các assertion hiện có.
+- `scripts/test-persist.py`: disk trắng, nonce phase 2, negative magic.
+- Áp dụng cả RISC-V/AArch64/x86_64 từ `23d8dfb`.
+- `test-qemu.py` dùng disk temp mới mỗi lần chạy.
 
 #### P0.3 Full SMP
 
@@ -607,7 +568,7 @@ Giữ `/motd`, `/scratch`, các string harness cũ. Thêm test:
 - IPI payload gồm ASID + VA range + loại invalidation.
 - Hart nhận invalidate đúng range.
 - ACK có timeout.
-- I-cache: RISC `fence.i` remote; AArch `dc cvau` + `ic ivau` + barriers; x86 `wbinvd`/clflush nếu cần.
+- I-cache: RISC `fence.i` remote; AArch `dc cvau` + `ic ivau` + barriers. x86 I/D cache coherent, chỉ cần lệnh serializing trên hart chạy code mới; không dùng `wbinvd`/clflush.
 - Test map/unmap từ hart A, chạy code mới trên hart B.
 
 #### P1.3 Hardware IOMMU
@@ -692,7 +653,7 @@ Giữ `/motd`, `/scratch`, các string harness cũ. Thêm test:
 - `Zero OK`
 - x86: `KERNEL DATA NX OK`
 - RISC/AArch: `SMP OK` và `ipi=1`
-- AArch/x86: `BLOCK OK`, `FS DISK OK`
+- RISC/AArch/x86: `BLOCK OK`, `FS DISK OK`
 
 ### Exit code
 
@@ -725,6 +686,7 @@ Nếu cần thêm tính năng, **thêm assertion mới**; không thay assertion 
    ```bash
    ./scripts/build.sh
    python3 scripts/test-qemu.py
+   python3 scripts/test-persist.py
    ```
 4. Chọn **một** hạng mục nhỏ.
 5. Viết test trước nếu có thể.
@@ -744,6 +706,7 @@ Một thay đổi chỉ được coi là xong khi:
 - Code build không warning.
 - Host test liên quan PASS.
 - QEMU 3/3 PASS, lặp 3 lần.
+- `python3 scripts/test-persist.py` PASS cả 3 kiến trúc.
 - Không làm yếu harness.
 - Có docs + log.
 - Có commit.
@@ -771,20 +734,21 @@ refactor: ...
 | `crates/vifast-user` | Syscall wrappers cho user programs |
 | `crates/vifast-elf` | ELF64 parser |
 | `crates/vifast-pte` | PTE formats, generic page-table walk, user VA range |
-| `crates/vifast-arch` | Trait/primitive chung |
+| `crates/vifast-arch` | Trait/primitive chung + `bkl.rs` |
 | `crates/vifast-arch-riscv64` | RISC-V trap/MMU/timer/SMP |
 | `crates/vifast-arch-aarch64` | AArch64 trap/MMU/timer/SMP |
 | `crates/vifast-arch-x86_64` | x86_64 trap/MMU/timer/SMP |
 | `crates/vifast-platform-riscv64` | OpenSBI, UART, page table, platform |
 | `crates/vifast-platform-aarch64` | GICv2, PSCI, VirtIO block |
 | `crates/vifast-platform-x86_64` | UEFI, GDT/TSS/IDT, ATA, paging |
-| `crates/vifast-virtio` | VirtIO-MMIO block driver AArch64 |
+| `crates/vifast-virtio` | VirtIO-MMIO block driver AArch64 + RISC-V |
 | `crates/vifast-root` | Root task: BootInfo, nạp module, fault handler |
 | `crates/vifast-server` | User-space VFS server |
 | `crates/vifast-client` | VFS client demo |
 | `crates/vifast-kernel-*` | Binary kernel cho từng target |
 | `scripts/build.sh` | Build và test toàn bộ |
 | `scripts/test-qemu.py` | Harness QEMU 3 kiến trúc |
+| `scripts/test-persist.py` | Hermetic persistence 3 kiến trúc |
 | `scripts/check-root-elf.sh` | Kiểm tra root ELF/link |
 | `docs/overnight-log.md` | Nhật ký thay đổi |
 | `ViFastOs-architecture-summary.txt` | Tài liệu kiến trúc chi tiết |
@@ -804,7 +768,8 @@ USER FAULT ... addr=0x80000000
 USER FAULT ... addr=0x0
 USER FAULT ... addr=0x1000002000
 USER FAULT ... addr=0x1000301000
-FS DISK RAM
+BLOCK OK
+FS DISK OK
 VFS OK
 PREEMPT OK (ticks=20, switches=539932)
 ROOT SWITCH 35
@@ -822,8 +787,8 @@ USER FAULT ... addr=0x80000000
 USER FAULT ... addr=0x80000000
 USER FAULT ... addr=0x1000002000
 USER FAULT ... addr=0x1000301000
+BLOCK OK
 FS DISK OK
-FS PERSIST OK
 VFS OK
 PREEMPT OK (ticks=20, switches=1147894)
 ROOT SWITCH 35
@@ -840,8 +805,8 @@ USER FAULT ... addr=0x80000000
 USER FAULT ... addr=0x0
 USER FAULT ... addr=0x1000002000
 USER FAULT ... addr=0x1000301000
+BLOCK OK
 FS DISK OK
-FS PERSIST OK
 VFS OK
 PREEMPT OK (ticks=20, switches=408653)
 ROOT SWITCH 35
@@ -872,20 +837,23 @@ DATA UNTYPED pages=41/64 objects=25/48
 | VFS I/O | 24 byte |
 | Block sector | 512 byte |
 | AArch virtio window | `0x0a00_0000..0x0a00_4000`, stride `0x200` |
-| RISC virtio candidate | `0x1000_1000` (hiện fail) |
+| RISC virtio device | `0x1000_8000`, version 2/device 2 |
 | RISC kernel limit | `0x8040_0000` (4 MiB) |
-| RISC headroom | khoảng 565.200 byte |
+| RISC headroom | 561.072 byte |
 | Root ELF RISC-V | 12.880 byte |
 | Root ELF AArch64 | 12.704 byte |
 | Root ELF x86_64 | 16.744 byte |
-| AArch disk | `/tmp/vifast-aarch64.disk`, 4 MiB |
-| x86 disk | `/tmp/vifast-x86_64.disk`, 4 MiB |
+| Test disks | temp dir riêng mỗi lần chạy, 4 MiB |
 
 ---
 
 ## 13. Phụ lục C — Lịch sử commit gần đây
 
 ```text
+23d8dfb feat: riscv virtio-mmio block backend
+4293406 refactor: add big kernel lock and per-cpu state groundwork
+096faf8 test: hermetic two-boot persistence check
+1e5d113 docs: sync architecture summary with current code
 1b3dc12 docs: record x86 block and persistent fs
 fe569c1 feat: add x86 ata block backend for persistent vfs
 c1cfe2e docs: record persistent vfs on virtio block
@@ -935,14 +903,12 @@ Mục tiêu: tiếp tục hoàn thiện các phần còn lại của ViFastOS, m
 một phần thì chạy đầy đủ test và commit.
 
 Ưu tiên:
-1. RISC-V block + FS bền vững.
-2. Test persistence thật qua reboot.
-3. Full SMP: x86 AP, scheduler đa hart, BKL.
-4. FS v2: nhiều file, directory, permission, crash-safe.
-5. Per-VA TLB shootdown + remote I-cache.
-6. Hardware IOMMU.
-7. VirtIO network/input.
-8. Compositor/ViFastKey.
+1. Full SMP: x86 AP, scheduler đa hart, BKL audit.
+2. FS v2: nhiều file, directory, permission, crash-safe.
+3. Per-VA TLB shootdown + remote I-cache.
+4. Hardware IOMMU.
+5. VirtIO network/input.
+6. Compositor/ViFastKey.
 
 Ràng buộc bắt buộc:
 - Kernel/runtime giữ no_std và forbid(unsafe_code).
@@ -960,9 +926,10 @@ Bắt đầu bằng:
   git status
   ./scripts/build.sh
   python3 scripts/test-qemu.py
+  python3 scripts/test-persist.py
 
 Sau đó chọn một hạng mục nhỏ, làm, test, cập nhật docs, commit.
-Nếu bị kẹt ở RISC-V PMP/PCI hoặc SMP, báo rõ đã thử gì và log liên quan.
+Nếu bị kẹt ở SMP/BKL hoặc persistence, báo rõ đã thử gì và log liên quan.
 ```
 
 ---
@@ -975,14 +942,13 @@ ViFastOS đang ở trạng thái **nguyên mẫu microkernel đa kiến trúc c�
 - User mode + ELF + VSpace.
 - Capability + IPC.
 - VFS user-space.
-- Block device + `/scratch` bền vững trên AArch64/x86_64.
+- Block device + `/scratch` bền vững trên cả 3 kiến trúc.
 - SMP maintenance IPI/TLB.
 - IOMMU mô hình phần mềm.
 
 Các phần còn thiếu lớn nhất là:
 
-- RISC-V storage.
-- Full SMP.
+- Full SMP scheduler.
 - Filesystem thật.
 - Hardware IOMMU.
 - Network/input/GUI.

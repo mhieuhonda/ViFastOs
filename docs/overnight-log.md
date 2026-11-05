@@ -25,6 +25,7 @@
 - `fe569c1` — x86 ATA block backend for persistent VFS.
 - `test: hermetic two-boot persistence check` — Task 2 (Agent 2).
 - `refactor: add big kernel lock and per-cpu state groundwork` — Task 4 (Agent 2).
+- `23d8dfb` — RISC-V VirtIO-MMIO block backend (vòng 02).
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -55,7 +56,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
   runtime/user compile.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
   `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`,
-  `IOMMU OK`; RISC-V/AArch `SMP OK (... ipi=1)`; AArch/x86 `BLOCK OK`,
+  `IOMMU OK`; RISC-V/AArch `SMP OK (... ipi=1)`; cả 3 `BLOCK OK`,
   `FS DISK OK`; persistence do `scripts/test-persist.py` kiểm tra.
 - Boot Untyped: RISC-V 20/32 pages, AArch/x86 22/32; free 12/10 pages,
   12/12 objects.
@@ -64,7 +65,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `6788309537024a3e3cdc64e2fdf13cdf1c252ad7425e9e8eecadac43718de25a`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `ba5cf4ed440ad125e0d02eeca978e40fa2760ac5d92195c4499c8c5d66afbfbd`.
 
 ---
 
@@ -207,6 +208,23 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.14 — RISC-V VirtIO-MMIO block + docs sync (vòng 02)
+
+- Commit `23d8dfb feat: riscv virtio-mmio block backend`.
+- OpenSBI PMP Region07 cho S/U RWX toàn bộ; PMP không chặn. QEMU đặt device
+  ở slot cuối `0x10008000`, các slot cách `0x1000`; `force-legacy=false`
+  cho version 2/device 2.
+- `vifast-virtio::init_range(start,end,stride)` scan toàn bộ; AArch64 giữ
+  cửa sổ cũ `0x0a000000..0x0a004000`, stride `0x200`; RISC-V dùng
+  `0x10001000..0x10009000`, stride `0x1000`. Legacy chỉ log
+  `BLOCK SKIP (virtio legacy)`.
+- RISC-V platform kiểm tra DMA range trong `kernel_accessible_range()`,
+  implement `init_block/block_read/block_write`.
+- Harness RISC-V thêm disk temp, `virtio-blk-device`, `force-legacy=false`,
+  bật `require_block/require_disk`; `test-persist.py` chạy cả 3 kiến trúc.
+- RISC-V kernel end `0x80377050`, headroom `561072` byte dưới `0x80400000`.
+- `./scripts/build.sh` PASS; QEMU 3/3 PASS × 5; persist 3/3 PASS.
 
 ## 8.12 — Hermetic two-boot persistence check (Task 2)
 
