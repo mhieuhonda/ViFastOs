@@ -71,6 +71,21 @@ def main() -> int:
     if "SMP TIMER OK (hart1_ticks=T)" not in summary:
         fail("missing AArch64 timer contract in summary")
 
+    # Prose must not duplicate numbers that the generated blocks own.
+    clean = re.sub(
+        r"### BEGIN GENERATED .*?### END GENERATED .*?\n", "", summary, flags=re.S
+    )
+    for pattern in (
+        r"\b\d+\s+test\b",
+        r"\b\d+/\d+\s+PASS\b",
+        r"\bheadroom\s+\d",
+        r"\b\d+/\d+\s+target\s+PASS\b",
+    ):
+        match = re.search(pattern, clean, re.I)
+        if match:
+            line = clean.count("\n", 0, match.start()) + 1
+            fail(f"number outside generated block at summary line {line}: {match.group(0)!r}")
+
     generated = gen_docs.pass_conditions().splitlines()
     generated_count = sum(
         1

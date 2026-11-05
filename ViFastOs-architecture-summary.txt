@@ -101,6 +101,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d8424e5 test: prove timer wakes idle secondary harts after workers block
 - b122c05 test: inject boot hart handoff on riscv
 - 32c2e03 chore: syscall status and generated status block
+- 1ff8644 fix: bounded boot handoff fails loudly
+- 9b8f031 feat: parse acpi madt on x86
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 32c2e03): harness spec + 166 case âm, post-worker
@@ -109,7 +111,7 @@ timer WFI, boot-handoff injection, syscall status; RISC-V 100/100, AArch64
 VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
-vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
+vifast-elf parser machine/window và build_task_space_elf đã có test host,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
 W^X theo Frame, PA uniqueness, sync I-cache, Untyped con/reserved, BootInfo, client VSpace, fault4, ReplyRecv, fault endpoint, IPC buffer + FrameWrite loader, notification cap transfer, user-space VFS server, 3 target link/FP
 validator, ROOT_ELF_BASE/soft-float chốt, boot quota 117, revoke Untyped thật, fault
@@ -150,12 +152,13 @@ Test hiện tại:
 - `cargo test -p vifast-elf`: 17/17 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
+- `cargo test -p vifast-acpi`: 8/8 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
 - RISC-V headroom: 454192 byte (`kernel_end=0x803911d0`)
 - QEMU lần chạy gần nhất (`--repeat 10`): riscv64 10/10, aarch64 10/10, x86_64 10/10
 ### END GENERATED status
-- root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
+- root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
@@ -287,8 +290,7 @@ vifast-pte
 - USER_VA_START/USER_VA_END thật của 3 kiến trúc; platform chỉ trả hằng số.
 - ELF machine constants: EM_RISCV=243, EM_AARCH64=183, EM_X86_64=62.
 - Host test kiểm tra dải user không giao kernel identity, nằm trong Sv39,
-  entry PML4/L0, KERNEL_SHARED_SLOTS, quyền leaf L3 AArch64 và index biên;
-  tổng 11 test.
+  entry PML4/L0, KERNEL_SHARED_SLOTS, quyền leaf L3 AArch64 và index biên.
 - File: crates/vifast-pte/src/lib.rs.
 
 vifast-elf
@@ -943,10 +945,13 @@ Lệnh:
     cargo test -p vifast-user
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
+    python3 scripts/test-qemu.py --arch riscv64 --feature test-boot-handoff
     python3 scripts/test-persist.py
+    python3 scripts/test-harness-spec.py
+    python3 scripts/gen-docs.py --check
+    python3 scripts/check-docs.py
 
-Host test hiện có 87 test `vifast-kernel` + 5 test `vifast-arch` +
-11 test `vifast-pte` + 17 test `vifast-elf`:
+Host test hiện có: xem vùng `tests` sinh tự động. Danh sách nhóm kiểm tra:
 - kernel/object sizes
 - self-test
 - capability rights monotonic
@@ -1071,6 +1076,7 @@ Cấm xuất hiện:
 - `VFS BAD` — forbidden
 - `ROOT PANIC` — forbidden
 - `STALL` — forbidden
+- `BOOT HANDOFF FAIL` — forbidden
 
 Exit code:
 - riscv64: 0
@@ -1104,19 +1110,17 @@ Theo kiến trúc:
   - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 - x86_64:
   - `KERNEL DATA NX OK` — kernel data is non-executable
+  - `ACPI MADT OK (cpus=C, bsp=ID, lapic=0x...)` — ACPI MADT parsed
   - `SMP SKIP` — x86 AP bring-up is not enabled yet
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
+  - ACPI MADT cpus == 2
 ### END GENERATED pass
 
 
 Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk mới;
 `scripts/test-persist.py` kiểm tra 2 lần boot với nonce duy nhất và test âm.
 
-Exit code:
-- RISC-V 0
-- AArch64 0
-- x86_64 3 (isa-debug-exit)
 
 15. CÁC THAY ĐỔI HARDENING GẦN NHẤT
 -------------------------------------
@@ -1241,8 +1245,7 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 87 test `vifast-kernel` + 5 test `vifast-arch` +
-  11 test `vifast-pte` + 17 test `vifast-elf`.
+- Host test hiện có: xem vùng `tests` sinh tự động.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
@@ -1259,6 +1262,8 @@ Exit code:
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
 - IOMMU mới có mô hình phần mềm (domain + reverse map + IoMap/IoUnmap);
   chưa có hardware IOMMU/VT-d/SMMU.
+- `CapDelete` (13) vẫn placeholder ở syscall dù kernel có `delete_cap`;
+  user chưa xóa được capability. Ghi nợ, chưa đổi ABI vòng này.
 - vifast-elf + vifast-root ELF đã build/validate; server/client cũng là Rust ELF
   do runtime cấp qua BootInfo staging, root nạp vào VSpace riêng. IPC buffer
   core + demo end-to-end đã có (8.1/8.1b); chưa có shared-memory mapping dùng
@@ -1455,7 +1460,7 @@ E. Desktop / Space
     bước tạo/revoke Untyped con.
 40. 7.1c: PageTableOps::sync_icache(pa, size) được gọi khi mapping mới có EXEC.
     RISC-V fence.i; AArch64 dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
-    SMP phải mở rộng thành remote fence/IPI trước khi chạy code mới trên hart khác.
+    Remote fence/IPI cho SMP đã có trên RISC-V/AArch64; x86 sẽ theo D2.
     Bộ đếm mapped_w/mapped_x dùng checked_add và trả OutOfMemory khi tràn u16.
 41. 7.2: Untyped con dùng `reserved` của cha để giữ quota object; điều kiện
     `objects + reserved + child_max_objects + 1 <= max_objects`. Con lấy vùng
@@ -1544,6 +1549,10 @@ crates/vifast-virtio/src/lib.rs
 scripts/build.sh
 scripts/test-qemu.py
 scripts/test-persist.py
+scripts/test-harness-spec.py
+scripts/harness_spec.py
+scripts/gen-docs.py
+scripts/check-docs.py
 
 20. KẾT LUẬN NGẮN
 ------------------
