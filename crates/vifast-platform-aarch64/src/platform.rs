@@ -1,9 +1,9 @@
 //! AArch64 QEMU `virt` platform: 4-level MMU, GICv2, generic timer and PSCI.
 
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
-use vifast_arch::bkl::BigKernelLock;
+use vifast_arch::bkl::{BigKernelGuard, BigKernelLock};
 use vifast_arch::{Arch, CpuState, MAX_HARTS};
 use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
@@ -89,6 +89,89 @@ static MAINT_KIND: [AtomicU32; MAX_HARTS] = [
     AtomicU32::new(0),
 ];
 static BKL: BigKernelLock = BigKernelLock::new();
+static BKL_OWNER: AtomicUsize = AtomicUsize::new(usize::MAX);
+static SCHED_READY: AtomicBool = AtomicBool::new(false);
+static RESCHED_SENT: AtomicUsize = AtomicUsize::new(0);
+static RESCHED_WAKE: AtomicUsize = AtomicUsize::new(0);
+static IDLE_HARTS: [AtomicBool; MAX_HARTS] = [
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+];
+static RESCHED_PENDING: [AtomicBool; MAX_HARTS] = [
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+];
+static USER_ENTRIES: [AtomicUsize; MAX_HARTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+
+struct PlatformBklGuard {
+    _guard: BigKernelGuard,
+    hart: usize,
+}
+
+impl Drop for PlatformBklGuard {
+    fn drop(&mut self) {
+        if BKL_OWNER.load(Ordering::Acquire) == self.hart {
+            BKL_OWNER.store(usize::MAX, Ordering::Release);
+        }
+    }
+}
+
+fn bkl_lock() -> PlatformBklGuard {
+    let state = cpu_state();
+    let hart = if state.is_null() {
+        0
+    } else {
+        unsafe { (*state).hart_id }
+    };
+    let guard = BKL.lock_with(poll_maintenance);
+    BKL_OWNER.store(hart, Ordering::Release);
+    PlatformBklGuard {
+        _guard: guard,
+        hart,
+    }
+}
+
+fn assert_bkl_released() {
+    let state = cpu_state();
+    let hart = if state.is_null() {
+        0
+    } else {
+        unsafe { (*state).hart_id }
+    };
+    assert!(
+        BKL_OWNER.load(Ordering::Acquire) != hart,
+        "BKL held on current hart before user return"
+    );
+}
+
+fn send_reschedule(target: usize) -> bool {
+    assert!(
+        BKL_OWNER.load(Ordering::Acquire) != usize::MAX,
+        "reschedule sender must hold BKL"
+    );
+    if target >= MAX_HARTS || !maintenance_target_online(target) {
+        return false;
+    }
+    if !IDLE_HARTS[target].load(Ordering::SeqCst) {
+        return false;
+    }
+    if RESCHED_PENDING[target].swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    // GICv2 SGIR: SGI 1 to the target CPU.
+    write32(GICD + 0xF00, (1 << (16 + target)) | 1);
+    RESCHED_SENT.fetch_add(1, Ordering::Relaxed);
+    true
+}
 
 fn poll_maintenance() {
     let state = cpu_state();
@@ -134,7 +217,10 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
     if state.is_null() || unsafe { (*state).hart_id } == target {
         return false;
     }
-    assert!(BKL.is_held(), "maintenance IPI sender must hold BKL");
+    assert!(
+        BKL_OWNER.load(Ordering::Acquire) != usize::MAX,
+        "maintenance IPI sender must hold BKL"
+    );
     let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
     MAINT_KIND[target].fetch_or(kind, Ordering::AcqRel);
     // GICv2 SGIR SGI 0, target list bit for the destination CPU.
@@ -216,7 +302,7 @@ fn write8(addr: u64, value: u8) {
 
 fn init_gic() {
     write32(GICD + 0x000, 1);
-    write32(GICD + 0x100, (1 << TIMER_IRQ) | 1);
+    write32(GICD + 0x100, (1 << TIMER_IRQ) | 0b11);
     write8(GICD + 0x400 + TIMER_IRQ as u64, 0xA0);
     write8(GICD + 0x800 + TIMER_IRQ as u64, 1);
     write32(GICC + 0x004, 0xFF);
@@ -236,7 +322,7 @@ unsafe fn init_cpu(hartid: usize) {
 fn init_gic_cpu1() {
     // CPU1 writes its own banked PPIs/SGIs and CPU interface state.
     write32(GICD + 0x000, 1);
-    write32(GICD + 0x100, (1 << TIMER_IRQ) | 1);
+    write32(GICD + 0x100, (1 << TIMER_IRQ) | 0b11);
     write8(GICD + 0x400 + TIMER_IRQ as u64, 0xA0);
     write8(GICD + 0x800 + TIMER_IRQ as u64, 1);
     write32(GICC + 0x004, 0xFF);
@@ -295,8 +381,41 @@ fn pan_supported() -> bool {
     ((mmfr1 >> 20) & 0xF) != 0
 }
 
+fn account_gic_wake(saw_timer: bool, saw_sgi: bool) {
+    if saw_sgi {
+        SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+    } else if saw_timer {
+        SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+    } else {
+        SECONDARY_NONE_WAKES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn park_secondary(hart: usize) {
+    loop {
+        poll_maintenance();
+        if Aarch64Platform::kernel().has_ready_on(hart) {
+            return;
+        }
+        SECONDARY_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        IDLE_HARTS[hart].store(true, Ordering::SeqCst);
+        if Aarch64Platform::kernel().has_ready_on(hart) {
+            IDLE_HARTS[hart].store(false, Ordering::SeqCst);
+            return;
+        }
+        unsafe {
+            core::arch::asm!("wfi");
+        }
+        IDLE_HARTS[hart].store(false, Ordering::SeqCst);
+        RESCHED_PENDING[hart].store(false, Ordering::SeqCst);
+        let (saw_timer, saw_sgi) = service_gic();
+        account_gic_wake(saw_timer, saw_sgi);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn rust_secondary(_context: u64) -> ! {
+    Aarch64Platform::init();
     unsafe {
         init_cpu(1);
         core::arch::asm!("msr daifset, #0xf");
@@ -306,23 +425,50 @@ pub extern "C" fn rust_secondary(_context: u64) -> ! {
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
         assert!(daif_i_set(), "AArch64 CPU1 must keep DAIF.I set");
-        // 1.2: masked WFI; pending interrupts wake without entering a vector.
+        if SCHED_READY.load(Ordering::SeqCst) {
+            let picked = {
+                let bkl = bkl_lock();
+                let picked = Aarch64Platform::kernel().pick_on(1);
+                if picked.is_none() {
+                    IDLE_HARTS[1].store(true, Ordering::SeqCst);
+                    if Aarch64Platform::kernel().has_ready_on(1) {
+                        IDLE_HARTS[1].store(false, Ordering::SeqCst);
+                    }
+                }
+                if let Some(tcb) = picked {
+                    publish_current_tcb(Some(tcb.index as usize));
+                    if vifast_runtime::ensure_current_root::<Aarch64Platform>().is_err() {
+                        drop(bkl);
+                        Aarch64::exit(1);
+                    }
+                }
+                picked
+            };
+            if let Some(tcb) = picked {
+                let context = Aarch64Platform::contexts()[tcb.index as usize];
+                <Aarch64Platform as Platform>::enter_user(&context);
+            }
+        }
         SECONDARY_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        IDLE_HARTS[1].store(true, Ordering::SeqCst);
+        if SCHED_READY.load(Ordering::SeqCst) && Aarch64Platform::kernel().has_ready_on(1) {
+            IDLE_HARTS[1].store(false, Ordering::SeqCst);
+        }
         unsafe {
             core::arch::asm!("wfi");
         }
+        IDLE_HARTS[1].store(false, Ordering::SeqCst);
+        let resched = RESCHED_PENDING[1].swap(false, Ordering::SeqCst);
         let (saw_timer, saw_sgi) = service_gic();
-        if saw_sgi {
-            SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
-        } else if saw_timer {
-            SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
-        } else {
-            SECONDARY_NONE_WAKES.fetch_add(1, Ordering::Relaxed);
+        if resched {
+            RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
         }
+        account_gic_wake(saw_timer, saw_sgi);
         assert!(daif_i_set(), "AArch64 CPU1 lost DAIF.I after WFI");
         core::hint::spin_loop();
     }
 }
+
 fn cpu_state() -> *mut CpuState {
     let state: *mut CpuState;
     unsafe {
@@ -355,8 +501,9 @@ fn set_active_root(root: u64, asid: u16) {
 
 fn assert_current_tcb() {
     let state = cpu_state();
+    let hart = unsafe { (*state).hart_id };
     let expected = Aarch64Platform::kernel()
-        .current()
+        .current_on(hart)
         .map(|tcb| tcb.index as usize)
         .unwrap_or(usize::MAX);
     assert_eq!(
@@ -372,7 +519,7 @@ fn active_root_matches_current() -> bool {
             return false;
         }
         let kernel = &*KERNEL_PTR;
-        let Some(tcb) = kernel.current() else {
+        let Some(tcb) = kernel.current_on((*cpu_state()).hart_id) else {
             return false;
         };
         kernel.current_root(tcb) == Some(active_root())
@@ -819,7 +966,8 @@ impl Platform for Aarch64Platform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
-        assert!(!BKL.is_held(), "BKL held before user return");
+        assert_bkl_released();
+        SCHED_READY.store(true, Ordering::SeqCst);
         let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36);
         let mair: u64 = 0xFF;
         unsafe {
@@ -902,6 +1050,47 @@ impl Platform for Aarch64Platform {
         )
     }
 
+    fn sched_harts() -> u32 {
+        0b11
+    }
+
+    fn can_wait_for_work() -> bool {
+        true
+    }
+
+    fn wait_for_work(hart: usize) {
+        park_secondary(hart);
+    }
+
+    fn wake_hart(hart: usize) {
+        assert!(
+            SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
+            "reschedule mailbox supports at most 2 online harts"
+        );
+        if hart == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
+            let _ = send_reschedule(1);
+        }
+    }
+
+    fn user_entries(hart: usize) -> usize {
+        USER_ENTRIES
+            .get(hart)
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    fn resched_sent() -> usize {
+        RESCHED_SENT.load(Ordering::Relaxed)
+    }
+
+    fn resched_wake() -> usize {
+        RESCHED_WAKE.load(Ordering::Relaxed)
+    }
+
+    fn idle_entries() -> usize {
+        SECONDARY_IDLE_ENTRIES.load(Ordering::Relaxed)
+    }
+
     fn secondary_timer_ticks() -> usize {
         SECONDARY_TIMER_TICKS.load(Ordering::Relaxed)
     }
@@ -965,7 +1154,7 @@ impl Platform for Aarch64Platform {
             spins += 1;
         }
         if SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            let bkl = BKL.lock_with(poll_maintenance);
+            let bkl = bkl_lock();
             let ipi_ok = request_ipi();
             drop(bkl);
             if ipi_ok {
@@ -1041,17 +1230,24 @@ extern "C" {
     fn secondary_entry();
 }
 
+fn count_user_trap() {
+    if let Some(counter) = USER_ENTRIES.get(Aarch64Platform::hart_id()) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 #[no_mangle]
 extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
     assert_irqs_disabled();
-    let bkl = BKL.lock_with(poll_maintenance);
+    let bkl = bkl_lock();
     assert_current_tcb();
     let frame = unsafe { &mut *frame };
+    count_user_trap();
     let ec = (frame.esr >> 26) & 0x3f;
     if ec != 0x15 {
         vifast_runtime::fault::suspend::<Aarch64Platform>(frame, frame.esr, frame.far);
         drop(bkl);
-        assert!(!BKL.is_held(), "BKL held on fault return");
+        assert_bkl_released();
         return;
     }
     let number = frame.regs[8];
@@ -1063,26 +1259,46 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
         frame.regs[4],
         frame.regs[5],
     ];
-    let _ = vifast_runtime::syscall::dispatch::<Aarch64Platform>(frame, number, args);
+    let waiting = vifast_runtime::syscall::dispatch::<Aarch64Platform>(frame, number, args);
     drop(bkl);
-    assert!(!BKL.is_held(), "BKL held on syscall return");
+    if waiting {
+        loop {
+            park_secondary(1);
+            let bkl = bkl_lock();
+            assert_current_tcb();
+            if vifast_runtime::syscall::resume_blocked::<Aarch64Platform>(frame) {
+                drop(bkl);
+                assert_bkl_released();
+                return;
+            }
+            drop(bkl);
+        }
+    }
+    assert_bkl_released();
 }
 
 #[no_mangle]
 extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
     assert_irqs_disabled();
-    let bkl = BKL.lock_with(poll_maintenance);
+    let bkl = bkl_lock();
     assert_current_tcb();
     let frame = unsafe { &mut *frame };
+    count_user_trap();
     let iar = read32(GICC + 0x00C);
     let irq = iar & 0x3FF;
     if irq != TIMER_IRQ {
         write32(GICC + 0x010, irq);
+        if irq == 1 {
+            RESCHED_PENDING[1].store(false, Ordering::SeqCst);
+        } else {
+            poll_maintenance();
+        }
         drop(bkl);
-        assert!(!BKL.is_held(), "BKL held on IRQ return");
+        assert_bkl_released();
         return;
     }
+    SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     vifast_runtime::timer::on_timer::<Aarch64Platform>(frame);
     drop(bkl);
-    assert!(!BKL.is_held(), "BKL held on timer return");
+    assert_bkl_released();
 }

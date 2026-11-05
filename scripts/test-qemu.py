@@ -140,12 +140,10 @@ def aarch64_idle_ok(output: str) -> bool:
         return False
     ticks = int(timer.group(1))
     wakeups, entries, timer_wakes, sgi_wakes = idle
-    return (
-        ticks > 0
-        and wakeups >= timer_wakes + sgi_wakes
-        and entries >= ticks - 2
-        and timer_wakes >= ticks - 2
-    )
+    # Before workers exist, every tick forces one masked WFI (I and Wt track
+    # T).  Once CPU1 runs workers continuously, ticks arrive as user IRQs
+    # instead, so only positive activity remains meaningful.
+    return ticks > 0 and wakeups >= timer_wakes + sgi_wakes and entries >= 1
 
 
 def smp_sched(output: str) -> tuple[int, int, int, int, int]:
@@ -254,6 +252,12 @@ def run_qemu(
                 output.count("SMP TIMER OK") == 1
                 and output.count("SMP IDLE OK") == 1
                 and aarch64_idle_ok(output)
+                and output.count("SMP SCHED OK") == 1
+                and smp_sched(output)[0] > 1
+                and smp_sched(output)[1] >= 100
+                and smp_sched(output)[3] > 0
+                and smp_sched(output)[2] <= smp_sched(output)[4]
+                and output.count("SMP WORKERS OK (a=50, b=50)") == 1
             )
         )
         and (
