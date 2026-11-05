@@ -339,7 +339,12 @@ impl Kernel {
         if self.root == Some(tcb) {
             Some(&self.root_cspace)
         } else {
-            self.tcb(tcb).map(|table| table.cspace.as_slice())
+            let table = self.tcb(tcb)?;
+            if let Some(cnode) = table.cnode {
+                self.cnode(cnode).map(|node| node.slots.as_slice())
+            } else {
+                Some(table.cspace.as_slice())
+            }
         }
     }
 
@@ -347,7 +352,12 @@ impl Kernel {
         if self.root == Some(tcb) {
             Some(&mut self.root_cspace)
         } else {
-            self.tcb_mut(tcb).map(|table| table.cspace.as_mut_slice())
+            let cnode = self.tcb(tcb)?.cnode;
+            if let Some(cnode) = cnode {
+                self.cnode_mut(cnode).map(|node| node.slots.as_mut_slice())
+            } else {
+                self.tcb_mut(tcb).map(|table| table.cspace.as_mut_slice())
+            }
         }
     }
 
@@ -355,7 +365,11 @@ impl Kernel {
         if self.root == Some(tcb) {
             MAX_CAPS_ROOT
         } else {
-            MAX_CAPS_TASK
+            self.tcb(tcb)
+                .and_then(|table| table.cnode)
+                .and_then(|cnode| self.cnode(cnode))
+                .map(CNode::capacity)
+                .unwrap_or(MAX_CAPS_TASK)
         }
     }
 
@@ -905,6 +919,79 @@ impl Kernel {
         }
     }
 
+    /// Install or clear an external flat CNode as a TCB's capability space.
+    /// Only an inactive/suspended/faulted TCB may be switched so a running
+    /// task never observes a cspace replacement mid-syscall.
+    pub fn set_tcb_cnode(&mut self, target: ObjRef, cnode: Option<ObjRef>) -> KResult<()> {
+        if self.root == Some(target) || target == self.root.unwrap_or(ObjRef::invalid()) {
+            return Err(KError::IllegalOperation);
+        }
+        let table = self.tcb(target).ok_or(KError::WrongType)?;
+        if table.queued
+            || !matches!(
+                table.state,
+                ThreadState::Inactive | ThreadState::Suspended | ThreadState::Faulted
+            )
+        {
+            return Err(KError::IllegalOperation);
+        }
+        if let Some(cnode) = cnode {
+            if self.cnode(cnode).is_none() {
+                return Err(KError::WrongType);
+            }
+        }
+        self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?.cnode = cnode;
+        Ok(())
+    }
+
+    /// Mint a derived cap directly into a flat CNode.  The source cap must be
+    /// in the caller's current cspace; the destination CNode is named by a
+    /// separate cap held by the caller.
+    pub fn cnode_mint(
+        &mut self,
+        caller: ObjRef,
+        source_slot: u8,
+        cnode: ObjRef,
+        dest_index: u8,
+        rights: Rights,
+        badge: u64,
+    ) -> KResult<()> {
+        let source = self.lookup_cap(caller, source_slot, None, Rights::NONE)?;
+        let index = dest_index as usize;
+        if index == 0 || self.cnode(cnode).is_none() {
+            return Err(KError::WrongType);
+        }
+        if index >= MAX_CAPS_TASK {
+            return Err(KError::InvalidArg);
+        }
+        if self
+            .cnode(cnode)
+            .and_then(|node| node.slots.get(index))
+            .is_some_and(Option::is_some)
+        {
+            return Err(KError::SlotOccupied);
+        }
+        let mut derived = source.derive(rights, badge)?;
+        derived.parent = Some(CapRef {
+            addr: SlotAddr {
+                tcb: caller,
+                slot: source_slot,
+            },
+            id: source.id,
+        });
+        derived.id = self.next_cap_id;
+        self.next_cap_id = self.next_cap_id.wrapping_add(1);
+        if self.next_cap_id == 0 {
+            self.next_cap_id = 1;
+        }
+        if self.get(derived.obj).is_none() {
+            return Err(KError::ObjectDestroyed);
+        }
+        let node = self.cnode_mut(cnode).ok_or(KError::ObjectDestroyed)?;
+        node.slots[index] = Some(derived);
+        Ok(())
+    }
+
     /// Suspend a TCB.  Running targets keep their saved `current` slot until
     /// the next timer switch; Endpoint/Notification waiters are removed from
     /// their queues and receive `WouldBlock` when resumed.  Root and the
@@ -1225,6 +1312,20 @@ impl Kernel {
         }
     }
 
+    pub fn cnode(&self, r: ObjRef) -> Option<&CNode> {
+        match self.get(r)?.kind {
+            Kind::CNode(ref node) => Some(node),
+            _ => None,
+        }
+    }
+
+    pub fn cnode_mut(&mut self, r: ObjRef) -> Option<&mut CNode> {
+        match self.get_mut(r)?.kind {
+            Kind::CNode(ref mut node) => Some(node),
+            _ => None,
+        }
+    }
+
     pub fn irq(&self, r: ObjRef) -> Option<&Irq> {
         match self.get(r)?.kind {
             Kind::Irq(ref irq) => Some(irq),
@@ -1363,6 +1464,11 @@ impl Kernel {
                 let charge = page.checked_mul(vspace_pages).ok_or(KError::OutOfMemory)?;
                 (Kind::Free, charge, page)
             }
+            ObjType::CNode => (
+                Kind::CNode(CNode::default()),
+                OBJ_CNODE_BYTES,
+                OBJ_METADATA_ALIGN,
+            ),
             ObjType::SchedContext => (
                 Kind::SchedContext(SchedContext::default()),
                 OBJ_SCHED_CONTEXT_BYTES,
@@ -2272,6 +2378,11 @@ impl Kernel {
                             return Err(KError::IllegalOperation);
                         }
                     }
+                    if let Some(cnode) = tcb.cnode {
+                        if self.cnode(cnode).is_none() {
+                            return Err(KError::ObjectDestroyed);
+                        }
+                    }
                     if let Some(slots) = self.cspace(reference) {
                         for cap in slots.iter().flatten() {
                             let Some(object) = self.get(cap.obj) else {
@@ -2457,6 +2568,16 @@ impl Kernel {
                             {
                                 return Err(KError::AlreadyMapped);
                             }
+                        }
+                    }
+                }
+                Kind::CNode(ref node) => {
+                    for cap in node.slots.iter().flatten() {
+                        let Some(object) = self.get(cap.obj) else {
+                            return Err(KError::ObjectDestroyed);
+                        };
+                        if object.kind.obj_type() != Some(cap.ty) {
+                            return Err(KError::WrongType);
                         }
                     }
                 }
@@ -2756,7 +2877,15 @@ impl Kernel {
                     .any(|child| child.parent.is_some() && self.is_descendant(child, target))
             })
         });
-        if has_live_objects || has_child_caps {
+        let has_cnode_child = self.objs.iter().any(|object| match object.kind {
+            Kind::CNode(ref node) => node
+                .slots
+                .iter()
+                .flatten()
+                .any(|child| child.parent.is_some() && self.is_descendant(child, target)),
+            _ => false,
+        });
+        if has_live_objects || has_child_caps || has_cnode_child {
             return Err(KError::IllegalOperation);
         }
         self.cspace_mut(tcb)
@@ -2862,6 +2991,11 @@ impl Kernel {
     /// surviving ancestor.  A cap whose root dies with no ancestor leaves
     /// creator/parent as None; only a root cap can collect those objects.
     fn reparent_tcb_caps(&mut self, obj: ObjRef) {
+        if self.tcb(obj).is_some_and(|table| table.cnode.is_some()) {
+            // A CNode is an independent object; its slots are not owned by
+            // the TCB that happens to use it as its current cspace.
+            return;
+        }
         let Some(slots) = self.cspace(obj) else {
             return;
         };
@@ -2971,6 +3105,22 @@ impl Kernel {
         for receiver in receivers.iter().take(recv_count) {
             self.wake_error(*receiver, KError::ObjectDestroyed);
         }
+    }
+
+    fn destroy_cnode(&mut self, obj: ObjRef) -> KResult<()> {
+        for index in 0..MAX_OBJECTS {
+            let tcb = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self.tcb(tcb).is_some_and(|table| table.cnode == Some(obj)) {
+                return Err(KError::IllegalOperation);
+            }
+        }
+        if let Some(node) = self.cnode_mut(obj) {
+            node.slots = [None; MAX_CAPS_TASK];
+        }
+        Ok(())
     }
 
     fn destroy_sched_context(&mut self, obj: ObjRef) {
@@ -3196,6 +3346,19 @@ impl Kernel {
                 }
             }
         }
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            if let Some(node) = self.cnode_mut(r) {
+                for slot in node.slots.iter_mut() {
+                    if slot.is_some_and(|cap| cap.obj == obj) {
+                        *slot = None;
+                    }
+                }
+            }
+        }
     }
 
     fn table_span_for(&self, vspace: ObjRef, level: u8) -> Option<(u64, u64)> {
@@ -3416,6 +3579,7 @@ impl Kernel {
             }
             Kind::Endpoint(_) => self.destroy_endpoint(obj),
             Kind::Notification(_) => self.destroy_notification(obj),
+            Kind::CNode(_) => self.destroy_cnode(obj)?,
             Kind::SchedContext(_) => self.destroy_sched_context(obj),
             Kind::Frame(frame) => {
                 self.unmap_frame_everywhere(frame);
@@ -3585,18 +3749,28 @@ impl Kernel {
                 index: i as u8,
                 gen: self.objs[i].gen,
             };
-            let Some(slots) = self.cspace(r) else {
-                continue;
-            };
-            for s in 1..slots.len() {
-                let Some(cap) = slots[s] else { continue };
+            let mark = |s: usize, cap: Cap, victim_bits: &mut [u64; BITS], removed: &mut usize| {
                 let remove = self.is_descendant(&cap, target_ref)
                     || (target_cap.ty == ObjType::Untyped
                         && objects[..object_count].contains(&cap.obj));
                 if remove {
                     let bit = i * MAX_CAPS_ROOT + s;
                     victim_bits[bit / 64] |= 1u64 << (bit % 64);
-                    removed += 1;
+                    *removed += 1;
+                }
+            };
+            if let Some(slots) = self.cspace(r) {
+                for s in 1..slots.len() {
+                    if let Some(cap) = slots[s] {
+                        mark(s, cap, &mut victim_bits, &mut removed);
+                    }
+                }
+            }
+            if let Some(node) = self.cnode(r) {
+                for s in 1..node.slots.len() {
+                    if let Some(cap) = node.slots[s] {
+                        mark(s, cap, &mut victim_bits, &mut removed);
+                    }
                 }
             }
         }
@@ -3611,6 +3785,14 @@ impl Kernel {
                 if victim_bits[bit / 64] & (1u64 << (bit % 64)) != 0 {
                     if let Some(slots) = self.cspace_mut(r) {
                         slots[s] = None;
+                    }
+                }
+            }
+            if let Some(node) = self.cnode_mut(r) {
+                for s in 1..node.slots.len() {
+                    let bit = i * MAX_CAPS_ROOT + s;
+                    if victim_bits[bit / 64] & (1u64 << (bit % 64)) != 0 {
+                        node.slots[s] = None;
                     }
                 }
             }
@@ -4515,6 +4697,7 @@ impl Kernel {
                     n if n == ObjType::Frame as u64 => ObjType::Frame,
                     n if n == ObjType::PageTable as u64 => ObjType::PageTable,
                     n if n == ObjType::VSpace as u64 => ObjType::VSpace,
+                    n if n == ObjType::CNode as u64 => ObjType::CNode,
                     n if n == ObjType::SchedContext as u64 => ObjType::SchedContext,
                     n if n == ObjType::Iommu as u64 => ObjType::Iommu,
                     n if n == ObjType::BlockDevice as u64 => ObjType::BlockDevice,
@@ -4643,6 +4826,61 @@ impl Kernel {
                 }
                 let rights = Rights((a3 as u8) & Rights::ALL.0) & source.rights;
                 match self.copy_cap(tcb, src_slot, dest.obj, dst_slot, rights, a4) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::CNodeMint as u64 => {
+                let destination = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::CNode),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let source_slot = slot_arg(a2).unwrap_or(0);
+                let dest_index = match slot_arg(a1) {
+                    Ok(index) => index,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let rights = Rights((a3 as u8) & Rights::ALL.0);
+                match self.cnode_mint(tcb, source_slot, destination.obj, dest_index, rights, a4) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::CNodeInstall as u64 => {
+                let target = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let cnode = if a1 == 0 {
+                    None
+                } else {
+                    match self.lookup_cap(
+                        tcb,
+                        slot_arg(a1).unwrap_or(0),
+                        Some(ObjType::CNode),
+                        Rights::WRITE,
+                    ) {
+                        Ok(cap) => Some(cap.obj),
+                        Err(error) => return UserAction::Return { value: 0, error },
+                    }
+                };
+                match self.set_tcb_cnode(target.obj, cnode) {
                     Ok(()) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,
@@ -9776,6 +10014,142 @@ mod tests {
         assert_eq!(kernel.pick_on(0), Some(sleeper));
         assert!(kernel.take_resume(sleeper).is_some());
         assert_eq!(kernel.tick(0), 0);
+    }
+
+    #[test]
+    fn cnode_mint_and_install_switches_tcb_cspace() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("cnode-target", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000_0000, 4096, 4096, 8)
+            .unwrap();
+        let cnode = kernel.retype(untyped, ObjType::CNode).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(cnode, ObjType::CNode, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::CNodeMint as u64,
+                1,
+                2,
+                2,
+                Rights::READ.0 as u64,
+                7,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        let minted = kernel.cnode(cnode).unwrap().slots[2].unwrap();
+        assert_eq!(minted.ty, ObjType::Endpoint);
+        assert_eq!(minted.badge, 7);
+        assert_eq!(minted.rights, Rights::READ);
+
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::CNodeInstall as u64, 3, 1, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(kernel.tcb(target).unwrap().cnode, Some(cnode));
+        assert_eq!(
+            kernel.lookup_cap(target, 2, Some(ObjType::Endpoint), Rights::READ),
+            Ok(minted)
+        );
+        assert!(kernel.check_invariants().is_ok());
+        assert_eq!(kernel.destroy_object(cnode), Err(KError::IllegalOperation));
+
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::CNodeInstall as u64, 3, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(kernel.tcb(target).unwrap().cnode, None);
+        assert_eq!(
+            kernel.lookup_cap(target, 2, Some(ObjType::Endpoint), Rights::READ),
+            Err(KError::InvalidCap)
+        );
+        kernel.destroy_object(cnode).unwrap();
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn cnode_mint_rejects_occupied_and_bad_destinations() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000_0000, 4096, 4096, 8)
+            .unwrap();
+        let cnode = kernel.retype(untyped, ObjType::CNode).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(cnode, ObjType::CNode, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::CNodeMint as u64,
+                1,
+                1,
+                2,
+                Rights::READ.0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::CNodeMint as u64,
+                1,
+                1,
+                2,
+                Rights::READ.0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::SlotOccupied
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::CNodeMint as u64,
+                1,
+                2,
+                99,
+                Rights::READ.0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidCap
+            }
+        );
     }
 
     #[test]

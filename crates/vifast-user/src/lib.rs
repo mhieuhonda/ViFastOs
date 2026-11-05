@@ -446,6 +446,39 @@ pub fn cap_mint(
     result(e, v)
 }
 
+pub fn cnode_mint(
+    cnode_slot: u8,
+    dest_index: u8,
+    source_slot: u8,
+    rights: u8,
+    badge: u64,
+) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::CNodeMint as u64,
+            [
+                cnode_slot as u64,
+                dest_index as u64,
+                source_slot as u64,
+                rights as u64,
+                badge,
+                0,
+            ],
+        )
+    };
+    result(e, v)
+}
+
+pub fn cnode_install(tcb_slot: u8, cnode_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::CNodeInstall as u64,
+            [tcb_slot as u64, cnode_slot as u64, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn page_table_map(page_table_slot: u8, vspace_slot: u8, va: u64) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

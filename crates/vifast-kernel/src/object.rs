@@ -252,6 +252,27 @@ impl Default for IommuMapping {
     }
 }
 
+/// Flat capability table.  The bring-up CSpace deliberately uses a single
+/// 64-slot level; `Tcb.cnode` selects it instead of the TCB's embedded table.
+#[derive(Clone, Copy, Debug)]
+pub struct CNode {
+    pub slots: [Option<Cap>; MAX_CAPS_TASK],
+}
+
+impl Default for CNode {
+    fn default() -> Self {
+        Self {
+            slots: [None; MAX_CAPS_TASK],
+        }
+    }
+}
+
+impl CNode {
+    pub fn capacity(&self) -> usize {
+        self.slots.len()
+    }
+}
+
 /// CPU budget for one TCB.  A bound TCB may run for `budget` timer ticks in
 /// each `period`; when the budget is exhausted the scheduler parks it until
 /// the current period expires and replenishes `remaining`.
@@ -500,6 +521,8 @@ pub struct Tcb {
     pub reply_epoch: u8,
     pub recv_slot: u8,
     pub bound_ntfn: Option<ObjRef>,
+    /// Optional external flat CNode used as this TCB's capability space.
+    pub cnode: Option<ObjRef>,
     /// Scheduler budget bound to this TCB, if any.
     pub sched_context: Option<ObjRef>,
     pub fault_ep: Option<CapRef>,
@@ -530,6 +553,7 @@ impl Tcb {
             reply_epoch: 0,
             recv_slot: 0,
             bound_ntfn: None,
+            cnode: None,
             sched_context: None,
             fault_ep: None,
             ipc_buffer: None,
@@ -569,6 +593,7 @@ pub enum Kind {
     Frame(Frame),
     VSpace(VSpace),
     PageTable(PageTable),
+    CNode(CNode),
     SchedContext(SchedContext),
     Irq(Irq),
     Iommu(IommuDomain),
@@ -589,6 +614,7 @@ impl Kind {
             Kind::Frame(_) => Some(ObjType::Frame),
             Kind::VSpace(_) => Some(ObjType::VSpace),
             Kind::PageTable(_) => Some(ObjType::PageTable),
+            Kind::CNode(_) => Some(ObjType::CNode),
             Kind::SchedContext(_) => Some(ObjType::SchedContext),
             Kind::Irq(_) => Some(ObjType::Irq),
             Kind::Iommu(_) => Some(ObjType::Iommu),

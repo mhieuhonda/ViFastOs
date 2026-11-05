@@ -719,3 +719,13 @@ follow-up `62b31f4`.
 - Manual `-serial stdio -monitor none` với kernel no-default: input được echo
   trên RISC-V, AArch64, x86_64.
 - Host test `vifast-arch` 7/7; QEMU chuẩn 3/3 (không input); 0 warning.
+
+## 8.99 — Flat CNode cspace (vòng 22)
+
+- Thêm object CNode 64 slot phẳng (chưa guard/nhiều cấp), `Tcb.cnode`
+  thay thế bảng cap nhúng khi được cài.
+- `CNodeMint` (12): mint/derive cap từ cspace caller vào slot CNode.
+- Syscall mới `CNodeInstall` (48): cài/bỏ CNode cho TCB
+  Inactive/Suspended/Faulted; CNode đang dùng không destroy được.
+- CNode revoke/delete/invariant/accounting được nối vào đường cap hiện có.
+- Host test 110/110; QEMU 3/3; ABI 49/49 implemented, 0 placeholder.

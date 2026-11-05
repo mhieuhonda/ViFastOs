@@ -169,6 +169,7 @@ pub const OBJ_METADATA_ALIGN: usize = 16;
 pub const OBJ_IOMMU_BYTES: usize = 1024;
 pub const OBJ_BLOCK_DEVICE_BYTES: usize = 64;
 pub const OBJ_IRQ_BYTES: usize = 64;
+pub const OBJ_CNODE_BYTES: usize = 4096;
 /// Logical IRQ numbers visible to user space.  Ports map these to their
 /// interrupt-controller lines and keep the controller details private.
 pub const IRQ_TIMER: u32 = 0;
@@ -575,6 +576,8 @@ pub enum SyscallId {
     BlockFlush = 45,
     Sleep = 46,
     ConsoleRead = 47,
+    /// Install or remove a flat CNode as a TCB's capability space.
+    CNodeInstall = 48,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -593,7 +596,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::Retype, true),
     (SyscallId::CapCopy, true),
     (SyscallId::CapMint, true),
-    (SyscallId::CNodeMint, false),
+    (SyscallId::CNodeMint, true),
     (SyscallId::CapDelete, true),
     (SyscallId::CapRevoke, true),
     (SyscallId::TcbConfigure, true),
@@ -629,6 +632,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::BlockFlush, true),
     (SyscallId::Sleep, true),
     (SyscallId::ConsoleRead, true),
+    (SyscallId::CNodeInstall, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

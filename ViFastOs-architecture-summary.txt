@@ -190,7 +190,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 108/108 PASS
+- `cargo test -p vifast-kernel`: 110/110 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -202,8 +202,8 @@ Test hiện tại:
 ### END GENERATED tests
 ### BEGIN GENERATED status
 - RISC-V headroom: 253264 byte (`kernel_end=0x803c22b0`)
-- `Kernel = 693592`, `Object = 4736`, `Tcb = 4688`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
+- `Kernel = 694744`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
+- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -533,11 +533,15 @@ Kind:
 - VSpace { root, aux_pa, page_size, base, next_va, end, mappings }
 - PageTable { root, mapped: Option<{vspace, va_base, level}> }
   // level chỉ nằm trong mapping do PageTableMap gán; mỗi bảng gắn một lần
+- CNode { slots: [Option<Cap>; 64] }\n  // bảng cap phẳng một cấp (chưa guard/nhiều cấp)
+- SchedContext { budget, period, remaining, period_start, bound }
+- Irq { number, notification, pending }
 
 Tcb:
 - name, state, priority
 - entry, stack, vspace: Option<ObjRef>
-- cspace [Option<Cap>; MAX_CAPS_TASK=64]; root cspace riêng 96 slot
+- cspace [Option<Cap>; MAX_CAPS_TASK=64]; `cnode: Option<ObjRef>` thay thế
+  bằng bảng CNode phẳng khi được CNodeInstall; root cspace riêng 96 slot
 - caller: Option<(ObjRef, epoch)>
 - reply_epoch
 - recv_slot
@@ -568,6 +572,9 @@ Untyped/retype:
 - Endpoint: tiêu OBJ_ENDPOINT_BYTES = 256.
 - Notification: tiêu OBJ_NOTIFICATION_BYTES = 128.
 - Tcb: tiêu OBJ_TCB_BYTES = 4096 (quota accounting).
+- CNode: tiêu OBJ_CNODE_BYTES = 4096, 64 slot phẳng.
+- SchedContext: tiêu OBJ_SCHED_CONTEXT_BYTES = 64.
+- Irq: object metadata, không cấp phát qua Retype (IrqGet root-only).
 - Hết Untyped trả OutOfMemory.
 - Mỗi object ghi `creator` = CapRef { addr, id } của cap đã dùng để retype;
   revoke chỉ khớp cả slot và id, nên slot tái sử dụng không kế thừa creator.
@@ -804,7 +811,7 @@ Số syscall chính:
 9 Retype — implemented
 10 CapCopy — implemented
 11 CapMint — implemented
-12 CNodeMint — placeholder (NotImplemented)
+12 CNodeMint — implemented
 13 CapDelete — implemented
 14 CapRevoke — implemented
 15 TcbConfigure — implemented
@@ -840,6 +847,7 @@ Số syscall chính:
 45 BlockFlush — implemented
 46 Sleep — implemented
 47 ConsoleRead — implemented
+48 CNodeInstall — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,
@@ -857,6 +865,12 @@ Số syscall chính:
 - `TcbBindNotification` (21): `a0` = cap TCB `WRITE`, `a1` = cap Notification
   `WRITE`; gắn tối đa một notification cho TCB, từ chối nếu đã gắn hoặc
   notification đang có waiter.
+- `CNodeMint` (12): `a0` = cap CNode `WRITE`, `a1` = slot đích 1..63,
+  `a2` = source cap slot trong cspace caller, `a3` = rights, `a4` = badge;
+  copy derive vào bảng CNode, parent trỏ source cap. Slot 0 là null.
+- `CNodeInstall` (48): `a0` = cap TCB `WRITE`, `a1` = cap CNode `WRITE`
+  (0 = bỏ CNode, quay về bảng nhúng); TCB phải Inactive/Suspended/Faulted.
+  CNode đang được TCB dùng không thể destroy.
 - `TcbRestart` (18): reset TCB không chạy về entry/stack đã cấu hình, xoá
   pending/fd/wake, đưa vào ready queue; runtime nhận `RestartTcb` để dựng lại
   context kiến trúc.
