@@ -233,6 +233,14 @@ pub extern "C" fn server_main() -> ! {
         write(b"FS DISK OK\n");
         if unsafe { PERSISTED } {
             write(b"FS PERSIST OK\n");
+            const PREFIX: &[u8] = b"FS PERSIST DATA ";
+            let files = unsafe { files() };
+            let len = core::cmp::min(files[1].len, FILE_CAP);
+            let mut line = [0u8; 82];
+            line[..PREFIX.len()].copy_from_slice(PREFIX);
+            line[PREFIX.len()..PREFIX.len() + len].copy_from_slice(&files[1].data[..len]);
+            line[PREFIX.len() + len] = b'\n';
+            write(&line[..PREFIX.len() + len + 1]);
         }
     } else {
         write(b"FS DISK RAM\n");

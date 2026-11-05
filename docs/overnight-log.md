@@ -23,6 +23,7 @@
 - `f216966` — AArch64 VirtIO block backend.
 - `1d4f0ea` — persistent VFS scratch on block storage.
 - `fe569c1` — x86 ATA block backend for persistent VFS.
+- `test: hermetic two-boot persistence check` — Task 2 (Agent 2).
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -52,8 +53,8 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - `vifast-kernel` 83/83, PTE 11/11, ELF 17/17; runtime/user compile.
 - QEMU 3/3 PASS ×3; 4 USER FAULT, có `0x80000000`, `0x1000002000`,
   `0x1000301000`; `FAULT EP OK`; `RUST MODULES OK`, `VFS SERVER OK`, `VFS OK`,
-  `IOMMU OK`; RISC-V/AArch `SMP OK (... ipi=1)`; AArch `BLOCK OK`,
-  `FS DISK OK`, `FS PERSIST OK`; x86 cũng `BLOCK OK`, `FS DISK OK`.
+  `IOMMU OK`; RISC-V/AArch `SMP OK (... ipi=1)`; AArch/x86 `BLOCK OK`,
+  `FS DISK OK`; persistence do `scripts/test-persist.py` kiểm tra.
 - Boot Untyped: RISC-V 20/32 pages, AArch/x86 22/32; free 12/10 pages,
   12/12 objects.
 - DATA UNTYPED lúc test-exit: RISC-V 36/64 pages, AArch64 37/64 pages,
@@ -61,7 +62,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `e0e53711264823d50edf7280a2fd98dba72bc258aedc319d211ccf696bccf15b`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `aeb1e034d6ee106bf9f004e7c7d4989de43a0177b45884839fc39f04cb107fef`.
 
 ---
 
@@ -204,6 +205,21 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.12 — Hermetic two-boot persistence check (Task 2)
+
+- Commit: `test: hermetic two-boot persistence check` (Agent 2).
+- Thêm `scripts/test-persist.py`: disk nằm trong temp dir riêng, xóa sau test.
+- Phase 1 disk trắng: yêu cầu `FS DISK OK`, **không** có `FS PERSIST OK`;
+  kiểm tra sector 0 có `VF01` + `ViFastOS write`.
+- Phase 2 seed nonce ngẫu nhiên vào `VF01` sector 0; yêu cầu `FS PERSIST OK`
+  và server in `FS PERSIST DATA <nonce>` đúng nonce.
+- Phase âm magic sai: yêu cầu `FS DISK OK`, không có `FS PERSIST OK`.
+- AArch64 và x86_64 PASS; RISC-V skip vì chưa có block backend.
+- `test-qemu.py` nay tạo disk mới trong temp dir cho mỗi lần chạy, không dùng
+  `/tmp/vifast-*.disk` cố định; vì vậy output chính chỉ cần `FS DISK OK`.
+- `./scripts/build.sh` PASS; `vifast-kernel` 83/83; QEMU 3/3 PASS ×3; persist
+  test PASS.
 
 ## 8.10 — AArch64 VirtIO block + FS scratch bền vững
 

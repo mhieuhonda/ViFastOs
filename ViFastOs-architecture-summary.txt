@@ -125,8 +125,8 @@ Output tiêu biểu:
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
   "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "IOMMU OK",
-  "SMP OK (... ipi=1)", "BLOCK OK"/"FS DISK OK", "FS PERSIST OK", "PREEMPT OK",
-  "ROOT SWITCH n>1"
+  "SMP OK (... ipi=1)", "BLOCK OK"/"FS DISK OK", "PREEMPT OK",
+  "ROOT SWITCH n>1"; persistence do `scripts/test-persist.py` kiểm tra.
 - user layout chung: boot mappings tại 0x0000_0010_0000_0000 (64 GiB);
   full user range hiện tại 64..128 GiB
 
@@ -843,6 +843,7 @@ Lệnh:
     cargo test -p vifast-user
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
+    python3 scripts/test-persist.py
 
 Host test hiện có 83 test `vifast-kernel` + 11 test `vifast-pte` +
 17 test `vifast-elf`:
@@ -925,6 +926,12 @@ QEMU test:
 - RISC-V: -machine virt -smp 2 -bios default
 - AArch64: -machine virt,gic-version=2 -cpu max -smp 2
 - x86_64: OVMF + -cpu max + -smp 2 + isa-debug-exit
+- `test-qemu.py` tạo disk mới trong thư mục tạm riêng cho mỗi lần chạy,
+  không dùng `/tmp/vifast-*.disk` cố định; vì vậy output chính chỉ cần
+  `FS DISK OK`, không cần `FS PERSIST OK`.
+- `scripts/test-persist.py` kiểm tra persistence thật: phase 1 disk trắng,
+  phase 2 seed nonce `VF01` và đọc lại, phase âm magic sai; áp dụng
+  AArch64/x86_64, RISC-V skip có lý do.
 
 Điều kiện PASS (khớp `scripts/test-qemu.py`):
 - SELFTEST PASS
@@ -956,8 +963,8 @@ QEMU test:
 - AArch64/x86_64 phải có BLOCK OK và FS DISK OK
 - x86_64 chấp nhận SMP SKIP
 
-Ghi chú: `FS PERSIST OK` chưa được harness bắt buộc; xem Task 2 của
-`ViFastOs-decision-agent2-01.md` để làm test persistence hermetic.
+Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk mới;
+`scripts/test-persist.py` kiểm tra 2 lần boot với nonce duy nhất và test âm.
 
 Exit code:
 - RISC-V 0

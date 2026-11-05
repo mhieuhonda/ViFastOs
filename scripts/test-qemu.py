@@ -38,12 +38,23 @@ def find_ovmf_code() -> str | None:
     return None
 
 
+DISK_DIRS: list[str] = []
+
+
 def make_disk(name: str) -> str:
-    path = os.path.join(tempfile.gettempdir(), f"vifast-{name}.disk")
-    if not os.path.exists(path) or os.path.getsize(path) < 4 * 1024 * 1024:
-        with open(path, "wb") as disk:
-            disk.truncate(4 * 1024 * 1024)
+    """Create a fresh disk in a unique per-run directory."""
+    directory = tempfile.mkdtemp(prefix=f"vifast-{name}-disk-")
+    DISK_DIRS.append(directory)
+    path = os.path.join(directory, "disk.img")
+    with open(path, "wb") as disk:
+        disk.truncate(4 * 1024 * 1024)
     return path
+
+
+def cleanup_disks() -> None:
+    for directory in DISK_DIRS:
+        shutil.rmtree(directory, ignore_errors=True)
+    DISK_DIRS.clear()
 
 
 def root_switch_count(output: str) -> int:
@@ -248,11 +259,14 @@ def main() -> int:
     if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
         print("missing QEMU binaries")
         return 2
-    results = {
-        "riscv64": test_riscv(),
-        "aarch64": test_aarch64(),
-        "x86_64": test_x86_64(),
-    }
+    try:
+        results = {
+            "riscv64": test_riscv(),
+            "aarch64": test_aarch64(),
+            "x86_64": test_x86_64(),
+        }
+    finally:
+        cleanup_disks()
     print("\n=== summary ===")
     for name, ok in results.items():
         print(f"{name:8} {'PASS' if ok else 'FAIL'}")
