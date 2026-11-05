@@ -308,6 +308,29 @@ pub fn cap_copy(src_slot: u8, dst_tcb_slot: u8, dst_slot: u8, rights: u8) -> Sys
     result(e, v)
 }
 
+pub fn cap_mint(
+    src_slot: u8,
+    dst_tcb_slot: u8,
+    dst_slot: u8,
+    rights: u8,
+    badge: u64,
+) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::CapMint as u64,
+            [
+                src_slot as u64,
+                dst_tcb_slot as u64,
+                dst_slot as u64,
+                rights as u64,
+                badge,
+                0,
+            ],
+        )
+    };
+    result(e, v)
+}
+
 pub fn page_table_map(page_table_slot: u8, vspace_slot: u8, va: u64) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(
@@ -355,13 +378,23 @@ pub fn frame_unmap(vspace_slot: u8, va: u64, frame_slot: u8) -> SyscallResult {
     result(e, v)
 }
 
-pub fn block_read(lba: u64, ptr: u64) -> SyscallResult {
-    let (e, v) = unsafe { syscall(SyscallId::BlockRead as u64, [lba, ptr, 0, 0, 0, 0]) };
+pub fn block_read(cap_slot: u8, lba: u64, ptr: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::BlockRead as u64,
+            [cap_slot as u64, lba, ptr, 0, 0, 0],
+        )
+    };
     result(e, v)
 }
 
-pub fn block_write(lba: u64, ptr: u64) -> SyscallResult {
-    let (e, v) = unsafe { syscall(SyscallId::BlockWrite as u64, [lba, ptr, 0, 0, 0, 0]) };
+pub fn block_write(cap_slot: u8, lba: u64, ptr: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::BlockWrite as u64,
+            [cap_slot as u64, lba, ptr, 0, 0, 0],
+        )
+    };
     result(e, v)
 }
 

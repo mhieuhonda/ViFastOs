@@ -206,7 +206,7 @@ pub struct Kernel {
     pub(crate) runq_len: usize,
     pub(crate) current: [Option<ObjRef>; MAX_HARTS],
     pub(crate) seq: u64,
-    pub(crate) ticks: u64,
+    pub(crate) ticks: [u64; MAX_HARTS],
     pub(crate) root: Option<ObjRef>,
     pub(crate) fs: fs::RamFs,
     pub(crate) stats: KernelStats,
@@ -229,7 +229,7 @@ impl Kernel {
             runq_len: 0,
             current: [None; MAX_HARTS],
             seq: 0,
-            ticks: 0,
+            ticks: [0; MAX_HARTS],
             root: None,
             fs: fs::RamFs::new(),
             stats: KernelStats {
@@ -256,7 +256,7 @@ impl Kernel {
         self.runq_len = 0;
         self.current = [None; MAX_HARTS];
         self.seq = 0;
-        self.ticks = 0;
+        self.ticks = [0; MAX_HARTS];
         self.root = None;
         self.fs = fs::RamFs::new();
         self.stats = KernelStats {
@@ -841,6 +841,11 @@ impl Kernel {
             ObjType::Iommu => (
                 Kind::Iommu(IommuDomain::default()),
                 OBJ_IOMMU_BYTES,
+                OBJ_METADATA_ALIGN,
+            ),
+            ObjType::BlockDevice => (
+                Kind::BlockDevice(BlockDevice::default()),
+                OBJ_BLOCK_DEVICE_BYTES,
                 OBJ_METADATA_ALIGN,
             ),
             _ => return Err(KError::NotImplemented),
@@ -1743,6 +1748,7 @@ impl Kernel {
                         physical_count += 1;
                     }
                 }
+                Kind::BlockDevice(_) => {}
                 Kind::Iommu(ref domain) => {
                     for (index, mapping) in domain.mappings.iter().enumerate() {
                         let Some(mapping) = mapping else { continue };
@@ -2641,7 +2647,7 @@ impl Kernel {
                     }
                 }
             }
-            Kind::Iommu(_) | Kind::Untyped(_) | Kind::Free => {}
+            Kind::Iommu(_) | Kind::BlockDevice(_) | Kind::Untyped(_) | Kind::Free => {}
         }
         self.remove_caps_to(obj);
         if let Some(object) = self.get_mut(obj) {
@@ -3080,13 +3086,21 @@ impl Kernel {
         self.pick_on(hart)
     }
 
-    pub fn tick(&mut self) {
-        self.ticks = self.ticks.wrapping_add(1);
-        self.stats.ticks = self.ticks;
+    pub fn tick(&mut self, hart: usize) {
+        if let Some(counter) = self.ticks.get_mut(hart) {
+            *counter = counter.wrapping_add(1);
+            self.stats.ticks = *counter;
+        }
     }
 
+    /// BSP ticks.  System-wide test timing always uses hart 0 so that the AP
+    /// timer cannot make the BSP measurement depend on itself.
     pub fn ticks(&self) -> u64 {
-        self.ticks
+        self.ticks[0]
+    }
+
+    pub fn ticks_on(&self, hart: usize) -> u64 {
+        self.ticks.get(hart).copied().unwrap_or(0)
     }
 
     /// User-visible syscall surface for the bring-up programs.
@@ -3138,7 +3152,7 @@ impl Kernel {
         }
         if number == SyscallId::GetTime as u64 {
             return UserAction::Return {
-                value: self.ticks,
+                value: self.ticks_on(hart),
                 error: KError::Ok,
             };
         }
@@ -3161,16 +3175,31 @@ impl Kernel {
 
         if number == SyscallId::BlockRead as u64 || number == SyscallId::BlockWrite as u64 {
             let write = number == SyscallId::BlockWrite as u64;
-            if self.validate_user_range(tcb, a1, 512, write).is_err() {
+            let rights = if write { Rights::WRITE } else { Rights::READ };
+            if self
+                .lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::BlockDevice),
+                    rights,
+                )
+                .is_err()
+            {
+                return UserAction::Return {
+                    value: 0,
+                    error: KError::InvalidCap,
+                };
+            }
+            if self.validate_user_range(tcb, a2, 512, write).is_err() {
                 return UserAction::Return {
                     value: 0,
                     error: KError::InvalidArg,
                 };
             }
             return if write {
-                UserAction::BlockWrite { lba: a0, ptr: a1 }
+                UserAction::BlockWrite { lba: a1, ptr: a2 }
             } else {
-                UserAction::BlockRead { lba: a0, ptr: a1 }
+                UserAction::BlockRead { lba: a1, ptr: a2 }
             };
         }
 
@@ -3399,6 +3428,7 @@ impl Kernel {
                     n if n == ObjType::PageTable as u64 => ObjType::PageTable,
                     n if n == ObjType::VSpace as u64 => ObjType::VSpace,
                     n if n == ObjType::Iommu as u64 => ObjType::Iommu,
+                    n if n == ObjType::BlockDevice as u64 => ObjType::BlockDevice,
                     n if n == ObjType::Untyped as u64 => ObjType::Untyped,
                     _ => {
                         return UserAction::Return {
@@ -3482,6 +3512,40 @@ impl Kernel {
                     };
                 let rights = Rights((a3 as u8) & Rights::ALL.0);
                 match self.copy_cap(tcb, src_slot, dest.obj, dst_slot, rights, 0) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::CapMint as u64 => {
+                let src_slot = slot_arg(a0).unwrap_or(0);
+                let dst_tcb_slot = slot_arg(a1).unwrap_or(0);
+                let dst_slot = slot_arg(a2).unwrap_or(0);
+                if dst_slot == 0 {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::InvalidArg,
+                    };
+                }
+                let dest =
+                    match self.lookup_cap(tcb, dst_tcb_slot, Some(ObjType::Tcb), Rights::WRITE) {
+                        Ok(cap) => cap,
+                        Err(error) => return UserAction::Return { value: 0, error },
+                    };
+                let source = match self.lookup_cap(tcb, src_slot, None, Rights::NONE) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                if !matches!(source.ty, ObjType::Endpoint | ObjType::Notification) {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::WrongType,
+                    };
+                }
+                let rights = Rights((a3 as u8) & Rights::ALL.0) & source.rights;
+                match self.copy_cap(tcb, src_slot, dest.obj, dst_slot, rights, a4) {
                     Ok(()) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,
@@ -3835,7 +3899,7 @@ fn message_from_cap(label: u64, w0: u64, w1: u64, w2: u64, cap: u64) -> KResult<
     Ok(msg)
 }
 
-fn message_action(error: KError, value: u64, msg: &Message) -> UserAction {
+fn message_action(error: KError, _value: u64, msg: &Message) -> UserAction {
     let mut data = [0u64; 4];
     let words = msg.words();
     let mut i = 0;
@@ -3845,7 +3909,7 @@ fn message_action(error: KError, value: u64, msg: &Message) -> UserAction {
     }
     UserAction::Message {
         error,
-        value,
+        value: msg.badge,
         label: msg.label,
         data,
     }
@@ -3887,6 +3951,7 @@ mod tests {
             user_code_count: 1,
             free_slot_start: 21,
             free_slot_end: 64,
+            block_device: 13,
             server_elf_va: 0x1000_0000,
             server_elf_len: 4096,
             client_elf_va: 0x1000_2000,
@@ -3894,7 +3959,7 @@ mod tests {
             sched_harts: 0b11,
         };
         let base = &info as *const BootInfo as usize;
-        assert_eq!(core::mem::size_of::<BootInfo>(), 72);
+        assert_eq!(core::mem::size_of::<BootInfo>(), 80);
         for (offset, field) in [
             (0usize, &info.magic as *const u64 as usize),
             (8, &info.version as *const u32 as usize),
@@ -3907,11 +3972,12 @@ mod tests {
             (26, &info.user_code_count as *const u16 as usize),
             (28, &info.free_slot_start as *const u16 as usize),
             (30, &info.free_slot_end as *const u16 as usize),
-            (32, &info.server_elf_va as *const u64 as usize),
-            (40, &info.server_elf_len as *const u64 as usize),
-            (48, &info.client_elf_va as *const u64 as usize),
-            (56, &info.client_elf_len as *const u64 as usize),
-            (64, &info.sched_harts as *const u32 as usize),
+            (32, &info.block_device as *const u16 as usize),
+            (40, &info.server_elf_va as *const u64 as usize),
+            (48, &info.server_elf_len as *const u64 as usize),
+            (56, &info.client_elf_va as *const u64 as usize),
+            (64, &info.client_elf_len as *const u64 as usize),
+            (72, &info.sched_harts as *const u32 as usize),
         ] {
             assert_eq!(field - base, offset);
         }
@@ -7912,5 +7978,89 @@ mod tests {
                 id
             );
         }
+    }
+
+    #[test]
+    fn block_syscalls_require_a_block_device_capability() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let caps = kernel
+            .create_untyped_with_limit(0x2000, 0x1000, 4096, 4)
+            .unwrap();
+        let block = kernel.retype(caps, ObjType::BlockDevice).unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(block, ObjType::BlockDevice, Rights::READ | Rights::WRITE),
+            )
+            .unwrap();
+        let endpoint = kernel.retype(caps, ObjType::Endpoint).unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        let ptr = 0u64;
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::BlockRead as u64, 0, 0, ptr, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidCap
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::BlockWrite as u64, 2, 0, ptr, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidCap
+            }
+        );
+        assert!(kernel
+            .lookup_cap(root, 1, Some(ObjType::BlockDevice), Rights::READ)
+            .is_ok());
+        assert!(kernel
+            .lookup_cap(root, 1, Some(ObjType::BlockDevice), Rights::WRITE)
+            .is_ok());
+    }
+
+    #[test]
+    fn capmint_copies_endpoint_with_badge() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(
+                    endpoint,
+                    ObjType::Endpoint,
+                    Rights::READ | Rights::WRITE | Rights::GRANT,
+                ),
+            )
+            .unwrap();
+        let child = kernel.create_tcb("child", 5).unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(child, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::CapMint as u64,
+                1,
+                3,
+                1,
+                Rights::READ.0 as u64,
+                7,
+                0,
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        let cap = kernel
+            .lookup_cap(child, 1, Some(ObjType::Endpoint), Rights::READ)
+            .unwrap();
+        assert_eq!(cap.badge, 7);
     }
 }

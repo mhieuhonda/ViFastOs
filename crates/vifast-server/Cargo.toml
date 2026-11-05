@@ -8,3 +8,4 @@ license.workspace = true
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
 vifast-user = { path = "../vifast-user" }
+vifast-fs = { path = "../vifast-fs" }

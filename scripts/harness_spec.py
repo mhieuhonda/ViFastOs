@@ -22,7 +22,11 @@ COMMON = [
     ("Cap OK", "capability transfer demo succeeded"),
     ("ViFastOS ramfs", "ramfs read path ran"),
     ("ViFastOS write", "ramfs write path ran"),
+    ("FS V2 OK", "FS v2 namespace/data demo completed"),
+    ("FS FSCK OK", "server fsck passed after demo"),
+    ("FS PERM OK", "badge-based FS permissions behaved"),
     ("IPC BUF OK", "IPC buffer transfer succeeded"),
+    ("BLOCK DENIED OK", "client was denied BlockWrite without a device cap"),
     ("Reply OK", "reply path succeeded"),
     ("ROOT RUST", "root Rust ELF entered user mode"),
     ("BOOTINFO OK", "root validated BootInfo v2"),
@@ -52,6 +56,10 @@ FORBIDDEN = [
     "BOOT HANDOFF FAIL",
     "KERNEL IRQ OUTSIDE IDLE",
     "AP PIC IRQ",
+    "BLOCK DENIED BAD",
+    "FS CORRUPT",
+    "FS V2 BAD",
+    "FS PERM BAD",
 ]
 
 FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000]
@@ -66,6 +74,7 @@ ARCH = {
     "riscv64": [
         ("SMP OK", "both harts online"),
         ("ipi=1", "maintenance IPI acknowledged"),
+        ("SMP TIMER RATE (ap=T, bsp=B)", "independent BSP and AP timer rates"),
         ("SMP TIMER OK (hart1_ticks=T)", "secondary timer ran, exactly once"),
         ("SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)", "idle accounting, exactly once"),
         ("SMP PREEMPT OK (user_ticks=U, preempts=P)", "secondary timer preempted a busy user task, exactly once"),
@@ -76,6 +85,7 @@ ARCH = {
     "aarch64": [
         ("SMP OK", "both CPUs online"),
         ("ipi=1", "maintenance IPI acknowledged"),
+        ("SMP TIMER RATE (ap=T, bsp=B)", "independent BSP and AP timer rates"),
         ("SMP TIMER OK (hart1_ticks=T)", "secondary timer ran, exactly once"),
         ("SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)", "idle accounting, exactly once"),
         ("SMP PREEMPT OK (user_ticks=U, preempts=P)", "secondary timer preempted a busy user task, exactly once"),
@@ -114,6 +124,8 @@ ORDER = {
 ARCH_EXACT_ONE = {
     "riscv64": [
         "SMP OK",
+        "SMP TIMER OK",
+        "SMP TIMER RATE",
         "SMP IDLE OK",
         "SMP PREEMPT OK",
         "SMP SCHED OK",
@@ -123,6 +135,7 @@ ARCH_EXACT_ONE = {
     "aarch64": [
         "SMP OK",
         "SMP TIMER OK",
+        "SMP TIMER RATE",
         "SMP IDLE OK",
         "SMP PREEMPT OK",
         "SMP SCHED OK",
@@ -138,6 +151,7 @@ NUMERIC = {
         "ROOT SWITCH n > 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
+        "B >= 5 and B/2 <= T <= 2B",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "aarch64": [
@@ -146,6 +160,7 @@ NUMERIC = {
         "T > 0, I >= 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
+        "B >= 5 and B/2 <= T <= 2B",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "x86_64": [
@@ -157,6 +172,7 @@ NUMERIC = {
         "1 <= Y <= X, Wt <= T, Ws <= Y",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
+        "B >= 5 and B/2 <= T <= 2B",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
 }
@@ -242,6 +258,13 @@ def accept(
     if len(faults) != 4:
         return False
     if not all(address in faults for address in FAULT_ADDRESSES):
+        return False
+    rate = RATE_RE.search(output)
+    if not rate:
+        return False
+    ap_rate = int(rate.group(1))
+    bsp_rate = int(rate.group(2))
+    if bsp_rate < 5 or ap_rate * 2 < bsp_rate or ap_rate > bsp_rate * 2:
         return False
     match = ROOT_SWITCH_RE.search(output)
     if not match or int(match.group(1)) <= 1:

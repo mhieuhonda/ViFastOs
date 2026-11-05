@@ -98,5 +98,5 @@ fn panic(_info: &PanicInfo) -> ! {
     for _ in 0..10_000_000 {
         core::hint::spin_loop();
     }
-    Aarch64Platform::exit(1)
+    vifast_platform_aarch64::platform::panic_exit(1)
 }

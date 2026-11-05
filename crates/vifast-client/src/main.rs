@@ -40,13 +40,6 @@ unsafe fn copy_to(va: u64, bytes: &[u8]) {
     core::ptr::copy_nonoverlapping(bytes.as_ptr(), va as *mut u8, bytes.len());
 }
 
-fn pack_name(name: &[u8]) -> (u64, u64) {
-    let len = core::cmp::min(name.len(), vfs::MAX_NAME);
-    let mut bytes = [0u8; vfs::MAX_NAME];
-    bytes[..len].copy_from_slice(&name[..len]);
-    (u64::from_le_bytes(bytes), len as u64)
-}
-
 fn percpu_clobber_ok() -> bool {
     #[cfg(target_arch = "riscv64")]
     {
@@ -95,21 +88,57 @@ fn percpu_clobber_ok() -> bool {
     }
 }
 
-fn vfs_open(name: &[u8], flags: u64) -> Option<(u64, u64)> {
-    let (packed, len) = pack_name(name);
-    let reply = unsafe { vifast_user::call_message(1, vfs::OPEN, packed, len, flags) };
-    if reply.error == KError::Ok && reply.label == vfs::OK {
+fn copy_path(path: &[u8]) -> usize {
+    let len = core::cmp::min(path.len(), vfs::MAX_PATH);
+    unsafe {
+        core::ptr::copy_nonoverlapping(path.as_ptr(), IPC_BUF_CLIENT_VA as *mut u8, len);
+    }
+    len
+}
+
+fn vfs_reply(reply: vifast_user::MessageResult) -> Result<vifast_user::MessageResult, u64> {
+    if reply.error != KError::Ok {
+        return Err(vfs::EIO);
+    }
+    if reply.label == vfs::ERR {
+        return Err(reply.data[0]);
+    }
+    Ok(reply)
+}
+
+fn vfs_open_via(slot: u8, name: &[u8], flags: u64) -> Option<(u64, u64)> {
+    let len = copy_path(name);
+    let reply = unsafe { vifast_user::call_message(slot, vfs::OPEN, flags, len as u64, 0) };
+    let reply = vfs_reply(reply).ok()?;
+    if reply.label == vfs::OK {
         Some((reply.data[0], reply.data[1]))
     } else {
         None
     }
 }
 
-fn vfs_read(fd: u64, offset: u64, len: usize, out: &mut [u8; vfs::MAX_IO]) -> Option<usize> {
-    let reply = unsafe { vifast_user::call_message(1, vfs::READ, fd, offset, len as u64) };
-    if reply.error != KError::Ok || reply.label == vfs::ERR {
-        return None;
+fn vfs_open(name: &[u8], flags: u64) -> Option<(u64, u64)> {
+    vfs_open_via(1, name, flags)
+}
+
+fn vfs_open_error(name: &[u8], flags: u64) -> u64 {
+    let len = copy_path(name);
+    let reply = unsafe { vifast_user::call_message(1, vfs::OPEN, flags, len as u64, 0) };
+    match vfs_reply(reply) {
+        Ok(_) => 0,
+        Err(code) => code,
     }
+}
+
+fn vfs_read_via(
+    slot: u8,
+    fd: u64,
+    offset: u64,
+    len: usize,
+    out: &mut [u8; vfs::MAX_IO],
+) -> Option<usize> {
+    let reply = unsafe { vifast_user::call_message(slot, vfs::READ, fd, offset, len as u64) };
+    let reply = vfs_reply(reply).ok()?;
     let count = core::cmp::min(reply.label as usize, out.len());
     for index in 0..count {
         let word = reply.data[index / 8];
@@ -118,23 +147,29 @@ fn vfs_read(fd: u64, offset: u64, len: usize, out: &mut [u8; vfs::MAX_IO]) -> Op
     Some(count)
 }
 
-fn vfs_write(fd: u64, offset: u64, bytes: &[u8]) -> Option<usize> {
+fn vfs_read(fd: u64, offset: u64, len: usize, out: &mut [u8; vfs::MAX_IO]) -> Option<usize> {
+    vfs_read_via(1, fd, offset, len, out)
+}
+
+fn vfs_write_via(slot: u8, fd: u64, offset: u64, bytes: &[u8]) -> Option<usize> {
     let len = core::cmp::min(bytes.len(), vfs::MAX_IO);
     unsafe {
         let dst = IPC_BUF_CLIENT_VA as *mut u8;
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, len);
     }
-    let reply = unsafe { vifast_user::call_message(1, vfs::WRITE, fd, offset, len as u64) };
-    if reply.error == KError::Ok && reply.label != vfs::ERR {
-        Some(reply.label as usize)
-    } else {
-        None
-    }
+    let reply = unsafe { vifast_user::call_message(slot, vfs::WRITE, fd, offset, len as u64) };
+    let reply = vfs_reply(reply).ok()?;
+    Some(reply.label as usize)
+}
+
+fn vfs_write(fd: u64, offset: u64, bytes: &[u8]) -> Option<usize> {
+    vfs_write_via(1, fd, offset, bytes)
 }
 
 fn vfs_stat(fd: u64) -> Option<u64> {
     let reply = unsafe { vifast_user::call_message(1, vfs::STAT, fd, 0, 0) };
-    if reply.error == KError::Ok && reply.label == vfs::OK {
+    let reply = vfs_reply(reply).ok()?;
+    if reply.label == vfs::OK {
         Some(reply.data[0])
     } else {
         None
@@ -143,11 +178,75 @@ fn vfs_stat(fd: u64) -> Option<u64> {
 
 fn vfs_close(fd: u64) -> Option<()> {
     let reply = unsafe { vifast_user::call_message(1, vfs::CLOSE, fd, 0, 0) };
-    if reply.error == KError::Ok && reply.label == vfs::OK {
-        Some(())
-    } else {
-        None
+    vfs_reply(reply).ok().map(|_| ())
+}
+
+fn vfs_mkdir_via(slot: u8, path: &[u8]) -> Result<u64, u64> {
+    let len = copy_path(path);
+    let reply = unsafe { vifast_user::call_message(slot, vfs::MKDIR, len as u64, 0, 0) };
+    vfs_reply(reply).map(|reply| reply.data[0])
+}
+
+fn vfs_mkdir(path: &[u8]) -> Result<u64, u64> {
+    vfs_mkdir_via(1, path)
+}
+
+fn vfs_unlink_via(slot: u8, path: &[u8]) -> Result<(), u64> {
+    let len = copy_path(path);
+    let reply = unsafe { vifast_user::call_message(slot, vfs::UNLINK, len as u64, 0, 0) };
+    vfs_reply(reply).map(|_| ())
+}
+
+fn vfs_unlink(path: &[u8]) -> Result<(), u64> {
+    vfs_unlink_via(1, path)
+}
+
+fn vfs_rename(old: &[u8], new: &[u8]) -> Result<(), u64> {
+    let old_len = copy_path(old);
+    let new_len = core::cmp::min(new.len(), vfs::MAX_PATH);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            new.as_ptr(),
+            (IPC_BUF_CLIENT_VA + vfs::MAX_PATH) as *mut u8,
+            new_len,
+        );
     }
+    let reply =
+        unsafe { vifast_user::call_message(1, vfs::RENAME, old_len as u64, new_len as u64, 0) };
+    vfs_reply(reply).map(|_| ())
+}
+
+fn vfs_truncate(fd: u64, size: u64) -> Result<(), u64> {
+    let reply = unsafe { vifast_user::call_message(1, vfs::TRUNCATE, fd, size, 0) };
+    vfs_reply(reply).map(|_| ())
+}
+
+fn vfs_readdir(fd: u64, index: u64) -> Result<Option<(u64, [u8; 28], usize)>, u64> {
+    let reply = unsafe { vifast_user::call_message(1, vfs::READDIR, fd, index, 0) };
+    match vfs_reply(reply) {
+        Ok(reply) => {
+            if reply.label != vfs::OK {
+                return Ok(None);
+            }
+            let len = reply.data[1] as usize;
+            let mut name = [0u8; 28];
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    IPC_BUF_CLIENT_VA as *const u8,
+                    name.as_mut_ptr(),
+                    len,
+                );
+            }
+            Ok(Some((reply.data[0], name, len)))
+        }
+        Err(vfs::ENOENT) => Ok(None),
+        Err(code) => Err(code),
+    }
+}
+
+fn vfs_fsck() -> bool {
+    let reply = unsafe { vifast_user::call_message(1, vfs::FSCK, 0, 0, 0) };
+    vfs_reply(reply).is_ok()
 }
 
 #[no_mangle]
@@ -174,6 +273,12 @@ pub extern "C" fn client_main() -> ! {
     }
     let _ = vifast_user::frame_unmap(2, DATA_VA as u64, 4);
     write(CLIENT);
+    let denied = vifast_user::block_write(0, 0, IPC_BUF_CLIENT_VA as u64);
+    write(if denied.error == KError::InvalidCap {
+        b"BLOCK DENIED OK\n"
+    } else {
+        b"BLOCK DENIED BAD\n"
+    });
 
     unsafe { copy_to(IPC_BUF_CLIENT_VA as u64, IPC_TEXT) };
     let first = vifast_user::call_with_cap(1, 0x1234, 0, 0, 5, 5);
@@ -214,10 +319,17 @@ pub extern "C" fn client_main() -> ! {
     } else {
         vfs_ok = false;
     }
-    if let Some((fd, _)) = vfs_open(b"/scratch", 6) {
+    let mut scratch: &[u8] = b"/scratch";
+    if let Some((fd, size)) = vfs_open(b"/scratch", 0) {
+        let _ = vfs_close(fd);
+        if size != 0 {
+            scratch = b"/scratch2";
+        }
+    }
+    if let Some((fd, _)) = vfs_open(scratch, 6) {
         vfs_ok &= vfs_write(fd, 0, WRITE_TEXT).is_some();
         let _ = vfs_close(fd);
-        if let Some((fd, _)) = vfs_open(b"/scratch", 0) {
+        if let Some((fd, _)) = vfs_open(scratch, 0) {
             vfs_ok &= vfs_read(fd, 0, vfs::MAX_IO, &mut file_buf).is_some_and(|n| {
                 let _ = vifast_user::debug_write(file_buf.as_ptr() as u64, n as u64);
                 n == WRITE_TEXT.len()
@@ -236,6 +348,159 @@ pub extern "C" fn client_main() -> ! {
         PERCPU_OK
     } else {
         PERCPU_BAD
+    });
+
+    let mut v2 = true;
+    v2 &= vfs_mkdir(b"/d").is_ok();
+    let fd = match vfs_open(b"/d/a", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
+        Some((fd, _)) => fd,
+        None => {
+            v2 = false;
+            0
+        }
+    };
+    let mut pattern = [0u8; 600];
+    let mut index = 0usize;
+    while index < pattern.len() {
+        pattern[index] = (index as u8) ^ 0x5a;
+        index += 1;
+    }
+    let mut written = 0usize;
+    while written < pattern.len() {
+        let chunk = core::cmp::min(vfs::MAX_IO, pattern.len() - written);
+        let Some(count) = vfs_write(fd, written as u64, &pattern[written..written + chunk]) else {
+            v2 = false;
+            break;
+        };
+        if count != chunk {
+            v2 = false;
+            break;
+        }
+        written += count;
+    }
+    v2 &= written == pattern.len();
+    v2 &= vfs_close(fd).is_some();
+
+    if let Some((fd, _)) = vfs_open(b"/d/a", 0) {
+        let mut readback = [0u8; 600];
+        let mut done = 0usize;
+        while done < readback.len() {
+            let mut chunk = [0u8; vfs::MAX_IO];
+            let want = core::cmp::min(vfs::MAX_IO, readback.len() - done);
+            let Some(count) = vfs_read(fd, done as u64, want, &mut chunk) else {
+                v2 = false;
+                break;
+            };
+            if count == 0 {
+                break;
+            }
+            readback[done..done + count].copy_from_slice(&chunk[..count]);
+            done += count;
+        }
+        v2 &= done == pattern.len() && readback == pattern;
+        v2 &= vfs_close(fd).is_some();
+    } else {
+        v2 = false;
+    }
+
+    let mut found_d = false;
+    if let Some((root_fd, _)) = vfs_open(b"/", 0) {
+        let mut entry = 0u64;
+        while let Ok(Some((_, name, len))) = vfs_readdir(root_fd, entry) {
+            if len == 1 && name[0] == b'd' {
+                found_d = true;
+            }
+            entry += 1;
+        }
+        v2 &= vfs_close(root_fd).is_some();
+    } else {
+        v2 = false;
+    }
+    v2 &= found_d;
+    let mut found_a = false;
+    if let Some((dir_fd, _)) = vfs_open(b"/d", 0) {
+        let mut entry = 0u64;
+        while let Ok(Some((_, name, len))) = vfs_readdir(dir_fd, entry) {
+            if len == 1 && name[0] == b'a' {
+                found_a = true;
+            }
+            entry += 1;
+        }
+        v2 &= vfs_close(dir_fd).is_some();
+    } else {
+        v2 = false;
+    }
+    v2 &= found_a;
+    v2 &= vfs_rename(b"/d/a", b"/d/b").is_ok();
+    v2 &= vfs_open_error(b"/d/a", 0) == vfs::ENOENT;
+    if let Some((fd, _)) = vfs_open(b"/d/b", 0) {
+        v2 &= vfs_stat(fd) == Some(600);
+        v2 &= vfs_truncate(fd, 100).is_ok();
+        v2 &= vfs_stat(fd) == Some(100);
+        v2 &= vfs_close(fd).is_some();
+    } else {
+        v2 = false;
+    }
+    v2 &= vfs_unlink(b"/d/b").is_ok();
+    v2 &= vfs_open_error(b"/d/b", 0) == vfs::ENOENT;
+    v2 &= vfs_mkdir(b"/d/x").is_ok();
+    v2 &= vfs_unlink(b"/d").is_err(); // ENOTEMPTY
+    v2 &= vfs_unlink(b"/d/x").is_ok();
+    v2 &= vfs_unlink(b"/d").is_ok();
+    v2 &= vfs_mkdir(b"/d").is_ok();
+    v2 &= vfs_mkdir(b"/d").is_err(); // EEXIST
+    v2 &= vfs_unlink(b"/d").is_ok();
+    v2 &= vfs_open_error(b"/does-not-exist", 0) == vfs::ENOENT;
+    let fsck = vfs_fsck();
+    write(if v2 && fsck {
+        b"FS V2 OK\n"
+    } else {
+        b"FS V2 BAD\n"
+    });
+
+    let mut perm = vfs_mkdir_via(1, b"/priv").is_ok();
+    if !perm {
+        let _ = vifast_user::debug_write(b"PERM MKDIR BAD\n".as_ptr() as u64, 15);
+    }
+    let file = match vfs_open_via(1, b"/priv/f", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
+        Some((fd, _)) => {
+            perm &= vfs_write_via(1, fd, 0, b"perm").is_some();
+            let _ = vfs_close(fd);
+            true
+        }
+        None => false,
+    };
+    perm &= file;
+    if !file {
+        let _ = vifast_user::debug_write(b"PERM CREATE BAD\n".as_ptr() as u64, 16);
+    }
+    if let Some((fd, _)) = vfs_open_via(6, b"/priv/f", 0) {
+        let mut buf = [0u8; vfs::MAX_IO];
+        let read_ok = vfs_read_via(6, fd, 0, 4, &mut buf) == Some(4) && &buf[..4] == b"perm";
+        perm &= read_ok;
+        if !read_ok {
+            let _ = vifast_user::debug_write(b"PERM READ BAD\n".as_ptr() as u64, 14);
+        }
+        let write_denied = vfs_write_via(6, fd, 0, b"nope").is_none();
+        perm &= write_denied;
+        if !write_denied {
+            let _ = vifast_user::debug_write(b"PERM WRITE BAD\n".as_ptr() as u64, 15);
+        }
+        let _ = vfs_close(fd);
+    } else {
+        perm = false;
+    }
+    let unlink_denied = matches!(vfs_unlink_via(6, b"/priv"), Err(vfs::EACCES));
+    perm &= unlink_denied;
+    if !unlink_denied {
+        let _ = vifast_user::debug_write(b"PERM UNLINK BAD\n".as_ptr() as u64, 16);
+    }
+    let _ = vfs_unlink(b"/priv/f");
+    let _ = vfs_unlink(b"/priv");
+    write(if perm {
+        b"FS PERM OK\n"
+    } else {
+        b"FS PERM BAD\n"
     });
 
     loop {

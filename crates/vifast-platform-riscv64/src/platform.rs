@@ -54,6 +54,8 @@ static mut TRAP_STACKS: [TrapStack; MAX_HARTS] = [TrapStack([0; 32768]); MAX_HAR
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static BSP_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static BSP_RATE_BASE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_USER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_PREEMPTS: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
@@ -108,6 +110,24 @@ static MAINT_KIND: [AtomicU32; MAX_HARTS] = [
     AtomicU32::new(0),
 ];
 static BKL: BigKernelLock = BigKernelLock::new();
+
+/// QEMU virt exposes the SiFive test finisher at this physical address.
+const SIFIVE_TEST: u64 = 0x10_0000;
+const SIFIVE_TEST_FAIL: u32 = 0x3333;
+
+/// QEMU's `sifive_test` finisher does not carry an exit-code field; this is
+/// recorded as a platform limitation in the round report.  The file is still
+/// mapped and used exactly as the virt-machine contract requires.
+pub fn panic_exit(_code: u8) -> ! {
+    unsafe {
+        core::ptr::write_volatile(SIFIVE_TEST as *mut u32, SIFIVE_TEST_FAIL);
+    }
+    loop {
+        unsafe {
+            core::arch::asm!("wfi");
+        }
+    }
+}
 
 pub fn panic_halt_others() {
     let hart = current_hart();
@@ -401,6 +421,7 @@ unsafe fn build_kernel_page_tables() {
     (*root).0[2] = pte(table_pa(kernel_l1), PTE_V);
     (*kernel_l1).0[0] = pte(0x8000_0000, PTE_V | PTE_R | PTE_W | PTE_X);
     (*kernel_l1).0[1] = pte(0x8020_0000, PTE_V | PTE_R | PTE_W | PTE_X);
+    (*device_l1).0[0] = pte(0x0, PTE_V | PTE_R | PTE_W);
     (*device_l1).0[128] = pte(0x1000_0000, PTE_V | PTE_R | PTE_W);
 }
 
@@ -701,6 +722,14 @@ impl Platform for RiscvPlatform {
 
     fn secondary_timer_ticks() -> usize {
         SECONDARY_TIMER_TICKS.load(Ordering::Relaxed)
+    }
+
+    fn timer_rate() -> Option<(usize, usize)> {
+        let base = BSP_RATE_BASE.load(Ordering::Acquire);
+        Some((
+            SECONDARY_TIMER_TICKS.load(Ordering::Relaxed),
+            BSP_TIMER_TICKS.load(Ordering::Relaxed).saturating_sub(base),
+        ))
     }
 
     fn secondary_user_ticks() -> usize {
@@ -1135,6 +1164,7 @@ impl Platform for RiscvPlatform {
             let bkl = bkl_lock();
             let ipi_ok = request_ipi();
             drop(bkl);
+            BSP_RATE_BASE.store(BSP_TIMER_TICKS.load(Ordering::Acquire), Ordering::Release);
             if ipi_ok {
                 vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2, ipi=1)");
             } else {
@@ -1207,6 +1237,8 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
             if user {
                 SECONDARY_USER_TICKS.fetch_add(1, Ordering::Relaxed);
             }
+        } else if hart == 0 {
+            BSP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
         }
         let changed = vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
         if hart == 1 && user && changed {

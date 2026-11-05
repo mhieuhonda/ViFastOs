@@ -19,6 +19,7 @@ def fixture(arch: str) -> str:
         lines += [
             "SMP OK (harts=2, ipi=1)",
             "SMP TIMER OK (hart1_ticks=20)",
+            "SMP TIMER RATE (ap=20, bsp=20)",
             "SMP IDLE OK (hart1_wakeups=5, idle_entries=5, wake_timer=0, wake_sgi=5)",
             "SMP PREEMPT OK (user_ticks=4, preempts=2)",
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=5)",
@@ -29,6 +30,7 @@ def fixture(arch: str) -> str:
         lines += [
             "SMP OK (harts=2, psci=0, ipi=1)",
             "SMP TIMER OK (hart1_ticks=20)",
+            "SMP TIMER RATE (ap=20, bsp=20)",
             "SMP IDLE OK (hart1_wakeups=2, idle_entries=2, wake_timer=0, wake_sgi=2)",
             "SMP PREEMPT OK (user_ticks=4, preempts=2)",
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=2)",
@@ -45,8 +47,8 @@ def fixture(arch: str) -> str:
             "AP LONG MODE OK (cpu=1)",
             "SMP OK (harts=2, ipi=1)",
             "SMP TIMER OK (hart1_ticks=20)",
-            "SMP IDLE OK (hart1_wakeups=3, idle_entries=4, wake_timer=2, wake_sgi=1)",
             "SMP TIMER RATE (ap=20, bsp=20)",
+            "SMP IDLE OK (hart1_wakeups=3, idle_entries=4, wake_timer=2, wake_sgi=1)",
             "SMP IPI COUNT (sent=2, seen=2)",
             "SMP PREEMPT OK (user_ticks=4, preempts=2)",
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=5)",

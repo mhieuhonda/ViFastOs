@@ -46,8 +46,8 @@ const USER_ELF_MACHINE: u16 = 243;
 const USER_ELF_MACHINE: u16 = 183;
 #[cfg(target_arch = "x86_64")]
 const USER_ELF_MACHINE: u16 = 62;
-const CLIENT_UNTYPED_SIZE: usize = 0x1_0000;
-const CLIENT_UNTYPED_OBJECTS: usize = 8;
+const CLIENT_UNTYPED_SIZE: usize = 0x4000;
+const CLIENT_UNTYPED_OBJECTS: usize = 4;
 
 fn worker_loop(label: u64) -> ! {
     let mut i = 0;
@@ -84,7 +84,7 @@ pub extern "C" fn smp_worker_c() -> ! {
     let start = vifast_user::get_time().value;
     loop {
         let now = vifast_user::get_time().value;
-        if now >= start.saturating_add(10) {
+        if now >= start.saturating_add(5) {
             break;
         }
     }
@@ -98,6 +98,20 @@ pub extern "C" fn smp_worker_c() -> ! {
 
 fn check(result: SyscallResult) {
     if result.error != KError::Ok {
+        let mut digits = [0u8; 10];
+        let mut value = result.error as u32;
+        let mut at = digits.len();
+        loop {
+            at -= 1;
+            digits[at] = b'0' + (value % 10) as u8;
+            value /= 10;
+            if value == 0 {
+                break;
+            }
+        }
+        let _ = vifast_user::debug_write(b"ROOT ERR ".as_ptr() as u64, 9);
+        let _ = vifast_user::debug_write(digits[at..].as_ptr() as u64, (digits.len() - at) as u64);
+        let _ = vifast_user::debug_write(b"\n".as_ptr() as u64, 1);
         panic!("root syscall failed: {:?}", result.error);
     }
 }
@@ -148,6 +162,21 @@ fn map_with_tables(
             return;
         }
         if mapped.error != KError::MissingPageTable {
+            let mut digits = [0u8; 10];
+            let mut value = mapped.error as u32;
+            let mut at = digits.len();
+            loop {
+                at -= 1;
+                digits[at] = b'0' + (value % 10) as u8;
+                value /= 10;
+                if value == 0 {
+                    break;
+                }
+            }
+            let _ = vifast_user::debug_write(b"ROOT MAP ERR ".as_ptr() as u64, 13);
+            let _ =
+                vifast_user::debug_write(digits[at..].as_ptr() as u64, (digits.len() - at) as u64);
+            let _ = vifast_user::debug_write(b"\n".as_ptr() as u64, 1);
             panic!("frame map failed: {:?}", mapped.error);
         }
         let table = slots.alloc();
@@ -300,6 +329,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         || info.user_code_count == 0
         || info.free_slot_start == 0
         || info.free_slot_start >= info.free_slot_end
+        || info.block_device == 0
         || info.server_elf_va == 0
         || info.server_elf_len == 0
         || info.client_elf_va == 0
@@ -455,6 +485,12 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     write(CLIENT_VSPACE_OK);
 
     copy(endpoint_slot, server_tcb, 1, Rights::READ);
+    copy(
+        info.block_device as u8,
+        server_tcb,
+        2,
+        Rights::READ | Rights::WRITE,
+    );
     check(vifast_user::tcb_configure(
         server_tcb,
         server_entry,
@@ -477,7 +513,20 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         client_untyped,
     ));
 
-    copy(endpoint_slot, client_tcb, 1, Rights::WRITE);
+    check(vifast_user::cap_mint(
+        endpoint_slot,
+        client_tcb,
+        1,
+        Rights::WRITE.0,
+        1,
+    ));
+    check(vifast_user::cap_mint(
+        endpoint_slot,
+        client_tcb,
+        6,
+        Rights::WRITE.0,
+        2,
+    ));
     copy(client_vspace, client_tcb, 2, Rights::WRITE);
     copy(client_untyped, client_tcb, 3, Rights::WRITE);
     copy(
@@ -589,7 +638,24 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
     let _ = vifast_user::debug_write(ROOT_PANIC.as_ptr() as u64, ROOT_PANIC.len() as u64);
+    if let Some(location) = info.location() {
+        let file = location.file().as_bytes();
+        let _ = vifast_user::debug_write(file.as_ptr() as u64, file.len() as u64);
+        let mut digits = [0u8; 20];
+        let mut value = location.line();
+        let mut at = digits.len();
+        loop {
+            at -= 1;
+            digits[at] = b'0' + (value % 10) as u8;
+            value /= 10;
+            if value == 0 {
+                break;
+            }
+        }
+        let _ = vifast_user::debug_write(digits[at..].as_ptr() as u64, (digits.len() - at) as u64);
+        let _ = vifast_user::debug_write(b"\n".as_ptr() as u64, 1);
+    }
     vifast_user::exit()
 }

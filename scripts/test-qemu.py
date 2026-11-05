@@ -276,6 +276,7 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
     cmd = [
         QEMU_ARM,
         "-machine", "virt,gic-version=2",
+        "-semihosting",
         "-cpu", "max",
         "-smp", "2",
         "-m", "128M",
@@ -292,7 +293,7 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         cmd,
         serial,
         20,
-        {0},
+        {1} if feature == "test-panic-hart1" else {0},
         require_smp=True,
         require_block=True,
         require_disk=True,

@@ -28,7 +28,7 @@ pub mod user_layout {
     /// deliberately disjoint: the server page at +0x2000 is not mapped in the
     /// root VSpace so the isolation test can fault on it.
     pub const SERVER_STACK_BASE: usize = CODE_VA + 0x2000;
-    pub const SERVER_STACK_TOP: usize = CODE_VA + 0x3000;
+    pub const SERVER_STACK_TOP: usize = CODE_VA + 0x5000;
     pub const CLIENT_STACK_BASE: usize = CODE_VA + 0x8000;
     pub const CLIENT_STACK_TOP: usize = CODE_VA + 0x9000;
     pub const FAULT1_STACK_BASE: usize = CODE_VA + 0x5000;
@@ -88,6 +88,7 @@ pub mod user_layout {
     pub const META_UNTYPED_SLOT: usize = 2;
     pub const DATA_UNTYPED_SLOT: usize = 3;
     pub const SERVER_VSPACE_SLOT: usize = 12;
+    pub const BLOCK_DEVICE_SLOT: usize = 13;
     pub const ENDPOINT_SLOT: usize = 4;
     pub const SERVER_TCB_SLOT: usize = 5;
     pub const CLIENT_TCB_SLOT: usize = 6;
@@ -110,7 +111,7 @@ pub mod user_layout {
 }
 /// Magic value for the read-only boot information page (`VFBOOT01` LE).
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VFBOOT01");
-pub const BOOTINFO_VERSION: u32 = 2;
+pub const BOOTINFO_VERSION: u32 = 3;
 
 /// Fixed layout passed to the root task as its first argument.  All fields are
 /// integers so the ABI has no Rust layout surprises; `free_slot_start` is the
@@ -129,6 +130,8 @@ pub struct BootInfo {
     pub user_code_count: u16,
     pub free_slot_start: u16,
     pub free_slot_end: u16,
+    /// Slot in the root CNode holding the block-device capability.
+    pub block_device: u16,
     pub server_elf_va: u64,
     pub server_elf_len: u64,
     pub client_elf_va: u64,
@@ -148,6 +151,7 @@ pub const OBJ_NOTIFICATION_BYTES: usize = 128;
 pub const OBJ_TCB_BYTES: usize = 4096;
 pub const OBJ_METADATA_ALIGN: usize = 16;
 pub const OBJ_IOMMU_BYTES: usize = 1024;
+pub const OBJ_BLOCK_DEVICE_BYTES: usize = 64;
 /// Base of the software IOMMU IOVA window used by the portable model.
 pub const IOMMU_IOVA_BASE: u64 = 0x1_0000_0000;
 pub const LABEL_FAULT: u64 = 0xFFFF_0001;
@@ -170,6 +174,25 @@ pub mod vfs {
     pub const WRITE: u64 = 0x2003;
     pub const CLOSE: u64 = 0x2004;
     pub const STAT: u64 = 0x2005;
+    pub const MKDIR: u64 = 0x2006;
+    pub const READDIR: u64 = 0x2007;
+    pub const UNLINK: u64 = 0x2008;
+    pub const RENAME: u64 = 0x2009;
+    pub const TRUNCATE: u64 = 0x200A;
+    pub const FSYNC: u64 = 0x200B;
+    pub const FSCK: u64 = 0x200C;
+
+    pub const ENOENT: u64 = 1;
+    pub const EEXIST: u64 = 2;
+    pub const EACCES: u64 = 3;
+    pub const ENOSPC: u64 = 4;
+    pub const ENOTDIR: u64 = 5;
+    pub const EISDIR: u64 = 6;
+    pub const ENOTEMPTY: u64 = 7;
+    pub const EINVAL: u64 = 8;
+    pub const ENAMETOOLONG: u64 = 9;
+    pub const EBADF: u64 = 10;
+    pub const EIO: u64 = 11;
 
     /// Successful open/close reply label.  Read/write replies use the byte
     /// count as the label so zero-length operations remain distinguishable.
@@ -177,8 +200,11 @@ pub mod vfs {
     /// Reply label used for malformed requests, missing files and invalid fds.
     pub const ERR: u64 = u64::MAX;
     pub const MAX_NAME: usize = 8;
+    pub const MAX_COMPONENT: usize = 28;
     pub const MAX_IO: usize = 24;
-    pub const MAX_FILES: usize = 4;
+    pub const MAX_FILES: usize = 16;
+    pub const MAX_PATH: usize = 128;
+    pub const MAX_FD: usize = 8;
 }
 
 /// Kernel error codes.  These values are part of the ABI and must never be
@@ -329,6 +355,7 @@ pub enum ObjType {
     PageTable = 7,
     SchedContext = 8,
     Iommu = 9,
+    BlockDevice = 10,
 }
 
 /// Thread states are exposed to the ABI for introspection and fault reports.
@@ -378,6 +405,9 @@ pub struct Message {
     pub _pad: [u8; 7],
     /// Slot number of a transferred capability, or `CAP_NONE`.
     pub cap: u64,
+    /// Sender badge captured from the endpoint capability.  Receiver sees
+    /// this in the message value register.
+    pub badge: u64,
     pub data: [u64; MSG_MAX_WORDS],
 }
 
@@ -388,6 +418,7 @@ impl Default for Message {
             len: 0,
             _pad: [0; 7],
             cap: CAP_NONE,
+            badge: 0,
             data: [0; MSG_MAX_WORDS],
         }
     }
@@ -400,6 +431,7 @@ impl Message {
             len: 0,
             _pad: [0; 7],
             cap: CAP_NONE,
+            badge: 0,
             data: [0; MSG_MAX_WORDS],
         }
     }
@@ -419,6 +451,7 @@ impl Message {
             len: words.len() as u8,
             _pad: [0; 7],
             cap: CAP_NONE,
+            badge: 0,
             data,
         })
     }
@@ -513,7 +546,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::Yield, true),
     (SyscallId::Retype, true),
     (SyscallId::CapCopy, true),
-    (SyscallId::CapMint, false),
+    (SyscallId::CapMint, true),
     (SyscallId::CNodeMint, false),
     (SyscallId::CapDelete, false),
     (SyscallId::CapRevoke, true),

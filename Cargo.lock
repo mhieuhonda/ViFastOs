@@ -51,6 +51,17 @@ name = "vifast-elf"
 version = "0.1.0"
 
 [[package]]
+name = "vifast-fs"
+version = "0.1.0"
+
+[[package]]
+name = "vifast-fsutil"
+version = "0.1.0"
+dependencies = [
+ "vifast-fs",
+]
+
+[[package]]
 name = "vifast-kernel"
 version = "0.1.0"
 dependencies = [
@@ -162,6 +173,7 @@ name = "vifast-server"
 version = "0.1.0"
 dependencies = [
  "vifast-abi",
+ "vifast-fs",
  "vifast-user",
 ]
 

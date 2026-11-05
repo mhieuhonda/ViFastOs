@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Hermetic two-boot persistence test for the user-space VFS server.
-
-Phase 1 uses a blank disk and must not report persisted data.
-Phase 2 seeds a unique nonce in sector 0 and must report that exact nonce.
-A negative phase uses a wrong magic and must not report persistence.
-
-The disks live in a temporary directory and are deleted at the end.
-RISC-V is intentionally skipped until its block backend exists.
-"""
+"""FS v2 persistence, migration and journal-recovery boot tests."""
 
 from __future__ import annotations
 
@@ -18,14 +10,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QEMU_RV = "qemu-system-riscv64"
 QEMU_ARM = "qemu-system-aarch64"
 QEMU_X86 = "qemu-system-x86_64"
 SECTOR = 512
-WRITE_TEXT = b"ViFastOS write\n"
+FSUTIL = os.path.join(ROOT, "target", "debug", "vifast-fsutil")
 
 
 def find_ovmf_code() -> str | None:
@@ -36,13 +27,8 @@ def find_ovmf_code() -> str | None:
         "/usr/share/OVMF/OVMF_CODE.fd",
         "/usr/share/qemu/OVMF_CODE.fd",
     ]
-    candidates += sorted(
-        glob.glob("/opt/homebrew/Cellar/qemu/*/share/qemu/edk2-x86_64-code.fd")
-    )
-    for path in candidates:
-        if path and os.path.exists(path):
-            return path
-    return None
+    candidates += sorted(glob.glob("/opt/homebrew/Cellar/qemu/*/share/qemu/edk2-x86_64-code.fd"))
+    return next((path for path in candidates if path and os.path.exists(path)), None)
 
 
 def find_ovmf_vars() -> str | None:
@@ -52,39 +38,19 @@ def find_ovmf_vars() -> str | None:
         "/opt/homebrew/share/qemu/edk2-i386-vars.fd",
         "/usr/share/OVMF/OVMF_VARS.fd",
     ]
-    candidates += sorted(
-        glob.glob("/opt/homebrew/Cellar/qemu/*/share/qemu/edk2-i386-vars.fd")
+    candidates += sorted(glob.glob("/opt/homebrew/Cellar/qemu/*/share/qemu/edk2-i386-vars.fd"))
+    return next((path for path in candidates if path and os.path.exists(path)), None)
+
+
+def fsutil(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    result = subprocess.run(
+        [FSUTIL, *args], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
-    for path in candidates:
-        if path and os.path.exists(path):
-            return path
-    return None
-
-
-def run_qemu(
-    name: str, cmd: list[str], serial: str, timeout: int, ok_codes: set[int]
-) -> tuple[int, str, bool]:
-    if os.path.exists(serial):
-        os.unlink(serial)
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    started = time.time()
-    timed_out = False
-    try:
-        rc = proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        proc.kill()
-        rc = proc.wait()
-    elapsed = time.time() - started
-    output = ""
-    if os.path.exists(serial):
-        output = open(serial, "rb").read().decode("utf-8", errors="replace")
-    print(f"--- {name} (rc={rc}, {elapsed:.1f}s) ---")
-    if timed_out:
-        print("FAIL: timeout")
-    elif rc not in ok_codes:
-        print(f"FAIL: unexpected QEMU exit code {rc}")
-    return rc, output, timed_out
+    if check and result.returncode != 0:
+        raise AssertionError(
+            f"fsutil {' '.join(args)} failed: {result.stderr.decode(errors='replace')}"
+        )
+    return result
 
 
 def require(condition: bool, message: str) -> None:
@@ -92,115 +58,73 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def check_phase1_disk(disk: str) -> None:
-    with open(disk, "rb") as image:
-        sector = image.read(SECTOR)
-    require(len(sector) == SECTOR, "short disk image")
-    require(sector[:4] == b"VF01", "phase 1 did not write VF01")
-    length = int.from_bytes(sector[4:8], "little")
-    require(length == len(WRITE_TEXT), "unexpected phase 1 scratch length")
-    require(sector[8 : 8 + length] == WRITE_TEXT, "phase 1 scratch payload differs")
+def make_disk(path: str) -> None:
+    with open(path, "wb") as image:
+        image.truncate(4 * 1024 * 1024)
 
 
-def seed_sector(disk: str, magic: bytes, payload: bytes) -> None:
-    require(len(magic) == 4, "magic must be four bytes")
-    require(len(payload) <= 64, "payload too large")
+def seed_legacy(path: str, nonce: bytes) -> None:
     sector = bytearray(SECTOR)
-    sector[:4] = magic
-    sector[4:8] = len(payload).to_bytes(4, "little")
-    sector[8 : 8 + len(payload)] = payload
-    with open(disk, "r+b") as image:
-        image.seek(0)
+    sector[:4] = b"VF01"
+    sector[4:8] = len(nonce).to_bytes(4, "little")
+    sector[8 : 8 + len(nonce)] = nonce
+    with open(path, "r+b") as image:
         image.write(sector)
 
 
-def riscv64_boot(disk: str, serial: str, timeout: int = 20) -> tuple[int, str, bool]:
-    kernel = os.path.join(
-        ROOT,
-        "target",
-        "riscv64gc-unknown-none-elf",
-        "release",
-        "vifast-kernel-riscv64",
-    )
-    require(os.path.exists(kernel), f"missing kernel: {kernel}")
-    cmd = [
-        QEMU_RV,
-        "-machine",
-        "virt",
-        "-smp",
-        "2",
-        "-m",
-        "128M",
-        "-display",
-        "none",
-        "-monitor",
-        "none",
-        "-serial",
-        f"file:{serial}",
-        "-global",
-        "virtio-mmio.force-legacy=false",
-        "-drive",
-        f"if=none,id=vd0,file={disk},format=raw",
-        "-device",
-        "virtio-blk-device,drive=vd0",
-        "-bios",
-        "default",
-        "-kernel",
-        kernel,
-    ]
-    return run_qemu("riscv64", cmd, serial, timeout, {0})
+def sector0(path: str) -> bytes:
+    with open(path, "rb") as image:
+        return image.read(4)
 
 
-def aarch64_boot(disk: str, serial: str, timeout: int = 20) -> tuple[int, str, bool]:
-    kernel = os.path.join(
-        ROOT,
-        "target",
-        "aarch64-unknown-none",
-        "release",
-        "vifast-kernel-aarch64",
-    )
-    require(os.path.exists(kernel), f"missing kernel: {kernel}")
-    cmd = [
-        QEMU_ARM,
-        "-machine",
-        "virt,gic-version=2",
-        "-cpu",
-        "max",
-        "-smp",
-        "2",
-        "-m",
-        "128M",
-        "-display",
-        "none",
-        "-monitor",
-        "none",
-        "-serial",
-        f"file:{serial}",
-        "-global",
-        "virtio-mmio.force-legacy=false",
-        "-drive",
-        f"if=none,id=vd0,file={disk},format=raw",
-        "-device",
-        "virtio-blk-device,drive=vd0",
-        "-kernel",
-        kernel,
-    ]
-    return run_qemu("aarch64", cmd, serial, timeout, {0})
+def run_qemu(name: str, cmd: list[str], serial: str, timeout: int, ok: set[int]) -> tuple[int, str, bool]:
+    if os.path.exists(serial):
+        os.unlink(serial)
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    timed_out = False
+    try:
+        rc = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc.kill()
+        rc = proc.wait()
+    output = ""
+    if os.path.exists(serial):
+        output = open(serial, "rb").read().decode("utf-8", errors="replace")
+    print(f"--- {name} (rc={rc}) ---")
+    if timed_out:
+        print("FAIL: timeout")
+        return rc, output, True
+    if rc not in ok:
+        print(f"FAIL: unexpected exit code {rc}")
+    return rc, output, False
+
+
+def boot_riscv(disk: str, serial: str) -> tuple[int, str, bool]:
+    kernel = os.path.join(ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64")
+    cmd = [QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "128M",
+           "-display", "none", "-monitor", "none", "-serial", f"file:{serial}",
+           "-global", "virtio-mmio.force-legacy=false", "-drive", f"if=none,id=vd0,file={disk},format=raw",
+           "-device", "virtio-blk-device,drive=vd0", "-bios", "default", "-kernel", kernel]
+    return run_qemu("riscv64", cmd, serial, 30, {0})
+
+
+def boot_aarch(disk: str, serial: str) -> tuple[int, str, bool]:
+    kernel = os.path.join(ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64")
+    cmd = [QEMU_ARM, "-machine", "virt,gic-version=2", "-semihosting", "-cpu", "max",
+           "-smp", "2", "-m", "128M", "-display", "none", "-monitor", "none",
+           "-serial", f"file:{serial}", "-global", "virtio-mmio.force-legacy=false",
+           "-drive", f"if=none,id=vd0,file={disk},format=raw",
+           "-device", "virtio-blk-device,drive=vd0", "-kernel", kernel]
+    return run_qemu("aarch64", cmd, serial, 30, {0})
 
 
 def prepare_x86(tmp: str) -> tuple[str, str, str]:
-    efi = os.path.join(
-        ROOT,
-        "target",
-        "x86_64-unknown-uefi",
-        "release",
-        "vifast-kernel-x86_64-uefi.efi",
-    )
-    require(os.path.exists(efi), f"missing EFI binary: {efi}")
+    efi = os.path.join(ROOT, "target", "x86_64-unknown-uefi", "release", "vifast-kernel-x86_64-uefi.efi")
     code = find_ovmf_code()
-    require(code is not None, "missing OVMF code (set OVMF_CODE)")
     vars_src = find_ovmf_vars()
-    require(vars_src is not None, "missing OVMF vars (set OVMF_VARS)")
+    require(code is not None, "missing OVMF code")
+    require(vars_src is not None, "missing OVMF vars")
     esp = os.path.join(tmp, "esp")
     os.makedirs(os.path.join(esp, "EFI", "BOOT"), exist_ok=True)
     shutil.copyfile(efi, os.path.join(esp, "EFI", "BOOT", "BOOTX64.EFI"))
@@ -209,106 +133,111 @@ def prepare_x86(tmp: str) -> tuple[str, str, str]:
     return code, esp, vars_path
 
 
-def x86_boot(
-    disk: str, serial: str, code: str, esp: str, vars_path: str, timeout: int = 40
-) -> tuple[int, str, bool]:
-    cmd = [
-        QEMU_X86,
-        "-machine",
-        "q35",
-        "-cpu",
-        "max",
-        "-smp",
-        "2",
-        "-m",
-        "256M",
-        "-display",
-        "none",
-        "-monitor",
-        "none",
-        "-serial",
-        f"file:{serial}",
-        "-drive",
-        f"if=pflash,format=raw,readonly=on,file={code}",
-        "-drive",
-        f"if=pflash,format=raw,file={vars_path}",
-        "-drive",
-        f"format=raw,file=fat:rw:{esp}",
-        "-device",
-        "isa-ide",
-        "-drive",
-        f"id=vd1,if=none,format=raw,file={disk}",
-        "-device",
-        "ide-hd,drive=vd1,bus=ide.6,unit=0",
-        "-device",
-        "isa-debug-exit,iobase=0x501,iosize=0x03",
-    ]
-    return run_qemu("x86_64", cmd, serial, timeout, {3})
+def boot_x86(disk: str, serial: str, code: str, esp: str, vars_path: str) -> tuple[int, str, bool]:
+    cmd = [QEMU_X86, "-machine", "q35", "-cpu", "max", "-smp", "2", "-m", "256M",
+           "-display", "none", "-monitor", "none", "-serial", f"file:{serial}",
+           "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
+           "-drive", f"if=pflash,format=raw,file={vars_path}",
+           "-drive", f"format=raw,file=fat:rw:{esp}", "-device", "isa-ide",
+           "-drive", f"id=vd1,if=none,format=raw,file={disk}",
+           "-device", "ide-hd,drive=vd1,bus=ide.6,unit=0",
+           "-device", "isa-debug-exit,iobase=0x501,iosize=0x03"]
+    return run_qemu("x86_64", cmd, serial, 45, {3})
 
 
-def run_phases(name: str, tmp: str, boot, expected_code: int) -> None:
+def run_phases(name: str, tmp: str, boot) -> None:
     disk = os.path.join(tmp, "disk.img")
-    with open(disk, "wb") as image:
-        image.truncate(4 * 1024 * 1024)
     serial = os.path.join(tmp, "serial.txt")
+    make_disk(disk)
 
-    rc, output, timed_out = boot(disk, serial)
-    require(not timed_out, f"{name}: phase 1 timed out")
-    require(rc == expected_code, f"{name}: phase 1 exit code {rc}")
-    require("SELFTEST PASS" in output, f"{name}: phase 1 did not boot")
-    require("FS DISK OK" in output, f"{name}: phase 1 missing FS DISK OK")
-    require("FS PERSIST OK" not in output, f"{name}: blank disk claimed persistence")
-    require("FS PERSIST DATA" not in output, f"{name}: blank disk printed data")
-    check_phase1_disk(disk)
-    print(f"{name}: phase 1 blank disk PASS")
+    # 1. Blank disk: guest format, no persistence, host fsck.
+    rc, output, timeout = boot(disk, serial)
+    require(not timeout, f"{name}: blank timeout")
+    require("SELFTEST PASS" in output and "FS DISK OK" in output, f"{name}: blank boot")
+    require("FS FORMAT OK" in output, f"{name}: blank missing FS FORMAT OK")
+    require("FS PERSIST OK" not in output, f"{name}: blank claimed persistence")
+    require("FS PERSIST DATA" not in output, f"{name}: blank printed data")
+    fsutil("fsck", disk)
+    print(f"{name}: phase 1 blank format PASS")
 
+    # 2. Host put, guest reads/reverses, host reads new value.
     nonce = secrets.token_hex(8)[:15].encode("ascii")
-    seed_sector(disk, b"VF01", nonce)
-    rc, output, timed_out = boot(disk, serial)
-    require(not timed_out, f"{name}: phase 2 timed out")
-    require(rc == expected_code, f"{name}: phase 2 exit code {rc}")
-    require("FS DISK OK" in output, f"{name}: phase 2 missing FS DISK OK")
-    require("FS PERSIST OK" in output, f"{name}: phase 2 missing FS PERSIST OK")
-    expected = b"FS PERSIST DATA " + nonce + b"\n"
-    require(expected.decode("ascii") in output, f"{name}: nonce was not read back")
-    print(f"{name}: phase 2 nonce {nonce.decode()} PASS")
+    fsutil("put", disk, "/p/nonce", nonce.decode())
+    rc, output, timeout = boot(disk, serial)
+    require(not timeout and "FS PERSIST OK" in output, f"{name}: persist boot")
+    require(b"FS PERSIST DATA " + nonce + b"\n" in output.encode(), f"{name}: nonce read")
+    expected = nonce[::-1]
+    got = fsutil("get", disk, "/p/nonce").stdout
+    require(got == expected, f"{name}: reverse persistence {got!r} != {expected!r}")
+    fsutil("fsck", disk)
+    print(f"{name}: phase 2 two-way persistence PASS")
 
-    seed_sector(disk, b"BAD!", nonce)
-    rc, output, timed_out = boot(disk, serial)
-    require(not timed_out, f"{name}: negative phase timed out")
-    require(rc == expected_code, f"{name}: negative phase exit code {rc}")
-    require("FS DISK OK" in output, f"{name}: negative phase missing FS DISK OK")
-    require("FS PERSIST OK" not in output, f"{name}: wrong magic claimed persistence")
-    require("FS PERSIST DATA" not in output, f"{name}: wrong magic printed data")
-    print(f"{name}: negative wrong-magic PASS")
+    # 3. Legacy VF01 at LBA0 migrates to /scratch and LBA0 is cleared.
+    make_disk(disk)
+    legacy = secrets.token_hex(6).encode("ascii")
+    seed_legacy(disk, legacy)
+    rc, output, timeout = boot(disk, serial)
+    require(not timeout and "FS MIGRATE OK" in output, f"{name}: migrate boot")
+    require(fsutil("get", disk, "/scratch").stdout == legacy, f"{name}: migrated data")
+    require(sector0(disk) == b"\0\0\0\0", f"{name}: legacy sector not cleared")
+    fsutil("fsck", disk)
+    print(f"{name}: phase 3 migration PASS")
+
+    # 4. Valid journal replay.
+    make_disk(disk)
+    fsutil("mkfs", disk)
+    fsutil("inject-journal", disk, "--valid")
+    rc, output, timeout = boot(disk, serial)
+    require(not timeout and "FS RECOVER OK (replayed=1)" in output, f"{name}: valid replay boot")
+    require(fsutil("get", disk, "/j").stdout == b"journal-new\n", f"{name}: replayed data")
+    fsutil("fsck", disk)
+    print(f"{name}: phase 4 valid journal replay PASS")
+
+    # 5. Torn commit is ignored; old data survives.
+    make_disk(disk)
+    fsutil("mkfs", disk)
+    fsutil("put", disk, "/j", "stable")
+    fsutil("inject-journal", disk, "--torn")
+    rc, output, timeout = boot(disk, serial)
+    require(not timeout and "FS RECOVER OK (replayed=0)" in output, f"{name}: torn replay boot")
+    require(fsutil("get", disk, "/j").stdout == b"stable", f"{name}: torn changed data")
+    fsutil("fsck", disk)
+    print(f"{name}: phase 5 torn journal PASS")
+
+    # 6. Corrupt superblock forces a new format, never persistence.
+    make_disk(disk)
+    fsutil("mkfs", disk)
+    with open(disk, "r+b") as image:
+        image.seek(SECTOR)
+        image.write(b"BAD!")
+    rc, output, timeout = boot(disk, serial)
+    require(not timeout and "FS FORMAT OK" in output, f"{name}: corrupt boot")
+    require("FS PERSIST OK" not in output, f"{name}: corrupt claimed persistence")
+    fsutil("fsck", disk)
+    print(f"{name}: phase 6 corrupt superblock PASS")
 
 
-def test_riscv64() -> None:
-    tmp = tempfile.mkdtemp(prefix="vifast-persist-riscv64-")
+def test_riscv() -> None:
+    tmp = tempfile.mkdtemp(prefix="vifast-persist-riscv-")
     try:
-        run_phases("riscv64", tmp, riscv64_boot, 0)
+        run_phases("riscv64", tmp, boot_riscv)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_aarch64() -> None:
-    tmp = tempfile.mkdtemp(prefix="vifast-persist-aarch64-")
+def test_aarch() -> None:
+    tmp = tempfile.mkdtemp(prefix="vifast-persist-aarch-")
     try:
-        run_phases("aarch64", tmp, aarch64_boot, 0)
+        run_phases("aarch64", tmp, boot_aarch)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_x86_64() -> None:
+def test_x86() -> None:
     tmp = tempfile.mkdtemp(prefix="vifast-persist-x86-")
     try:
         code, esp, vars_path = prepare_x86(tmp)
-        run_phases(
-            "x86_64",
-            tmp,
-            lambda disk, serial: x86_boot(disk, serial, code, esp, vars_path),
-            3,
-        )
+        run_phases("x86_64", tmp, lambda disk, serial: boot_x86(disk, serial, code, esp, vars_path))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -317,12 +246,11 @@ def main() -> int:
     if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
         print("missing QEMU binaries")
         return 2
+    if not os.path.exists(FSUTIL):
+        print(f"missing {FSUTIL}; run ./scripts/build.sh")
+        return 2
     ok = True
-    for name, test in (
-        ("riscv64", test_riscv64),
-        ("aarch64", test_aarch64),
-        ("x86_64", test_x86_64),
-    ):
+    for name, test in (("riscv64", test_riscv), ("aarch64", test_aarch), ("x86_64", test_x86)):
         try:
             test()
             print(f"{name}: PASS")

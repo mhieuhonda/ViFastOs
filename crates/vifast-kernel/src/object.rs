@@ -10,7 +10,7 @@ pub const MAX_OBJECTS: usize = 128;
 pub const MAX_TCBS: usize = 16;
 pub const MAX_CAPS: usize = 64;
 pub const MAX_QUEUE: usize = 8;
-pub const MAX_MAPPINGS: usize = 32;
+pub const MAX_MAPPINGS: usize = 64;
 pub const MAX_IOMMU_MAPPINGS: usize = 32;
 pub const MAX_FDS: usize = 8;
 pub const MAX_PRIORITY: u8 = 15;
@@ -532,7 +532,11 @@ pub enum Kind {
     VSpace(VSpace),
     PageTable(PageTable),
     Iommu(IommuDomain),
+    BlockDevice(BlockDevice),
 }
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BlockDevice;
 
 impl Kind {
     pub fn obj_type(&self) -> Option<ObjType> {
@@ -546,6 +550,7 @@ impl Kind {
             Kind::VSpace(_) => Some(ObjType::VSpace),
             Kind::PageTable(_) => Some(ObjType::PageTable),
             Kind::Iommu(_) => Some(ObjType::Iommu),
+            Kind::BlockDevice(_) => Some(ObjType::BlockDevice),
         }
     }
 }

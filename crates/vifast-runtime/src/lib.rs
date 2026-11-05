@@ -23,6 +23,8 @@ static TEST_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBo
 #[cfg(feature = "test-exit")]
 static TEST_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
+static TEST_FS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-exit")]
 static TEST_EXPECT_WORKERS: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 pub const USER_COPY_MAX: usize = 256;
@@ -120,7 +122,7 @@ pub trait Platform: Arch + Console {
             data[i] = words[i];
             i += 1;
         }
-        Self::write_result(context, KError::Ok, 0, message.label, data);
+        Self::write_result(context, KError::Ok, message.badge, message.label, data);
     }
 
     fn prepare_user() {}
@@ -298,6 +300,11 @@ fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
     );
     ops.copy_to_frame_at(
         pa,
+        core::mem::offset_of!(BootInfo, block_device),
+        &info.block_device.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
         core::mem::offset_of!(BootInfo, server_elf_va),
         &info.server_elf_va.to_le_bytes(),
     );
@@ -472,6 +479,24 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         A::exit(1);
     }
 
+    let Ok(block_device) = kernel.retype(meta_untyped, ObjType::BlockDevice) else {
+        A::exit(1);
+    };
+    if kernel
+        .install_cap(
+            root,
+            vifast_abi::user_layout::BLOCK_DEVICE_SLOT as u8,
+            Cap::new(
+                block_device,
+                ObjType::BlockDevice,
+                Rights::READ | Rights::WRITE | Rights::GRANT,
+            ),
+        )
+        .is_err()
+    {
+        A::exit(1);
+    }
+
     let page_size = A::PAGE_SIZE as u64;
     let layout = TaskLayout {
         code_va: vifast_abi::user_layout::CODE_VA as u64,
@@ -593,7 +618,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     let server_layout = TaskLayout {
         code_va: vifast_abi::user_layout::CODE_VA as u64,
         stack_va: vifast_abi::user_layout::SERVER_STACK_BASE as u64,
-        stack_pages: 1,
+        stack_pages: 3,
         data: None,
     };
     let Ok(server_space) =
@@ -742,6 +767,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         user_code_count,
         free_slot_start,
         free_slot_end,
+        block_device: vifast_abi::user_layout::BLOCK_DEVICE_SLOT as u16,
         server_elf_va: vifast_abi::user_layout::ROOT_MODULE_SERVER_VA as u64,
         server_elf_len: image.server_elf.len() as u64,
         client_elf_va: vifast_abi::user_layout::ROOT_MODULE_CLIENT_VA as u64,
@@ -976,6 +1002,12 @@ pub mod syscall {
                         if workers {
                             TEST_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
                         }
+                        let fs_done = buf[..len]
+                            .windows(b"FS PERM OK".len())
+                            .any(|window| window == b"FS PERM OK");
+                        if fs_done {
+                            TEST_FS_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
+                        }
                     }
                     for byte in &buf[..len] {
                         A::putc(*byte);
@@ -1122,7 +1154,7 @@ pub mod timer {
         if let Some(old) = old {
             contexts[old.index as usize] = *context;
         }
-        kernel.tick();
+        kernel.tick(hart);
         #[cfg(feature = "test-panic-hart1")]
         if hart == 1 {
             panic!("test-panic-hart1");
@@ -1130,14 +1162,15 @@ pub mod timer {
         #[cfg(feature = "test-exit")]
         if hart == 0
             && TEST_DONE.load(core::sync::atomic::Ordering::SeqCst)
+            && TEST_FS_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && A::post_idle_ready()
-            && kernel.ticks() >= TIMER_TICKS
+            && kernel.ticks_on(0) >= TIMER_TICKS
         {
             let switches = kernel.stats().context_switches.saturating_sub(1);
             vifast_kernel::klog!(
                 A,
                 "PREEMPT OK (ticks={}, switches={})",
-                kernel.ticks(),
+                kernel.ticks_on(0),
                 switches
             );
             let (timer_wakes, ipi_wakes) = A::secondary_wakeups();

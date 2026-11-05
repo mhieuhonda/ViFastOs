@@ -64,6 +64,8 @@ static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static BSP_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static BSP_RATE_BASE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_USER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_PREEMPTS: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
@@ -117,6 +119,27 @@ static USER_ENTRIES: [AtomicUsize; MAX_HARTS] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
 ];
+
+static mut SEMIHOST_EXIT_BLOCK: [u32; 2] = [0x20026, 1];
+
+/// Semihosting SYS_EXIT_EXTENDED gives QEMU a real nonzero exit code; PSCI
+/// SYSTEM_OFF cannot distinguish panic from success.
+pub fn panic_exit(code: u8) -> ! {
+    unsafe {
+        SEMIHOST_EXIT_BLOCK[1] = code as u32;
+        let block = core::ptr::addr_of!(SEMIHOST_EXIT_BLOCK) as u64;
+        core::arch::asm!(
+            "hlt #0xF000",
+            in("x0") 0x20u64,
+            in("x1") block,
+        );
+    }
+    loop {
+        unsafe {
+            core::arch::asm!("wfi");
+        }
+    }
+}
 
 pub fn panic_halt_others() {
     let hart = current_hart();
@@ -1117,6 +1140,14 @@ impl Platform for Aarch64Platform {
         SECONDARY_TIMER_TICKS.load(Ordering::Relaxed)
     }
 
+    fn timer_rate() -> Option<(usize, usize)> {
+        let base = BSP_RATE_BASE.load(Ordering::Acquire);
+        Some((
+            SECONDARY_TIMER_TICKS.load(Ordering::Relaxed),
+            BSP_TIMER_TICKS.load(Ordering::Relaxed).saturating_sub(base),
+        ))
+    }
+
     fn secondary_user_ticks() -> usize {
         SECONDARY_USER_TICKS.load(Ordering::Relaxed)
     }
@@ -1218,6 +1249,7 @@ impl Platform for Aarch64Platform {
             let bkl = bkl_lock();
             let ipi_ok = request_ipi();
             drop(bkl);
+            BSP_RATE_BASE.store(BSP_TIMER_TICKS.load(Ordering::Acquire), Ordering::Release);
             if ipi_ok {
                 vifast_kernel::klog!(
                     Aarch64Platform,
@@ -1370,6 +1402,8 @@ extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
         if user {
             SECONDARY_USER_TICKS.fetch_add(1, Ordering::Relaxed);
         }
+    } else if hart == 0 {
+        BSP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     }
     let changed = vifast_runtime::timer::on_timer::<Aarch64Platform>(frame);
     if hart == 1 && user && changed {

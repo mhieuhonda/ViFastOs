@@ -10,6 +10,8 @@ default-members = [
     "crates/vifast-runtime",
     "crates/vifast-user",
     "crates/vifast-acpi",
+    "crates/vifast-fs",
+    "crates/vifast-fsutil",
 ]
 
 members = [
@@ -22,6 +24,8 @@ members = [
     "crates/vifast-runtime",
     "crates/vifast-user",
     "crates/vifast-acpi",
+    "crates/vifast-fs",
+    "crates/vifast-fsutil",
     "crates/vifast-arch-x86_64",
     "crates/vifast-arch-aarch64",
     "crates/vifast-arch-riscv64",

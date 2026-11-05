@@ -93,6 +93,7 @@ impl Kernel {
                 }
             }
             self.copy_ipc_buffers(sender, receiver);
+            msg.badge = badge;
             if let Some(table) = self.tcb_mut(receiver) {
                 table.resume = Some(msg);
                 table.resume_error = None;
@@ -170,6 +171,7 @@ impl Kernel {
                 .pending
                 .take()
                 .ok_or(KError::InvalidArg)?;
+            pending.msg.badge = pending.badge;
             if pending.can_grant {
                 if let Err(error) =
                     self.grant_message_cap(sender, receiver, recv_slot, &mut pending.msg)
@@ -252,6 +254,7 @@ impl Kernel {
         if !valid {
             return Err(KError::NoCaller);
         }
+        self.copy_ipc_buffers(server, client);
         if let Some(table) = self.tcb_mut(client) {
             table.resume = Some(msg);
             table.resume_error = None;

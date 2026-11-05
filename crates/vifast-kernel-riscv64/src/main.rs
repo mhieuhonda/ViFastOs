@@ -102,5 +102,5 @@ fn panic(_info: &PanicInfo) -> ! {
     for _ in 0..10_000_000 {
         core::hint::spin_loop();
     }
-    RiscvPlatform::exit(1)
+    vifast_platform_riscv64::platform::panic_exit(1)
 }
