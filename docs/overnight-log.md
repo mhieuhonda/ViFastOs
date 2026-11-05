@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `835db39ac041f2d01e3ee26f9bf62fe6232749360d0a15593963aaf4293ac894`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `dbbe76db3a88ba0a987fac48e19c10b64b2a02f3574d6c25a509c99198ac74d4`.
 
 ---
 
@@ -211,6 +211,15 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.22 — Harness spec, post-worker timer, boot handoff (vòng 11)
+
+- `17aee2a`: khôi phục BLOCK/FS/SMP SKIP/exit code vào harness spec; 166 case âm.
+- `d8424e5`: worker block Wait; `SMP POST IDLE OK` chứng minh timer WFI.
+- `b122c05`: feature `test-boot-handoff`, retry HSM start, `BOOT HANDOFF OK`.
+- `32c2e03`: `SYSCALL_STATUS` implemented/placeholder; generated status block;
+  host test dispatch fallback (kernel 88/88).
+- QEMU 10/10 all; RISC/AArch 50/50; feature 10/10; persist 3/3.
 
 ## 8.21 — RISC-V flake, AArch64 worker, generated docs (vòng 10)
 

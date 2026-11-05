@@ -100,10 +100,12 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 17aee2a test: restore and negative-test every harness condition
 - d8424e5 test: prove timer wakes idle secondary harts after workers block
 - b122c05 test: inject boot hart handoff on riscv
+- 32c2e03 chore: syscall status and generated status block
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit cce094a): RISC-V 50/50 sau khi xử lý boot hart
-tùy ý và runqueue hart phụ rỗng; AArch64 CPU1 chạy worker 50/50; persistent
+Cập nhật code gần nhất (commit 32c2e03): harness spec + 166 case âm, post-worker
+timer WFI, boot-handoff injection, syscall status; RISC-V 100/100, AArch64
+50/50, persistent
 VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,

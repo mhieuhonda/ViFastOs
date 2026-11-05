@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `cce094a` (RISC-V 50/50 + AArch64 CPU1 worker; docs generator `ec090c9`)
+**Mốc code hiện tại:** `32c2e03` (harness spec/negative tests, post-worker timer, boot handoff, syscall status)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
@@ -31,7 +31,7 @@
   - RISC-V: VirtIO-MMIO, polling; slot `0x10008000`, version 2.
 - `/scratch` bền vững trên cả 3 kiến trúc qua sector 0.
 - Software IOMMU: domain, reverse map, `IoMap`/`IoUnmap`, 32 mapping/domain.
-- SMP mức "maintenance": RISC-V/AArch64 có 2 hart, IPI và full TLB shootdown; hart phụ **chưa chạy scheduler**.
+- SMP: RISC-V/AArch64 có 2 hart, scheduler + worker hart phụ, IPI/SGI và full TLB shootdown; x86 AP chưa bật.
 - BKL ticket FIFO + RAII, mailbox maintenance đối xứng, per-CPU state dùng sscratch/swapgs/TPIDR_EL1; test `PERCPU CLOBBER OK`.
 - ASID/PCID tagging; x86 PCID chỉ bật khi CPUID hỗ trợ, QEMU TCG thường fallback CR3.
 
@@ -71,7 +71,7 @@
 | Platform/arch | có `unsafe` để chạm thanh ghi/cổng I/O |
 | QEMU | 3 kiến trúc |
 | Host test | `vifast-kernel` 83/83, `vifast-pte` 11/11, `vifast-elf` 17/17 |
-| QEMU test | 3/3 PASS, lặp 3 lần đều PASS |
+| QEMU test | 10/10 cả 3 kiến trúc; RISC-V 100/100, AArch64 50/50 |
 | Warning | không |
 | Tài liệu kiến trúc | `ViFastOs-architecture-summary.txt` |
 | SHA-256 summary | `dcc0eb6bd7d929711d137e3c9977683f3dd9b30c64fdbba048d3dcde9d9276be` |
@@ -466,7 +466,7 @@ Chưa có:
 | P1 | Object table cố định | Hết object là `OutOfMemory` | 128 object; TCB 16 |
 | P1 | QEMU-specific driver | Không chạy được máy thật | ATA legacy, VirtIO-MMIO |
 | P2 | x86 identity map 0..1 GiB | RAM/UEFI vượt 1 GiB có thể hỏng | Cần memory map |
-| P2 | RISC kernel accessible 4 MiB | Headroom 561.072 B | Theo dõi kích thước |
+| P2 | RISC kernel accessible 4 MiB | Headroom 454.192 B | Theo dõi kích thước |
 | P2 | Tài liệu có chỗ cũ | Agent dễ làm sai | Summary có mục stale |
 | P2 | CNode/SchedContext/Irq placeholder | ABI trông đầy đủ nhưng chưa chạy | Implement hoặc đánh dấu rõ |
 | P2 | Chưa có CI | Dễ commit đỏ | Thêm CI chạy build + QEMU |
@@ -713,7 +713,7 @@ Một thay đổi chỉ được coi là xong khi:
 
 - Code build không warning.
 - Host test liên quan PASS.
-- QEMU 3/3 PASS, lặp 3 lần.
+- QEMU 10/10 cả 3 kiến trúc.
 - `python3 scripts/test-persist.py` PASS cả 3 kiến trúc.
 - Không làm yếu harness.
 - Có docs + log.
@@ -847,7 +847,7 @@ DATA UNTYPED pages=41/64 objects=25/48
 | AArch virtio window | `0x0a00_0000..0x0a00_4000`, stride `0x200` |
 | RISC virtio device | `0x1000_8000`, version 2/device 2 |
 | RISC kernel limit | `0x8040_0000` (4 MiB) |
-| RISC headroom | 561.072 byte |
+| RISC headroom | 454.192 byte |
 | Root ELF RISC-V | 12.880 byte |
 | Root ELF AArch64 | 12.704 byte |
 | Root ELF x86_64 | 16.744 byte |
@@ -928,7 +928,7 @@ Ràng buộc bắt buộc:
 - Giữ các string/assertion hiện có; thêm assertion mới nếu cần.
 - Không commit khi test đỏ.
 - Mỗi feature phải có docs + docs/overnight-log.md.
-- Chạy QEMU 3/3 PASS, lặp 3 lần trước khi commit.
+- Chạy QEMU 10/10 cả 3 kiến trúc trước khi commit.
 
 Bắt đầu bằng:
   git status
