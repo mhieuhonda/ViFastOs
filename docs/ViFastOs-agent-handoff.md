@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `4d44b60` (`refactor: per-cpu trap stacks and current tcb`)
+**Mốc code hiện tại:** `74b7d75` (`feat: per-cpu security and per-hart current groundwork`)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
@@ -32,13 +32,13 @@
 - `/scratch` bền vững trên cả 3 kiến trúc qua sector 0.
 - Software IOMMU: domain, reverse map, `IoMap`/`IoUnmap`, 32 mapping/domain.
 - SMP mức "maintenance": RISC-V/AArch64 có 2 hart, IPI và full TLB shootdown; hart phụ **chưa chạy scheduler**.
-- BigKernelLock (BKL) test-and-set + RAII đã bọc trap/syscall/IRQ entry; chưa fair lock.
+- BKL ticket FIFO + RAII, maintenance poll khi spin; per-CPU state dùng sscratch/swapgs/TPIDR_EL1; test `PERCPU CLOBBER OK`.
 - ASID/PCID tagging; x86 PCID chỉ bật khi CPUID hỗ trợ, QEMU TCG thường fallback CR3.
 
 ### Chưa có / còn yếu
 
 - Full SMP scheduler; x86 AP bootstrap; per-hart runqueue.
-- BKL chưa phải ticket/fair lock; per-CPU `current_tcb` chưa được cập nhật theo scheduler.
+- Hart phụ chưa chạy scheduler (Task 5 chưa hoàn tất); x86 AP vẫn SKIP.
 - Per-VA TLB shootdown; cross-hart I-cache shootdown.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
 - Hệ thống file thật: mới là một sector `/scratch`, chưa có directory/permission/journal.
@@ -189,8 +189,8 @@ Kernel không biết chi tiết phần cứng. Nó gọi các trait/primitive do
 | Block x86_64 | ✅ | ATA PIO, polling |
 | Block RISC-V | ✅ | VirtIO-MMIO slot `0x10008000` |
 | FS bền vững 3 kiến trúc | ✅ | sector 0, magic `VF01`, test-persist |
-| BKL | ✅ groundwork | test-and-set + RAII; trap/syscall/IRQ + x86 fault |
-| Per-CPU | ✅ groundwork | MAX_HARTS=4; trap stacks/state; tp/TPIDR/GS |
+| BKL | ✅ ticket | FIFO + maintenance poll; trap/syscall/IRQ + x86 fault |
+| Per-CPU | ✅ secure | MAX_HARTS=4; sscratch/swapgs/TPIDR; clobber test |
 | IOMMU phần mềm | ✅ | domain, 32 mapping, `IoMap`/`IoUnmap` |
 | IOMMU phần cứng | ❌ | chưa VT-d/SMMU |
 | VirtIO net | ❌ | chưa có |
@@ -334,7 +334,7 @@ Chưa có:
 - x86 AP bootstrap.
 - Per-hart runqueue.
 - Hart phụ chạy task người dùng.
-- BKL fair/ticket; per-CPU scheduler.
+- Hart phụ chạy scheduler; x86 AP.
 - Timer đa hart.
 - Per-VA TLB shootdown.
 - Remote I-cache shootdown.
@@ -625,6 +625,7 @@ Giữ `/motd`, `/scratch`, các string harness cũ. Thêm test:
 - `BOOT UNTYPED`
 - `PREEMPT OK`
 - `ROOT SWITCH n` với `n > 1`
+- `PERCPU CLOBBER OK` đúng 1 lần; không có `PERCPU CLOBBER BAD`
 - `Isolation`
 - `Server`
 - `Client`

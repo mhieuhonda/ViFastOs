@@ -69,12 +69,13 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 23d8dfb feat: riscv virtio-mmio block backend
 - b51782b fix: make bkl cover all kernel entries and assert release on user return
 - 4d44b60 refactor: per-cpu trap stacks and current tcb
+- 74b7d75 feat: per-cpu security and per-hart current groundwork
 - ed06f82 feat: add smp maintenance ipi and tlb shootdown
 - fffa7d6 feat: add vfs stat request
 - 826efed feat: tag vspaces with asid and pcid
 
-Cập nhật code gần nhất (commit 4d44b60): persistent VFS scratch trên cả 3 kiến trúc,
-VirtIO-MMIO/ATA block, BKL audit + per-CPU groundwork, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit 74b7d75): persistent VFS scratch trên cả 3 kiến trúc,
+VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
@@ -110,14 +111,14 @@ hardening và vifast-user.
 - x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
 
 Test hiện tại:
-- cargo test -p vifast-kernel: 83/83 PASS
+- cargo test -p vifast-kernel: 84/84 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
-  headroom 462.672 B dưới 0x80400000
+  headroom 458.480 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -836,11 +837,18 @@ Cap transfer:
 - Timer/scheduler vẫn một hart.
 - Đã có IPI maintenance và full TLB shootdown user trên RISC-V/AArch64;
   secondary hart vẫn chỉ xử lý maintenance, chưa vào scheduler.
-- Đã có BigKernelLock (BKL) dạng test-and-set + RAII guard, bọc trap/syscall/IRQ
-  entry trên cả 3 platform, gồm x86 exception/page-fault; single-hart xanh.
-  Trước khi về user đều assert BKL đã nhả; trap entry assert IRQ đã tắt.
-  Hart phụ IPI maintenance không lấy BKL (tránh deadlock TLB shootdown).
-  BKL chưa phải ticket/fair lock.
+- BigKernelLock đã là ticket lock FIFO (`next`/`serving`) + RAII guard, bọc
+  trap/syscall/IRQ + x86 exception/page-fault. Spin chờ khóa gọi
+  `poll_maintenance()` để hart phụ xử lý IPI TLB/fence và ACK; assert IRQ tắt
+  trước khi lấy khóa; assert BKL đã nhả trước khi về user.
+- RISC-V CpuState nằm trong `sscratch` khi user, `tp` chỉ dùng trong kernel;
+  x86 dùng `swapgs`/`IA32_KERNEL_GS_BASE`; AArch64 dùng `TPIDR_EL1` (user
+  không ghi được `TPIDR_EL1`). User clobber tp/GS/TPIDR_EL0 được test bằng
+  `PERCPU CLOBBER OK`.
+- `current[hart]`, `ACTIVE_ROOT`, `ACTIVE_ASID` nằm trong CpuState; kernel có
+  `MAX_HARTS=4`, `pick_on(hart)`/`current_on(hart)`; runqueue vẫn global.
+- RISC-V map EXEC gọi `fence.i` local + IPI maintenance remote fence; AArch64
+  `ic ivau` + `dsb ish` đã broadcast.
 - Per-CPU groundwork: `MAX_HARTS=4`, `CpuState { hart_id, current_tcb,
   trap_stack_top }`; TRAP_STACKS/IST_STACKS/TSSS là mảng theo hart. Hart 0 đọc
   state qua `tp` (RISC-V), `TPIDR_EL1` (AArch64), `GS_BASE` (x86). Hart phụ vẫn
@@ -866,7 +874,7 @@ Lệnh:
     python3 scripts/test-qemu.py
     python3 scripts/test-persist.py
 
-Host test hiện có 83 test `vifast-kernel` + 2 test `vifast-arch` +
+Host test hiện có 84 test `vifast-kernel` + 4 test `vifast-arch` +
 11 test `vifast-pte` + 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -978,6 +986,7 @@ QEMU test:
   ROOT READY mỗi chuỗi đúng 1 lần
 - không có ROOT PANIC
 - Zero OK
+- PERCPU CLOBBER OK đúng 1 lần; không có PERCPU CLOBBER BAD
 - ROOT SWITCH n > 1
 - x86_64 phải có KERNEL DATA NX OK
 - RISC-V/AArch64 phải có SMP OK và ipi=1
@@ -1116,15 +1125,15 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 83 test `vifast-kernel` + 2 test `vifast-arch` +
+- Host test hiện có 84 test `vifast-kernel` + 4 test `vifast-arch` +
   11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
 - Scheduler một hart; SMP mới bootstrap, hart phụ idle.
-- BKL test-and-set + RAII đã bọc trap/syscall/IRQ + x86 fault/page-fault;
-  đã assert nhả trước user và IRQ tắt khi giữ. Chưa phải ticket/fair lock;
-  IPI maintenance không lấy BKL.
+- BKL ticket + RAII đã bọc trap/syscall/IRQ + x86 fault/page-fault;
+  đã assert nhả trước user và IRQ tắt khi giữ. Hart phụ chưa chạy scheduler;
+  current per-hart có API nhưng chưa bật hart phụ.
 - SMP full TLB shootdown đã có qua SBI IPI/GICv2 SGI; per-VA shootdown và
   I-cache shootdown cho code mới trên hart khác vẫn chưa hoàn chỉnh.
   `sync_icache` hiện chỉ bảo đảm hart đang map.
@@ -1361,6 +1370,10 @@ E. Desktop / Space
     32 word trực tiếp qua PA khi cả sender/receiver có buffer. Unmap/revoke
     mapping xoá ipc_buffer. Demo user.S buffer dài để 3c.
 
+48. Vòng 03: Per-CPU state chỉ đọc từ vùng kernel-only (`sscratch`/`swapgs`/
+    `TPIDR_EL1`); BKL là ticket lock FIFO có maintenance poll; kernel giữ
+    `current[hart]` nhưng runqueue vẫn global; hart phụ chưa chạy scheduler.
+
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
 README.md
@@ -1405,7 +1418,7 @@ scripts/test-persist.py
 Nó chưa phải OS hoàn chỉnh. Root và server/client đều chạy từ ELF Rust; mỗi
 task có VSpace riêng; client dùng Untyped con. 8.4/8.4b đã xong: runtime cấp
 Rust ELF qua BootInfo staging, root loader nạp vào VSpace riêng; 8.5 đã có VFS
-IPC server bước đầu. Đã có block cả 3 kiến trúc, persistence test hermetic,
-BKL groundwork, ASID/PCID, IPI/TLB full shootdown. Khoảng trống lớn tiếp theo
-là full SMP (x86 AP, scheduler đa hart), FS v2, per-VA TLB/remote I-cache,
-hardware IOMMU, network/input và compositor/ViFastKey.
+IPC server bước đầu. Đã có block cả 3 kiến trúc, persistence test hermetic, BKL ticket + per-CPU
+an toàn, current theo hart, ASID/PCID, IPI/TLB full shootdown và remote fence.i.
+Khoảng trống lớn tiếp theo là hart phụ chạy scheduler, x86 AP, FS v2, per-VA
+TLB, hardware IOMMU, network/input và compositor/ViFastKey.

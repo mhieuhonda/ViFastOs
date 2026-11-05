@@ -28,6 +28,7 @@
 - `23d8dfb` — RISC-V VirtIO-MMIO block backend (vòng 02).
 - `b51782b` — BKL audit + x86 fault path (vòng 02).
 - `4d44b60` — per-CPU trap stacks/state (vòng 02).
+- `74b7d75` — per-CPU security, ticket BKL, per-hart current (vòng 03).
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -67,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `69ffa2fc99d70c44730d7be98bd3ed5a69d239bf32a2a287a7379a5d2f1e3268`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `d0d671f9cbb3fd468ad9ff53ec0629deee22c730c7b9ebc34c73cf76ed637d64`.
 
 ---
 
@@ -210,6 +211,23 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.16 — Per-CPU security, ticket BKL, per-hart current (vòng 03)
+
+- Commit tích hợp `74b7d75` (Task 1–4 có phụ thuộc trap/BKL nên gộp).
+- RISC-V: user `tp` không còn là state pointer; `sscratch` giữ CpuState khi
+  user, trap entry lưu user sp/tp vào frame, dùng `s0` giữ CpuState qua C call.
+- x86_64: `swapgs` + `IA32_KERNEL_GS_BASE`; user GS clobber không ảnh hưởng;
+  `x86_reload_segments` reset GS base nên `prepare_user` publish lại.
+- AArch64: `TPIDR_EL1` kernel-only; test clobber `TPIDR_EL0`.
+- User test `PERCPU CLOBBER OK` cả 3 arch; harness bắt buộc đúng 1 lần.
+- BKL: ticket lock FIFO, `lock_with(poll_maintenance)`; IRQ assert trước lock;
+  IPI maintenance không lấy BKL; host test FIFO + mô phỏng deadlock PASS.
+- Kernel: `current[hart]`, `pick_on/current_on`, runqueue global, invariant
+  không TCB Running trên 2 hart; revoke TCB current bị từ chối.
+- RISC-V `sync_icache` gửi maintenance IPI remote fence; AArch64 đã broadcast.
+- QEMU 3/3 PASS ×3; persist 3/3; kernel 84/84; arch 4/4; headroom 458480.
+- **Task 5 chưa làm**: hart phụ vẫn maintenance, chưa có `SMP SCHED OK`.
 
 ## 8.15 — BKL audit + x86 fault path + per-CPU groundwork (vòng 02)
 
