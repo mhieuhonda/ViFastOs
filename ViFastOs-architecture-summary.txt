@@ -63,6 +63,9 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - f216966 feat: add aarch64 virtio block backend
 - 1d4f0ea feat: persist vfs scratch on block storage
 - fe569c1 feat: add x86 ata block backend for persistent vfs
+- ed06f82 feat: add smp maintenance ipi and tlb shootdown
+- fffa7d6 feat: add vfs stat request
+- 826efed feat: tag vspaces with asid and pcid
 - 1e5d113 docs: sync architecture summary with current code
 - 096faf8 test: hermetic two-boot persistence check
 - 4293406 refactor: add big kernel lock and per-cpu state groundwork
@@ -70,9 +73,6 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - b51782b fix: make bkl cover all kernel entries and assert release on user return
 - 4d44b60 refactor: per-cpu trap stacks and current tcb
 - 74b7d75 feat: per-cpu security and per-hart current groundwork
-- ed06f82 feat: add smp maintenance ipi and tlb shootdown
-- fffa7d6 feat: add vfs stat request
-- 826efed feat: tag vspaces with asid and pcid
 
 Cập nhật code gần nhất (commit 74b7d75): persistent VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
@@ -112,6 +112,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 - cargo test -p vifast-kernel: 84/84 PASS
+- cargo test -p vifast-arch: 4/4 PASS
 - cargo test -p vifast-pte: 11/11 PASS
 - cargo test -p vifast-elf: 17/17 PASS
 - cargo test -p vifast-runtime: compile + 0 test
@@ -298,7 +299,7 @@ vifast-platform-riscv64
 - SBI timer.
 - Page/stack user do boot Untyped + builder/FrameMap tạo.
 - HSM secondary hart + SMP bootstrap.
-- TLB: sfence.vma. Map EXEC gọi fence.i (local hart; SMP cần remote fence).
+- TLB: sfence.vma. Map EXEC gọi fence.i local + maintenance IPI remote fence.
 - Files: platform.rs, trap.S, smp.S.
 
 vifast-platform-aarch64
@@ -365,7 +366,7 @@ vifast-root:
 - 300 dòng Rust + 31 dòng start asm; ELF build 3 target
 
 vifast-kernel:
-- 7198 dòng, không còn dependency vifast-arch
+- khoảng 7000 dòng, không còn dependency vifast-arch
 
 Kích thước Kernel (host test):
 - Kernel = 597624 bytes
@@ -618,7 +619,7 @@ RISC-V64:
 - VSpace client: code chung RX, client stack +0x8000, fault4 stack +0x9000.
 - VSpace server: +0x2000 RW U, code dùng chung Frame.
 - Data 64 GiB+0xa000: để trống trong root VSpace; client FrameMap RW U.
-- TLB: sfence.vma. Map EXEC gọi fence.i (local hart; SMP cần remote fence).
+- TLB: sfence.vma. Map EXEC gọi fence.i local + maintenance IPI remote fence.
 - Trap dùng kernel trap stack qua sscratch; sscratch=0 khi ở kernel.
 - SUM=0; read_user/write_user bật SUM tạm thời quanh copy.
 
@@ -663,7 +664,7 @@ Kernel fallback: `crates/vifast-kernel/src/fs.rs`; user-space service:
 - Client demo không còn gọi syscall Open/Read/Write/Close; kernel ramfs chỉ
   còn selftest/fallback. Server chưa tách thành module riêng và chưa có
   directory/permission. AArch64/x86_64 lưu `/scratch` bền vững ở sector 0
-  (magic `VF01`); RISC-V còn fallback RAM.
+  (magic `VF01`); cả 3 kiến trúc đều dùng block backend.
 
 Kernel fallback:
 File: crates/vifast-kernel/src/fs.rs.
@@ -849,16 +850,11 @@ Cap transfer:
   `MAX_HARTS=4`, `pick_on(hart)`/`current_on(hart)`; runqueue vẫn global.
 - RISC-V map EXEC gọi `fence.i` local + IPI maintenance remote fence; AArch64
   `ic ivau` + `dsb ish` đã broadcast.
-- Per-CPU groundwork: `MAX_HARTS=4`, `CpuState { hart_id, current_tcb,
-  trap_stack_top }`; TRAP_STACKS/IST_STACKS/TSSS là mảng theo hart. Hart 0 đọc
-  state qua `tp` (RISC-V), `TPIDR_EL1` (AArch64), `GS_BASE` (x86). Hart phụ vẫn
-  maintenance; chưa có scheduler đa hart.
 - `static mut` toàn cục vẫn còn: page table, pool, CONTEXTS, KERNEL_PTR,
-  ACTIVE_ROOT/ASID, KERNEL_STORAGE, FILES/FILE_COUNT, VirtIO QUEUE/BASE/READY.
+  KERNEL_STORAGE, FILES/FILE_COUNT, VirtIO QUEUE/BASE/READY.
   Chúng được bảo vệ bởi BKL khi đi qua trap, nhưng chưa phải per-CPU;
   server/virtio cần khóa riêng khi SMP.
-- Chưa có per-hart runqueue, timer đa hart, per-VA TLB shootdown,
-  remote I-cache shootdown.
+- Chưa có per-hart runqueue, timer đa hart, per-VA TLB shootdown.
 
 14. TEST VÀ TIÊU CHÍ PASS
 -------------------------
@@ -1093,10 +1089,9 @@ Exit code:
   stack và tạo USER FAULT thứ tư. Harness yêu cầu đúng 4 fault; 3b hoàn tất.
   DATA UNTYPED lúc test-exit hiện tại: RISC-V 36/64 trang, AArch64 37/64,
   x86 41/64; object RISC-V/AArch 21/48, x86 25/48.
-- RISC-V sync I-cache bằng fence.i (local hart); AArch64 dùng CTR_EL0 để lấy
-  line size rồi dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
-- Chưa có SMP I-cache shootdown: RISC-V cần remote fence qua SBI/IPI, AArch64
-  cần broadcast/đồng bộ các PE khác trước khi cho chạy code mới.
+- RISC-V sync I-cache: fence.i local + maintenance IPI remote fence; AArch64
+  dùng CTR_EL0 + dc cvau/dsb ish/ic ivau/dsb ish/isb (broadcast inner-shareable);
+  x86 no-op vì I/D coherent.
 - 8.2: ReplyRecv (syscall 4) reply caller hiện tại rồi Recv; không caller thì
   chỉ Recv; server user.S chuyển sang vòng ReplyRecv + Signal; 3 host test mới.
 - 8.3: TCB fault endpoint (CapRef), TcbConfigure a5, message LABEL_FAULT,
@@ -1134,9 +1129,8 @@ Exit code:
 - BKL ticket + RAII đã bọc trap/syscall/IRQ + x86 fault/page-fault;
   đã assert nhả trước user và IRQ tắt khi giữ. Hart phụ chưa chạy scheduler;
   current per-hart có API nhưng chưa bật hart phụ.
-- SMP full TLB shootdown đã có qua SBI IPI/GICv2 SGI; per-VA shootdown và
-  I-cache shootdown cho code mới trên hart khác vẫn chưa hoàn chỉnh.
-  `sync_icache` hiện chỉ bảo đảm hart đang map.
+- SMP full TLB shootdown đã có qua SBI IPI/GICv2 SGI; remote I-cache fence
+  RISC-V đã có qua maintenance IPI, AArch64 broadcast; còn per-VA TLB shootdown.
 - x86_64 chưa boot AP.
 - Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
   chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
@@ -1172,7 +1166,9 @@ Exit code:
 - Shared-code builder root/server chỉ nhận một trang code; builder ELF đã hỗ trợ
   nhiều PT_LOAD. Root ELF đã nạp ở 6.4.
 - Root TCB bị cấm destroy; nếu vi phạm sẽ làm mất root cap của Untyped.
-- TOCTOU validate-copy chỉ an toàn khi một hart/syscall không bị ngắt; xử lý khi làm BKL/SMP.
+- Double-fetch nội dung user: BKL ngăn đổi mapping giữa validate/copy, nhưng
+  hart khác vẫn có thể đổi nội dung buffer giữa hai lần đọc; các syscall copy
+  một lần vào buffer kernel (hoặc cần pin/copy-once) khi rà soát SMP.
 - Fault endpoint tối giản đã có (8.3): log/queue/BlockedFault + handler Recv;
   Reply để tiếp tục chưa được demo. Fault1/2/3 vẫn suspend.
 - Self-revoke Untyped hiện trả IllegalOperation; supervisor hủy nhóm gồm chính

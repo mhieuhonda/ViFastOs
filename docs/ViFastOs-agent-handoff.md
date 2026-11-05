@@ -39,7 +39,7 @@
 
 - Full SMP scheduler; x86 AP bootstrap; per-hart runqueue.
 - Hart phụ chưa chạy scheduler (Task 5 chưa hoàn tất); x86 AP vẫn SKIP.
-- Per-VA TLB shootdown; cross-hart I-cache shootdown.
+- Per-VA TLB shootdown.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
 - Hệ thống file thật: mới là một sector `/scratch`, chưa có directory/permission/journal.
 - VirtIO network/input.
@@ -247,7 +247,7 @@ QEMU -bios default (OpenSBI)
 - OpenSBI PMP Region07 cho S/U `R,W,X` toàn bộ; **không có PMP chặn**.
 - 8 slot VirtIO-MMIO cách nhau `0x1000`; QEMU đặt `virtio-blk-device` ở slot cuối
   `0x10008000`. Driver scan `0x10001000..0x10009000`, yêu cầu version 2/device 2.
-- Legacy chỉ log `BLOCK SKIP (virtio legacy)`; không fallback RAM.
+- Legacy chỉ log `BLOCK SKIP (virtio legacy)`; không dùng RAM disk.
 
 ---
 
@@ -337,7 +337,6 @@ Chưa có:
 - Hart phụ chạy scheduler; x86 AP.
 - Timer đa hart.
 - Per-VA TLB shootdown.
-- Remote I-cache shootdown.
 
 **SMP hiện tại chỉ chứng minh IPI/TLB maintenance, không phải SMP scheduler thật.**
 
