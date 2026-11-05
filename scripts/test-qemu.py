@@ -214,6 +214,7 @@ def run_qemu(
         and output.count("FAULT EP OK") == 1
         and output.count("ROOT READY") == 1
         and "ROOT PANIC" not in output
+        and "STALL" not in output
         and root_rust_at >= 0
         and server_at > root_rust_at
         and client_at > root_rust_at

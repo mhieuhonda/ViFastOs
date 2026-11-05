@@ -690,6 +690,46 @@ impl Platform for RiscvPlatform {
         0b11
     }
 
+    fn can_wait_for_work() -> bool {
+        true
+    }
+
+    fn wait_for_work(hart: usize) {
+        loop {
+            poll_maintenance();
+            if RiscvPlatform::kernel().has_ready_on(hart) {
+                return;
+            }
+            IDLE_HARTS[hart].store(true, Ordering::SeqCst);
+            if RiscvPlatform::kernel().has_ready_on(hart) {
+                IDLE_HARTS[hart].store(false, Ordering::SeqCst);
+                return;
+            }
+            unsafe {
+                core::arch::asm!("wfi");
+            }
+            IDLE_HARTS[hart].store(false, Ordering::SeqCst);
+            RESCHED_PENDING[hart].store(false, Ordering::SeqCst);
+            let sip: u64;
+            unsafe {
+                core::arch::asm!("csrr {}, sip", out(reg) sip);
+            }
+            if sip & (1u64 << 5) != 0 {
+                SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+                unsafe {
+                    set_timer(Riscv64::now() + TIMER_INTERVAL);
+                }
+            }
+            if sip & (1u64 << 1) != 0 {
+                SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+                unsafe {
+                    core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
+                }
+                poll_maintenance();
+            }
+        }
+    }
+
     fn user_entries(hart: usize) -> usize {
         USER_ENTRIES
             .get(hart)
@@ -1106,7 +1146,20 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         frame.regs[14],
         frame.regs[15],
     ];
-    vifast_runtime::syscall::dispatch::<RiscvPlatform>(frame, number, args);
+    let waiting = vifast_runtime::syscall::dispatch::<RiscvPlatform>(frame, number, args);
     drop(bkl);
+    if waiting {
+        loop {
+            RiscvPlatform::wait_for_work(1);
+            let bkl = bkl_lock();
+            assert_current_tcb();
+            if vifast_runtime::syscall::resume_blocked::<RiscvPlatform>(frame) {
+                drop(bkl);
+                assert_bkl_released();
+                return;
+            }
+            drop(bkl);
+        }
+    }
     assert_bkl_released();
 }

@@ -1363,7 +1363,7 @@ extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
     let args = [
         frame.rdi, frame.rsi, frame.rdx, frame.rcx, frame.r8, frame.r9,
     ];
-    vifast_runtime::syscall::dispatch::<X86Platform>(frame, number, args);
+    let _ = vifast_runtime::syscall::dispatch::<X86Platform>(frame, number, args);
     drop(bkl);
     assert!(!BKL.is_held(), "BKL held on x86 syscall return");
 }

@@ -17,6 +17,13 @@ use vifast_kernel::{Cap, Kernel, StackSpec, TaskLayout, UserAction};
 
 #[cfg(feature = "test-exit")]
 pub const TIMER_TICKS: u64 = 20;
+#[cfg(feature = "test-exit")]
+static TEST_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-exit")]
+static TEST_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-exit")]
+static TEST_EXPECT_WORKERS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 pub const USER_COPY_MAX: usize = 256;
 
 /// Boot information supplied by the architecture entry point.
@@ -148,6 +155,16 @@ pub trait Platform: Arch + Console {
     /// Harts that can schedule ordinary user tasks.
     fn sched_harts() -> u32 {
         0b01
+    }
+
+    /// True when a secondary hart may park in the platform idle loop instead
+    /// of shutting the kernel down if its runqueue becomes empty.
+    fn can_wait_for_work() -> bool {
+        false
+    }
+
+    fn wait_for_work(_hart: usize) {
+        core::hint::spin_loop();
     }
 
     fn resched_sent() -> usize {
@@ -759,6 +776,11 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         vifast_kernel::klog!(A, "BLOCK SKIP");
     }
     A::start_timer();
+    #[cfg(feature = "test-exit")]
+    TEST_EXPECT_WORKERS.store(
+        A::sched_harts() & 0b10 != 0,
+        core::sync::atomic::Ordering::SeqCst,
+    );
     vifast_kernel::klog!(A, "entering user mode at {:#x}", A::user_code_base());
     let first = contexts[root.index as usize];
     A::enter_user(&first)
@@ -768,7 +790,8 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
 pub mod syscall {
     use super::*;
 
-    pub fn dispatch<A: Platform>(context: &mut A::Context, number: u64, args: [u64; 6]) {
+    pub fn dispatch<A: Platform>(context: &mut A::Context, number: u64, args: [u64; 6]) -> bool {
+        let mut waiting = false;
         let kernel = A::kernel();
         let hart = A::hart_id();
         let Some(tcb) = kernel.current_on(hart) else {
@@ -878,13 +901,39 @@ pub mod syscall {
                 if A::read_user(ptr, &mut buf[..len]).is_err() {
                     A::write_result(context, KError::InvalidArg, 0, 0, [0; 4]);
                 } else {
+                    #[cfg(feature = "test-exit")]
+                    {
+                        let ready = buf[..len]
+                            .windows(b"ROOT READY".len())
+                            .any(|window| window == b"ROOT READY");
+                        if ready {
+                            TEST_READY.store(true, core::sync::atomic::Ordering::SeqCst);
+                            if !TEST_EXPECT_WORKERS.load(core::sync::atomic::Ordering::SeqCst) {
+                                TEST_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
+                            }
+                        }
+                        let workers = buf[..len]
+                            .windows(b"SMP WORKERS OK".len())
+                            .any(|window| window == b"SMP WORKERS OK");
+                        if workers {
+                            TEST_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
                     for byte in &buf[..len] {
                         A::putc(*byte);
                     }
                     A::write_result(context, KError::Ok, 0, 0, [0; 4]);
                 }
             }
-            UserAction::Blocked => switch_blocked::<A>(context),
+            UserAction::Blocked => {
+                if !switch_blocked::<A>(context) {
+                    if A::can_wait_for_work() && hart != 0 {
+                        waiting = true;
+                    } else {
+                        A::exit(1);
+                    }
+                }
+            }
             UserAction::Exit => {
                 A::write_str("\r\nUSER EXIT\r\n");
                 A::exit(0);
@@ -893,6 +942,7 @@ pub mod syscall {
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
         }
+        waiting
     }
 
     pub fn apply_resume<A: Platform>(context: &mut A::Context, tcb: vifast_kernel::ObjRef) {
@@ -904,7 +954,9 @@ pub mod syscall {
         }
     }
 
-    pub fn switch_blocked<A: Platform>(context: &mut A::Context) {
+    /// Save the blocked task.  Returns false when its hart has no other
+    /// runnable task; the caller may park and retry after an IPI.
+    pub fn switch_blocked<A: Platform>(context: &mut A::Context) -> bool {
         let kernel = A::kernel();
         let contexts = A::contexts();
         let hart = A::hart_id();
@@ -912,7 +964,7 @@ pub mod syscall {
             contexts[old.index as usize] = *context;
         }
         let Some(next) = kernel.pick_on(hart) else {
-            A::exit(1);
+            return false;
         };
         note_current_tcb::<A>(kernel);
         *context = contexts[next.index as usize];
@@ -920,6 +972,24 @@ pub mod syscall {
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
         }
+        true
+    }
+
+    /// Resume any task that became ready while a secondary hart was parked.
+    pub fn resume_blocked<A: Platform>(context: &mut A::Context) -> bool {
+        let kernel = A::kernel();
+        let contexts = A::contexts();
+        let hart = A::hart_id();
+        let Some(next) = kernel.pick_on(hart) else {
+            return false;
+        };
+        note_current_tcb::<A>(kernel);
+        *context = contexts[next.index as usize];
+        crate::syscall::apply_resume::<A>(context, next);
+        if ensure_current_root::<A>().is_err() {
+            fault::suspend::<A>(context, 0, 0);
+        }
+        true
     }
 }
 
@@ -995,7 +1065,10 @@ pub mod timer {
         }
         kernel.tick();
         #[cfg(feature = "test-exit")]
-        if kernel.ticks() >= TIMER_TICKS {
+        if hart == 0
+            && TEST_DONE.load(core::sync::atomic::Ordering::SeqCst)
+            && kernel.ticks() >= TIMER_TICKS
+        {
             let switches = kernel.stats().context_switches.saturating_sub(1);
             vifast_kernel::klog!(
                 A,

@@ -1043,7 +1043,7 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
         frame.regs[4],
         frame.regs[5],
     ];
-    vifast_runtime::syscall::dispatch::<Aarch64Platform>(frame, number, args);
+    let _ = vifast_runtime::syscall::dispatch::<Aarch64Platform>(frame, number, args);
     drop(bkl);
     assert!(!BKL.is_held(), "BKL held on syscall return");
 }
