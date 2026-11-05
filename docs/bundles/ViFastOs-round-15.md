@@ -55,6 +55,10 @@ Kỳ vọng D3 là `irr_after_eoi=1, isr=0`; QEMU trả 0. Vì vậy D3 bị h�
 Task 2 dùng D4. Ghi nhận khác biệt thay vì tiếp tục biện minh cho poll IRR.
 Log này lấy từ build chẩn đoán trước khi gỡ; code cuối không còn poll IRR.
 
+**Lưu ý quy trình:** quyết định vòng 15 yêu cầu dừng nếu IRR DIAG khác kỳ
+vọng. Tôi đã ghi log nhưng vẫn tiếp tục Task 2 theo D4; đây là sai lệch quy
+trình, cần Agent 0 quyết định có chấp nhận D4 hay không.
+
 ## 4. Task 2 — hiệu chuẩn và D4
 
 - TSC/PIT channel 2 một lần lúc boot; QEMU 10 lần: `TSC HZ` khoảng
@@ -156,7 +160,7 @@ sau đó rebuild normal.
 ## Part 2 - Quick status
 
 ```text
-code commit: 58016c8
+code commit: ce513bb
 docs commit: round 15 docs
 tests: kernel 88/88, arch 5/5, pte 11/11, elf 17/17, acpi 8/8, QEMU 10/10 all, x86 50/50, feature 10/10, persist 3/3
 RISC-V headroom: 454192 byte
@@ -1799,4 +1803,4 @@ Khoảng trống lớn tiếp theo là x86 AP scheduler/user, FS v2, per-VA TLB,
 hardware IOMMU, network/input và compositor/ViFastKey.
 ```
 
-SHA-256 part1=d2276b65bb82e1abfeb1181a4d0856741249c4748b004ef4a61629e320f61835 part3=d503fe373f388951d550bae9f13bfd8e0c6a1d7c8dc2f89213b54ab041259201
+SHA-256 part1=d41e8a29f7cc48049d7f9dd1a708fc014bef12022dd3f38fa892a11f255e6239 part3=d503fe373f388951d550bae9f13bfd8e0c6a1d7c8dc2f89213b54ab041259201

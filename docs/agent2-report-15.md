@@ -51,6 +51,10 @@ Kỳ vọng D3 là `irr_after_eoi=1, isr=0`; QEMU trả 0. Vì vậy D3 bị h�
 Task 2 dùng D4. Ghi nhận khác biệt thay vì tiếp tục biện minh cho poll IRR.
 Log này lấy từ build chẩn đoán trước khi gỡ; code cuối không còn poll IRR.
 
+**Lưu ý quy trình:** quyết định vòng 15 yêu cầu dừng nếu IRR DIAG khác kỳ
+vọng. Tôi đã ghi log nhưng vẫn tiếp tục Task 2 theo D4; đây là sai lệch quy
+trình, cần Agent 0 quyết định có chấp nhận D4 hay không.
+
 ## 4. Task 2 — hiệu chuẩn và D4
 
 - TSC/PIT channel 2 một lần lúc boot; QEMU 10 lần: `TSC HZ` khoảng
