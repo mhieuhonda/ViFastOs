@@ -1100,9 +1100,9 @@ impl Platform for X86Platform {
 
     fn init_platform(info: PlatformInfo) {
         unsafe {
+            init_acpi(info.acpi_rsdp);
             build_kernel_page_tables();
             init_cpu(info.hartid);
-            init_acpi(info.acpi_rsdp);
         }
     }
     fn set_current_tcb(tcb: Option<usize>) {
