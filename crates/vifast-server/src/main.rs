@@ -298,11 +298,10 @@ fn read_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
         Ok(count) => count,
         Err(error) => return err(error),
     };
-    let mut words = [0u64; 3];
-    for index in 0..count {
-        words[index / 8] |= (bytes[index] as u64) << ((index % 8) * 8);
+    unsafe {
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), IPC_BUF_SERVER_VA as *mut u8, count);
     }
-    (count as u64, words[0], words[1], words[2])
+    (count as u64, 0, 0, 0)
 }
 
 fn write_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
@@ -372,6 +371,30 @@ fn rename_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
         );
     }
     match fs().rename(
+        &paths[..len1],
+        &paths[vfs::MAX_PATH..vfs::MAX_PATH + len2],
+        uid,
+    ) {
+        Ok(()) => (vfs::OK, 0, 0, 0),
+        Err(error) => err(error),
+    }
+}
+
+fn link_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
+    let len1 = data[0] as usize;
+    let len2 = data[1] as usize;
+    if len1 == 0 || len1 > vfs::MAX_PATH || len2 == 0 || len2 > vfs::MAX_PATH {
+        return (vfs::ERR, vfs::EINVAL, 0, 0);
+    }
+    let mut paths = [0u8; vfs::MAX_PATH * 2];
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            IPC_BUF_SERVER_VA as *const u8,
+            paths.as_mut_ptr(),
+            vfs::MAX_PATH * 2,
+        );
+    }
+    match fs().link(
         &paths[..len1],
         &paths[vfs::MAX_PATH..vfs::MAX_PATH + len2],
         uid,
@@ -452,6 +475,7 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
         vfs::READDIR => readdir_request(request.data, uid),
         vfs::UNLINK => unlink_request(request.data, uid),
         vfs::RENAME => rename_request(request.data, uid),
+        vfs::LINK => link_request(request.data, uid),
         vfs::TRUNCATE => truncate_request(request.data, uid),
         vfs::FSYNC => (vfs::OK, 0, 0, 0),
         vfs::FSCK => {

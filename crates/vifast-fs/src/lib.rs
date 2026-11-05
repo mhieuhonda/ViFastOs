@@ -1352,6 +1352,43 @@ impl<D: BlockDev> Fs<D> {
         Ok(true)
     }
 
+    /// Create a second directory entry for an existing regular file.  The
+    /// inode link count is journaled together with the new directory entry.
+    pub fn link(&mut self, target: &[u8], new_path: &[u8], uid: u16) -> Result<(), FsError> {
+        if target.len() > MAX_PATH || new_path.len() > MAX_PATH {
+            return Err(FsError::Invalid);
+        }
+        self.tx_count = 0;
+        let target_ino = self.lookup_path(target, uid)?;
+        let target_inode = self.inodes[target_ino as usize - 1];
+        if target_inode.kind == INODE_DIR {
+            return Err(FsError::IsDir);
+        }
+        if target_inode.kind == INODE_FREE {
+            return Err(FsError::NotFound);
+        }
+        if target_inode.nlink == u16::MAX {
+            return Err(FsError::NoSpace);
+        }
+        let (parent, name, name_len) = self.resolve_parent(new_path, uid)?;
+        if self.lookup_child(parent, &name[..name_len])?.is_some() {
+            return Err(FsError::Exists);
+        }
+        let old_nlink = target_inode.nlink;
+        {
+            let inode = &mut self.inodes[target_ino as usize - 1];
+            inode.nlink = inode.nlink.saturating_add(1);
+        }
+        self.stage_inode(target_ino)?;
+        if let Err(error) = self.write_dir_entry(parent, &name[..name_len], target_ino) {
+            let inode = &mut self.inodes[target_ino as usize - 1];
+            inode.nlink = old_nlink;
+            self.tx_count = 0;
+            return Err(error);
+        }
+        self.commit()
+    }
+
     pub fn unlink(&mut self, path: &[u8], uid: u16) -> Result<(), FsError> {
         self.tx_count = 0;
         let (parent, name, name_len) = self.resolve_parent(path, uid)?;
@@ -2167,5 +2204,42 @@ mod tests {
             let size = mounted.info(ino).unwrap().size as usize;
             assert!(size == 11 * BLOCK_SIZE || size == 12 * BLOCK_SIZE);
         }
+    }
+
+    #[test]
+    fn hard_link_keeps_data_until_last_name_is_removed() {
+        let mut fs = fresh();
+        let ino = fs.create(b"/a", 1, INODE_FILE).unwrap();
+        let data = [0x5au8; 3 * BLOCK_SIZE];
+        fs.write(ino, 0, &data, 1).unwrap();
+        fs.link(b"/a", b"/b", 1).unwrap();
+        fs.fsck().unwrap();
+        assert_eq!(fs.info(ino).unwrap().nlink, 2);
+        assert_eq!(fs.lookup(b"/b", 1).unwrap(), ino);
+        let mut out = [0u8; 3 * BLOCK_SIZE];
+        fs.read(ino, 0, &mut out, 1).unwrap();
+        assert_eq!(out, data);
+        fs.unlink(b"/a", 1).unwrap();
+        fs.fsck().unwrap();
+        assert_eq!(fs.info(ino).unwrap().nlink, 1);
+        let mut out = [0u8; BLOCK_SIZE];
+        let b = fs.lookup(b"/b", 1).unwrap();
+        assert_eq!(fs.read(b, 0, &mut out, 1).unwrap(), BLOCK_SIZE);
+        assert_eq!(&out, &data[..BLOCK_SIZE]);
+        fs.unlink(b"/b", 1).unwrap();
+        assert_eq!(fs.lookup(b"/b", 1), Err(FsError::NotFound));
+        fs.fsck().unwrap();
+    }
+
+    #[test]
+    fn hard_link_rejects_missing_existing_and_directory_targets() {
+        let mut fs = fresh();
+        assert_eq!(fs.link(b"/missing", b"/b", 1), Err(FsError::NotFound));
+        fs.create(b"/a", 1, INODE_FILE).unwrap();
+        fs.create(b"/b", 1, INODE_FILE).unwrap();
+        assert_eq!(fs.link(b"/a", b"/b", 1), Err(FsError::Exists));
+        fs.mkdir(b"/d", 1).unwrap();
+        assert_eq!(fs.link(b"/d", b"/e", 1), Err(FsError::IsDir));
+        fs.fsck().unwrap();
     }
 }

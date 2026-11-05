@@ -140,9 +140,8 @@ fn vfs_read_via(
     let reply = unsafe { vifast_user::call_message(slot, vfs::READ, fd, offset, len as u64) };
     let reply = vfs_reply(reply).ok()?;
     let count = core::cmp::min(reply.label as usize, out.len());
-    for index in 0..count {
-        let word = reply.data[index / 8];
-        out[index] = (word >> ((index % 8) * 8)) as u8;
+    unsafe {
+        core::ptr::copy_nonoverlapping(IPC_BUF_CLIENT_VA as *const u8, out.as_mut_ptr(), count);
     }
     Some(count)
 }
@@ -199,6 +198,21 @@ fn vfs_unlink_via(slot: u8, path: &[u8]) -> Result<(), u64> {
 
 fn vfs_unlink(path: &[u8]) -> Result<(), u64> {
     vfs_unlink_via(1, path)
+}
+
+fn vfs_link(old: &[u8], new: &[u8]) -> Result<(), u64> {
+    let old_len = copy_path(old);
+    let new_len = core::cmp::min(new.len(), vfs::MAX_PATH);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            new.as_ptr(),
+            (IPC_BUF_CLIENT_VA + vfs::MAX_PATH) as *mut u8,
+            new_len,
+        );
+    }
+    let reply =
+        unsafe { vifast_user::call_message(1, vfs::LINK, old_len as u64, new_len as u64, 0) };
+    vfs_reply(reply).map(|_| ())
 }
 
 fn vfs_rename(old: &[u8], new: &[u8]) -> Result<(), u64> {
@@ -526,8 +540,10 @@ pub extern "C" fn client_main() -> ! {
     });
     let mut large_ok = true;
     if let Some((fd, _)) = vfs_open_via(1, b"/large", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
+        const LARGE_BYTES: usize = 20 * 1024;
+        const CHUNKS: usize = LARGE_BYTES / vfs::MAX_IO;
         let mut chunk = [0u8; vfs::MAX_IO];
-        for block in 0..40usize {
+        for block in 0..CHUNKS {
             for (index, byte) in chunk.iter_mut().enumerate() {
                 *byte = (block * 17 + index * 7 + 3) as u8;
             }
@@ -536,7 +552,8 @@ pub extern "C" fn client_main() -> ! {
         let _ = vfs_close(fd);
         if let Some((fd, _)) = vfs_open_via(1, b"/large", 0) {
             let mut out = [0u8; vfs::MAX_IO];
-            for block in 0..40usize {
+            large_ok &= vfs_stat(fd) == Some(LARGE_BYTES as u64);
+            for block in 0..CHUNKS {
                 if vfs_read_via(1, fd, (block * vfs::MAX_IO) as u64, vfs::MAX_IO, &mut out)
                     != Some(vfs::MAX_IO)
                 {
@@ -562,6 +579,56 @@ pub extern "C" fn client_main() -> ! {
         b"FS LARGE OK\n"
     } else {
         b"FS LARGE BAD\n"
+    });
+    let _ = vfs_unlink(b"/hard_a");
+    let _ = vfs_unlink(b"/hard_b");
+    let mut hard_ok = true;
+    if let Some((fd, _)) = vfs_open_via(1, b"/hard_a", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
+        let mut chunk = [0u8; vfs::MAX_IO];
+        for block in 0..4usize {
+            for (index, byte) in chunk.iter_mut().enumerate() {
+                *byte = (0xa0u8).wrapping_add((block * 19 + index * 3) as u8);
+            }
+            hard_ok &= vfs_write_via(1, fd, (block * vfs::MAX_IO) as u64, &chunk).is_some();
+        }
+        let _ = vfs_close(fd);
+        hard_ok &= vfs_link(b"/hard_a", b"/hard_b").is_ok();
+        if let Some((fd, _)) = vfs_open_via(1, b"/hard_b", 0) {
+            let mut out = [0u8; vfs::MAX_IO];
+            hard_ok &= vfs_stat(fd) == Some((4 * vfs::MAX_IO) as u64);
+            for block in 0..4usize {
+                if vfs_read_via(1, fd, (block * vfs::MAX_IO) as u64, vfs::MAX_IO, &mut out)
+                    != Some(vfs::MAX_IO)
+                {
+                    hard_ok = false;
+                    break;
+                }
+                for (index, byte) in out.iter().enumerate() {
+                    if *byte != (0xa0u8).wrapping_add((block * 19 + index * 3) as u8) {
+                        hard_ok = false;
+                    }
+                }
+            }
+            let _ = vfs_close(fd);
+        } else {
+            hard_ok = false;
+        }
+        hard_ok &= vfs_unlink(b"/hard_a").is_ok();
+        if let Some((fd, _)) = vfs_open_via(1, b"/hard_b", 0) {
+            hard_ok &= vfs_stat(fd) == Some((4 * vfs::MAX_IO) as u64);
+            let _ = vfs_close(fd);
+        } else {
+            hard_ok = false;
+        }
+        hard_ok &= vfs_unlink(b"/hard_b").is_ok();
+        hard_ok &= vfs_fsck();
+    } else {
+        hard_ok = false;
+    }
+    write(if hard_ok {
+        b"HARD LINK OK\n"
+    } else {
+        b"HARD LINK BAD\n"
     });
 
     loop {

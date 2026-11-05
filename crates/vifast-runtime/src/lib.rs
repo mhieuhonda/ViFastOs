@@ -28,6 +28,9 @@ static TEST_FS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::Atomic
 static TEST_FS_LARGE_DONE: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
+static TEST_HARD_LINK_DONE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-exit")]
 static TEST_TLB_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-skip-tlb-ipi")]
 static TEST_TLB_BAD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -1050,6 +1053,12 @@ pub mod syscall {
                         if fs_large_done {
                             TEST_FS_LARGE_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
                         }
+                        let hard_link_done = buf[..len]
+                            .windows(b"HARD LINK OK".len())
+                            .any(|window| window == b"HARD LINK OK");
+                        if hard_link_done {
+                            TEST_HARD_LINK_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
+                        }
                         let tlb_done = buf[..len]
                             .windows(b"TLB REMAP OK".len())
                             .any(|window| window == b"TLB REMAP OK");
@@ -1226,6 +1235,7 @@ pub mod timer {
             && TEST_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && TEST_FS_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && TEST_FS_LARGE_DONE.load(core::sync::atomic::Ordering::SeqCst)
+            && TEST_HARD_LINK_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && TEST_TLB_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && A::post_idle_ready()
             && kernel.ticks_on(0) >= TIMER_TICKS

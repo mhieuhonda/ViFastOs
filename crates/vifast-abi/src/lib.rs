@@ -193,6 +193,8 @@ pub mod vfs {
     pub const FSCK: u64 = 0x200C;
     /// Identity probe: server returns the kernel-stamped badge in data[0].
     pub const BADGE_PROBE: u64 = 0x200D;
+    /// Hard link: old path in buffer[0], new path in buffer[MAX_PATH].
+    pub const LINK: u64 = 0x200E;
 
     pub const ENOENT: u64 = 1;
     pub const EEXIST: u64 = 2;
@@ -213,7 +215,7 @@ pub mod vfs {
     pub const ERR: u64 = u64::MAX;
     pub const MAX_NAME: usize = 8;
     pub const MAX_COMPONENT: usize = 28;
-    pub const MAX_IO: usize = 24;
+    pub const MAX_IO: usize = 128;
     pub const MAX_FILES: usize = 16;
     pub const MAX_PATH: usize = 128;
     pub const MAX_FD: usize = 8;
