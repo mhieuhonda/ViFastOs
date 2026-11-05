@@ -8,9 +8,11 @@ defined by the kernel printing its banner and SELFTEST PASS.
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -39,6 +41,7 @@ def find_ovmf_code() -> str | None:
 
 
 DISK_DIRS: list[str] = []
+ARTIFACT_ROOT = os.path.join(ROOT, "artifacts")
 
 
 def make_disk(name: str) -> str:
@@ -55,6 +58,54 @@ def cleanup_disks() -> None:
     for directory in DISK_DIRS:
         shutil.rmtree(directory, ignore_errors=True)
     DISK_DIRS.clear()
+
+
+def make_monitor(name: str, index: int) -> str:
+    directory = tempfile.mkdtemp(prefix=f"vifast-{name}-mon-")
+    DISK_DIRS.append(directory)
+    return os.path.join(directory, "mon.sock")
+
+
+def dump_timeout_artifacts(
+    name: str, index: int, monitor: str, output: str
+) -> None:
+    """Collect frozen-machine diagnostics before QEMU is killed."""
+    directory = os.path.join(ARTIFACT_ROOT, f"flake-{name}-{index}")
+    os.makedirs(directory, exist_ok=True)
+    registers = ""
+    if os.path.exists(monitor):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2.0)
+                sock.connect(monitor)
+                sock.sendall(b"info registers -a\n")
+                chunks: list[bytes] = []
+                while True:
+                    try:
+                        chunk = sock.recv(65536)
+                    except socket.timeout:
+                        break
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    if b"(qemu)" in chunk:
+                        break
+                registers = b"".join(chunks).decode("utf-8", errors="replace")
+        except OSError as error:
+            registers = f"monitor unavailable: {error}\n"
+    with open(os.path.join(directory, "registers.txt"), "w") as handle:
+        handle.write(registers)
+    tail = "\n".join(output.splitlines()[-80:])
+    with open(os.path.join(directory, "tail.txt"), "w") as handle:
+        handle.write(tail + "\n")
+    important = [
+        line
+        for line in output.splitlines()
+        if re.search(r"STALL|PANIC|SMP |USER FAULT|KERNEL EXCEPTION|BKL", line)
+    ]
+    with open(os.path.join(directory, "status.txt"), "w") as handle:
+        handle.write("\n".join(important[-40:]) + "\n")
+    print(f"artifacts: {directory}")
 
 
 def hart1_wakeups(output: str) -> int:
@@ -91,6 +142,8 @@ def run_qemu(
     require_smp: bool = False,
     require_block: bool = False,
     require_disk: bool = False,
+    monitor: str | None = None,
+    index: int = 0,
 ) -> bool:
     if os.path.exists(serial):
         os.unlink(serial)
@@ -101,6 +154,11 @@ def run_qemu(
         rc = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
+        output_at_timeout = ""
+        if os.path.exists(serial):
+            output_at_timeout = open(serial, "rb").read().decode("utf-8", errors="replace")
+        if monitor:
+            dump_timeout_artifacts(name, index, monitor, output_at_timeout)
         proc.kill()
         rc = proc.wait()
     elapsed = time.time() - started
@@ -190,19 +248,20 @@ def run_qemu(
     return True
 
 
-def test_riscv() -> bool:
+def test_riscv(index: int = 0) -> bool:
     kernel = os.path.join(
         ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
     )
     serial = os.path.join(tempfile.gettempdir(), "vifast-riscv64.serial")
     disk = make_disk("riscv64")
+    monitor = make_monitor("riscv64", index)
     cmd = [
         QEMU_RV,
         "-machine", "virt",
         "-smp", "2",
         "-m", "128M",
         "-display", "none",
-        "-monitor", "none",
+        "-monitor", f"unix:{monitor},server,nowait",
         "-serial", f"file:{serial}",
         "-global", "virtio-mmio.force-legacy=false",
         "-drive", f"if=none,id=vd0,file={disk},format=raw",
@@ -219,15 +278,18 @@ def test_riscv() -> bool:
         require_smp=True,
         require_block=True,
         require_disk=True,
+        monitor=monitor,
+        index=index,
     )
 
 
-def test_aarch64() -> bool:
+def test_aarch64(index: int = 0) -> bool:
     kernel = os.path.join(
         ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64"
     )
     serial = os.path.join(tempfile.gettempdir(), "vifast-aarch64.serial")
     disk = make_disk("aarch64")
+    monitor = make_monitor("aarch64", index)
     cmd = [
         QEMU_ARM,
         "-machine", "virt,gic-version=2",
@@ -235,7 +297,7 @@ def test_aarch64() -> bool:
         "-smp", "2",
         "-m", "128M",
         "-display", "none",
-        "-monitor", "none",
+        "-monitor", f"unix:{monitor},server,nowait",
         "-serial", f"file:{serial}",
         "-global", "virtio-mmio.force-legacy=false",
         "-drive", f"if=none,id=vd0,file={disk},format=raw",
@@ -243,11 +305,20 @@ def test_aarch64() -> bool:
         "-kernel", kernel,
     ]
     return run_qemu(
-        "aarch64", cmd, serial, 20, {0}, require_smp=True, require_block=True, require_disk=True
+        "aarch64",
+        cmd,
+        serial,
+        20,
+        {0},
+        require_smp=True,
+        require_block=True,
+        require_disk=True,
+        monitor=monitor,
+        index=index,
     )
 
 
-def test_x86_64() -> bool:
+def test_x86_64(index: int = 0) -> bool:
     code = find_ovmf_code()
     if not code:
         print("SKIP x86_64: OVMF firmware not found (set OVMF_CODE)")
@@ -279,6 +350,7 @@ def test_x86_64() -> bool:
     shutil.copyfile(vars_src, vars_path)
     serial = os.path.join(tmp, "serial.txt")
     disk = make_disk("x86_64")
+    monitor = make_monitor("x86_64", index)
     cmd = [
         QEMU_X86,
         "-machine", "q35",
@@ -286,7 +358,7 @@ def test_x86_64() -> bool:
         "-smp", "2",
         "-m", "256M",
         "-display", "none",
-        "-monitor", "none",
+        "-monitor", f"unix:{monitor},server,nowait",
         "-serial", f"file:{serial}",
         "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
         "-drive", f"if=pflash,format=raw,file={vars_path}",
@@ -305,26 +377,54 @@ def test_x86_64() -> bool:
         {3},
         require_block=True,
         require_disk=True,
+        monitor=monitor,
+        index=index,
     )
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--arch",
+        choices=("riscv64", "aarch64", "x86_64"),
+        help="run only one architecture (default: all three)",
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="run the selected cases N times and print the PASS ratio",
+    )
+    args = parser.parse_args()
+    if args.repeat < 1:
+        parser.error("--repeat must be at least 1")
     if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
         print("missing QEMU binaries")
         return 2
+    tests = {
+        "riscv64": test_riscv,
+        "aarch64": test_aarch64,
+        "x86_64": test_x86_64,
+    }
+    names = [args.arch] if args.arch else ["riscv64", "aarch64", "x86_64"]
+    results: dict[str, list[bool]] = {name: [] for name in names}
     try:
-        results = {
-            "riscv64": test_riscv(),
-            "aarch64": test_aarch64(),
-            "x86_64": test_x86_64(),
-        }
+        for index in range(1, args.repeat + 1):
+            for name in names:
+                if args.repeat > 1:
+                    print(f"\n===== {name} run {index}/{args.repeat} =====")
+                results[name].append(tests[name](index))
     finally:
         cleanup_disks()
     print("\n=== summary ===")
-    for name, ok in results.items():
-        print(f"{name:8} {'PASS' if ok else 'FAIL'}")
-    return 0 if all(results.values()) else 1
-
+    failed = False
+    for name in names:
+        runs = results[name]
+        passed = sum(runs)
+        print(f"{name:8} {passed}/{len(runs)} PASS")
+        if passed != len(runs):
+            failed = True
+    return 1 if failed else 0
 
 if __name__ == "__main__":
     sys.exit(main())
