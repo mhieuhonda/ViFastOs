@@ -78,6 +78,10 @@ static mut ACPI_CPUS: usize = 0;
 static mut ACPI_BSP: u32 = 0;
 static mut ACPI_LAPIC_BASE: u64 = 0;
 static mut AP_TRAMPOLINE: u64 = 0;
+static mut AP_APIC_ID: u32 = 0;
+static mut AP_STARTED: bool = false;
+const TRAMPOLINE_MAGIC: u16 = 0xA55A;
+const TRAMPOLINE_MAGIC_OFFSET: u64 = 0x800;
 
 unsafe fn identity_u32(address: u64) -> Option<u32> {
     if address.saturating_add(4) > 0x4000_0000 {
@@ -162,6 +166,13 @@ unsafe fn init_acpi(rsdp: u64) {
             ACPI_CPUS = parsed.cpu_count;
             ACPI_BSP = parsed.bsp;
             ACPI_LAPIC_BASE = parsed.lapic_base;
+            AP_APIC_ID = 0;
+            for cpu in parsed.cpus[..parsed.cpu_count].iter() {
+                if cpu.enabled && cpu.apic_id != parsed.bsp {
+                    AP_APIC_ID = cpu.apic_id;
+                    break;
+                }
+            }
             vifast_kernel::klog!(
                 X86Platform,
                 "ACPI MADT OK (cpus={}, bsp={}, lapic={:#x})",
@@ -741,6 +752,105 @@ unsafe fn init_lapic() {
     vifast_kernel::klog!(X86Platform, "LAPIC OK (id={})", id);
 }
 
+unsafe fn install_real_trampoline() {
+    let base = AP_TRAMPOLINE;
+    if base == 0 || base >= 0xA0000 || base & 0xfff != 0 {
+        return;
+    }
+    let page = base as *mut u8;
+    core::ptr::write_bytes(page, 0, 4096);
+    let vector = (base >> 12) as u16;
+    let code = [
+        0xFA, // cli
+        0xB8,
+        0x00,
+        vector as u8, // mov ax, vector << 8
+        0x8E,
+        0xD8, // mov ds, ax
+        0xC7,
+        0x06,
+        0x00,
+        0x08, // mov word [0x0800], imm16
+        (TRAMPOLINE_MAGIC & 0xff) as u8,
+        (TRAMPOLINE_MAGIC >> 8) as u8,
+        0xF4, // hlt
+        0xEB,
+        0xFD, // jmp back to hlt
+    ];
+    core::ptr::copy_nonoverlapping(code.as_ptr(), page, code.len());
+}
+
+unsafe fn wait_icr_idle(base: u64) -> bool {
+    for _ in 0..1_000_000 {
+        if core::ptr::read_volatile((base + 0x300) as *const u32) & (1 << 12) == 0 {
+            return true;
+        }
+        core::arch::asm!("pause");
+    }
+    false
+}
+
+unsafe fn send_icr(base: u64, low: u32) {
+    // Destination was written to ICR high (0x310) before this low write.
+    core::ptr::write_volatile((base + 0x300) as *mut u32, low);
+}
+
+unsafe fn tsc_delay(cycles: u64) {
+    let low: u32;
+    let high: u32;
+    core::arch::asm!("rdtsc", out("eax") low, out("edx") high);
+    let start = ((high as u64) << 32) | low as u64;
+    let mut now = start;
+    while now.wrapping_sub(start) < cycles {
+        core::arch::asm!("pause");
+        let low: u32;
+        let high: u32;
+        core::arch::asm!("rdtsc", out("eax") low, out("edx") high);
+        now = ((high as u64) << 32) | low as u64;
+    }
+}
+
+unsafe fn start_ap_real() {
+    if AP_STARTED || AP_TRAMPOLINE == 0 || AP_APIC_ID == 0 {
+        return;
+    }
+    AP_STARTED = true;
+    let base = if ACPI_LAPIC_BASE == 0 {
+        LAPIC_DEFAULT
+    } else {
+        ACPI_LAPIC_BASE
+    };
+    let vector = (AP_TRAMPOLINE >> 12) as u32;
+    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+    send_icr(base, 0x000C_4500);
+    if !wait_icr_idle(base) {
+        X86_64::write_str("SMP FAIL (ap timeout stage=real)\r\n");
+        return;
+    }
+    tsc_delay(30_000_000); // approximately 10 ms at QEMU TSC
+    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+    send_icr(base, 0x000C_4600 | vector);
+    if !wait_icr_idle(base) {
+        X86_64::write_str("SMP FAIL (ap timeout stage=real)\r\n");
+        return;
+    }
+    tsc_delay(1_000_000); // approximately 200 us
+    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+    send_icr(base, 0x000C_4600 | vector);
+    let _ = wait_icr_idle(base);
+    for _ in 0..20 {
+        tsc_delay(1_000_000);
+        if core::ptr::read_volatile((AP_TRAMPOLINE + TRAMPOLINE_MAGIC_OFFSET) as *const u16)
+            == TRAMPOLINE_MAGIC
+        {
+            let apic = AP_APIC_ID;
+            vifast_kernel::klog!(X86Platform, "AP REAL MODE OK (apic={})", apic);
+            return;
+        }
+    }
+    X86_64::write_str("SMP FAIL (ap timeout stage=real)\r\n");
+}
+
 unsafe fn init_cpu(hartid: usize) {
     let index = core::cmp::min(hartid, MAX_HARTS - 1);
     CPU_STATES[index].hart_id = hartid;
@@ -1104,6 +1214,7 @@ impl Platform for X86Platform {
             init_acpi(info.acpi_rsdp);
             AP_TRAMPOLINE = info.ap_trampoline;
             build_kernel_page_tables();
+            install_real_trampoline();
             init_cpu(info.hartid);
             let trampoline = AP_TRAMPOLINE;
             if trampoline != 0 {
@@ -1197,6 +1308,7 @@ impl Platform for X86Platform {
             // spaces keep their tagged TLB entries.
             core::arch::asm!("mov cr3, {}", in(reg) cr3);
             init_lapic();
+            start_ap_real();
         }
         true
     }
