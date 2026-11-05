@@ -41,6 +41,8 @@ def fixture(arch: str) -> str:
             "AP REAL MODE OK (apic=1)",
             "AP LONG MODE OK (cpu=1)",
             "SMP OK (harts=2, ipi=1)",
+            "SMP TIMER OK (hart1_ticks=20)",
+            "SMP IDLE OK (hart1_wakeups=3, idle_entries=4, wake_timer=2, wake_sgi=1)",
         ]
     for address in [0] + spec.FAULT_ADDRESSES:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")

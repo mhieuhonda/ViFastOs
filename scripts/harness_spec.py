@@ -87,6 +87,8 @@ ARCH = {
         ("AP LONG MODE OK (cpu=1)", "AP entered long mode"),
         ("SMP OK", "both CPUs online"),
         ("ipi=1", "AP maintenance IPI acknowledged"),
+        ("SMP TIMER OK (hart1_ticks=T)", "AP LAPIC timer ran, exactly once"),
+        ("SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)", "AP idle accounting, exactly once"),
     ],
 }
 
@@ -107,7 +109,7 @@ ARCH_EXACT_ONE = {
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK"],
 }
 
 NUMERIC = {
@@ -128,6 +130,7 @@ NUMERIC = {
         "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
         "ROOT SWITCH n > 1",
         "ACPI MADT cpus == 2",
+        "T > 0, I >= 1",
     ],
 }
 

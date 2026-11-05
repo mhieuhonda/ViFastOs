@@ -89,6 +89,10 @@ static AP_MAINT_ACK: AtomicUsize = AtomicUsize::new(0);
 static AP_MAINT_KIND: AtomicU32 = AtomicU32::new(0);
 static AP_IRR_SEEN: AtomicUsize = AtomicUsize::new(0);
 const APIC_MAINT_VECTOR: u32 = 0x30;
+const APIC_TIMER_VECTOR: u32 = 0x31;
+static AP_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static AP_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
+static AP_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 const AP_MAINT_TLB: u32 = 1;
 const AP_MAINT_ICACHE: u32 = 2;
 const TRAMPOLINE_MAGIC: u16 = 0xA55A;
@@ -791,10 +795,31 @@ unsafe fn ap_poll_irr() {
         AP_MAINT_ACK.store(seq, Ordering::Release);
         core::ptr::write_volatile((base + 0xB0) as *mut u32, 0);
     }
+    let timer_word = core::ptr::read_volatile(
+        (base + 0x200 + ((APIC_TIMER_VECTOR / 32) as u64) * 0x10) as *const u32,
+    );
+    if timer_word & (1 << (APIC_TIMER_VECTOR % 32)) != 0 {
+        AP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+        AP_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+        core::ptr::write_volatile((base + 0xB0) as *mut u32, 0);
+    }
 }
 
-unsafe fn ap_maintenance_loop() -> ! {
+unsafe fn ap_configure_timer() {
+    let base = if ACPI_LAPIC_BASE == 0 {
+        LAPIC_DEFAULT
+    } else {
+        ACPI_LAPIC_BASE
+    };
+    core::ptr::write_volatile((base + 0x3E0) as *mut u32, 0x3);
+    core::ptr::write_volatile((base + 0x320) as *mut u32, (1 << 17) | APIC_TIMER_VECTOR);
+    core::ptr::write_volatile((base + 0x380) as *mut u32, 1_000_000);
+}
+
+unsafe fn ap_scheduler_loop() -> ! {
+    ap_configure_timer();
     loop {
+        AP_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
         ap_poll_irr();
         core::arch::asm!("pause");
     }
@@ -929,7 +954,7 @@ pub extern "C" fn ap_entry() -> ! {
         enable_smep_smap();
         AP_ONLINE.store(true, Ordering::SeqCst);
         AP_LONG_ONLINE = true;
-        ap_maintenance_loop()
+        ap_scheduler_loop()
     }
 }
 
@@ -1766,6 +1791,21 @@ impl Platform for X86Platform {
 
     fn block_write(lba: u64, input: &[u8; 512]) -> bool {
         unsafe { ata_write(lba, input) }
+    }
+
+    fn secondary_wakeups() -> (usize, usize) {
+        (
+            AP_TIMER_WAKES.load(Ordering::Relaxed),
+            AP_IRR_SEEN.load(Ordering::Relaxed),
+        )
+    }
+
+    fn secondary_timer_ticks() -> usize {
+        AP_TIMER_TICKS.load(Ordering::Relaxed)
+    }
+
+    fn secondary_idle_entries() -> usize {
+        AP_IDLE_ENTRIES.load(Ordering::Relaxed)
     }
 
     fn start_smp() {
