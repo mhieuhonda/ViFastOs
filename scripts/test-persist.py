@@ -21,6 +21,7 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+QEMU_RV = "qemu-system-riscv64"
 QEMU_ARM = "qemu-system-aarch64"
 QEMU_X86 = "qemu-system-x86_64"
 SECTOR = 512
@@ -111,6 +112,43 @@ def seed_sector(disk: str, magic: bytes, payload: bytes) -> None:
     with open(disk, "r+b") as image:
         image.seek(0)
         image.write(sector)
+
+
+def riscv64_boot(disk: str, serial: str, timeout: int = 20) -> tuple[int, str, bool]:
+    kernel = os.path.join(
+        ROOT,
+        "target",
+        "riscv64gc-unknown-none-elf",
+        "release",
+        "vifast-kernel-riscv64",
+    )
+    require(os.path.exists(kernel), f"missing kernel: {kernel}")
+    cmd = [
+        QEMU_RV,
+        "-machine",
+        "virt",
+        "-smp",
+        "2",
+        "-m",
+        "128M",
+        "-display",
+        "none",
+        "-monitor",
+        "none",
+        "-serial",
+        f"file:{serial}",
+        "-global",
+        "virtio-mmio.force-legacy=false",
+        "-drive",
+        f"if=none,id=vd0,file={disk},format=raw",
+        "-device",
+        "virtio-blk-device,drive=vd0",
+        "-bios",
+        "default",
+        "-kernel",
+        kernel,
+    ]
+    return run_qemu("riscv64", cmd, serial, timeout, {0})
 
 
 def aarch64_boot(disk: str, serial: str, timeout: int = 20) -> tuple[int, str, bool]:
@@ -245,6 +283,14 @@ def run_phases(name: str, tmp: str, boot, expected_code: int) -> None:
     print(f"{name}: negative wrong-magic PASS")
 
 
+def test_riscv64() -> None:
+    tmp = tempfile.mkdtemp(prefix="vifast-persist-riscv64-")
+    try:
+        run_phases("riscv64", tmp, riscv64_boot, 0)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_aarch64() -> None:
     tmp = tempfile.mkdtemp(prefix="vifast-persist-aarch64-")
     try:
@@ -268,18 +314,21 @@ def test_x86_64() -> None:
 
 
 def main() -> int:
-    if not all(shutil.which(q) for q in (QEMU_ARM, QEMU_X86)):
+    if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
         print("missing QEMU binaries")
         return 2
     ok = True
-    for name, test in (("aarch64", test_aarch64), ("x86_64", test_x86_64)):
+    for name, test in (
+        ("riscv64", test_riscv64),
+        ("aarch64", test_aarch64),
+        ("x86_64", test_x86_64),
+    ):
         try:
             test()
             print(f"{name}: PASS")
         except Exception as error:
             print(f"{name}: FAIL: {error}")
             ok = False
-    print("riscv64: SKIP (no block backend; see Task 3)")
     return 0 if ok else 1
 
 

@@ -12,3 +12,4 @@ vifast-arch = { path = "../vifast-arch" }
 vifast-arch-riscv64 = { path = "../vifast-arch-riscv64" }
 vifast-kernel = { path = "../vifast-kernel" }
 vifast-runtime = { path = "../vifast-runtime" }
+vifast-virtio = { path = "../vifast-virtio" }

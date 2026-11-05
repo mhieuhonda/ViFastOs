@@ -155,6 +155,7 @@ def test_riscv() -> bool:
         ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
     )
     serial = os.path.join(tempfile.gettempdir(), "vifast-riscv64.serial")
+    disk = make_disk("riscv64")
     cmd = [
         QEMU_RV,
         "-machine", "virt",
@@ -163,10 +164,22 @@ def test_riscv() -> bool:
         "-display", "none",
         "-monitor", "none",
         "-serial", f"file:{serial}",
+        "-global", "virtio-mmio.force-legacy=false",
+        "-drive", f"if=none,id=vd0,file={disk},format=raw",
+        "-device", "virtio-blk-device,drive=vd0",
         "-bios", "default",
         "-kernel", kernel,
     ]
-    return run_qemu("riscv64", cmd, serial, 20, {0}, require_smp=True)
+    return run_qemu(
+        "riscv64",
+        cmd,
+        serial,
+        20,
+        {0},
+        require_smp=True,
+        require_block=True,
+        require_disk=True,
+    )
 
 
 def test_aarch64() -> bool:

@@ -359,6 +359,44 @@ impl Platform for RiscvPlatform {
         }
     }
 
+    fn init_block() {
+        let (lo, hi) = PageOps.kernel_accessible_range();
+        let (dma_lo, dma_hi) = vifast_virtio::dma_range();
+        if dma_lo < lo || dma_hi > hi {
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "VIRTIO DMA OUTSIDE kernel range {:#x}..{:#x} (dma {:#x}..{:#x})",
+                lo,
+                hi,
+                dma_lo,
+                dma_hi
+            );
+            return;
+        }
+        if vifast_virtio::init_range(0x1000_1000, 0x1000_9000, 0x1000) {
+            let (base, magic, version, device) = vifast_virtio::probe_info();
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "VIRTIO OK base={:#x} magic={:#x} version={} device={}",
+                base,
+                magic,
+                version,
+                device
+            );
+        } else if vifast_virtio::legacy_seen() {
+            vifast_kernel::klog!(RiscvPlatform, "BLOCK SKIP (virtio legacy)");
+        } else {
+            let (base, magic, version, device) = vifast_virtio::probe_info();
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "VIRTIO SKIP base={:#x} magic={:#x} version={} device={}",
+                base,
+                magic,
+                version,
+                device
+            );
+        }
+    }
     fn init_kernel() -> &'static mut Kernel {
         unsafe {
             let kernel = &mut *core::ptr::addr_of_mut!(KERNEL_STORAGE);
@@ -582,6 +620,14 @@ impl Platform for RiscvPlatform {
     }
 
     fn ack_timer() {}
+
+    fn block_read(lba: u64, out: &mut [u8; 512]) -> bool {
+        vifast_virtio::read_sector(lba, out)
+    }
+
+    fn block_write(lba: u64, input: &[u8; 512]) -> bool {
+        vifast_virtio::write_sector(lba, input)
+    }
 
     fn start_smp() {
         let entry = secondary_entry as *const () as usize;
