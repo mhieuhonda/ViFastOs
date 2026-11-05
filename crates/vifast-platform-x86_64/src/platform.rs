@@ -1200,9 +1200,9 @@ impl vifast_kernel::PageTableOps for PageOps {
             let aux = aux_pa as *mut u64;
             let shared_pdpt = core::ptr::addr_of!(PDPT) as *const u64;
             *root = aux_pa | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
-            *aux = *shared_pdpt;
-            // PDPT[3] carries the supervisor-only LAPIC MMIO window.
-            *aux.add(3) = *shared_pdpt.add(3);
+            for slot in vifast_pte::x86_64::KERNEL_SHARED_SLOTS {
+                *aux.add(*slot) = *shared_pdpt.add(*slot);
+            }
         }
     }
 
@@ -1329,6 +1329,32 @@ fn kernel_data_nx(root_pa: u64) -> bool {
     kernel_data_ranges()
         .into_iter()
         .all(|(start, len)| kernel_range_nx(root_pa, start, len))
+}
+
+fn lapic_mapping_ok(root_pa: u64) -> bool {
+    let base = unsafe {
+        if ACPI_LAPIC_BASE == 0 {
+            LAPIC_DEFAULT
+        } else {
+            ACPI_LAPIC_BASE
+        }
+    };
+    let mut table = root_pa;
+    for level in 0..vifast_pte::x86_64::LEVELS {
+        let idx = PageOps.index(base, level);
+        let pte = PageOps.read_pte(table, idx);
+        match PageOps.decode_at(pte, level) {
+            vifast_kernel::Pte::Table(next) => table = next,
+            vifast_kernel::Pte::Leaf(_, _) => {
+                return pte & PAGE_USER == 0
+                    && pte & PAGE_PCD != 0
+                    && pte & PAGE_PWT != 0
+                    && pte & PAGE_NX != 0;
+            }
+            vifast_kernel::Pte::Invalid => return false,
+        }
+    }
+    false
 }
 
 fn kernel_range_ok(root_pa: u64) -> bool {
@@ -1471,6 +1497,7 @@ impl Platform for X86Platform {
 
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
+            && lapic_mapping_ok(root_pa)
             && kernel_leaf_ok(
                 root_pa,
                 if unsafe { ACPI_LAPIC_BASE == 0 } {

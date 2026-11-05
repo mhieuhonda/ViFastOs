@@ -139,7 +139,7 @@ pub mod x86_64 {
     pub const USER_VA_END: u64 = crate::USER_VA_END;
     /// PDPT[0] points at the shared 0..1 GiB kernel PD.  PML4[0] itself is
     /// private to each VSpace and points at the private PDPT.
-    pub const KERNEL_SHARED_SLOTS: &[usize] = &[0];
+    pub const KERNEL_SHARED_SLOTS: &[usize] = &[0, 3];
 
     pub const fn table_span(level: usize) -> u64 {
         crate::table_span(LEVELS, level, DEFAULT_PAGE_SIZE)
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(riscv::index(riscv::USER_VA_START, 0), 64);
 
         assert_eq!(x86_64::index(0, 1), 0);
-        assert_eq!(x86_64::KERNEL_SHARED_SLOTS, &[0]);
+        assert_eq!(x86_64::KERNEL_SHARED_SLOTS, &[0, 3]);
         assert_eq!(x86_64::index(x86_64::USER_VA_START, 1), 64);
 
         // AArch64 virt maps low MMIO in L1[0] and RAM at 0x4000_0000 in
