@@ -18,6 +18,7 @@ Vòng 22 hoàn tất các mảnh còn thiếu của ABI và mở driver input th
 8. `TcbDestroy` + fault-slot identity + reap fault/demo TCB.
 9. `O_EXCL`/`O_DIRECTORY` và test mở file.
 10. Pager server phục vụ hai client, in `PAGER2 OK`.
+11. VFS `STAT_PATH` + test `FS STAT PATH OK`.
 
 Không còn syscall placeholder; các phần lớn còn lại là hardware IOMMU,
 network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
@@ -35,6 +36,7 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
 | `363574a` | Write-back data block cache |
 | `801fb13` | Test CNode delete/revoke |
 | `46e8ad6` | TcbDestroy/reap, fault-slot identity, O_EXCL/O_DIRECTORY, pager hai client |
+| `13c26f8` | VFS `STAT_PATH` |
 | docs | Các commit `docs: sync ...` sau mỗi mốc |
 
 ## 3. Chi tiết
@@ -92,6 +94,8 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
 - `O_EXCL=0x20`: `O_CREATE|O_EXCL` trả `EEXIST` nếu file đã có;
   `O_DIRECTORY=0x40`: chỉ mở directory, file trả `ENOTDIR`, kết hợp create
   trả `EINVAL`. Test `FS OPEN FLAGS OK`.
+- `STAT_PATH=0x2011`: server lookup path rồi trả `(size, ino, kind)` qua
+  `data[0..3]`, không cần fd. Test `/motd`, `/`, path không tồn tại.
 
 ### 3.6 Pager/fault resume
 
@@ -121,7 +125,7 @@ vifast-elf       17/17
 vifast-acpi       8/8
 QEMU --repeat 3  3/3 cả 3 kiến trúc
 persistence      7 phase ×3 PASS
-harness âm       417 case PASS
+harness âm       426 case PASS
 cargo fmt/check  PASS, 0 warning
 ```
 

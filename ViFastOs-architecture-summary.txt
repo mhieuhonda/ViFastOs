@@ -153,6 +153,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - ca4d2f4 feat: add demand paging fault-resume demo
 - 79005ce feat: move pager handling into user-space server
 - 46e8ad6 feat: reap TCBs and serve two pager clients
+- 13c26f8 feat: add VFS stat-by-path request
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -1236,6 +1237,7 @@ Mỗi dòng sau đúng một lần:
 - `FS LARGE OK` — exactly once
 - `FS APPEND OK` — exactly once
 - `FS OPEN FLAGS OK` — exactly once
+- `FS STAT PATH OK` — exactly once
 - `HARD LINK OK` — exactly once
 - `SYMLINK OK` — exactly once
 - `IRQ OK` — exactly once
@@ -1264,6 +1266,7 @@ Cấm xuất hiện:
 - `FS LARGE BAD` — forbidden
 - `FS APPEND BAD` — forbidden
 - `FS OPEN FLAGS BAD` — forbidden
+- `FS STAT PATH BAD` — forbidden
 - `TCB REAP BAD` — forbidden
 - `PAGER2 BAD` — forbidden
 - `HARD LINK BAD` — forbidden

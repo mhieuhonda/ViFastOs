@@ -784,3 +784,10 @@ follow-up `62b31f4`.
 - Nới metadata lên 80 KiB, object table 147, TCB 18, data 76 page; vẫn còn
   headroom 200.016 byte.
 - Host kernel 112/112; QEMU repeat 3/3; persistence 7×3; harness 417 case.
+
+## 9.02 — VFS stat-by-path (vòng 22.2)
+
+- Thêm request `STAT_PATH` (0x2011) vào protocol VFS server.
+- Client có `vfs_stat_path`; test `/motd`, `/`, path không tồn tại.
+- Output mới `FS STAT PATH OK`; harness 426 case.
+- QEMU repeat 3/3, persistence 7×3; kernel 112/112.
