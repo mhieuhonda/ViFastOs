@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `4e100dd1c6601b0674295098eded04d478a0700fea3954d3098f6ac9cbf5c67c`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `1e8c778c30a4465f6e0478eedc2a385ab67d45c3a995619828c0c8d9b0684bd0`.
 
 ---
 
@@ -559,3 +559,11 @@ follow-up `62b31f4`.
 - QEMU 3/3 PASS ×3; ROOT SWITCH 23754 / 27659 / 9203 (lần đầu).
   Boot Untyped RISC-V 19/32, AArch/x86 21/32; data test-exit 23/64 RISC-V,
   24/64 AArch/x86, 8/48 object.
+
+## 8.28 — FS v2, block cap, per-hart tick, CapMint (vòng 17)
+
+- `85cbdb9`: tick theo hart; block cap; FS v2 journal; server VFS v2; fsutil.
+- Host `vifast-kernel` 90/90, `vifast-fs` 7/7; QEMU 10/10 và 50/50 cả 3.
+- `test-panic-hart1` 5/5 mỗi kiến trúc; AArch rc=1, x86 rc=7, RISC rc=0
+  (QEMU sifive_test không mang exit-code — nợ R2).
+- Persistence 6 phase × 3 PASS; harness 263 case âm.

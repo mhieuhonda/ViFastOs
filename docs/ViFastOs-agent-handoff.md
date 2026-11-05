@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `34db2e0` (BKL owner, AP preempt proof, panic halt, BKL stats)
+**Mốc code hiện tại:** `85cbdb9` (FS v2, block cap, per-hart tick, CapMint)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.

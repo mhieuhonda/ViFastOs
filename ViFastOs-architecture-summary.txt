@@ -116,11 +116,12 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 7196a4e feat: smp hardening bkl owner ap preempt panic halt stats
 - 225ccdb fix: mask interrupts on panic halt
 - 34db2e0 fix: serialize panic console output
+- 85cbdb9 feat: fs v2 journaled vfs per-hart ticks block cap capmint
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit 34db2e0): BKL owner theo hart, AP mask LINT;
-worker c busy chứng minh preempt; panic-halt đa hart; BKL stats; x86 50/50 và
-QEMU 10/10 cả 3 kiến trúc.
+Cập nhật code gần nhất (commit 85cbdb9): FS v2 journal hóa trong user-space,
+block cap, CapMint badge/permission, tick theo hart với BSP/AP rate độc lập;
+QEMU 10/10 và 50/50 cả 3 kiến trúc; persistence 6 phase.
 VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
@@ -159,16 +160,18 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 88/88 PASS
+- `cargo test -p vifast-kernel`: 90/90 PASS
 - `cargo test -p vifast-arch`: 6/6 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
+- `cargo test -p vifast-fs`: 7/7 PASS
+- `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 454176 byte (`kernel_end=0x803911e0`)
+- RISC-V headroom: 400912 byte (`kernel_end=0x8039e1f0`)
 - QEMU lần chạy gần nhất (`--repeat 10`): riscv64 10/10, aarch64 10/10, x86_64 10/10
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
@@ -190,6 +193,7 @@ Output tiêu biểu:
   "SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)",
   "SMP PREEMPT OK (user_ticks=U, preempts=P)",
   "SMP WORKERS OK (a=50, b=50, c=1)", "BKL STATS (h0_acq=..., h1_acq=...)",
+  "BLOCK DENIED OK", "FS V2 OK", "FS FSCK OK", "FS PERM OK",
   "PERCPU CLOBBER OK",
   "BLOCK OK"/"FS DISK OK", "PREEMPT OK", "ROOT SWITCH n>1";
   persistence do `scripts/test-persist.py` kiểm tra.
@@ -331,7 +335,7 @@ vifast-root
 - Logic root: đọc BootInfo từ arg0, kiểm tra magic/version/size, in
   `BOOTINFO OK`; cấp slot tuần tự từ free_slot_start; retype TCB/endpoint/
   notification, dựng VSpace client từ data Untyped, map code RX + client/fault4
-  stack RW, in `CLIENT VSPACE OK`; tạo Untyped con 64 KiB/8 object cho client;
+  stack RW, in `CLIENT VSPACE OK`; tạo Untyped con 16 KiB/4 object cho client;
   cấu hình client/fault4 trên VSpace riêng; in `ROOT RUST`/`ROOT READY`, Wait
   notification động; panic in `ROOT PANIC` rồi Exit.
 - Linker script tại `ROOT_ELF_BASE`; x86 code-model pic + -no-pie, RISC-V
@@ -592,7 +596,7 @@ Scheduler:
 - Runtime lưu/nạp Platform::Context.
 - Timer 100 Hz; binary test bật feature test-exit để sau 20 tick in PREEMPT OK và exit QEMU.
 - Cả RISC-V, AArch64 và x86_64 cho hart phụ chạy ba worker.
-- Worker stack A/B: `CODE_VA+0xd000` / `+0xe000`, mỗi stack 1 page; ABI
+- Worker stack A/B/C: `CODE_VA+0xd000` / `+0xe000` / `+0x10000`, mỗi stack 1 page; ABI
   const assert không chồng nhau và trên `DATA_VA`. Root tạo worker, cấp TCB,
   frame, endpoint cap slot 1, affinity `0b10`.
 
@@ -636,7 +640,7 @@ Portable generic page-table walk + reverse map:
   có R, và W nếu cần ghi. Reverse map không còn dùng để validation.
 - User layout hằng trong vifast-abi: code 64 GiB, data +0xa000.
   USER_ENTRY_* tại +0x00/+0x10/+0x20/+0x30/+0x40/+0x50 cho server/client/
-  fault1/2/3/4. Stack tops: server +0x3000, client +0x9000, fault1/2/3
+  fault1/2/3/4. Stack tops: server +0x5000, client +0x9000, fault1/2/3
   +0x6000/+0x7000/+0x8000, fault4 +0xa000.
   Root ELF ở +0x20_0000, stack Rust 4 trang tại ROOT_ELF_STACK_BASE + guard;
   BootInfo READ-only ở ROOT_BOOTINFO_VA ngay trên stack; root builder map code + 4 stack fault/client;
@@ -693,50 +697,41 @@ x86_64:
 - Cả ba kiến trúc cho CPU phụ chạy scheduler + ba worker; x86 dùng D4 idle
   `sti; hlt; cli` và LAPIC timer/IPI vector.
 
-10. VFS / RAMFS
----------------
-Kernel fallback: `crates/vifast-kernel/src/fs.rs`; user-space service:
-`crates/vifast-server/src/main.rs` + `vifast-abi::vfs`.
-- Server Rust sở hữu `/motd` và `/scratch`, trả lời OPEN/READ/WRITE/CLOSE/STAT
-  qua endpoint IPC hiện có; write dùng IPC buffer, read trả tối đa 24 byte
-  trong reply data.
-- Client demo không còn gọi syscall Open/Read/Write/Close; kernel ramfs chỉ
-  còn selftest/fallback. Server chưa tách thành module riêng và chưa có
-  directory/permission. Cả 3 kiến trúc lưu `/scratch` bền vững ở sector 0
-  (magic `VF01`) và đều dùng block backend.
+10. VFS V2 / VIFAST-FS
+------------------------
+User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
+`crates/vifast-fs/src/lib.rs`; host image tool: `crates/vifast-fsutil`.
 
-Kernel fallback:
-File: crates/vifast-kernel/src/fs.rs.
-- MAX_FILES = 8
-- MAX_FILE_NAME = 24
-- MAX_FILE_SIZE = 512
-- MAX_FDS = 8 mỗi TCB
-- MAX_PATH = 64
-
-RamFile:
-- name, data, len, used, writable.
-- format() tạo /motd và /hello.
-- create() tạo file mới.
-- find() so khớp chính xác, không path walker.
-
-Fd:
-- file index, offset, flags.
-- flags chỉ lưu access mode.
-- O_CREATE dùng lúc Open.
-
-Syscall:
-- Open(path, len, flags)
-- Read(fd, buffer, len)
-- Write(fd, buffer, len)
-- Seek(fd, offset)
-- Stat(fd)
-- Close(fd)
-
-Giới hạn:
-- chỉ flat root;
-- không directory, quyền file, uid/gid;
-- không block device, cache, pager, persistence;
-- chỉ offset riêng mỗi fd, chưa có locking nhiều TCB.
+- `vifast-fs` là `no_std`, `forbid(unsafe_code)`, không dùng `alloc`; toàn bộ
+  buffer cố định. Server giữ `Fs` trong `.bss`, không đặt journal 8 KiB trên
+  stack 1 trang.
+- Layout 4 MiB: LBA0 legacy `VF01` (chỉ đọc để migrate), LBA1 superblock
+  `VF02`, LBA2..3 bitmap, LBA4..11 64 inode x 64 byte, LBA12..29 journal
+  1 header + 16 data + 1 commit, LBA30.. data. Inode có 12 block trực tiếp,
+  file tối đa 6 KiB; thư mục tối đa 12 block, entry 32 byte, tên tối đa 28.
+- Journal write-ahead: mỗi thao tác là một transaction tối đa 16 block; ghi
+  data journal, header, commit một sector có CRC32, ghi target, rồi xóa commit.
+  Mount replay commit hợp lệ; commit hỏng bị bỏ, dữ liệu cũ giữ nguyên.
+  Giả định ghi một sector 512 byte là nguyên tử; chưa có flush/barrier phần cứng.
+- Protocol giữ OPEN/READ/WRITE/CLOSE/STAT và thêm MKDIR/READDIR/UNLINK/RENAME/
+  TRUNCATE/FSYNC/FSCK. Mã lỗi FS nằm trong `vifast_abi::vfs`; path tối đa 128
+  byte, dữ liệu path/write đi qua IPC buffer. Server trả fd/size cho OPEN,
+  read/write theo byte, READDIR trả tên qua IPC buffer.
+- Quyền: uid lấy từ badge endpoint cap (message value); uid 0 là superuser.
+  File/thư mục mới có uid người tạo, mode owner rw + other r. Đọc cần r,
+  ghi/truncate cần w; tạo/xóa/rename trong thư mục cần w trên thư mục cha.
+  `UNLINK` thư mục chỉ khi rỗng; `RENAME` không đưa thư mục vào cây con của nó.
+- Block syscall 43/44 bắt buộc cap `ObjType::BlockDevice`; runtime cài cap
+  vào root slot từ BootInfo v3, root chỉ copy cho server. Client thử
+  BlockWrite không cap và in `BLOCK DENIED OK`.
+- Server tự format đĩa trắng (`FS FORMAT OK`), mount đĩa hợp lệ
+  (`FS PERSIST OK`), migrate `VF01` sang `/scratch` (`FS MIGRATE OK`), và
+  replay/torn journal (`FS RECOVER OK (replayed=1|0)`). FSCK sau demo in
+  `FS FSCK OK`; `FS V2 OK`, `FS PERM OK` là điều kiện harness.
+- `vifast-fsutil` (host) có mkfs/put/get/ls/fsck/inject-journal --valid|--torn;
+  `scripts/test-persist.py` chạy 6 phase cho cả 3 kiến trúc.
+- Kernel ramfs `crates/vifast-kernel/src/fs.rs` vẫn chỉ là fallback/selftest,
+  không chứa logic FS v2.
 
 11. ABI / SYSCALL HIỆN CÓ
 -------------------------
@@ -753,7 +748,7 @@ Số syscall chính:
 8 Yield — implemented
 9 Retype — implemented
 10 CapCopy — implemented
-11 CapMint — placeholder (NotImplemented)
+11 CapMint — implemented
 12 CNodeMint — placeholder (NotImplemented)
 13 CapDelete — placeholder (NotImplemented)
 14 CapRevoke — implemented
@@ -789,6 +784,11 @@ Số syscall chính:
 44 BlockWrite — implemented
 ### END GENERATED syscalls
 
+- `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,
+  `a1` = LBA, `a2` = user buffer 512 byte; thiếu/sai cap trả `InvalidCap`.
+- `CapMint` (11): `a0` source slot, `a1` TCB đích, `a2` slot đích,
+  `a3` rights (chỉ giảm), `a4` badge; chỉ Endpoint/Notification. Server nhận
+  uid từ badge qua `value` của message.
 
 Quy ước register:
 RISC-V:
@@ -823,13 +823,14 @@ tại `ROOT_BOOTINFO_VA`, chứa:
 
 Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
 - Retype(metadata Untyped) -> Endpoint, TCB server/client, notification root
-- CapCopy:
+- CapCopy/CapMint:
   - endpoint -> server slot 1 READ
-  - endpoint -> client slot 1 WRITE
+  - CapMint endpoint badge 1 -> client slot 1 WRITE; badge 2 -> slot 6 WRITE
+  - BlockDevice cap (BootInfo v3 slot) -> server slot 2 READ|WRITE
   - client VSpace (dựng bên dưới) -> client slot 2 WRITE
-  - Untyped con 64 KiB/8 object -> client slot 3 WRITE
+  - Untyped con 16 KiB/4 object -> client slot 3 WRITE
   - notification -> client slot 5 READ|WRITE|GRANT
-- TcbConfigure(server, entry, stack 0x1000003000, VSpace BootInfo.server, priority 5)
+- TcbConfigure(server, entry, stack 0x1000005000, VSpace BootInfo.server, priority 5)
 - Retype thêm 4 fault TCB (priority 6) và notification root
 - TcbConfigure(client, entry, stack 0x1000009000, VSpace client, priority 5)
 - TcbResume(server/client), fault1/2/3 root VSpace, fault4 client VSpace
@@ -837,7 +838,7 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
 - Retype(data Untyped) → VSpace client; lặp PageTableMap + FrameMap cho code
   BootInfo RX; retype Frame client stack +0x8000 và fault4 stack +0x9000, map
   RW. Code, stack và DATA_VA (+0xa000) cùng bảng cấp cuối; log CLIENT VSPACE OK.
-- Tạo Untyped con 64 KiB/8 object từ data Untyped; CapCopy con cho client slot
+- Tạo Untyped con 16 KiB/4 object từ data Untyped; CapCopy con cho client slot
   3. TcbConfigure client với VSpace client; fault4 VSpace client, stack +0xa000.
 - Fault4 ghi vào ROOT_ELF_STACK_BASE (không map trong VSpace client), sinh
   USER FAULT thứ tư tại 0x1000301000.
@@ -845,7 +846,7 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
   server 0x1000002000; fault4 trong VSpace client ghi root stack 0x1000301000
   -> cả bốn log USER FAULT.
 - Server VSpace riêng, code dùng chung Frame root, stack riêng +0x2000.
-  Client dùng VSpace riêng và Untyped con 64 KiB/8 object từ 7.5; không còn cap
+  Client dùng VSpace riêng và Untyped con 16 KiB/4 object từ 7.5; không còn cap
   tới root VSpace hay data Untyped của root.
 
 Server A:
@@ -887,15 +888,18 @@ Cap transfer:
 13. SMP HIỆN TẠI
 ---------------
 - RISC-V: SBI HSM start hart 1; timer SBI, BKL per-hart, idle WFI với
-  SIE=0, reschedule IPI chỉ khi idle; hai worker affinity hart 1.
+  SIE=0, reschedule IPI chỉ khi idle; ba worker affinity hart 1.
 - AArch64: PSCI CPU_ON CPU1; GIC banked/timer riêng, DAIF.I=1, WFI polling
-  `GICC_IAR`, per-hart BKL/current, TTBR0 theo VSpace; hai worker affinity
+  `GICC_IAR`, per-hart BKL/current, TTBR0 theo VSpace; ba worker affinity
   CPU1 và reschedule SGI chỉ khi idle.
 - x86_64: AP online qua trampoline 16→32→64-bit, INIT-SIPI-SIPI, stage 1..4;
   TSS/GS riêng, BKL + `pick_on(1)`, timer LAPIC calibrated 100 Hz; D4 idle
   `sti; hlt; cli`, vector 0x30/0x31 ở ring 0 chỉ trong cửa sổ idle.
 - Scheduler dùng `pick_on(hart)` trên cả ba kiến trúc; x86 AP chạy worker
   thật và timer preempt ở ring 3.
+- `ticks[hart]` là bộ đếm theo hart; `GetTime` đọc tick của hart hiện tại;
+  test-exit/PREEMPT OK và `B` dùng `ticks[0]` của BSP, không dùng tổng. `SMP TIMER RATE (ap=T, bsp=B)` in trên cả 3 kiến trúc và kiểm `B >= 5`,
+  `B/2 <= T <= 2B`.
 - BigKernelLock đã là ticket lock FIFO (`next`/`serving`) + RAII guard, bọc
   trap/syscall/IRQ + x86 exception/page-fault. Spin chờ khóa gọi
   `poll_maintenance()` để hart phụ xử lý IPI TLB/fence và ACK; assert IRQ tắt
@@ -926,8 +930,9 @@ Cap transfer:
   KERNEL_STORAGE, FILES/FILE_COUNT, VirtIO QUEUE/BASE/READY.
   Chúng được bảo vệ bởi BKL khi đi qua trap, nhưng chưa phải per-CPU;
   server/virtio cần khóa riêng khi SMP.
-- Chưa có per-hart runqueue, per-VA TLB shootdown;
-  panic không dừng hart khác (R5).
+- Chưa có per-hart runqueue, per-VA TLB shootdown.
+- Panic-halt IPI đã dừng hart khác trên cả 3 kiến trúc; RISC-V/AArch64 dùng
+  SBI/PSCI shutdown nên mã thoát QEMU của panic vẫn là 0 (xem nợ vòng 17).
 
 14. TEST VÀ TIÊU CHÍ PASS
 -------------------------
@@ -940,6 +945,8 @@ Lệnh:
     cargo test -p vifast-runtime
     cargo test -p vifast-user
     cargo test -p vifast-acpi
+    cargo test -p vifast-fs
+    cargo test -p vifast-fsutil
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
     python3 scripts/test-qemu.py --arch riscv64 --feature test-boot-handoff
@@ -1050,7 +1057,11 @@ QEMU test:
 - `Cap OK` — capability transfer demo succeeded
 - `ViFastOS ramfs` — ramfs read path ran
 - `ViFastOS write` — ramfs write path ran
+- `FS V2 OK` — FS v2 namespace/data demo completed
+- `FS FSCK OK` — server fsck passed after demo
+- `FS PERM OK` — badge-based FS permissions behaved
 - `IPC BUF OK` — IPC buffer transfer succeeded
+- `BLOCK DENIED OK` — client was denied BlockWrite without a device cap
 - `Reply OK` — reply path succeeded
 - `ROOT RUST` — root Rust ELF entered user mode
 - `BOOTINFO OK` — root validated BootInfo v2
@@ -1077,6 +1088,10 @@ Cấm xuất hiện:
 - `BOOT HANDOFF FAIL` — forbidden
 - `KERNEL IRQ OUTSIDE IDLE` — forbidden
 - `AP PIC IRQ` — forbidden
+- `BLOCK DENIED BAD` — forbidden
+- `FS CORRUPT` — forbidden
+- `FS V2 BAD` — forbidden
+- `FS PERM BAD` — forbidden
 
 Exit code:
 - riscv64: 0
@@ -1087,6 +1102,7 @@ Theo kiến trúc:
 - riscv64:
   - `SMP OK` — both harts online
   - `ipi=1` — maintenance IPI acknowledged
+  - `SMP TIMER RATE (ap=T, bsp=B)` — independent BSP and AP timer rates
   - `SMP TIMER OK (hart1_ticks=T)` — secondary timer ran, exactly once
   - `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` — idle accounting, exactly once
   - `SMP PREEMPT OK (user_ticks=U, preempts=P)` — secondary timer preempted a busy user task, exactly once
@@ -1097,10 +1113,12 @@ Theo kiến trúc:
   - ROOT SWITCH n > 1
   - N > 1, M >= 100, W > 0, W <= S, S <= I
   - U >= 3, P >= 1, U <= T
+  - B >= 5 and B/2 <= T <= 2B
   - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 - aarch64:
   - `SMP OK` — both CPUs online
   - `ipi=1` — maintenance IPI acknowledged
+  - `SMP TIMER RATE (ap=T, bsp=B)` — independent BSP and AP timer rates
   - `SMP TIMER OK (hart1_ticks=T)` — secondary timer ran, exactly once
   - `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` — idle accounting, exactly once
   - `SMP PREEMPT OK (user_ticks=U, preempts=P)` — secondary timer preempted a busy user task, exactly once
@@ -1112,6 +1130,7 @@ Theo kiến trúc:
   - T > 0, I >= 1
   - N > 1, M >= 100, W > 0, W <= S, S <= I
   - U >= 3, P >= 1, U <= T
+  - B >= 5 and B/2 <= T <= 2B
   - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 - x86_64:
   - `KERNEL DATA NX OK` — kernel data is non-executable
@@ -1137,6 +1156,7 @@ Theo kiến trúc:
   - 1 <= Y <= X, Wt <= T, Ws <= Y
   - N > 1, M >= 100, W > 0, W <= S, S <= I
   - U >= 3, P >= 1, U <= T
+  - B >= 5 and B/2 <= T <= 2B
   - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 
 Thứ tự bắt buộc:
@@ -1236,7 +1256,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - 7.4/7.5: root dựng VSpace client từ data Untyped; code lấy từ Frame cap RX
   trong BootInfo, client/fault4 stack RW; helper map_with_tables lặp
   PageTableMap/FrameMap. Bảng cấp cuối phủ DATA_VA; log CLIENT VSPACE OK.
-- 7.5: client nhận VSpace riêng slot 2 và Untyped con 64 KiB/8 object slot 3;
+- 7.5: client nhận VSpace riêng slot 2 và Untyped con 16 KiB/4 object slot 3;
   root VSpace bỏ client stack; fault4 thread trong client VSpace ghi root Rust
   stack và tạo USER FAULT thứ tư. Harness yêu cầu đúng 4 fault; 3b hoàn tất.
   DATA UNTYPED lúc test-exit hiện tại: RISC-V 36/64 trang, AArch64 37/64,
@@ -1297,12 +1317,14 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   chung ngoài IPC buffer.
 - Chưa có Reply mang capability; ReplyRecv và fault endpoint tối giản đã có.
 - Kernel VFS fallback chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
-  User-space VFS server đã có `/motd` + `/scratch` qua IPC, tối đa 4 file x 64 B,
-  chưa có directory/permission và chưa tách module riêng; persistence đã có
-  trên cả 3 kiến trúc.
+  Server dùng `vifast-fs` v2: journal 16 data block, 64 inode, file tối đa
+  6 KiB, thư mục 12 block; chưa có cache block, indirect block, hard link
+  protocol, symlink. Chưa có flush/barrier block cho phần cứng thật.
+- R4: hart 1 spin BKL gấp khoảng 10 lần số lần lấy khóa chủ yếu do worker c
+  gọi `GetTime`; chỉ ghi nhận, chưa tối ưu.
+- RISC-V panic-halt dùng `sifive_test` nhưng QEMU không mang mã thoát; rc=0.
 - AArch64 có VirtIO-MMIO block, x86_64 có ATA PIO và RISC-V có VirtIO-MMIO
-  block; cả ba lưu `/scratch` bền vững qua sector 0. Chưa có
-  directory/permission.
+  block; FS v2 persistence đã có trên cả 3 kiến trúc.
 - Chưa có driver network/GPU/input.
 - Chưa có compositor, ViFastKey.
 - Chưa có formal verification; đã có syscall fuzz 10.000 bước x 3 PTE format
@@ -1364,13 +1386,13 @@ C. SMP
 4. IPI wakeup/reschedule — RISC-V IPI và AArch64 SGI đã chạy; chỉ gửi khi
    hart đích idle.
 5. TLB shootdown đa hart — full shootdown đã có; per-VA chưa.
-6. Timer đa hart.
+6. Timer per-hart — đã xong; BSP/AP rate độc lập, preempt 50/50 cả 3.
 
 D. VFS / driver
-1. Chuyển VFS/FS ra user-space server khi có IPC buffer — bước đầu đã xong
-   (server hiện tại, OPEN/READ/WRITE/CLOSE); còn tách module/FS bền vững.
-2. Block driver VirtIO.
-3. FS bền vững.
+1. VFS/FS v2 trong user-space server — đã xong (`vifast-fs`, journal,
+   permission, fsutil).
+2. Block driver VirtIO — đã có cho cả 3 kiến trúc.
+3. FS bền vững — đã có 6 phase persistence/replay/migrate.
 4. Network VirtIO + TCP/UDP tối giản.
 5. Console/input driver.
 
@@ -1507,7 +1529,7 @@ E. Desktop / Space
     PageTableMap/FrameMap đến khi hết MissingPageTable. Code/stack/DATA_VA
     cùng bảng cấp cuối. 7.4 chỉ log `CLIENT VSPACE OK`, chưa đổi TcbConfigure;
     DATA UNTYPED được log lại tại test-exit.
-44. 7.5: client nhận VSpace riêng (slot 2) và Untyped con 64 KiB/8 object
+44. 7.5: client nhận VSpace riêng (slot 2) và Untyped con 16 KiB/4 object
     (slot 3); root VSpace bỏ client stack; client stack/fault4 stack nằm trong
     VSpace client. Fault4 ghi root Rust stack không map trong VSpace client.
     Harness yêu cầu đúng 4 USER FAULT, gồm 0x1000301000; `Zero OK` chạy qua
@@ -1567,6 +1589,11 @@ E. Desktop / Space
     D3 đã hủy, D4 giữ nguyên.
 64. Vòng 16: BKL owner theo hart + assert nhả khóa; mask LINT AP; worker c
     busy chứng minh preempt; panic-halt đa hart; BKL stats; docs R1/R7.
+65. D5: FS v2 nằm trong `vifast-fs` no_std/no alloc/forbid unsafe; layout
+    VF02, 64 inode, file 6 KiB, journal 16 data block + commit CRC32; protocol
+    mở rộng; quyền theo badge endpoint; block syscall cần cap BlockDevice.
+66. Vòng 17: D5 FS v2 + fsutil crash injection; server VFS v2; tick theo hart;
+    block cap; CapMint badge/permission; persistence 6 phase cả 3 kiến trúc.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
@@ -1596,6 +1623,8 @@ crates/vifast-kernel-*/src/main.rs
 crates/vifast-arch/src/bkl.rs (BKL) + CpuState/MAX_HARTS
 crates/vifast-virtio/src/lib.rs
 crates/vifast-acpi/src/lib.rs
+crates/vifast-fs/src/lib.rs
+crates/vifast-fsutil/src/main.rs
 scripts/build.sh
 scripts/test-qemu.py
 scripts/test-persist.py
@@ -1615,9 +1644,8 @@ scripts/check-docs.py
 - test QEMU 3 kiến trúc xanh.
 
 Nó chưa phải OS hoàn chỉnh. Root và server/client đều chạy từ ELF Rust; mỗi
-task có VSpace riêng; client dùng Untyped con. 8.4/8.4b đã xong: runtime cấp
-Rust ELF qua BootInfo staging, root loader nạp vào VSpace riêng; 8.5 đã có VFS
-IPC server bước đầu. Đã có block cả 3 kiến trúc, persistence test hermetic, BKL ticket + per-CPU
-an toàn, current theo hart, ASID/PCID, IPI/TLB full shootdown và remote fence.i.
-Khoảng trống tiếp theo, theo thứ tự: FS v2, per-VA TLB shootdown, hardware
-IOMMU, network/input, compositor/ViFastKey.
+task có VSpace riêng; client dùng Untyped con. Đã có FS v2 journal hóa trong
+user space, block cap, permission theo badge, persistence 6 phase cả 3 kiến
+trúc, BKL ticket per-hart, tick BSP/AP độc lập, ASID/PCID, IPI/TLB full
+shootdown và remote fence.i. Khoảng trống tiếp theo: per-VA TLB shootdown,
+hardware IOMMU, x2APIC/per-hart runqueue, network/input, compositor/ViFastKey.
