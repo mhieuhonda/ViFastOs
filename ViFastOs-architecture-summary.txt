@@ -89,6 +89,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - e3c4280 chore: aarch64 kernel exception reports vector and cpu
 - b9bfad9 chore: automated docs consistency check
 - c7c45ed feat: aarch64 secondary cpu idle with masked wfi
+- 3631ed7 chore: derive docs checks from abi, harness and git
 
 Cập nhật code gần nhất (commit c7c45ed): persistent VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
@@ -1430,6 +1431,9 @@ E. Desktop / Space
     BootInfo v2 `sched_harts`, checker docs anchor; AArch64 3a vector an toàn.
 53. Vòng 09: AArch64 CPU1 GIC banked/timer + WFI polling, `SMP TIMER OK` và
     `SMP IDLE OK`, chưa chạy task; docs checker còn anchor.
+
+54. Vòng 09: AArch64 CPU1 GIC banked/timer + masked WFI; `SMP TIMER OK`
+    và `SMP IDLE OK`; chưa chạy task AArch64; docs checker mới còn anchor.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

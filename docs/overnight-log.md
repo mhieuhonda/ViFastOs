@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `daf8b7a87a6e23bddedd8a325a5eade708efa3e800fd1508b12be235cd2efe78`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `1f01502cbd99179c95ee9bbd7e8bc49620d48b0df80eaf6bb1bf411ed3ad2d9d`.
 
 ---
 
@@ -211,6 +211,16 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.20 — AArch64 CPU1 timer/idle + docs checks (vòng 08/09)
+
+- `e895bda`: idle flag + fire-and-forget reschedule; S=1/W=1, bão IPI hết.
+- `dbe7675`: BootInfo v2 `sched_harts`, root không biết kiến trúc.
+- `e3c4280`: AArch64 vector diagnostics an toàn.
+- `c7c45ed`: AArch64 CPU1 DAIF mask, GIC banked, timer riêng, WFI polling
+  `GICC_IAR`; `SMP TIMER OK` + `SMP IDLE OK`; chưa worker.
+- `3631ed7`: docs checker exact commit order/headroom/positive strings.
+- QEMU AArch 1.1/1.2 10/10; RISC Task 1 10/10; persist 3/3.
 
 ## 8.19 — Two workers, real counters, WFI idle (vòng 07)
 

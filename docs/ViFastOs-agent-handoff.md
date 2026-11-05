@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `b9bfad9` (RISC-V SMP evidence + docs checker)
+**Mốc code hiện tại:** `c7c45ed` (AArch64 CPU1 timer/idle + RISC-V SMP)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
@@ -38,7 +38,7 @@
 ### Chưa có / còn yếu
 
 - Full SMP scheduler; x86 AP bootstrap; per-hart runqueue.
-- RISC-V hart 1 chạy hai worker (`SMP WORKERS OK`, `SMP SCHED OK`), counters thật, WFI+SIE=0; AArch64 hart phụ dừng (3a revert); x86 AP vẫn SKIP.
+- RISC-V hart 1 chạy hai worker (`SMP WORKERS OK`, `SMP SCHED OK`), counters thật, WFI+SIE=0; AArch64 CPU1 có GIC/timer/WFI (`SMP TIMER OK`, `SMP IDLE OK`) nhưng chưa chạy worker; x86 AP vẫn SKIP.
 - Per-VA TLB shootdown.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
 - Hệ thống file thật: mới là một sector `/scratch`, chưa có directory/permission/journal.
@@ -193,6 +193,7 @@ Kernel không biết chi tiết phần cứng. Nó gọi các trait/primitive do
 | Per-CPU | ✅ secure | MAX_HARTS=4; sscratch/swapgs/TPIDR; clobber test |
 | SMP idle | ✅ RISC-V | affinity, mailbox, timer/IPI, `SMP IDLE OK` |
 | SMP worker | ✅ RISC-V | hai worker hart 1, `SMP WORKERS OK`, `SMP SCHED OK`, WFI idle |
+| SMP idle AArch | ✅ | CPU1 GIC banked/timer/WFI, `SMP TIMER OK` |
 | IOMMU phần mềm | ✅ | domain, 32 mapping, `IoMap`/`IoUnmap` |
 | IOMMU phần cứng | ❌ | chưa VT-d/SMMU |
 | VirtIO net | ❌ | chưa có |
