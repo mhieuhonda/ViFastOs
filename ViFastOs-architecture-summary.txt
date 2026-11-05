@@ -598,7 +598,8 @@ Portable generic page-table walk + reverse map:
   FrameMap. TcbConfigure không kiểm tra entry/stack.
 - x86 dùng VA cố định; VSpace.direct đã bị xoá.
 - Frame object metadata PA/size + mapped_w/mapped_x; retype Frame/PageTable zero page.
-- Chưa có page-table page allocator; đã có range VA allocator; ASID/PCID chưa có.
+- Chưa có page-table page allocator; đã có range VA allocator; ASID 12-bit gán
+  theo VSpace, x86 PCID chỉ bật khi CPUID hỗ trợ (QEMU TCG fallback CR3).
 
 RISC-V64:
 - Sv39 root boot tĩnh; kernel identity 0x8000_0000..0x803f_ffff; UART 0x1000_0000.
@@ -653,7 +654,8 @@ Kernel fallback: `crates/vifast-kernel/src/fs.rs`; user-space service:
   trong reply data.
 - Client demo không còn gọi syscall Open/Read/Write/Close; kernel ramfs chỉ
   còn selftest/fallback. Server chưa tách thành module riêng và chưa có
-  directory/permission/persistence.
+  directory/permission. AArch64/x86_64 lưu `/scratch` bền vững ở sector 0
+  (magic `VF01`); RISC-V còn fallback RAM.
 
 Kernel fallback:
 File: crates/vifast-kernel/src/fs.rs.
@@ -708,6 +710,8 @@ Số syscall chính:
 24 PageTableMap(pt_cap, vspace_cap, va) — trả level kernel chọn
 25 FrameMap
 26 FrameUnmap
+27 IoMap
+28 IoUnmap
 32 DebugWrite
 33 GetTime
 34 Exit
@@ -717,6 +721,10 @@ Số syscall chính:
 38 Close
 39 Stat
 40 Seek
+41 TcbSetIpcBuffer
+42 FrameWrite
+43 BlockRead
+44 BlockWrite
 
 Quy ước register:
 RISC-V:
@@ -819,8 +827,10 @@ Cap transfer:
 - x86_64: chưa boot AP; SMP SKIP. Hướng tiếp theo là ACPI MADT +
   LAPIC/SIPI, không dùng UEFI MP Services sau ExitBootServices.
 - Timer/scheduler vẫn một hart.
-- Chưa có per-hart runqueue, BKL, IPI, TLB shootdown, timer đa hart.
-- Secondary hart chưa vào scheduler.
+- Đã có IPI maintenance và full TLB shootdown user trên RISC-V/AArch64;
+  secondary hart vẫn chỉ xử lý maintenance, chưa vào scheduler.
+- Chưa có per-hart runqueue, BKL, timer đa hart, per-VA TLB shootdown,
+  remote I-cache shootdown.
 
 14. TEST VÀ TIÊU CHÍ PASS
 -------------------------
@@ -916,27 +926,38 @@ QEMU test:
 - AArch64: -machine virt,gic-version=2 -cpu max -smp 2
 - x86_64: OVMF + -cpu max + -smp 2 + isa-debug-exit
 
-Điều kiện PASS:
+Điều kiện PASS (khớp `scripts/test-qemu.py`):
 - SELFTEST PASS
 - booting on
 - BOOT UNTYPED
 - PREEMPT OK
+- Isolation
 - Server
 - Client
 - Mapped
 - Cap OK
 - ViFastOS ramfs
 - ViFastOS write
+- IPC BUF OK
 - Reply OK
+- VFS SERVER OK đúng 1 lần
+- VFS OK đúng 1 lần
+- VFS STAT OK đúng 1 lần
+- IOMMU OK đúng 1 lần
+- không có VFS BAD
 - đúng 4 USER FAULT, có 0x80000000, 0x1000002000 và 0x1000301000
-- ROOT RUST, BOOTINFO OK, CLIENT VSPACE OK, FAULT EP OK và ROOT READY mỗi
-  chuỗi đúng 1 lần
+- ROOT RUST, BOOTINFO OK, RUST MODULES OK, CLIENT VSPACE OK, FAULT EP OK và
+  ROOT READY mỗi chuỗi đúng 1 lần
 - không có ROOT PANIC
-- Isolation
-- ROOT SWITCH n > 1
 - Zero OK
-- RISC-V/AArch64 phải có SMP OK
+- ROOT SWITCH n > 1
+- x86_64 phải có KERNEL DATA NX OK
+- RISC-V/AArch64 phải có SMP OK và ipi=1
+- AArch64/x86_64 phải có BLOCK OK và FS DISK OK
 - x86_64 chấp nhận SMP SKIP
+
+Ghi chú: `FS PERSIST OK` chưa được harness bắt buộc; xem Task 2 của
+`ViFastOs-decision-agent2-01.md` để làm test persistence hermetic.
 
 Exit code:
 - RISC-V 0
@@ -1031,8 +1052,8 @@ Exit code:
 - 7.5: client nhận VSpace riêng slot 2 và Untyped con 64 KiB/8 object slot 3;
   root VSpace bỏ client stack; fault4 thread trong client VSpace ghi root Rust
   stack và tạo USER FAULT thứ tư. Harness yêu cầu đúng 4 fault; 3b hoàn tất.
-  DATA UNTYPED lúc test-exit: RISC-V 21/64 trang, AArch64/x86 22/64 trang,
-  6/48 object.
+  DATA UNTYPED lúc test-exit hiện tại: RISC-V 36/64 trang, AArch64 37/64,
+  x86 41/64; object RISC-V/AArch 21/48, x86 25/48.
 - RISC-V sync I-cache bằng fence.i (local hart); AArch64 dùng CTR_EL0 để lấy
   line size rồi dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
 - Chưa có SMP I-cache shootdown: RISC-V cần remote fence qua SBI/IPI, AArch64
