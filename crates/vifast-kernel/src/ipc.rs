@@ -31,11 +31,14 @@ impl Kernel {
         if !source.rights.contains(Rights::GRANT) {
             return Err(KError::NoRights);
         }
-        if hint == 0 || (hint as usize) >= MAX_CAPS {
+        if hint == 0 || (hint as usize) >= self.cspace_capacity(receiver) {
             return Err(KError::InvalidArg);
         }
-        let table = self.tcb(receiver).ok_or(KError::InvalidCap)?;
-        if table.cspace[hint as usize].is_some() {
+        if self
+            .cspace(receiver)
+            .and_then(|slots| slots.get(hint as usize))
+            .is_some_and(Option::is_some)
+        {
             return Err(KError::SlotOccupied);
         }
         let rights = source.rights.without(Rights::GRANT);

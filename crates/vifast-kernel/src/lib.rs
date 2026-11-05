@@ -221,6 +221,8 @@ pub struct Kernel {
     pub(crate) fs: fs::RamFs,
     pub(crate) stats: KernelStats,
     pub(crate) page_table_ops: Option<&'static dyn PageTableOps>,
+    /// Root's cspace is separate so ordinary TCBs stay compact.
+    pub(crate) root_cspace: [Option<Cap>; MAX_CAPS_ROOT],
     pub(crate) next_cap_id: u64,
     pub(crate) next_asid: u16,
 }
@@ -251,6 +253,7 @@ impl Kernel {
                 ticks: 0,
             },
             page_table_ops: None,
+            root_cspace: [None; MAX_CAPS_ROOT],
             next_cap_id: 1,
             next_asid: 1,
         }
@@ -278,6 +281,7 @@ impl Kernel {
             ticks: 0,
         };
         self.page_table_ops = None;
+        self.root_cspace = [None; MAX_CAPS_ROOT];
         self.next_cap_id = 1;
         self.next_asid = 1;
         self.init_fs();
@@ -294,6 +298,30 @@ impl Kernel {
 
     pub fn root(&self) -> Option<ObjRef> {
         self.root
+    }
+
+    pub(crate) fn cspace(&self, tcb: ObjRef) -> Option<&[Option<Cap>]> {
+        if self.root == Some(tcb) {
+            Some(&self.root_cspace)
+        } else {
+            self.tcb(tcb).map(|table| table.cspace.as_slice())
+        }
+    }
+
+    pub(crate) fn cspace_mut(&mut self, tcb: ObjRef) -> Option<&mut [Option<Cap>]> {
+        if self.root == Some(tcb) {
+            Some(&mut self.root_cspace)
+        } else {
+            self.tcb_mut(tcb).map(|table| table.cspace.as_mut_slice())
+        }
+    }
+
+    pub(crate) fn cspace_capacity(&self, tcb: ObjRef) -> usize {
+        if self.root == Some(tcb) {
+            MAX_CAPS_ROOT
+        } else {
+            MAX_CAPS_TASK
+        }
     }
 
     /// Map a Frame into a software IOMMU domain.  DMA mappings are
@@ -1679,12 +1707,14 @@ impl Kernel {
                             return Err(KError::ObjectDestroyed);
                         }
                     }
-                    for cap in tcb.cspace.iter().flatten() {
-                        let Some(object) = self.get(cap.obj) else {
-                            return Err(KError::ObjectDestroyed);
-                        };
-                        if object.kind.obj_type() != Some(cap.ty) {
-                            return Err(KError::WrongType);
+                    if let Some(slots) = self.cspace(reference) {
+                        for cap in slots.iter().flatten() {
+                            let Some(object) = self.get(cap.obj) else {
+                                return Err(KError::ObjectDestroyed);
+                            };
+                            if object.kind.obj_type() != Some(cap.ty) {
+                                return Err(KError::WrongType);
+                            }
                         }
                     }
                     for fd in tcb.fds.iter().flatten() {
@@ -2016,7 +2046,7 @@ impl Kernel {
     }
 
     pub fn install_cap(&mut self, tcb: ObjRef, slot: u8, mut cap: Cap) -> KResult<()> {
-        if slot == 0 || slot as usize >= MAX_CAPS {
+        if slot == 0 || slot as usize >= self.cspace_capacity(tcb) {
             return Err(KError::InvalidArg);
         }
         if self.get(cap.obj).is_none() {
@@ -2031,11 +2061,11 @@ impl Kernel {
         if self.next_cap_id == 0 {
             self.next_cap_id = 1;
         }
-        let table = self.tcb_mut(tcb).ok_or(KError::InvalidCap)?;
-        if table.cspace[slot as usize].is_some() {
+        let slots = self.cspace_mut(tcb).ok_or(KError::InvalidCap)?;
+        if slots[slot as usize].is_some() {
             return Err(KError::SlotOccupied);
         }
-        table.cspace[slot as usize] = Some(cap);
+        slots[slot as usize] = Some(cap);
         Ok(())
     }
 
@@ -2046,9 +2076,9 @@ impl Kernel {
         want: Option<ObjType>,
         need: Rights,
     ) -> KResult<Cap> {
-        let table = self.tcb(tcb).ok_or(KError::InvalidCap)?;
-        let cap = table
-            .cspace
+        let cap = self
+            .cspace(tcb)
+            .ok_or(KError::InvalidCap)?
             .get(slot as usize)
             .and_then(|slot| *slot)
             .ok_or(KError::InvalidCap)?;
@@ -2067,8 +2097,7 @@ impl Kernel {
     }
 
     pub fn cap_at(&self, addr: SlotAddr) -> Option<Cap> {
-        self.tcb(addr.tcb)?
-            .cspace
+        self.cspace(addr.tcb)?
             .get(addr.slot as usize)
             .and_then(|cap| *cap)
     }
@@ -2084,24 +2113,24 @@ impl Kernel {
                         .creator
                         .is_some_and(|creator| self.cap_ref_is_descendant(creator, target))
             });
-            let has_child_caps =
-                (0..MAX_OBJECTS).any(|i| {
-                    let r = ObjRef {
-                        index: i as u8,
-                        gen: self.objs[i].gen,
-                    };
-                    self.tcb(r).is_some_and(|table| {
-                        table.cspace.iter().flatten().any(|child| {
-                            child.parent.is_some() && self.is_descendant(child, target)
-                        })
-                    })
-                });
+            let has_child_caps = (0..MAX_OBJECTS).any(|i| {
+                let r = ObjRef {
+                    index: i as u8,
+                    gen: self.objs[i].gen,
+                };
+                self.cspace(r).is_some_and(|slots| {
+                    slots
+                        .iter()
+                        .flatten()
+                        .any(|child| child.parent.is_some() && self.is_descendant(child, target))
+                })
+            });
             if has_live_objects || has_child_caps {
                 return Err(KError::IllegalOperation);
             }
         }
-        self.tcb_mut(tcb)
-            .and_then(|table| table.cspace.get_mut(slot as usize)?.take())
+        self.cspace_mut(tcb)
+            .and_then(|slots| slots.get_mut(slot as usize)?.take())
             .ok_or(KError::InvalidCap)
     }
 
@@ -2203,13 +2232,13 @@ impl Kernel {
     /// surviving ancestor.  A cap whose root dies with no ancestor leaves
     /// creator/parent as None; only a root cap can collect those objects.
     fn reparent_tcb_caps(&mut self, obj: ObjRef) {
-        let Some(table) = self.tcb(obj) else {
+        let Some(slots) = self.cspace(obj) else {
             return;
         };
-        let mut dying = [CapRef::default(); MAX_CAPS];
-        let mut survivors = [None; MAX_CAPS];
+        let mut dying = [CapRef::default(); MAX_CAPS_ROOT];
+        let mut survivors = [None; MAX_CAPS_ROOT];
         let mut count = 0usize;
-        for (slot, cap) in table.cspace.iter().enumerate() {
+        for (slot, cap) in slots.iter().enumerate() {
             if let Some(cap) = cap {
                 dying[count] = CapRef {
                     addr: SlotAddr {
@@ -2239,10 +2268,10 @@ impl Kernel {
                 index: i as u8,
                 gen: self.objs[i].gen,
             };
-            let Some(table) = self.tcb_mut(r) else {
+            let Some(slots) = self.cspace_mut(r) else {
                 continue;
             };
-            for cap in table.cspace.iter_mut().flatten() {
+            for cap in slots.iter_mut().flatten() {
                 let Some(parent) = cap.parent else {
                     continue;
                 };
@@ -2451,20 +2480,23 @@ impl Kernel {
                 index: i as u8,
                 gen: self.objs[i].gen,
             };
-            if let Some(table) = self.tcb_mut(r) {
-                for slot in table.cspace.iter_mut() {
+            if let Some(slots) = self.cspace_mut(r) {
+                for slot in slots.iter_mut() {
                     if slot.is_some_and(|cap| cap.obj == obj) {
                         *slot = None;
                     }
                 }
-                if let Some(fault) = table.fault_ep {
+                let fault = self.tcb(r).and_then(|table| table.fault_ep);
+                if let Some(fault) = fault {
                     if fault.addr.tcb == r
-                        && table
-                            .cspace
-                            .get(fault.addr.slot as usize)
+                        && self
+                            .cspace(r)
+                            .and_then(|slots| slots.get(fault.addr.slot as usize))
                             .is_none_or(Option::is_none)
                     {
-                        table.fault_ep = None;
+                        if let Some(table) = self.tcb_mut(r) {
+                            table.fault_ep = None;
+                        }
                     }
                 }
             }
@@ -2832,7 +2864,7 @@ impl Kernel {
             }
         }
 
-        const BITS: usize = (MAX_OBJECTS * MAX_CAPS + 63) / 64;
+        const BITS: usize = (MAX_OBJECTS * MAX_CAPS_ROOT + 63) / 64;
         let mut victim_bits = [0u64; BITS];
         let mut removed = 0usize;
         for i in 0..MAX_OBJECTS {
@@ -2840,14 +2872,16 @@ impl Kernel {
                 index: i as u8,
                 gen: self.objs[i].gen,
             };
-            let Some(table) = self.tcb(r) else { continue };
-            for s in 1..MAX_CAPS {
-                let Some(cap) = table.cspace[s] else { continue };
+            let Some(slots) = self.cspace(r) else {
+                continue;
+            };
+            for s in 1..slots.len() {
+                let Some(cap) = slots[s] else { continue };
                 let remove = self.is_descendant(&cap, target_ref)
                     || (target_cap.ty == ObjType::Untyped
                         && objects[..object_count].contains(&cap.obj));
                 if remove {
-                    let bit = i * MAX_CAPS + s;
+                    let bit = i * MAX_CAPS_ROOT + s;
                     victim_bits[bit / 64] |= 1u64 << (bit % 64);
                     removed += 1;
                 }
@@ -2858,11 +2892,12 @@ impl Kernel {
                 index: i as u8,
                 gen: self.objs[i].gen,
             };
-            for s in 1..MAX_CAPS {
-                let bit = i * MAX_CAPS + s;
+            let capacity = self.cspace_capacity(r);
+            for s in 1..capacity {
+                let bit = i * MAX_CAPS_ROOT + s;
                 if victim_bits[bit / 64] & (1u64 << (bit % 64)) != 0 {
-                    if let Some(table) = self.tcb_mut(r) {
-                        table.cspace[s] = None;
+                    if let Some(slots) = self.cspace_mut(r) {
+                        slots[s] = None;
                     }
                 }
             }
@@ -2883,9 +2918,8 @@ impl Kernel {
     }
 
     pub fn set_cap_badge(&mut self, tcb: ObjRef, slot: u8, badge: u64) -> KResult<()> {
-        let table = self.tcb_mut(tcb).ok_or(KError::InvalidCap)?;
-        let cap = table
-            .cspace
+        let slots = self.cspace_mut(tcb).ok_or(KError::InvalidCap)?;
+        let cap = slots
             .get_mut(slot as usize)
             .and_then(|cap| cap.as_mut())
             .ok_or(KError::InvalidCap)?;
@@ -3504,7 +3538,7 @@ impl Kernel {
                     }
                 };
                 let dest = match slot_arg(a2) {
-                    Ok(dest) if dest != 0 && (dest as usize) < MAX_CAPS => dest,
+                    Ok(dest) if dest != 0 && (dest as usize) < self.cspace_capacity(tcb) => dest,
                     _ => {
                         return UserAction::Return {
                             value: 0,
@@ -3513,13 +3547,13 @@ impl Kernel {
                     }
                 };
                 if self
-                    .tcb(tcb)
-                    .and_then(|table| table.cspace.get(dest as usize))
+                    .cspace(tcb)
+                    .and_then(|slots| slots.get(dest as usize))
                     .is_none()
                     || self
-                        .tcb(tcb)
-                        .and_then(|table| table.cspace[dest as usize])
-                        .is_some()
+                        .cspace(tcb)
+                        .and_then(|slots| slots.get(dest as usize))
+                        .is_some_and(Option::is_some)
                 {
                     return UserAction::Return {
                         value: 0,
@@ -8253,5 +8287,17 @@ mod tests {
         // Full ASID flush of the first space clears only the flushed hart.
         assert_eq!(kernel.clear_vspace_harts(space, 1 << 0), 0b10);
         assert_eq!(kernel.vspace_harts_loaded(space), 0b10);
+    }
+
+    #[test]
+    fn layout_sizes_for_status() {
+        println!(
+            "LAYOUT kernel={} object={} tcb={} cap={} option_cap={}",
+            core::mem::size_of::<Kernel>(),
+            core::mem::size_of::<Object>(),
+            core::mem::size_of::<Tcb>(),
+            core::mem::size_of::<Cap>(),
+            core::mem::size_of::<Option<Cap>>()
+        );
     }
 }

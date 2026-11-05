@@ -8,7 +8,15 @@ use vifast_abi::*;
 
 pub const MAX_OBJECTS: usize = 128;
 pub const MAX_TCBS: usize = 16;
-pub const MAX_CAPS: usize = 96;
+/// Root task cspace capacity.  Root owns the large slot range used while it
+/// builds the initial task graph.
+pub const MAX_CAPS_ROOT: usize = 96;
+/// Ordinary TCB cspace capacity.  Keeping this compact is important: `Tcb`
+/// is the largest `Object` variant, so every unused slot costs
+/// `MAX_OBJECTS * sizeof(Option<Cap>)` bytes of the static kernel image.
+pub const MAX_CAPS_TASK: usize = 64;
+/// Historical name used by the BootInfo slot range (root cspace).
+pub const MAX_CAPS: usize = MAX_CAPS_ROOT;
 pub const MAX_QUEUE: usize = 8;
 pub const MAX_MAPPINGS: usize = 64;
 pub const MAX_IOMMU_MAPPINGS: usize = 32;
@@ -465,7 +473,7 @@ pub struct Tcb {
     pub entry: u64,
     pub stack: u64,
     pub vspace: Option<ObjRef>,
-    pub cspace: [Option<Cap>; MAX_CAPS],
+    pub cspace: [Option<Cap>; MAX_CAPS_TASK],
     /// Client waiting for this TCB to reply: (client, reply epoch).
     pub caller: Option<(ObjRef, u8)>,
     pub reply_epoch: u8,
@@ -492,7 +500,7 @@ impl Tcb {
             entry: 0,
             stack: 0,
             vspace: None,
-            cspace: [None; MAX_CAPS],
+            cspace: [None; MAX_CAPS_TASK],
             caller: None,
             reply_epoch: 0,
             recv_slot: 0,

@@ -166,7 +166,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 94/94 PASS
+- `cargo test -p vifast-kernel`: 95/95 PASS
 - `cargo test -p vifast-arch`: 6/6 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -177,7 +177,8 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 138672 byte (`kernel_end=0x803de250`)
+- RISC-V headroom: 396720 byte (`kernel_end=0x8039f250`)
+- `Kernel = 613048`, `Object = 4704`, `Tcb = 4656`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 10`): riscv64 10/10, aarch64 10/10, x86_64 10/10
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)

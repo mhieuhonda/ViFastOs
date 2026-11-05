@@ -9,6 +9,7 @@ exec > >(tee "$BUILD_LOG") 2>&1
 
 echo "== host portable-kernel tests =="
 cargo test -p vifast-kernel
+cargo test -p vifast-kernel --lib layout_sizes_for_status -- --nocapture
 cargo test -p vifast-arch
 cargo test -p vifast-pte
 cargo test -p vifast-elf
@@ -96,6 +97,10 @@ KERNEL_LIMIT=$((0x80400000))
 echo "RISC-V kernel_end=${KERNEL_END} limit=${KERNEL_LIMIT} headroom=$((KERNEL_LIMIT - KERNEL_END))"
 if (( KERNEL_END > KERNEL_LIMIT )); then
     echo "RISC-V KERNEL IMAGE EXCEEDS 4 MiB" >&2
+    exit 1
+fi
+if (( KERNEL_LIMIT - KERNEL_END < 196608 )); then
+    echo "RISC-V KERNEL HEADROOM BELOW 192 KiB: $((KERNEL_LIMIT - KERNEL_END)) bytes" >&2
     exit 1
 fi
 

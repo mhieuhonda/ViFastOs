@@ -156,9 +156,16 @@ def qemu_status() -> str:
     end = match.group(1)
     if not end.startswith("0x"):
         end = hex(int(end))
+    layout = re.search(
+        r"LAYOUT kernel=(\d+) object=(\d+) tcb=(\d+) cap=(\d+)", build
+    )
+    if not layout:
+        raise SystemExit("gen-docs: build log missing LAYOUT sizes")
     return "\n".join(
         [
             f"- RISC-V headroom: {match.group(2)} byte (`kernel_end={end}`)",
+            f"- `Kernel = {layout.group(1)}`, `Object = {layout.group(2)}`, "
+            f"`Tcb = {layout.group(3)}`, `Cap = {layout.group(4)}` byte",
             f"- QEMU lần chạy gần nhất (`--repeat {data.get('repeat', '?')}`): "
             + ", ".join(pieces),
         ]
