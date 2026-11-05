@@ -252,6 +252,18 @@ impl Default for IommuMapping {
     }
 }
 
+/// CPU budget for one TCB.  A bound TCB may run for `budget` timer ticks in
+/// each `period`; when the budget is exhausted the scheduler parks it until
+/// the current period expires and replenishes `remaining`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SchedContext {
+    pub budget: u64,
+    pub period: u64,
+    pub remaining: u64,
+    pub period_start: u64,
+    pub bound: Option<ObjRef>,
+}
+
 /// A software IOMMU domain.  It is deliberately independent of a VSpace:
 /// device-visible IOVAs are not user VAs and are validated separately.
 #[derive(Clone, Copy, Debug)]
@@ -479,6 +491,8 @@ pub struct Tcb {
     pub reply_epoch: u8,
     pub recv_slot: u8,
     pub bound_ntfn: Option<ObjRef>,
+    /// Scheduler budget bound to this TCB, if any.
+    pub sched_context: Option<ObjRef>,
     pub fault_ep: Option<CapRef>,
     pub ipc_buffer: Option<IpcBuffer>,
     pub pending: Option<PendingSend>,
@@ -507,6 +521,7 @@ impl Tcb {
             reply_epoch: 0,
             recv_slot: 0,
             bound_ntfn: None,
+            sched_context: None,
             fault_ep: None,
             ipc_buffer: None,
             pending: None,
@@ -545,6 +560,7 @@ pub enum Kind {
     Frame(Frame),
     VSpace(VSpace),
     PageTable(PageTable),
+    SchedContext(SchedContext),
     Iommu(IommuDomain),
     BlockDevice(BlockDevice),
 }
@@ -563,6 +579,7 @@ impl Kind {
             Kind::Frame(_) => Some(ObjType::Frame),
             Kind::VSpace(_) => Some(ObjType::VSpace),
             Kind::PageTable(_) => Some(ObjType::PageTable),
+            Kind::SchedContext(_) => Some(ObjType::SchedContext),
             Kind::Iommu(_) => Some(ObjType::Iommu),
             Kind::BlockDevice(_) => Some(ObjType::BlockDevice),
         }

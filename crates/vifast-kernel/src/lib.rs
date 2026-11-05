@@ -636,6 +636,154 @@ impl Kernel {
         Ok(())
     }
 
+    /// Configure a retyped scheduler context.  The budget is expressed in
+    /// timer ticks and must fit inside one period.
+    pub fn configure_sched_context(
+        &mut self,
+        context_ref: ObjRef,
+        budget: u64,
+        period: u64,
+    ) -> KResult<()> {
+        if budget == 0 || period == 0 || budget > period {
+            return Err(KError::InvalidArg);
+        }
+        let now = self.fast_time();
+        let context = self
+            .sched_context_mut(context_ref)
+            .ok_or(KError::WrongType)?;
+        context.budget = budget;
+        context.period = period;
+        context.remaining = budget;
+        context.period_start = now;
+        Ok(())
+    }
+
+    /// Bind a configured scheduler context to a TCB.  A context may serve one
+    /// TCB at a time; binding is idempotent for the same pair.
+    pub fn bind_sched_context(&mut self, tcb: ObjRef, context_ref: ObjRef) -> KResult<()> {
+        let context = *self.sched_context(context_ref).ok_or(KError::WrongType)?;
+        if context.budget == 0 || context.period == 0 || context.budget > context.period {
+            return Err(KError::InvalidArg);
+        }
+        let table = self.tcb(tcb).ok_or(KError::WrongType)?;
+        if let Some(existing) = table.sched_context {
+            if existing == context_ref {
+                return Ok(());
+            }
+            return Err(KError::AlreadyMapped);
+        }
+        if context.bound.is_some_and(|bound| bound != tcb) {
+            return Err(KError::AlreadyMapped);
+        }
+        let now = self.fast_time();
+        {
+            let context = self
+                .sched_context_mut(context_ref)
+                .ok_or(KError::ObjectDestroyed)?;
+            context.bound = Some(tcb);
+            context.remaining = context.budget;
+            context.period_start = now;
+        }
+        let table = self.tcb_mut(tcb).ok_or(KError::ObjectDestroyed)?;
+        table.sched_context = Some(context_ref);
+        Ok(())
+    }
+
+    /// Replenish expired budget blocks.  These TCBs were preempted asynchronously
+    /// by the timer, so no syscall result is installed in `resume`.
+    fn wake_budgeters(&mut self, now: u64) -> usize {
+        let mut woke = 0usize;
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            let expired = match self.objs[index].kind {
+                Kind::Tcb(tcb) => {
+                    tcb.state == ThreadState::BlockedBudget
+                        && tcb.wake_at.is_some_and(|deadline| deadline <= now)
+                }
+                _ => false,
+            };
+            if !expired {
+                continue;
+            }
+            let context = self.tcb(reference).and_then(|table| table.sched_context);
+            if let Some(context) = context {
+                if let Some(context) = self.sched_context_mut(context) {
+                    context.remaining = context.budget;
+                    context.period_start = now;
+                }
+            }
+            if let Some(tcb) = self.tcb_mut(reference) {
+                tcb.wake_at = None;
+                tcb.state = ThreadState::Ready;
+                tcb.resume = None;
+                tcb.resume_error = None;
+            }
+            self.enqueue(reference);
+            woke += 1;
+        }
+        woke
+    }
+
+    /// Charge one timer tick to the current TCB.  Returns true when this tick
+    /// exhausted its budget and parked it until the next period.
+    fn charge_current_budget(&mut self, hart: usize, now: u64) -> bool {
+        let Some(current) = self.current_on(hart) else {
+            return false;
+        };
+        let Some(table) = self.tcb(current) else {
+            return false;
+        };
+        if table.state != ThreadState::Running {
+            return false;
+        }
+        let Some(context_ref) = table.sched_context else {
+            return false;
+        };
+        let Some(context) = self.sched_context(context_ref) else {
+            if let Some(table) = self.tcb_mut(current) {
+                table.sched_context = None;
+            }
+            return false;
+        };
+        let (budget, period, context_start, context_remaining) = (
+            context.budget,
+            context.period,
+            context.period_start,
+            context.remaining,
+        );
+        if budget == 0 || period == 0 {
+            return false;
+        }
+        let mut period_start = context_start;
+        let mut remaining = context_remaining;
+        if now >= period_start.saturating_add(period) {
+            period_start = now;
+            remaining = budget;
+        }
+        if remaining != 0 {
+            remaining -= 1;
+        }
+        let exhausted = remaining == 0;
+        let deadline = period_start
+            .saturating_add(period)
+            .max(now.saturating_add(1));
+        if let Some(context) = self.sched_context_mut(context_ref) {
+            context.period_start = period_start;
+            context.remaining = remaining;
+        }
+        if exhausted {
+            if let Some(table) = self.tcb_mut(current) {
+                table.state = ThreadState::BlockedBudget;
+                table.wake_at = Some(deadline);
+                table.queued = false;
+            }
+        }
+        exhausted
+    }
+
     pub fn set_tcb_priority(
         &mut self,
         target: ObjRef,
@@ -708,6 +856,13 @@ impl Kernel {
                 table.resume = Some(Message::empty(0));
                 table.resume_error = Some(KError::WouldBlock);
             }
+            ThreadState::BlockedBudget => {
+                self.remove_from_runq(target);
+                let table = self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?;
+                table.wake_at = None;
+                table.resume = None;
+                table.resume_error = None;
+            }
             ThreadState::BlockedSend
             | ThreadState::BlockedRecv
             | ThreadState::BlockedNotification => {
@@ -745,16 +900,25 @@ impl Kernel {
     }
 
     pub fn resume_tcb(&mut self, tcb: ObjRef) -> KResult<()> {
-        let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
-        if table.entry == 0 || table.vspace.is_none() {
+        let (entry, vspace, state, sched) = {
+            let table = self.tcb(tcb).ok_or(KError::WrongType)?;
+            (table.entry, table.vspace, table.state, table.sched_context)
+        };
+        if entry == 0 || vspace.is_none() {
             return Err(KError::IllegalOperation);
         }
-        if table.state == ThreadState::Running || table.state == ThreadState::Suspended {
-            table.state = ThreadState::Ready;
-            self.enqueue(tcb);
-            return Ok(());
+        if state == ThreadState::Suspended {
+            if let Some(sched) = sched {
+                let now = self.fast_time();
+                if let Some(context) = self.sched_context_mut(sched) {
+                    context.remaining = context.budget;
+                    context.period_start = now;
+                }
+            }
         }
-        table.state = ThreadState::Ready;
+        if let Some(table) = self.tcb_mut(tcb) {
+            table.state = ThreadState::Ready;
+        }
         self.enqueue(tcb);
         Ok(())
     }
@@ -774,7 +938,15 @@ impl Kernel {
         }
         let entry = table.entry;
         let stack = table.stack;
+        let sched = table.sched_context;
         self.remove_from_runq(target);
+        if let Some(sched) = sched {
+            let now = self.fast_time();
+            if let Some(context) = self.sched_context_mut(sched) {
+                context.remaining = context.budget;
+                context.period_start = now;
+            }
+        }
         let table = self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?;
         table.state = ThreadState::Ready;
         table.pending = None;
@@ -958,6 +1130,20 @@ impl Kernel {
         }
     }
 
+    pub fn sched_context(&self, r: ObjRef) -> Option<&SchedContext> {
+        match self.get(r)?.kind {
+            Kind::SchedContext(ref context) => Some(context),
+            _ => None,
+        }
+    }
+
+    pub fn sched_context_mut(&mut self, r: ObjRef) -> Option<&mut SchedContext> {
+        match self.get_mut(r)?.kind {
+            Kind::SchedContext(ref mut context) => Some(context),
+            _ => None,
+        }
+    }
+
     pub fn iommu(&self, r: ObjRef) -> Option<&IommuDomain> {
         match self.get(r)?.kind {
             Kind::Iommu(ref domain) => Some(domain),
@@ -1082,6 +1268,11 @@ impl Kernel {
                 let charge = page.checked_mul(vspace_pages).ok_or(KError::OutOfMemory)?;
                 (Kind::Free, charge, page)
             }
+            ObjType::SchedContext => (
+                Kind::SchedContext(SchedContext::default()),
+                OBJ_SCHED_CONTEXT_BYTES,
+                OBJ_METADATA_ALIGN,
+            ),
             ObjType::Iommu => (
                 Kind::Iommu(IommuDomain::default()),
                 OBJ_IOMMU_BYTES,
@@ -1978,6 +2169,14 @@ impl Kernel {
                             return Err(KError::ObjectDestroyed);
                         }
                     }
+                    if let Some(sched) = tcb.sched_context {
+                        let Some(context) = self.sched_context(sched) else {
+                            return Err(KError::ObjectDestroyed);
+                        };
+                        if context.bound != Some(reference) {
+                            return Err(KError::IllegalOperation);
+                        }
+                    }
                     if let Some(slots) = self.cspace(reference) {
                         for cap in slots.iter().flatten() {
                             let Some(object) = self.get(cap.obj) else {
@@ -2163,6 +2362,25 @@ impl Kernel {
                             {
                                 return Err(KError::AlreadyMapped);
                             }
+                        }
+                    }
+                }
+                Kind::SchedContext(ref context) => {
+                    let configured = context.budget != 0 || context.period != 0;
+                    if configured
+                        && (context.budget == 0
+                            || context.period == 0
+                            || context.budget > context.period
+                            || context.remaining > context.budget)
+                    {
+                        return Err(KError::IllegalOperation);
+                    }
+                    if let Some(bound) = context.bound {
+                        let Some(tcb) = self.tcb(bound) else {
+                            return Err(KError::ObjectDestroyed);
+                        };
+                        if tcb.sched_context != Some(reference) {
+                            return Err(KError::IllegalOperation);
                         }
                     }
                 }
@@ -2593,6 +2811,13 @@ impl Kernel {
     }
 
     fn detach_tcb(&mut self, obj: ObjRef) {
+        if let Some(sched) = self.tcb(obj).and_then(|table| table.sched_context) {
+            if let Some(context) = self.sched_context_mut(sched) {
+                if context.bound == Some(obj) {
+                    context.bound = None;
+                }
+            }
+        }
         self.remove_from_runq(obj);
         if let Some((client, _)) = self.tcb(obj).and_then(|table| table.caller) {
             self.wake_error(client, KError::ObjectDestroyed);
@@ -2643,6 +2868,39 @@ impl Kernel {
         }
         for receiver in receivers.iter().take(recv_count) {
             self.wake_error(*receiver, KError::ObjectDestroyed);
+        }
+    }
+
+    fn destroy_sched_context(&mut self, obj: ObjRef) {
+        let mut wake = [ObjRef::invalid(); MAX_TCBS];
+        let mut count = 0usize;
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            let Some(table) = self.tcb_mut(reference) else {
+                continue;
+            };
+            if table.sched_context == Some(obj) {
+                table.sched_context = None;
+                if table.state == ThreadState::BlockedBudget {
+                    table.state = ThreadState::Ready;
+                    table.wake_at = None;
+                    table.resume = None;
+                    table.resume_error = None;
+                    if count < wake.len() {
+                        wake[count] = reference;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        if let Some(context) = self.sched_context_mut(obj) {
+            context.bound = None;
+        }
+        for reference in wake.iter().take(count) {
+            self.enqueue(*reference);
         }
     }
 
@@ -3056,6 +3314,7 @@ impl Kernel {
             }
             Kind::Endpoint(_) => self.destroy_endpoint(obj),
             Kind::Notification(_) => self.destroy_notification(obj),
+            Kind::SchedContext(_) => self.destroy_sched_context(obj),
             Kind::Frame(frame) => {
                 self.unmap_frame_everywhere(frame);
                 self.unmap_iommu_frame_everywhere(obj);
@@ -3079,6 +3338,19 @@ impl Kernel {
             Kind::Iommu(_) | Kind::BlockDevice(_) | Kind::Untyped(_) | Kind::Free => {}
         }
         self.remove_caps_to(obj);
+        let (owner, reserved) = match self.get(obj).map(|object| object.kind) {
+            Some(Kind::Untyped(child)) => (
+                self.get(obj).and_then(|object| object.owner),
+                child.max_objects,
+            ),
+            _ => (self.get(obj).and_then(|object| object.owner), 0),
+        };
+        if let Some(owner) = owner {
+            if let Some(region) = self.untyped_mut(owner) {
+                region.objects = region.objects.saturating_sub(1);
+                region.reserved = region.reserved.saturating_sub(reserved);
+            }
+        }
         if let Some(object) = self.get_mut(obj) {
             object.kind = Kind::Free;
             object.owner = None;
@@ -3601,7 +3873,11 @@ impl Kernel {
                     .store(*counter, core::sync::atomic::Ordering::Release);
             }
         }
-        self.wake_sleepers(self.fast_time())
+        let now = self.fast_time();
+        let slept = self.wake_sleepers(now);
+        let budgeted = self.wake_budgeters(now);
+        let _ = self.charge_current_budget(hart, now);
+        slept + budgeted
     }
 
     /// Move every deadline-expired `BlockedSleep` TCB to the ready queue.
@@ -4017,6 +4293,7 @@ impl Kernel {
                     n if n == ObjType::Frame as u64 => ObjType::Frame,
                     n if n == ObjType::PageTable as u64 => ObjType::PageTable,
                     n if n == ObjType::VSpace as u64 => ObjType::VSpace,
+                    n if n == ObjType::SchedContext as u64 => ObjType::SchedContext,
                     n if n == ObjType::Iommu as u64 => ObjType::Iommu,
                     n if n == ObjType::BlockDevice as u64 => ObjType::BlockDevice,
                     n if n == ObjType::Untyped as u64 => ObjType::Untyped,
@@ -4144,6 +4421,51 @@ impl Kernel {
                 }
                 let rights = Rights((a3 as u8) & Rights::ALL.0) & source.rights;
                 match self.copy_cap(tcb, src_slot, dest.obj, dst_slot, rights, a4) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::SchedContextConfigure as u64 => {
+                let context = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::SchedContext),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.configure_sched_context(context.obj, a1, a2) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::SchedContextBind as u64 => {
+                let target = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let context = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a1).unwrap_or(0),
+                    Some(ObjType::SchedContext),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.bind_sched_context(target.obj, context.obj) {
                     Ok(()) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,
@@ -9232,6 +9554,136 @@ mod tests {
         assert_eq!(kernel.pick_on(0), Some(sleeper));
         assert!(kernel.take_resume(sleeper).is_some());
         assert_eq!(kernel.tick(0), 0);
+    }
+
+    #[test]
+    fn sched_context_configures_binds_and_charges_budget() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("budgeted", 5).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000_0000, 4096, 4096, 8)
+            .unwrap();
+        let context = kernel.retype(untyped, ObjType::SchedContext).unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(context, ObjType::SchedContext, Rights::ALL),
+            )
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::SchedContextConfigure as u64,
+                1,
+                0,
+                5,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::SchedContextConfigure as u64,
+                1,
+                2,
+                5,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::SchedContextBind as u64, 2, 1, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(kernel.tcb(target).unwrap().sched_context, Some(context));
+        assert_eq!(kernel.sched_context(context).unwrap().bound, Some(target));
+
+        kernel.current[0] = Some(target);
+        kernel.tcb_mut(target).unwrap().state = ThreadState::Running;
+        kernel.tcb_mut(target).unwrap().queued = false;
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(kernel.sched_context(context).unwrap().remaining, 1);
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(
+            kernel.tcb(target).unwrap().state,
+            ThreadState::BlockedBudget
+        );
+        assert_eq!(kernel.tcb(target).unwrap().wake_at, Some(5));
+        assert!(!kernel.tcb(target).unwrap().queued);
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(kernel.tick(0), 1);
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Ready);
+        assert_eq!(kernel.sched_context(context).unwrap().remaining, 2);
+        assert_eq!(kernel.sched_context(context).unwrap().period_start, 5);
+        assert!(kernel.take_resume(target).is_none());
+        assert_eq!(kernel.pick_on(0), Some(target));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn sched_context_destroy_unbinds_and_wakes_budget_blocked_tcb() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("budgeted", 5).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000_0000, 4096, 4096, 8)
+            .unwrap();
+        let context = kernel.retype(untyped, ObjType::SchedContext).unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(context, ObjType::SchedContext, Rights::ALL),
+            )
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::SchedContextBind as u64, 2, 1, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        kernel.configure_sched_context(context, 1, 3).unwrap();
+        kernel.bind_sched_context(target, context).unwrap();
+        kernel.current[0] = Some(target);
+        kernel.tcb_mut(target).unwrap().state = ThreadState::Running;
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(
+            kernel.tcb(target).unwrap().state,
+            ThreadState::BlockedBudget
+        );
+        kernel.destroy_object(context).unwrap();
+        let target_table = kernel.tcb(target).unwrap();
+        assert_eq!(target_table.sched_context, None);
+        assert_eq!(target_table.state, ThreadState::Ready);
+        assert!(target_table.wake_at.is_none());
+        assert!(target_table.queued);
+        kernel.current[0] = None;
+        assert!(kernel.check_invariants().is_ok());
     }
 
     #[test]

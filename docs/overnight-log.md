@@ -682,3 +682,15 @@ follow-up `62b31f4`.
 - Thêm `scripts/check-all.sh` thay CI hosted: format, build/host test,
   QEMU 3 lần mỗi kiến trúc, persistence, harness âm, docs.
 - README hướng dẫn chạy gate; không phụ thuộc GitHub Actions.
+
+## 8.96 — SchedContext budget scheduler (vòng 22)
+
+- ABI `ObjType::SchedContext` có handler thật; thêm `ThreadState::BlockedBudget`.
+- Kernel lưu budget/period/remaining/period_start/bound; retype SchedContext,
+  configure 1..period, bind một-một với TCB.
+- `tick()` trừ budget của TCB đang chạy; hết budget thì block tới hết period,
+  `wake_budgeters()` nạp lại budget và đưa về ready queue (không ghi resume).
+- Destroy/revoke context tự unbind; TCB đang BlockedBudget được đánh thức.
+- Root retype context 1000/1000, bind worker C, in `SCHED CTX OK`; harness
+  yêu cầu dòng này.
+- Host test 106/106; QEMU --repeat 3 3/3; persistence 7 phase ×3; 0 warning.

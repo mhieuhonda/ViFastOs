@@ -159,6 +159,7 @@ pub const USER_IO_MAX: usize = 256;
 pub const OBJ_ENDPOINT_BYTES: usize = 256;
 pub const OBJ_NOTIFICATION_BYTES: usize = 128;
 pub const OBJ_TCB_BYTES: usize = 4096;
+pub const OBJ_SCHED_CONTEXT_BYTES: usize = 64;
 pub const OBJ_METADATA_ALIGN: usize = 16;
 pub const OBJ_IOMMU_BYTES: usize = 1024;
 pub const OBJ_BLOCK_DEVICE_BYTES: usize = 64;
@@ -398,6 +399,8 @@ pub enum ThreadState {
     BlockedFault = 8,
     Suspended = 9,
     BlockedSleep = 10,
+    /// Budget exhausted; the scheduler wakes the TCB when its period ends.
+    BlockedBudget = 11,
 }
 
 impl ThreadState {
@@ -409,6 +412,7 @@ impl ThreadState {
                 | ThreadState::BlockedReply
                 | ThreadState::BlockedNotification
                 | ThreadState::BlockedSleep
+                | ThreadState::BlockedBudget
         )
     }
 }
@@ -588,8 +592,8 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::TcbSetPriority, true),
     (SyscallId::TcbSetAffinity, true),
     (SyscallId::TcbBindNotification, true),
-    (SyscallId::SchedContextConfigure, false),
-    (SyscallId::SchedContextBind, false),
+    (SyscallId::SchedContextConfigure, true),
+    (SyscallId::SchedContextBind, true),
     (SyscallId::PageTableMap, true),
     (SyscallId::FrameMap, true),
     (SyscallId::FrameUnmap, true),

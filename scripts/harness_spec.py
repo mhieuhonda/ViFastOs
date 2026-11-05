@@ -32,6 +32,7 @@ COMMON = [
     ("Reply OK", "reply path succeeded"),
     ("ROOT RUST", "root Rust ELF entered user mode"),
     ("BOOTINFO OK", "root validated BootInfo v3"),
+    ("SCHED CTX OK", "scheduler context configured and bound"),
     ("RUST MODULES OK", "server/client Rust ELF modules loaded"),
     ("CLIENT VSPACE OK", "client VSpace built"),
     ("FAULT EP OK", "fault endpoint delivered all fault records"),

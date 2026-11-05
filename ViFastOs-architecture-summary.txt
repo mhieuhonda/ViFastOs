@@ -187,7 +187,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 104/104 PASS
+- `cargo test -p vifast-kernel`: 106/106 PASS
 - `cargo test -p vifast-arch`: 6/6 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -198,8 +198,8 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 261536 byte (`kernel_end=0x803c0260`)
-- `Kernel = 691288`, `Object = 4720`, `Tcb = 4672`, `Cap = 64` byte
+- RISC-V headroom: 257440 byte (`kernel_end=0x803c1260`)
+- `Kernel = 693592`, `Object = 4736`, `Tcb = 4688`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
@@ -626,6 +626,9 @@ Scheduler:
 - Block state không nằm trong runqueue.
 - Runtime lưu/nạp Platform::Context.
 - Timer 100 Hz; binary test bật feature test-exit để sau 20 tick in PREEMPT OK và exit QEMU.
+- SchedContext: budget/period theo tick; TCB `BlockedBudget` chờ hết period,
+  tick kế tiếp nạp lại budget. Root tạo context 1000/1000 và bind worker C,
+  in `SCHED CTX OK`.
 - Cả RISC-V, AArch64 và x86_64 cho hart phụ chạy năm worker.
 - Worker stack A/B/C/D/E: `CODE_VA+0xd000` / `+0xe000` / `+0x10000` / `+0x11000` / `+0x12000`, mỗi stack 1 page; ABI
   const assert không chồng nhau và trên `DATA_VA`. Root tạo worker, cấp TCB,
@@ -808,8 +811,8 @@ Số syscall chính:
 19 TcbSetPriority — implemented
 20 TcbSetAffinity — implemented
 21 TcbBindNotification — implemented
-22 SchedContextConfigure — placeholder (NotImplemented)
-23 SchedContextBind — placeholder (NotImplemented)
+22 SchedContextConfigure — implemented
+23 SchedContextBind — implemented
 24 PageTableMap — implemented
 25 FrameMap — implemented
 26 FrameUnmap — implemented
@@ -854,6 +857,14 @@ Số syscall chính:
 - `TcbRestart` (18): reset TCB không chạy về entry/stack đã cấu hình, xoá
   pending/fd/wake, đưa vào ready queue; runtime nhận `RestartTcb` để dựng lại
   context kiến trúc.
+- `SchedContextConfigure` (22): `a0` = cap SchedContext `WRITE`, `a1` =
+  budget tick, `a2` = period tick; yêu cầu `1 <= budget <= period`.
+- `SchedContextBind` (23): `a0` = cap TCB `WRITE`, `a1` = cap SchedContext
+  `WRITE`; một context chỉ bind một TCB, bind idempotent cùng cặp.
+- Thread state thêm `BlockedBudget = 11`; `tick()` trừ budget của TCB đang
+  chạy, khi hết budget đặt `wake_at = hết period`; `wake_budgeters()` nạp lại
+  budget và đưa TCB về ready queue (không ghi resume register vì đây là
+  preemption bất đồng bộ).
 - `ConsoleRead` (47): poll UART 16550 / PL011 / COM1, trả một byte hoặc
   `WouldBlock`. Client chạy shell nhỏ sau demo (`help`, `time`, `echo`, `ls`,
   `cat`, `mkdir`, `rm`, `mv`, `ln`, `stat`, `sync`, `truncate`, `fsck`);
@@ -1152,6 +1163,7 @@ QEMU test:
 - `Reply OK` — reply path succeeded
 - `ROOT RUST` — root Rust ELF entered user mode
 - `BOOTINFO OK` — root validated BootInfo v3
+- `SCHED CTX OK` — scheduler context configured and bound
 - `RUST MODULES OK` — server/client Rust ELF modules loaded
 - `CLIENT VSPACE OK` — client VSpace built
 - `FAULT EP OK` — fault endpoint delivered all fault records

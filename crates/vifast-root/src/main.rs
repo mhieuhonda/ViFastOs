@@ -47,6 +47,7 @@ const TLB_TEST_VA: u64 = CODE_VA as u64 + 0x40_0000;
 const SUSPEND_FLAG_VA: u64 = TLB_TEST_VA + 0x1000;
 const TCB_SUSPEND_OK: &[u8] = b"TCB SUSPEND OK\n";
 const TCB_SUSPEND_BAD: &[u8] = b"TCB SUSPEND BAD\n";
+const SCHED_CTX_OK: &[u8] = b"SCHED CTX OK\n";
 const TLB_A: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 const TLB_B: u64 = 0xBBBB_BBBB_BBBB_BBBB;
 const TLB_REMAP_OK: &[u8] = b"TLB REMAP OK (seen_new=1)\n";
@@ -797,6 +798,17 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             WORKER_C_STACK_TOP,
             &mut slots,
         );
+    }
+    if worker_c_tcb != 0 {
+        let sched_slot = slots.alloc();
+        check(vifast_user::retype(
+            data_untyped,
+            ObjType::SchedContext as u64,
+            sched_slot,
+        ));
+        check(vifast_user::sched_context_configure(sched_slot, 1000, 1000));
+        check(vifast_user::sched_context_bind(worker_c_tcb, sched_slot));
+        write(SCHED_CTX_OK);
     }
     write(ROOT_READY);
 

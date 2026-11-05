@@ -44,20 +44,20 @@ Kernel portable hiện có:
 - invariant checker cho object/capability/runqueue/VSpace/fd, W^X theo Frame,
   PA uniqueness;
 - Frame/VSpace/PageTable, generic page-table walk, map/unmap, W^X, sync icache;
-- Untyped/retype Frame/PageTable/VSpace/Endpoint/Notification/Tcb/Iommu;
+- Untyped/retype Frame/PageTable/VSpace/Endpoint/Notification/Tcb/
+  SchedContext/Iommu;
 - VSpace riêng, ASID/PCID, first-fit VA allocator, per-VA TLB shootdown;
 - user-space VFS server, FS v3 journal, hard link/symlink, double-indirect,
   write-through block cache, `fsync` → `BlockFlush`;
 - software IOMMU domain + `IoMap`/`IoUnmap`;
-- 47 syscall number: 41 implemented, 6 placeholder (`CNodeMint`,
-  `SchedContextConfigure`, `SchedContextBind`, `IrqGet`,
-  `IrqSetNotification`, `IrqAck`);
+- 47 syscall number: 43 implemented, 4 placeholder (`CNodeMint`, `IrqGet`,
+  `IrqSetNotification`, `IrqAck`); SchedContext budget/period đã chạy;
 - console input polling qua UART/PL011/COM1 và shell nhỏ trong client.
 
 ## Chưa có
 
 - Hardware IOMMU (VT-d/SMMU); chỉ có mô hình software.
-- CNode nhiều cấp, SchedContext đầy đủ, IRQ external delivery.
+- CNode nhiều cấp, IRQ external delivery.
 - Network, input IRQ, GPU/framebuffer, compositor, ViFastKey.
 - Block cache write-back, mount/pager, barrier phần cứng thật, driver disk
   ngoài QEMU.

@@ -11,9 +11,9 @@ shootdown**. User mode có **root/server/client/fault TCB từ ELF Rust**, VSpac
 riêng, IPC + chuyển capability, W^X, ASID/PCID, Untyped/retype có accounting,
 software IOMMU, **VFS server user-space** với FS v3 journal, **hard link,
 symlink, double-indirect, block cache, fsync/flush thật**, persistence 7 phase,
-**Sleep deadline + BSP idle TCB**, `TcbRestart`, `TcbBindNotification`, và
-**console input + shell nhỏ** (`ls`, `cat`, `stat`, `sync`...). Có 47 syscall
-(41 implemented, 6 placeholder).
+**Sleep deadline + BSP idle TCB**, **SchedContext budget/period**, `TcbRestart`,
+`TcbBindNotification`, và **console input + shell nhỏ** (`ls`, `cat`, `stat`,
+`sync`...). Có 47 syscall (43 implemented, 4 placeholder).
 
 Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: chưa có driver
 network/input IRQ/GPU, compositor, hardware IOMMU, CNode/SchedContext/IRQ
@@ -203,9 +203,9 @@ cargo test -p vifast-elf
 
 - Userland vẫn là chương trình demo (root/server/client/fault/worker/shell),
   chưa có libc, shell hệ thống đầy đủ, dynamic linking hay ứng dụng thật.
-- 6 syscall còn placeholder: `CNodeMint`, `SchedContextConfigure`,
-  `SchedContextBind`, `IrqGet`, `IrqSetNotification`, `IrqAck`. CNode và
-  SchedContext chưa có object model hoàn chỉnh; IRQ external chưa có delivery.
+- 4 syscall còn placeholder: `CNodeMint`, `IrqGet`, `IrqSetNotification`,
+  `IrqAck`. CNode chưa có object model hoàn chỉnh; IRQ external chưa có
+  delivery. SchedContext budget/period đã có object và scheduler thật.
 - Chưa có hardware IOMMU (VT-d/SMMU); `IoMap`/`IoUnmap` chỉ là mô hình phần mềm.
 - Chưa có network, input IRQ, GPU/framebuffer, compositor hay ViFastKey.
   Console hiện chỉ polling; shell chưa có job control.

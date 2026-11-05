@@ -299,6 +299,26 @@ pub fn console_read() -> SyscallResult {
     result(e, v)
 }
 
+pub fn sched_context_configure(context_slot: u8, budget: u64, period: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::SchedContextConfigure as u64,
+            [context_slot as u64, budget, period, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn sched_context_bind(tcb_slot: u8, context_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::SchedContextBind as u64,
+            [tcb_slot as u64, context_slot as u64, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn tcb_restart(tcb_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(
