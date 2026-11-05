@@ -968,6 +968,9 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
   để scheduler BSP luôn có task chạy khi mọi task khác block.
 - Tạo CNode phẳng + TCB demo: mint endpoint vào slot 1, CNodeInstall, resume;
   worker gửi label `CNODE` để root in `CNODE OK`.
+- Tạo pager TCB root VSpace; đọc `PAGER_VA` chưa map → fault endpoint;
+  root map Frame bằng `map_with_tables` rồi `TcbResume`; pager retry và in
+  `PAGER OK`. Đây là demand paging/fault-resume end-to-end đầu tiên.
 - Wait trên notification root.
 - Retype(data Untyped) → VSpace client; lặp PageTableMap + FrameMap cho code
   BootInfo RX; retype Frame client stack +0x8000 và fault4 stack +0x9000, map
@@ -1231,6 +1234,7 @@ Mỗi dòng sau đúng một lần:
 - `SYMLINK OK` — exactly once
 - `IRQ OK` — exactly once
 - `CNODE OK` — exactly once
+- `PAGER OK` — exactly once
 
 Cấm xuất hiện:
 - `PERCPU CLOBBER BAD` — forbidden
@@ -1254,6 +1258,7 @@ Cấm xuất hiện:
 - `HARD LINK BAD` — forbidden
 - `SYMLINK BAD` — forbidden
 - `IRQ BAD` — forbidden
+- `PAGER BAD` — forbidden
 
 Exit code:
 - riscv64: 0
@@ -1272,7 +1277,7 @@ Theo kiến trúc:
   - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - `TLB STATS (va_flush=V, ipi=I, skipped=K)` — per-VA TLB accounting
-  - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
+  - 5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000
   - ROOT SWITCH n > 1
   - N > 1, M >= 100, W > 0, W <= S, S <= I
   - U >= 3, P >= 1, U <= T
@@ -1290,7 +1295,7 @@ Theo kiến trúc:
   - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - `TLB STATS (va_flush=V, ipi=I, skipped=K)` — per-VA TLB accounting
-  - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
+  - 5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000
   - ROOT SWITCH n > 1
   - T > 0, I >= 1
   - N > 1, M >= 100, W > 0, W <= S, S <= I
@@ -1315,7 +1320,7 @@ Theo kiến trúc:
   - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker AP idle proof
   - `TLB STATS (va_flush=V, ipi=I, skipped=K)` — per-VA TLB accounting
-  - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
+  - 5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000
   - ROOT SWITCH n > 1
   - ACPI MADT cpus == 2
   - T > 0, I >= 1

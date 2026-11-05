@@ -13,10 +13,10 @@ use vifast_abi::user_layout::{
     CLIENT_UART_IRQ_SLOT, CLIENT_UART_NOTIFICATION_SLOT, CNODE_STACK_BASE, CNODE_STACK_TOP,
     CODE_VA, FAULT1_STACK_TOP, FAULT2_STACK_TOP, FAULT3_STACK_TOP, FAULT4_STACK_BASE,
     FAULT4_STACK_TOP, IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
-    SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
-    WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
-    WORKER_C_STACK_BASE, WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP,
-    WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
+    PAGER_STACK_BASE, PAGER_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2,
+    USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE, WORKER_A_STACK_TOP,
+    WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE, WORKER_C_STACK_TOP,
+    WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
 };
 use vifast_abi::{
     BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
@@ -54,6 +54,11 @@ const TCB_SUSPEND_BAD: &[u8] = b"TCB SUSPEND BAD\n";
 const SCHED_CTX_OK: &[u8] = b"SCHED CTX OK\n";
 const CNODE_OK: &[u8] = b"CNODE OK\n";
 const CNODE_LABEL: u64 = 0x434E_4F44;
+const PAGER_LABEL: u64 = 0x5041_4745;
+const PAGER_VA: u64 = CODE_VA as u64 + 0x100_0000;
+const PAGER_VALUE: u64 = 0x5041_4745_5200_0001;
+const PAGER_OK: &[u8] = b"PAGER OK\n";
+const PAGER_BAD: &[u8] = b"PAGER BAD\n";
 const TLB_A: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 const TLB_B: u64 = 0xBBBB_BBBB_BBBB_BBBB;
 const TLB_REMAP_OK: &[u8] = b"TLB REMAP OK (seen_new=1)\n";
@@ -81,6 +86,17 @@ pub extern "C" fn idle_main() -> ! {
 pub extern "C" fn cnode_worker() -> ! {
     // Slot 1 is the only cap in this task's flat CNode cspace.
     let _ = vifast_user::send(1, CNODE_LABEL, 1, 0, 0);
+    loop {
+        let _ = vifast_user::yield_now();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn pager_client() -> ! {
+    // The first execution faults on this unmapped page.  Root handles the
+    // fault, maps a frame, and resumes the TCB from this entry point.
+    let value = unsafe { core::ptr::read_volatile(PAGER_VA as *const u64) };
+    let _ = vifast_user::send(1, PAGER_LABEL, value, 0, 0);
     loop {
         let _ = vifast_user::yield_now();
     }
@@ -422,6 +438,47 @@ fn spawn_cnode_demo(
     ));
     check(vifast_user::cnode_install(tcb, cnode));
     check(vifast_user::tcb_resume(tcb));
+}
+
+fn spawn_pager(
+    meta_untyped: u8,
+    data_untyped: u8,
+    root_vspace: u8,
+    endpoint_slot: u8,
+    slots: &mut SlotAllocator,
+) -> (u8, u8) {
+    let pager_tcb = slots.alloc();
+    retype(meta_untyped, ObjType::Tcb, pager_tcb);
+    let stack_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, stack_frame);
+    map_with_tables(
+        data_untyped,
+        root_vspace,
+        stack_frame,
+        PAGER_STACK_BASE as u64,
+        Rights::READ | Rights::WRITE,
+        slots,
+    );
+    let page_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, page_frame);
+    let value = PAGER_VALUE;
+    check(vifast_user::frame_write(
+        page_frame,
+        0,
+        &value as *const u64 as u64,
+        8,
+    ));
+    copy(endpoint_slot, pager_tcb, 1, Rights::WRITE);
+    check(vifast_user::tcb_configure_fault(
+        pager_tcb,
+        pager_client as usize as u64,
+        PAGER_STACK_TOP as u64,
+        root_vspace,
+        5,
+        1,
+    ));
+    check(vifast_user::tcb_resume(pager_tcb));
+    (pager_tcb, page_frame)
 }
 
 fn spawn_worker(
@@ -783,6 +840,13 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         fault_endpoint_slot,
         &mut slots,
     );
+    let (pager_tcb, pager_frame) = spawn_pager(
+        meta_untyped,
+        data_untyped,
+        root_vspace,
+        fault_endpoint_slot,
+        &mut slots,
+    );
 
     // Per-VA TLB demo: map A, perform a local-only unmap (hart 1 has not
     // loaded the root VSpace yet), then map A again and let worker d establish
@@ -919,6 +983,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
 
     let mut worker_bits = 0u8;
     let mut workers_ok = false;
+    let mut pager_mapped = false;
     let mut tlb_remapped = false;
     let mut tlb_done = false;
     let mut suspend_done = false;
@@ -927,7 +992,13 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     loop {
         let message = unsafe { vifast_user::recv_message(fault_endpoint_slot, 0) };
         if message.error == KError::Ok {
-            if message.label == CNODE_LABEL {
+            if message.label == PAGER_LABEL {
+                write(if pager_mapped && message.data[0] == PAGER_VALUE {
+                    PAGER_OK
+                } else {
+                    PAGER_BAD
+                });
+            } else if message.label == CNODE_LABEL {
                 write(CNODE_OK);
             } else if message.label == WORKER_LABEL_C_RUNNING {
                 if !suspend_done {
@@ -1041,6 +1112,19 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                     }
                 }
+            } else if message.data[0] == PAGER_VA {
+                if !pager_mapped {
+                    map_with_tables(
+                        data_untyped,
+                        root_vspace,
+                        pager_frame,
+                        PAGER_VA,
+                        Rights::READ,
+                        &mut slots,
+                    );
+                    pager_mapped = true;
+                }
+                check(vifast_user::tcb_resume(pager_tcb));
             } else {
                 write_fault_addr(message.data[0]);
             }

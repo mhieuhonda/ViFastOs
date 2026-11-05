@@ -14,6 +14,7 @@ Vòng 22 hoàn tất các mảnh còn thiếu của ABI và mở driver input th
 4. CNode phẳng 64 slot, CNodeMint, CNodeInstall, demo end-to-end.
 5. VFS `O_APPEND`.
 6. Block cache write-back cho data, write-through journal/metadata.
+7. Demand paging/fault-resume demo (`PAGER OK`).
 
 Không còn syscall placeholder; các phần lớn còn lại là hardware IOMMU,
 network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
@@ -30,6 +31,7 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
 | `e9b8286` | VFS O_APPEND |
 | `363574a` | Write-back data block cache |
 | `801fb13` | Test CNode delete/revoke |
+| pending | Pager fault-resume demo (`PAGER OK`) |
 | docs | Các commit `docs: sync ...` sau mỗi mốc |
 
 ## 3. Chi tiết
@@ -85,6 +87,14 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
   commit; replay cũng flush trước khi clear.
 - `O_TRUNC` vẫn hoạt động; test `/append` kiểm "a"+"b" → "ab", size 2.
 
+### 3.6 Pager/fault resume
+
+- Thêm pager TCB root VSpace, stack riêng; đọc `PAGER_VA` chưa map.
+- Fault endpoint gửi root; root `map_with_tables` Frame vào `PAGER_VA`,
+  `TcbResume` pager TCB; pager chạy lại entry, đọc value và gửi `PAGER` label.
+- Harness yêu cầu 5 USER FAULT (4 cũ + pager), `PAGER OK` đúng một lần.
+- Chưa có user-space pager server; đây là demo trong root.
+
 ## 4. Kiểm tra
 
 ```text
@@ -96,18 +106,18 @@ vifast-elf       17/17
 vifast-acpi       8/8
 QEMU --repeat 3  3/3 cả 3 kiến trúc
 persistence      7 phase ×3 PASS
-harness âm       375 case PASS
+harness âm       387 case PASS
 cargo fmt/check  PASS, 0 warning
 ```
 
 RISC-V headroom khoảng 249 KiB sau CNode/IRQ; `Kernel ≈ 694.7 KiB`.
-Root data untyped 68/72 page, 64/72 object.
+Root data untyped 71/72 page, 67/72 object.
 
 ## 5. Còn lại
 
 - Hardware IOMMU (VT-d/SMMU); `IoMap` vẫn software.
 - Network, GPU/framebuffer, compositor, ViFastKey.
-- CNode guard/nhiều cấp/zombie; pager/mount; barrier phần cứng.
+- CNode guard/nhiều cấp/zombie; user-space pager/mount; barrier phần cứng.
 - Khóa mịn/x2APIC, test >2 hart.
 - Formal verification/CI hosted.
 - Userland đầy đủ (libc, shell hệ thống, dynamic linking).

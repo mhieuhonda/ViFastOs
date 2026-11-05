@@ -754,3 +754,12 @@ follow-up `62b31f4`.
 - `Fs::commit` flush trước khi xoá journal commit; `replay` cũng flush trước
   khi clear commit. Vì vậy crash không mất data sau khi journal đã commit.
 - Host test `vifast-fs` 22/22; QEMU 3/3; persistence 7 phase ×3; 0 warning.
+
+## 8.999 — Pager fault-resume demo (vòng 22)
+
+- Pager TCB root VSpace đọc `PAGER_VA` chưa map; fault endpoint gửi root.
+- Root map Frame bằng `map_with_tables`, rồi `TcbResume` pager; pager chạy
+  lại entry, đọc value, gửi label; in `PAGER OK`.
+- Harness yêu cầu 5 USER FAULT (4 fault cũ + pager) và `PAGER OK` đúng một lần;
+  `PAGER BAD` bị cấm.
+- QEMU --repeat 3 3/3; persistence 7 phase ×3; host kernel 111/111.

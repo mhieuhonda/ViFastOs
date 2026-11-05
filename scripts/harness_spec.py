@@ -59,6 +59,7 @@ EXACT_ONE = [
     "SYMLINK OK",
     "IRQ OK",
     "CNODE OK",
+    "PAGER OK",
 ]
 
 FORBIDDEN = [
@@ -83,9 +84,10 @@ FORBIDDEN = [
     "HARD LINK BAD",
     "SYMLINK BAD",
     "IRQ BAD",
+    "PAGER BAD",
 ]
 
-FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000]
+FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000, 0x1001000000]
 
 EXIT_CODES = {
     "riscv64": {0},
@@ -173,7 +175,7 @@ ARCH_EXACT_ONE = {
 
 NUMERIC = {
     "riscv64": [
-        "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
+        "5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000",
         "ROOT SWITCH n > 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
@@ -182,7 +184,7 @@ NUMERIC = {
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "aarch64": [
-        "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
+        "5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000",
         "ROOT SWITCH n > 1",
         "T > 0, I >= 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
@@ -192,7 +194,7 @@ NUMERIC = {
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "x86_64": [
-        "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
+        "5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000",
         "ROOT SWITCH n > 1",
         "ACPI MADT cpus == 2",
         "T > 0, I >= 1",
@@ -286,7 +288,7 @@ def accept(
     if not all(output.count(anchor) == 1 for anchor in ARCH_EXACT_ONE[name]):
         return False
     faults = fault_addresses(output)
-    if len(faults) != 4:
+    if len(faults) != 5:
         return False
     if not all(address in faults for address in FAULT_ADDRESSES):
         return False

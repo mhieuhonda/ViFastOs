@@ -28,6 +28,7 @@ chưa được port sang bản bare-metal này.
 | Sleep deadline (BlockedSleep) | có | có | có |
 | Console input IRQ + shell | có | có | có |
 | CNode phẳng + CNodeInstall demo | có | có | có |
+| Demand paging + fault resume demo | có | có | có |
 | User fault suspend (không panic) | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
@@ -56,6 +57,7 @@ Kernel portable hiện có:
   budget/period, timer IRQ và UART IRQ delivery đã chạy;
 - console input IRQ qua UART 16550/PL011/COM1, RxQueue lock-free và shell
   block trên notification UART thay vì polling.
+- fault endpoint → root map Frame → TcbResume; pager TCB retry và in `PAGER OK`.
 
 ## Chưa có
 
