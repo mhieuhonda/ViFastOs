@@ -151,6 +151,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 363574a feat: add write-back block cache for file data
 - 801fb13 test: cover cnode delete and revoke integration
 - ca4d2f4 feat: add demand paging fault-resume demo
+- 79005ce feat: move pager handling into user-space server
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
