@@ -145,7 +145,7 @@ code commit: 225ccdb
 docs commit: round 16 docs
 tests: kernel 88/88, arch 6/6, pte 11/11, elf 17/17, acpi 8/8, QEMU 10/10 all, 50/50 each, panic 5/5, handoff 10/10, persist 3/3
 RISC-V headroom: 454192 byte
-summary SHA-256: b37fc4cbe5af9efb5a1ec4344e75e5ff4db1e37ba9a2e899c2b33de318eab103
+summary SHA-256: d324067014ff5fccc9b0ed7ed07f3e74f1f540847fa072f945cb8c314aa383a5
 ```
 
 ## Part 3 - Full ViFastOs-architecture-summary.txt
@@ -340,7 +340,6 @@ Output tiêu biểu:
   "SMP OK (... ipi=1)", "SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)",
   "SMP TIMER OK (hart1_ticks=T)" trên cả 3 kiến trúc,
   "SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)",
-  "SMP PREEMPT OK (user_ticks=U, preempts=P)",
   "SMP PREEMPT OK (user_ticks=U, preempts=P)",
   "SMP WORKERS OK (a=50, b=50, c=1)", "BKL STATS (h0_acq=..., h1_acq=...)",
   "PERCPU CLOBBER OK",
@@ -1776,4 +1775,4 @@ Khoảng trống tiếp theo, theo thứ tự: FS v2, per-VA TLB shootdown, hard
 IOMMU, network/input, compositor/ViFastKey.
 ```
 
-SHA-256 part1=ea6b6170d20a75fae9e75fbef11b369731455b30f7a2246c89f11bc6eb195a19 part3=b37fc4cbe5af9efb5a1ec4344e75e5ff4db1e37ba9a2e899c2b33de318eab103
+SHA-256 part1=ea6b6170d20a75fae9e75fbef11b369731455b30f7a2246c89f11bc6eb195a19 part3=d324067014ff5fccc9b0ed7ed07f3e74f1f540847fa072f945cb8c314aa383a5

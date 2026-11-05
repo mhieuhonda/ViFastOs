@@ -188,7 +188,6 @@ Output tiêu biểu:
   "SMP TIMER OK (hart1_ticks=T)" trên cả 3 kiến trúc,
   "SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)",
   "SMP PREEMPT OK (user_ticks=U, preempts=P)",
-  "SMP PREEMPT OK (user_ticks=U, preempts=P)",
   "SMP WORKERS OK (a=50, b=50, c=1)", "BKL STATS (h0_acq=..., h1_acq=...)",
   "PERCPU CLOBBER OK",
   "BLOCK OK"/"FS DISK OK", "PREEMPT OK", "ROOT SWITCH n>1";
