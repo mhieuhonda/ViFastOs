@@ -6,16 +6,24 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::MAX_HARTS;
+
 /// A FIFO ticket lock with an RAII guard.
+pub const NO_OWNER: usize = usize::MAX;
+
 pub struct BigKernelLock {
     next: AtomicUsize,
     serving: AtomicUsize,
+    owner: AtomicUsize,
+    acquisitions: [AtomicUsize; MAX_HARTS],
+    spins: [AtomicUsize; MAX_HARTS],
 }
 
 /// Guard returned by [`BigKernelLock::lock`] and [`BigKernelLock::try_lock`].
 #[must_use = "dropping the guard releases the big kernel lock"]
 pub struct BigKernelGuard {
     lock: &'static BigKernelLock,
+    owner: usize,
 }
 
 impl BigKernelLock {
@@ -23,6 +31,9 @@ impl BigKernelLock {
         Self {
             next: AtomicUsize::new(0),
             serving: AtomicUsize::new(0),
+            owner: AtomicUsize::new(NO_OWNER),
+            acquisitions: [const { AtomicUsize::new(0) }; MAX_HARTS],
+            spins: [const { AtomicUsize::new(0) }; MAX_HARTS],
         }
     }
 
@@ -45,7 +56,10 @@ impl BigKernelLock {
             )
             .is_ok()
         {
-            Some(BigKernelGuard { lock: self })
+            Some(BigKernelGuard {
+                lock: self,
+                owner: NO_OWNER,
+            })
         } else {
             None
         }
@@ -55,18 +69,59 @@ impl BigKernelLock {
     ///
     /// `poll` must service maintenance work (for example an IPI TLB
     /// shootdown) without taking this lock again.
-    pub fn lock_with<F: FnMut()>(&'static self, mut poll: F) -> BigKernelGuard {
+    pub fn lock_with<F: FnMut()>(&'static self, poll: F) -> BigKernelGuard {
+        self.acquire(NO_OWNER, poll)
+    }
+
+    /// Acquire the lock for a specific hart.  The owner is published while
+    /// the guard is live, so a hart can assert that it has really released
+    /// the lock before returning to user mode.
+    pub fn lock_with_hart<F: FnMut()>(&'static self, hart: usize, poll: F) -> BigKernelGuard {
+        assert!(hart < MAX_HARTS, "BKL hart out of range");
+        assert!(!self.held_by(hart), "BKL re-entry on the same hart");
+        self.acquire(hart, poll)
+    }
+
+    fn acquire<F: FnMut()>(&'static self, owner: usize, mut poll: F) -> BigKernelGuard {
         let ticket = self.next.fetch_add(1, Ordering::AcqRel);
         while self.serving.load(Ordering::Acquire) != ticket {
+            if owner < MAX_HARTS {
+                self.spins[owner].fetch_add(1, Ordering::Relaxed);
+            }
             poll();
             core::hint::spin_loop();
         }
-        BigKernelGuard { lock: self }
+        if owner < MAX_HARTS {
+            assert!(
+                self.owner
+                    .compare_exchange(NO_OWNER, owner, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok(),
+                "BKL owner already set"
+            );
+            self.acquisitions[owner].fetch_add(1, Ordering::Relaxed);
+        }
+        BigKernelGuard { lock: self, owner }
     }
 
     /// Acquire the lock without a maintenance hook.
     pub fn lock(&'static self) -> BigKernelGuard {
         self.lock_with(|| {})
+    }
+
+    /// Whether this exact hart currently owns the lock.
+    pub fn held_by(&self, hart: usize) -> bool {
+        hart < MAX_HARTS && self.owner.load(Ordering::Acquire) == hart
+    }
+
+    /// `(acquisitions, spin iterations)` for one hart.
+    pub fn stats(&self, hart: usize) -> (usize, usize) {
+        if hart >= MAX_HARTS {
+            return (0, 0);
+        }
+        (
+            self.acquisitions[hart].load(Ordering::Relaxed),
+            self.spins[hart].load(Ordering::Relaxed),
+        )
     }
 
     /// Whether a ticket is outstanding.
@@ -83,6 +138,14 @@ impl Default for BigKernelLock {
 
 impl Drop for BigKernelGuard {
     fn drop(&mut self) {
+        if self.owner < MAX_HARTS {
+            let _ = self.lock.owner.compare_exchange(
+                self.owner,
+                NO_OWNER,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
         self.lock.serving.fetch_add(1, Ordering::Release);
     }
 }
@@ -210,5 +273,37 @@ mod tests {
         holder.join().unwrap();
         spinner.join().unwrap();
         assert!(REVERSE_POLLED.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn tracks_owner_per_hart_with_a_waiter() {
+        static OWNER_LOCK: BigKernelLock = BigKernelLock::new();
+        static FIRST_HELD: AtomicBool = AtomicBool::new(false);
+        static SECOND_DONE: AtomicBool = AtomicBool::new(false);
+        let first = thread::spawn(|| {
+            let guard = OWNER_LOCK.lock_with_hart(0, || {});
+            assert!(OWNER_LOCK.held_by(0));
+            assert!(!OWNER_LOCK.held_by(1));
+            FIRST_HELD.store(true, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(20));
+            drop(guard);
+            assert!(!OWNER_LOCK.held_by(0));
+        });
+        let second = thread::spawn(|| {
+            while !FIRST_HELD.load(Ordering::SeqCst) {
+                core::hint::spin_loop();
+            }
+            let guard = OWNER_LOCK.lock_with_hart(1, || {});
+            assert!(OWNER_LOCK.held_by(1));
+            assert!(!OWNER_LOCK.held_by(0));
+            drop(guard);
+            assert!(!OWNER_LOCK.held_by(1));
+            SECOND_DONE.store(true, Ordering::SeqCst);
+        });
+        first.join().unwrap();
+        second.join().unwrap();
+        assert!(SECOND_DONE.load(Ordering::SeqCst));
+        assert!(OWNER_LOCK.stats(0).0 >= 1);
+        assert!(OWNER_LOCK.stats(1).0 >= 1);
     }
 }

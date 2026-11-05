@@ -3283,7 +3283,14 @@ impl Kernel {
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
                 let ntfn = cap.obj;
-                match self.signal(ntfn, if cap.badge != 0 { cap.badge } else { 1 }) {
+                let bits = if a1 != 0 {
+                    a1
+                } else if cap.badge != 0 {
+                    cap.badge
+                } else {
+                    1
+                };
+                match self.signal(ntfn, bits) {
                     Ok(()) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,

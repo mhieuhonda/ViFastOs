@@ -65,6 +65,7 @@ version = "0.1.0"
 dependencies = [
  "vifast-abi",
  "vifast-arch",
+ "vifast-kernel",
  "vifast-platform-aarch64",
  "vifast-runtime",
 ]
@@ -75,6 +76,7 @@ version = "0.1.0"
 dependencies = [
  "vifast-abi",
  "vifast-arch",
+ "vifast-kernel",
  "vifast-platform-riscv64",
  "vifast-runtime",
 ]

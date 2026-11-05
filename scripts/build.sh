@@ -102,10 +102,23 @@ cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-
 # Restore the normal artifact for all regular QEMU runs.
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 
+echo "== riscv64 panic-halt feature build =="
+VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-panic-hart1
+cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-panic
+VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
+
 echo "== aarch64 bare metal =="
+VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
+echo "== aarch64 panic-halt feature build =="
+VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-panic-hart1
+cp target/aarch64-unknown-none/release/vifast-kernel-aarch64 target/aarch64-unknown-none/release/vifast-kernel-aarch64-panic
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
 
 echo "== x86_64 UEFI =="
+VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
+echo "== x86_64 panic-halt feature build =="
+VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-panic-hart1
+cp target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi-panic.efi
 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
 
 echo "build complete"

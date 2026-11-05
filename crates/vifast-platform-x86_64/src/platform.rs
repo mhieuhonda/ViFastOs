@@ -76,6 +76,18 @@ static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut SMAP_ENABLED: bool = false;
 static mut PCID_ENABLED: bool = false;
 static BKL: BigKernelLock = BigKernelLock::new();
+
+fn bkl_lock() -> vifast_arch::bkl::BigKernelGuard {
+    BKL.lock_with_hart(X86Platform::hart_id(), poll_maintenance)
+}
+
+fn assert_bkl_released() {
+    let hart = X86Platform::hart_id();
+    assert!(
+        !BKL.held_by(hart),
+        "BKL held on current hart before user return"
+    );
+}
 static mut ACPI_CPUS: usize = 0;
 static mut ACPI_BSP: u32 = 0;
 static mut ACPI_LAPIC_BASE: u64 = 0;
@@ -89,8 +101,11 @@ static AP_MAINT_ACK: AtomicUsize = AtomicUsize::new(0);
 static AP_MAINT_KIND: AtomicU32 = AtomicU32::new(0);
 const APIC_MAINT_VECTOR: u32 = 0x30;
 const APIC_TIMER_VECTOR: u32 = 0x31;
+const APIC_HALT_VECTOR: u32 = 0x32;
 static AP_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static AP_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
+static AP_USER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static AP_PREEMPTS: AtomicUsize = AtomicUsize::new(0);
 static AP_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static AP_IPI_SEEN: AtomicUsize = AtomicUsize::new(0);
 static AP_IPI_SENT: AtomicUsize = AtomicUsize::new(0);
@@ -105,6 +120,9 @@ static POST_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static POST_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static POST_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 static WAKE_SENT_THIS_WINDOW: AtomicBool = AtomicBool::new(false);
+static AP_IDLE_GENERATION: AtomicUsize = AtomicUsize::new(0);
+static WAKE_LAST_GENERATION: AtomicUsize = AtomicUsize::new(usize::MAX);
+static AP_RESCHED_PENDING: AtomicBool = AtomicBool::new(false);
 static TSC_HZ: AtomicU64 = AtomicU64::new(0);
 static LAPIC_TIMER_HZ: AtomicU64 = AtomicU64::new(0);
 static BSP_PIT_TICKS: AtomicUsize = AtomicUsize::new(0);
@@ -797,8 +815,13 @@ unsafe fn init_lapic() {
         return;
     }
     let id = configure_lapic();
+    let base = lapic_base();
+    core::ptr::write_volatile((base + 0x350) as *mut u32, 0x700);
+    let lint0 = core::ptr::read_volatile((base + 0x350) as *const u32);
+    let lint1 = core::ptr::read_volatile((base + 0x360) as *const u32);
     LAPIC_READY = true;
     vifast_kernel::klog!(X86Platform, "LAPIC OK (id={})", id);
+    vifast_kernel::klog!(X86Platform, "BSP LINT0={:#x} LINT1={:#x}", lint0, lint1);
 }
 
 unsafe fn lapic_base() -> u64 {
@@ -911,7 +934,7 @@ unsafe fn ap_idle_loop() -> ! {
     calibrate_lapic_timer();
     loop {
         let (picked, ready) = {
-            let bkl = BKL.lock_with(poll_maintenance);
+            let bkl = bkl_lock();
             let picked = X86Platform::kernel().pick_on(1);
             let ready = X86Platform::kernel().has_ready_on(1);
             drop(bkl);
@@ -929,6 +952,8 @@ unsafe fn ap_idle_loop() -> ! {
             continue;
         }
         AP_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        let generation = AP_IDLE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = generation;
         WAKE_SENT_THIS_WINDOW.store(false, Ordering::SeqCst);
         if POST_STARTED.load(Ordering::Relaxed) {
             POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
@@ -1110,6 +1135,22 @@ pub extern "C" fn ap_entry() -> ! {
         AP_ONLINE.store(true, Ordering::SeqCst);
         AP_LONG_ONLINE = true;
         ap_idle_loop()
+    }
+}
+
+pub fn panic_halt_others() {
+    unsafe {
+        let base = lapic_base();
+        let target = if X86Platform::hart_id() == 0 {
+            if !AP_ONLINE.load(Ordering::SeqCst) {
+                return;
+            }
+            AP_APIC_ID
+        } else {
+            0
+        };
+        core::ptr::write_volatile((base + 0x310) as *mut u32, target << 24);
+        send_icr(base, APIC_HALT_VECTOR);
     }
 }
 
@@ -1355,6 +1396,7 @@ unsafe fn setup_gdt_tss_idt() {
     for (vector, handler) in [
         (APIC_MAINT_VECTOR, ap_ipi_entry as *const () as u64),
         (APIC_TIMER_VECTOR, ap_timer_entry as *const () as u64),
+        (APIC_HALT_VECTOR, ap_halt_entry as *const () as u64),
     ] {
         (*idt)[vector as usize] = IdtEntry {
             offset_low: handler as u16,
@@ -1895,6 +1937,7 @@ impl Platform for X86Platform {
         }
         assert!(hart < 2, "unexpected x86 per-CPU hart");
         assert!(trap_top != 0, "x86 per-CPU trap stack missing");
+        assert_bkl_released();
         count_user_entry();
         // Entering ring 3: restore the user GS base and keep CpuState in
         // IA32_KERNEL_GS_BASE (standard swapgs convention).
@@ -1995,6 +2038,14 @@ impl Platform for X86Platform {
         AP_TIMER_TICKS.load(Ordering::Relaxed)
     }
 
+    fn secondary_user_ticks() -> usize {
+        AP_USER_TICKS.load(Ordering::Relaxed)
+    }
+
+    fn secondary_preempts() -> usize {
+        AP_PREEMPTS.load(Ordering::Relaxed)
+    }
+
     fn secondary_idle_entries() -> usize {
         AP_IDLE_ENTRIES.load(Ordering::Relaxed)
     }
@@ -2032,12 +2083,16 @@ impl Platform for X86Platform {
 
     fn wake_hart(hart: usize) {
         if hart == 1 && AP_ONLINE.load(Ordering::SeqCst) && AP_IDLE_WINDOW.load(Ordering::SeqCst) {
-            unsafe {
-                let base = lapic_base();
-                AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
-                RESCHED_SENT.fetch_add(1, Ordering::Relaxed);
-                core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
-                send_icr(base, APIC_MAINT_VECTOR);
+            let generation = AP_IDLE_GENERATION.load(Ordering::SeqCst);
+            if WAKE_LAST_GENERATION.swap(generation, Ordering::AcqRel) != generation {
+                unsafe {
+                    let base = lapic_base();
+                    AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
+                    RESCHED_SENT.fetch_add(1, Ordering::Relaxed);
+                    AP_RESCHED_PENDING.store(true, Ordering::Release);
+                    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+                    send_icr(base, APIC_MAINT_VECTOR);
+                }
             }
         }
     }
@@ -2053,7 +2108,7 @@ impl Platform for X86Platform {
     fn wait_for_work(hart: usize) {
         loop {
             let ready = {
-                let bkl = BKL.lock_with(poll_maintenance);
+                let bkl = bkl_lock();
                 let ready = X86Platform::kernel().has_ready_on(hart);
                 drop(bkl);
                 ready
@@ -2063,6 +2118,7 @@ impl Platform for X86Platform {
             }
             if hart == 1 {
                 AP_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+                AP_IDLE_GENERATION.fetch_add(1, Ordering::SeqCst);
                 WAKE_SENT_THIS_WINDOW.store(false, Ordering::SeqCst);
                 if POST_STARTED.load(Ordering::Relaxed) {
                     POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
@@ -2091,6 +2147,10 @@ impl Platform for X86Platform {
 
     fn resched_wake() -> usize {
         RESCHED_WAKE.load(Ordering::Relaxed)
+    }
+
+    fn bkl_stats() -> [(usize, usize); 2] {
+        [BKL.stats(0), BKL.stats(1)]
     }
 
     fn idle_entries() -> usize {
@@ -2125,6 +2185,7 @@ extern "efiapi" {
     fn irq0_entry();
     fn ap_ipi_entry();
     fn ap_timer_entry();
+    fn ap_halt_entry();
     fn pf_entry();
     static x86_exception_table: [u64; 32];
     fn x86_reload_segments();
@@ -2145,7 +2206,7 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
         X86Platform::exit(1);
     }
     assert_irqs_disabled();
-    let bkl = BKL.lock_with(poll_maintenance);
+    let bkl = bkl_lock();
     assert_current_tcb("exception");
     if matches!(vector, 2 | 8 | 18) {
         vifast_kernel::klog!(
@@ -2170,13 +2231,14 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
     let mut context = TrapFrame::empty();
     vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, error);
     drop(bkl);
+    assert_bkl_released();
     <X86Platform as Platform>::enter_user(&context);
 }
 
 #[no_mangle]
 extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
     assert_irqs_disabled();
-    let bkl = BKL.lock_with(poll_maintenance);
+    let bkl = bkl_lock();
     assert_current_tcb("pagefault");
     let cr2: u64;
     unsafe {
@@ -2195,13 +2257,17 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
     let mut context = TrapFrame::empty();
     vifast_runtime::fault::suspend::<X86Platform>(&mut context, error, cr2);
     drop(bkl);
+    assert_bkl_released();
     <X86Platform as Platform>::enter_user(&context);
 }
 
 #[no_mangle]
 extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
+    if vifast_arch::panic::is_panicking() {
+        X86_64::halt();
+    }
     assert_irqs_disabled();
-    let bkl = BKL.lock_with(poll_maintenance);
+    let bkl = bkl_lock();
     assert_current_tcb("trap");
     let frame = unsafe { &mut *frame };
     let number = frame.rax;
@@ -2213,28 +2279,31 @@ extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
     if waiting && X86Platform::hart_id() == 1 {
         loop {
             <X86Platform as Platform>::wait_for_work(1);
-            let bkl = BKL.lock_with(poll_maintenance);
+            let bkl = bkl_lock();
             if vifast_runtime::syscall::resume_blocked::<X86Platform>(frame) {
                 drop(bkl);
+                assert_bkl_released();
                 count_user_entry();
                 return;
             }
             drop(bkl);
         }
     }
+    assert_bkl_released();
     count_user_entry();
 }
 
 #[no_mangle]
 extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
+    if vifast_arch::panic::is_panicking() {
+        X86_64::halt();
+    }
     if X86Platform::hart_id() != 0 {
-        // Some QEMU/PIC routings broadcast the legacy IRQ0 to every CPU.
-        // The AP owns only LAPIC timer/IPI vectors; acknowledge and ignore.
-        unsafe { outb(0x20, 0x20) };
-        return;
+        vifast_kernel::klog!(X86Platform, "AP PIC IRQ");
+        panic!("AP PIC IRQ");
     }
     assert_irqs_disabled();
-    let bkl = BKL.lock_with(poll_maintenance);
+    let bkl = bkl_lock();
     assert_current_tcb("irq0");
     if cpu_state() == unsafe { core::ptr::addr_of!(CPU_STATES[0]) as *mut _ } {
         BSP_PIT_TICKS.fetch_add(1, Ordering::Relaxed);
@@ -2242,10 +2311,14 @@ extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
     let frame = unsafe { &mut *frame };
     vifast_runtime::timer::on_timer::<X86Platform>(frame);
     drop(bkl);
+    assert_bkl_released();
 }
 
 #[no_mangle]
 extern "efiapi" fn x86_ap_irq_handler(frame: *mut TrapFrame, vector: u64) {
+    if vifast_arch::panic::is_panicking() {
+        X86_64::halt();
+    }
     assert_irqs_disabled();
     let cs = unsafe { (*frame).cs };
     if cs & 3 == 0 {
@@ -2264,21 +2337,30 @@ extern "efiapi" fn x86_ap_irq_handler(frame: *mut TrapFrame, vector: u64) {
         } else if vector == APIC_MAINT_VECTOR as u64 {
             AP_IPI_SEEN.fetch_add(1, Ordering::Relaxed);
             AP_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
-            RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
+            if AP_RESCHED_PENDING.swap(false, Ordering::AcqRel) {
+                RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
+            }
             unsafe { process_maintenance() };
         }
         unsafe { lapic_eoi() };
         return;
     }
     // Ring-3 path keeps the existing preemption contract.
-    let bkl = BKL.lock_with(poll_maintenance);
+    let bkl = bkl_lock();
     assert_current_tcb("ap-user-irq");
     if vector == APIC_TIMER_VECTOR as u64 {
         unsafe { lapic_eoi() };
-        vifast_runtime::timer::on_timer::<X86Platform>(unsafe { &mut *frame });
+        AP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+        AP_USER_TICKS.fetch_add(1, Ordering::Relaxed);
+        let changed = vifast_runtime::timer::on_timer::<X86Platform>(unsafe { &mut *frame });
+        if changed {
+            AP_PREEMPTS.fetch_add(1, Ordering::Relaxed);
+        }
     } else if vector == APIC_MAINT_VECTOR as u64 {
         AP_IPI_SEEN.fetch_add(1, Ordering::Relaxed);
-        RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
+        if AP_RESCHED_PENDING.swap(false, Ordering::AcqRel) {
+            RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
+        }
         unsafe {
             process_maintenance();
             lapic_eoi();
@@ -2286,4 +2368,5 @@ extern "efiapi" fn x86_ap_irq_handler(frame: *mut TrapFrame, vector: u64) {
     }
     count_user_entry();
     drop(bkl);
+    assert_bkl_released();
 }

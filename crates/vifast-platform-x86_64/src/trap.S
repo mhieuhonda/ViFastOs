@@ -271,6 +271,13 @@ ap_irq_common:
     RESTORE_REGS
     iretq
 
+    .globl ap_halt_entry
+ap_halt_entry:
+    cli
+1:
+    hlt
+    jmp 1b
+
     .globl x86_reload_segments
 x86_reload_segments:
     lea rax, [rip + 1f]

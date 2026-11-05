@@ -223,11 +223,12 @@ def run_qemu(
 
 
 def test_riscv(index: int = 0, feature: str | None = None) -> bool:
-    kernel_name = (
-        "vifast-kernel-riscv64-handoff"
-        if feature == "test-boot-handoff"
-        else "vifast-kernel-riscv64"
-    )
+    if feature == "test-boot-handoff":
+        kernel_name = "vifast-kernel-riscv64-handoff"
+    elif feature == "test-panic-hart1":
+        kernel_name = "vifast-kernel-riscv64-panic"
+    else:
+        kernel_name = "vifast-kernel-riscv64"
     kernel = os.path.join(
         ROOT, "target", "riscv64gc-unknown-none-elf", "release", kernel_name
     )
@@ -266,10 +267,9 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
     )
 
 
-def test_aarch64(index: int = 0) -> bool:
-    kernel = os.path.join(
-        ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64"
-    )
+def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
+    name = "vifast-kernel-aarch64-panic" if feature == "test-panic-hart1" else "vifast-kernel-aarch64"
+    kernel = os.path.join(ROOT, "target", "aarch64-unknown-none", "release", name)
     serial = os.path.join(tempfile.gettempdir(), "vifast-aarch64.serial")
     disk = make_disk("aarch64")
     monitor = make_monitor("aarch64", index)
@@ -298,10 +298,11 @@ def test_aarch64(index: int = 0) -> bool:
         require_disk=True,
         monitor=monitor,
         index=index,
+        feature_mode=feature,
     )
 
 
-def test_x86_64(index: int = 0) -> bool:
+def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
     code = find_ovmf_code()
     if not code:
         print("SKIP x86_64: OVMF firmware not found (set OVMF_CODE)")
@@ -311,7 +312,9 @@ def test_x86_64(index: int = 0) -> bool:
         "target",
         "x86_64-unknown-uefi",
         "release",
-        "vifast-kernel-x86_64-uefi.efi",
+        "vifast-kernel-x86_64-uefi-panic.efi"
+        if feature == "test-panic-hart1"
+        else "vifast-kernel-x86_64-uefi.efi",
     )
     tmp = tempfile.mkdtemp(prefix="vifast-uefi-")
     esp = os.path.join(tmp, "esp")
@@ -357,11 +360,12 @@ def test_x86_64(index: int = 0) -> bool:
         cmd,
         serial,
         40,
-        {3},
+        {7} if feature == "test-panic-hart1" else {3},
         require_block=True,
         require_disk=True,
         monitor=monitor,
         index=index,
+        feature_mode=feature,
     )
 
 
@@ -380,21 +384,21 @@ def main() -> int:
     )
     parser.add_argument(
         "--feature",
-        choices=("test-boot-handoff",),
-        help="run the RISC-V test-only boot handoff build",
+        choices=("test-boot-handoff", "test-panic-hart1"),
+        help="run a test-only feature build",
     )
     args = parser.parse_args()
     if args.repeat < 1:
         parser.error("--repeat must be at least 1")
-    if args.feature and args.arch not in (None, "riscv64"):
+    if args.feature == "test-boot-handoff" and args.arch not in (None, "riscv64"):
         parser.error("--feature test-boot-handoff only applies to riscv64")
     if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
         print("missing QEMU binaries")
         return 2
     tests = {
         "riscv64": lambda index: test_riscv(index, args.feature),
-        "aarch64": test_aarch64,
-        "x86_64": test_x86_64,
+        "aarch64": lambda index: test_aarch64(index, args.feature),
+        "x86_64": lambda index: test_x86_64(index, args.feature),
     }
     names = [args.arch] if args.arch else ["riscv64", "aarch64", "x86_64"]
     results: dict[str, list[bool]] = {name: [] for name in names}

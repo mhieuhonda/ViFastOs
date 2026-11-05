@@ -87,6 +87,14 @@ pub extern "C" fn rust_main(dtb: usize) -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    Aarch64Platform::write_str("\r\nPANIC\r\n");
+    if !vifast_arch::panic::begin() {
+        Aarch64Platform::halt();
+    }
+    let hart = <Aarch64Platform as vifast_runtime::Platform>::hart_id();
+    vifast_kernel::klog!(Aarch64Platform, "PANIC (hart={})", hart);
+    vifast_platform_aarch64::platform::panic_halt_others();
+    for _ in 0..10_000_000 {
+        core::hint::spin_loop();
+    }
     Aarch64Platform::exit(1)
 }

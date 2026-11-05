@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bkl;
+pub mod panic;
 
 /// Small per-CPU array bound used by the platform ports.  The secondary harts
 /// are still maintenance-only, but trap stacks and CPU state are already

@@ -91,6 +91,14 @@ pub extern "C" fn rust_main(hartid: usize, dtb: usize) -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    RiscvPlatform::write_str("\r\nPANIC\r\n");
+    if !vifast_arch::panic::begin() {
+        RiscvPlatform::halt();
+    }
+    let hart = <RiscvPlatform as vifast_runtime::Platform>::hart_id();
+    vifast_kernel::klog!(RiscvPlatform, "PANIC (hart={})", hart);
+    vifast_platform_riscv64::platform::panic_halt_others();
+    for _ in 0..10_000_000 {
+        core::hint::spin_loop();
+    }
     RiscvPlatform::exit(1)
 }

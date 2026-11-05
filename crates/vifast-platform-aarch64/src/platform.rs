@@ -64,6 +64,8 @@ static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_USER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_PREEMPTS: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
@@ -94,7 +96,6 @@ static MAINT_KIND: [AtomicU32; MAX_HARTS] = [
     AtomicU32::new(0),
 ];
 static BKL: BigKernelLock = BigKernelLock::new();
-static BKL_OWNER: AtomicUsize = AtomicUsize::new(usize::MAX);
 static SCHED_READY: AtomicBool = AtomicBool::new(false);
 static RESCHED_SENT: AtomicUsize = AtomicUsize::new(0);
 static RESCHED_WAKE: AtomicUsize = AtomicUsize::new(0);
@@ -117,50 +118,40 @@ static USER_ENTRIES: [AtomicUsize; MAX_HARTS] = [
     AtomicUsize::new(0),
 ];
 
-struct PlatformBklGuard {
-    _guard: BigKernelGuard,
-    hart: usize,
-}
-
-impl Drop for PlatformBklGuard {
-    fn drop(&mut self) {
-        if BKL_OWNER.load(Ordering::Acquire) == self.hart {
-            BKL_OWNER.store(usize::MAX, Ordering::Release);
-        }
+pub fn panic_halt_others() {
+    let hart = current_hart();
+    let target = if hart == 0 { 1 } else { 0 };
+    if target == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) == 0 {
+        return;
     }
+    // GICv2 SGI 2: panic halt.
+    write32(GICD + 0xF00, (1 << (16 + target)) | 2);
 }
 
-fn bkl_lock() -> PlatformBklGuard {
+fn current_hart() -> usize {
     let state = cpu_state();
-    let hart = if state.is_null() {
+    if state.is_null() {
         0
     } else {
         unsafe { (*state).hart_id }
-    };
-    let guard = BKL.lock_with(poll_maintenance);
-    BKL_OWNER.store(hart, Ordering::Release);
-    PlatformBklGuard {
-        _guard: guard,
-        hart,
     }
+}
+
+fn bkl_lock() -> BigKernelGuard {
+    BKL.lock_with_hart(current_hart(), poll_maintenance)
 }
 
 fn assert_bkl_released() {
-    let state = cpu_state();
-    let hart = if state.is_null() {
-        0
-    } else {
-        unsafe { (*state).hart_id }
-    };
+    let hart = current_hart();
     assert!(
-        BKL_OWNER.load(Ordering::Acquire) != hart,
+        !BKL.held_by(hart),
         "BKL held on current hart before user return"
     );
 }
 
 fn send_reschedule(target: usize) -> bool {
     assert!(
-        BKL_OWNER.load(Ordering::Acquire) != usize::MAX,
+        BKL.held_by(current_hart()),
         "reschedule sender must hold BKL"
     );
     if target >= MAX_HARTS || !maintenance_target_online(target) {
@@ -223,7 +214,7 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
         return false;
     }
     assert!(
-        BKL_OWNER.load(Ordering::Acquire) != usize::MAX,
+        BKL.held_by(current_hart()),
         "maintenance IPI sender must hold BKL"
     );
     let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
@@ -353,6 +344,9 @@ fn service_gic() -> (bool, bool) {
             return (saw_timer, saw_sgi);
         }
         write32(GICC + 0x010, irq);
+        if irq == 2 || vifast_arch::panic::is_panicking() {
+            Aarch64::halt();
+        }
         if irq == TIMER_IRQ {
             saw_timer = true;
             SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
@@ -404,6 +398,9 @@ fn account_gic_wake(saw_timer: bool, saw_sgi: bool) {
 
 fn park_secondary(hart: usize) {
     loop {
+        if vifast_arch::panic::is_panicking() {
+            Aarch64::halt();
+        }
         poll_maintenance();
         if Aarch64Platform::kernel().has_ready_on(hart) {
             return;
@@ -438,6 +435,9 @@ pub extern "C" fn rust_secondary(_context: u64) -> ! {
     }
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
+        if vifast_arch::panic::is_panicking() {
+            Aarch64::halt();
+        }
         assert!(daif_i_set(), "AArch64 CPU1 must keep DAIF.I set");
         if SCHED_READY.load(Ordering::SeqCst) {
             let picked = {
@@ -1104,12 +1104,24 @@ impl Platform for Aarch64Platform {
         RESCHED_WAKE.load(Ordering::Relaxed)
     }
 
+    fn bkl_stats() -> [(usize, usize); 2] {
+        [BKL.stats(0), BKL.stats(1)]
+    }
+
     fn idle_entries() -> usize {
         SECONDARY_IDLE_ENTRIES.load(Ordering::Relaxed)
     }
 
     fn secondary_timer_ticks() -> usize {
         SECONDARY_TIMER_TICKS.load(Ordering::Relaxed)
+    }
+
+    fn secondary_user_ticks() -> usize {
+        SECONDARY_USER_TICKS.load(Ordering::Relaxed)
+    }
+
+    fn secondary_preempts() -> usize {
+        SECONDARY_PREEMPTS.load(Ordering::Relaxed)
     }
 
     fn secondary_idle_entries() -> usize {
@@ -1327,6 +1339,9 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
 
 #[no_mangle]
 extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
+    if vifast_arch::panic::is_panicking() {
+        Aarch64::halt();
+    }
     assert_irqs_disabled();
     let bkl = bkl_lock();
     assert_current_tcb();
@@ -1338,6 +1353,7 @@ extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
         write32(GICC + 0x010, irq);
         if irq == 1 {
             RESCHED_PENDING[1].store(false, Ordering::SeqCst);
+            RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
         } else {
             poll_maintenance();
         }
@@ -1345,8 +1361,18 @@ extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
         assert_bkl_released();
         return;
     }
-    SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
-    vifast_runtime::timer::on_timer::<Aarch64Platform>(frame);
+    let hart = Aarch64Platform::hart_id();
+    let user = frame.spsr & 0b1111 == 0;
+    if hart == 1 {
+        SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+        if user {
+            SECONDARY_USER_TICKS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let changed = vifast_runtime::timer::on_timer::<Aarch64Platform>(frame);
+    if hart == 1 && user && changed {
+        SECONDARY_PREEMPTS.fetch_add(1, Ordering::Relaxed);
+    }
     drop(bkl);
     assert_bkl_released();
 }

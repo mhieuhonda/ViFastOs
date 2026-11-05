@@ -825,10 +825,16 @@ pub fn reply_recv(
 }
 
 pub fn signal(notification_slot: u8) -> SyscallResult {
+    signal_bits(notification_slot, 0)
+}
+
+/// Signal a notification with an explicit bit mask.  A zero mask keeps the
+/// legacy one-bit behaviour (capability badge or bit 0).
+pub fn signal_bits(notification_slot: u8, bits: u64) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(
             SyscallId::Signal as u64,
-            [notification_slot as u64, 0, 0, 0, 0, 0],
+            [notification_slot as u64, bits, 0, 0, 0, 0],
         )
     };
     result(e, v)

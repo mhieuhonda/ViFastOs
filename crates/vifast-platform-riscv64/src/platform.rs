@@ -53,6 +53,9 @@ struct TrapStack([u8; 32768]);
 static mut TRAP_STACKS: [TrapStack; MAX_HARTS] = [TrapStack([0; 32768]); MAX_HARTS];
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_USER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_PREEMPTS: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_NONE_WAKES: AtomicUsize = AtomicUsize::new(0);
@@ -105,45 +108,35 @@ static MAINT_KIND: [AtomicU32; MAX_HARTS] = [
     AtomicU32::new(0),
 ];
 static BKL: BigKernelLock = BigKernelLock::new();
-static BKL_OWNER: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-struct PlatformBklGuard {
-    _guard: BigKernelGuard,
-    hart: usize,
-}
-
-impl Drop for PlatformBklGuard {
-    fn drop(&mut self) {
-        if BKL_OWNER.load(Ordering::Acquire) == self.hart {
-            BKL_OWNER.store(usize::MAX, Ordering::Release);
+pub fn panic_halt_others() {
+    let hart = current_hart();
+    if hart == 0 {
+        if SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
+            Riscv64::send_ipi(1);
         }
+    } else {
+        Riscv64::send_ipi(0);
     }
 }
 
-fn bkl_lock() -> PlatformBklGuard {
+fn current_hart() -> usize {
     let state = cpu_state();
-    let hart = if state.is_null() {
+    if state.is_null() {
         0
     } else {
         unsafe { (*state).hart_id }
-    };
-    let guard = BKL.lock_with(poll_maintenance);
-    BKL_OWNER.store(hart, Ordering::Release);
-    PlatformBklGuard {
-        _guard: guard,
-        hart,
     }
+}
+
+fn bkl_lock() -> BigKernelGuard {
+    BKL.lock_with_hart(current_hart(), poll_maintenance)
 }
 
 fn assert_bkl_released() {
-    let state = cpu_state();
-    let hart = if state.is_null() {
-        0
-    } else {
-        unsafe { (*state).hart_id }
-    };
+    let hart = current_hart();
     assert!(
-        BKL_OWNER.load(Ordering::Acquire) != hart,
+        !BKL.held_by(hart),
         "BKL held on current hart before user return"
     );
 }
@@ -192,7 +185,7 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
         return false;
     }
     assert!(
-        BKL_OWNER.load(Ordering::Acquire) != usize::MAX,
+        BKL.held_by(current_hart()),
         "maintenance IPI sender must hold BKL"
     );
     let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
@@ -213,7 +206,7 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
 
 fn send_reschedule(target: usize) -> bool {
     assert!(
-        BKL_OWNER.load(Ordering::Acquire) != usize::MAX,
+        BKL.held_by(current_hart()),
         "reschedule sender must hold BKL"
     );
     if target >= MAX_HARTS || !maintenance_target_online(target) {
@@ -306,8 +299,11 @@ unsafe fn set_timer(at: u64) {
 /// Account one WFI wake.  If several sources are pending, prefer the IPI
 /// reason so that one sleep contributes exactly one wakeup.
 fn record_secondary_wake(sip: u64) {
-    if sip & (1u64 << 5) != 0 && POST_STARTED.load(Ordering::Relaxed) {
-        POST_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    if sip & (1u64 << 5) != 0 {
+        SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+        if POST_STARTED.load(Ordering::Relaxed) {
+            POST_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+        }
     }
     if sip & (1u64 << 1) != 0 {
         SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
@@ -342,6 +338,9 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
     }
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
+        if vifast_arch::panic::is_panicking() {
+            Riscv64::halt();
+        }
         if !SCHED_READY.load(Ordering::Acquire) {
             poll_maintenance();
             core::hint::spin_loop();
@@ -700,6 +699,18 @@ impl Platform for RiscvPlatform {
         )
     }
 
+    fn secondary_timer_ticks() -> usize {
+        SECONDARY_TIMER_TICKS.load(Ordering::Relaxed)
+    }
+
+    fn secondary_user_ticks() -> usize {
+        SECONDARY_USER_TICKS.load(Ordering::Relaxed)
+    }
+
+    fn secondary_preempts() -> usize {
+        SECONDARY_PREEMPTS.load(Ordering::Relaxed)
+    }
+
     fn secondary_idle_entries() -> usize {
         IDLE_ENTRIES.load(Ordering::Relaxed)
     }
@@ -763,6 +774,9 @@ impl Platform for RiscvPlatform {
 
     fn wait_for_work(hart: usize) {
         loop {
+            if vifast_arch::panic::is_panicking() {
+                Riscv64::halt();
+            }
             poll_maintenance();
             if RiscvPlatform::kernel().has_ready_on(hart) {
                 return;
@@ -801,6 +815,10 @@ impl Platform for RiscvPlatform {
 
     fn resched_wake() -> usize {
         RESCHED_WAKE.load(Ordering::Relaxed)
+    }
+
+    fn bkl_stats() -> [(usize, usize); 2] {
+        [BKL.stats(0), BKL.stats(1)]
     }
 
     fn idle_entries() -> usize {
@@ -1158,23 +1176,41 @@ fn count_user_entry() {
 
 #[no_mangle]
 pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
+    if vifast_arch::panic::is_panicking() {
+        Riscv64::halt();
+    }
     let frame = unsafe { &mut *frame };
     // Count every return to user, not only the first enter_user.
     if frame.sstatus & (1 << 8) == 0 {
         count_user_entry();
     }
     if frame.scause == 0x8000_0000_0000_0001 {
+        let resched = MAINT_KIND[1].load(Ordering::Acquire) & MAINT_RESCHEDULE != 0;
         unsafe {
             core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
         }
         poll_maintenance();
+        if resched {
+            RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
+        }
         return;
     }
     assert_irqs_disabled();
     let bkl = bkl_lock();
     assert_current_tcb();
     if frame.scause == 0x8000_0000_0000_0005 {
-        vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
+        let hart = RiscvPlatform::hart_id();
+        let user = frame.sstatus & (1 << 8) == 0;
+        if hart == 1 {
+            SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+            if user {
+                SECONDARY_USER_TICKS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let changed = vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
+        if hart == 1 && user && changed {
+            SECONDARY_PREEMPTS.fetch_add(1, Ordering::Relaxed);
+        }
         drop(bkl);
         assert_bkl_released();
         return;

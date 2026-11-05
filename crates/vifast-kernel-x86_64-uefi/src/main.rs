@@ -208,16 +208,15 @@ pub extern "efiapi" fn efi_main(image_handle: *mut c_void, system_table: *mut c_
 }
 
 #[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    X86Platform::write_str("\r\nPANIC\r\n");
-    if let Some(location) = info.location() {
-        vifast_kernel::klog!(
-            X86Platform,
-            "PANIC LOC {}:{}:{}",
-            location.file(),
-            location.line(),
-            location.column()
-        );
+fn panic(_info: &PanicInfo) -> ! {
+    if !vifast_arch::panic::begin() {
+        X86Platform::halt();
+    }
+    let hart = <X86Platform as vifast_runtime::Platform>::hart_id();
+    vifast_kernel::klog!(X86Platform, "PANIC (hart={})", hart);
+    vifast_platform_x86_64::platform::panic_halt_others();
+    for _ in 0..10_000_000 {
+        core::hint::spin_loop();
     }
     X86Platform::exit(1)
 }

@@ -148,6 +148,16 @@ pub trait Platform: Arch + Console {
         0
     }
 
+    /// Timer deliveries while hart 1 was in user mode.
+    fn secondary_user_ticks() -> usize {
+        0
+    }
+
+    /// Timer deliveries that switched a user task on hart 1.
+    fn secondary_preempts() -> usize {
+        0
+    }
+
     fn secondary_idle_entries() -> usize {
         0
     }
@@ -187,6 +197,11 @@ pub trait Platform: Arch + Console {
 
     fn user_entries(_hart: usize) -> usize {
         0
+    }
+
+    /// `(acquisitions, spin iterations)` for each BKL hart.
+    fn bkl_stats() -> [(usize, usize); 2] {
+        [(0, 0), (0, 0)]
     }
 
     /// Harts that can schedule ordinary user tasks.
@@ -1098,15 +1113,20 @@ pub mod fault {
 pub mod timer {
     use super::*;
 
-    pub fn on_timer<A: Platform>(context: &mut A::Context) {
+    pub fn on_timer<A: Platform>(context: &mut A::Context) -> bool {
         let kernel = A::kernel();
         let contexts = A::contexts();
         let hart = A::hart_id();
         let old = kernel.current_on(hart);
+        let old_index = old.map(|tcb| tcb.index);
         if let Some(old) = old {
             contexts[old.index as usize] = *context;
         }
         kernel.tick();
+        #[cfg(feature = "test-panic-hart1")]
+        if hart == 1 {
+            panic!("test-panic-hart1");
+        }
         #[cfg(feature = "test-exit")]
         if hart == 0
             && TEST_DONE.load(core::sync::atomic::Ordering::SeqCst)
@@ -1143,6 +1163,14 @@ pub mod timer {
             if hart1_ticks > 0 {
                 vifast_kernel::klog!(A, "SMP TIMER OK (hart1_ticks={})", hart1_ticks);
             }
+            let user_ticks = A::secondary_user_ticks();
+            let preempts = A::secondary_preempts();
+            vifast_kernel::klog!(
+                A,
+                "SMP PREEMPT OK (user_ticks={}, preempts={})",
+                user_ticks,
+                preempts
+            );
             if let Some((ticks, entries, timer_wakes)) = A::post_idle_stats() {
                 vifast_kernel::klog!(
                     A,
@@ -1164,6 +1192,15 @@ pub mod timer {
                     A::idle_entries()
                 );
             }
+            let bkl = A::bkl_stats();
+            vifast_kernel::klog!(
+                A,
+                "BKL STATS (h0_acq={}, h0_spin={}, h1_acq={}, h1_spin={})",
+                bkl[0].0,
+                bkl[0].1,
+                bkl[1].0,
+                bkl[1].1
+            );
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
             if let Some((size, bump, objects, max_objects)) =
                 kernel.untyped_usage_by_base(A::data_page().as_ptr() as usize)
@@ -1194,5 +1231,6 @@ pub mod timer {
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
         }
+        old_index != Some(next.index)
     }
 }

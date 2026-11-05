@@ -18,9 +18,11 @@ def fixture(arch: str) -> str:
     if arch == "riscv64":
         lines += [
             "SMP OK (harts=2, ipi=1)",
+            "SMP TIMER OK (hart1_ticks=20)",
             "SMP IDLE OK (hart1_wakeups=5, idle_entries=5, wake_timer=0, wake_sgi=5)",
+            "SMP PREEMPT OK (user_ticks=4, preempts=2)",
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=5)",
-            "SMP WORKERS OK (a=50, b=50)",
+            "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
         ]
     elif arch == "aarch64":
@@ -28,8 +30,9 @@ def fixture(arch: str) -> str:
             "SMP OK (harts=2, psci=0, ipi=1)",
             "SMP TIMER OK (hart1_ticks=20)",
             "SMP IDLE OK (hart1_wakeups=2, idle_entries=2, wake_timer=0, wake_sgi=2)",
+            "SMP PREEMPT OK (user_ticks=4, preempts=2)",
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=2)",
-            "SMP WORKERS OK (a=50, b=50)",
+            "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
         ]
     else:
@@ -45,8 +48,9 @@ def fixture(arch: str) -> str:
             "SMP IDLE OK (hart1_wakeups=3, idle_entries=4, wake_timer=2, wake_sgi=1)",
             "SMP TIMER RATE (ap=20, bsp=20)",
             "SMP IPI COUNT (sent=2, seen=2)",
+            "SMP PREEMPT OK (user_ticks=4, preempts=2)",
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=5)",
-            "SMP WORKERS OK (a=50, b=50)",
+            "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
         ]
     for address in [0] + spec.FAULT_ADDRESSES:
@@ -95,7 +99,12 @@ def main() -> int:
                 "sent": base.replace("resched_sent=1", "resched_sent=6"),
                 "idle-zero": base.replace("hart1_wakeups=5", "hart1_wakeups=0")
                 .replace("hart1_wakeups=2", "hart1_wakeups=0"),
-                "workers": base.replace("SMP WORKERS OK (a=50, b=50)\n", ""),
+                "workers": base.replace("SMP WORKERS OK (a=50, b=50, c=1)\n", ""),
+                "preempt-u": base.replace("user_ticks=4", "user_ticks=2"),
+                "preempt-p": base.replace("preempts=2", "preempts=0"),
+                "preempt-over": base.replace("user_ticks=4", "user_ticks=21"),
+                "w-gt-s": base.replace("resched_sent=1", "resched_sent=0"),
+                "timer-zero": base.replace("SMP TIMER OK (hart1_ticks=20)", "SMP TIMER OK (hart1_ticks=0)"),
                 "post-ticks": base.replace("ticks=6", "ticks=4"),
                 "post-entries": base.replace("idle_entries=6", "idle_entries=1"),
                 "post-wake": base.replace("wake_timer=5", "wake_timer=0"),
@@ -144,6 +153,11 @@ def main() -> int:
                 "post-ticks": base.replace("ticks=6", "ticks=4"),
                 "post-entries": base.replace("idle_entries=6", "idle_entries=1"),
                 "post-wake": base.replace("wake_timer=5", "wake_timer=0"),
+                "workers": base.replace("SMP WORKERS OK (a=50, b=50, c=1)\n", ""),
+                "preempt-u": base.replace("user_ticks=4", "user_ticks=2"),
+                "preempt-p": base.replace("preempts=2", "preempts=0"),
+                "preempt-over": base.replace("user_ticks=4", "user_ticks=21"),
+                "w-gt-s": base.replace("resched_sent=1", "resched_sent=0"),
                 "order-real-long": base.replace(
                     "AP REAL MODE OK (apic=1)\nAP LONG MODE OK (cpu=1)",
                     "AP LONG MODE OK (cpu=1)\nAP REAL MODE OK (apic=1)",
@@ -155,6 +169,21 @@ def main() -> int:
             }
             for label, output in variants.items():
                 expect_fail(f"x86_64: numeric {label}", arch, output, rc)
+
+    panic_base = "booting on x86_64\nPANIC (hart=1)\n"
+    for arch in ("riscv64", "aarch64", "x86_64"):
+        cases += 1
+        if not spec.accept(arch, panic_base, 0, feature_mode="test-panic-hart1"):
+            failures.append(f"{arch}: panic feature accepted")
+        for label, output in {
+            "missing": "booting on x86_64\n",
+            "hart0": "PANIC (hart=0)\n",
+            "duplicate": panic_base + "PANIC (hart=1)\n",
+            "after": panic_base + "ROOT SWITCH 2\n",
+        }.items():
+            cases += 1
+            if spec.accept(arch, output, 0, feature_mode="test-panic-hart1"):
+                failures.append(f"{arch}: panic {label} accepted")
 
     feature_base = fixture("riscv64") + "BOOT HANDOFF OK (from=1)\n"
     cases += 1

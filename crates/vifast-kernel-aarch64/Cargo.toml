@@ -8,9 +8,11 @@ license.workspace = true
 [features]
 default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
+test-panic-hart1 = ["vifast-runtime/test-panic-hart1"]
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
 vifast-arch = { path = "../vifast-arch" }
 vifast-platform-aarch64 = { path = "../vifast-platform-aarch64" }
+vifast-kernel = { path = "../vifast-kernel" }
 vifast-runtime = { path = "../vifast-runtime" }

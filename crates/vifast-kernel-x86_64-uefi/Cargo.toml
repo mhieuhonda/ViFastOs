@@ -8,6 +8,7 @@ license.workspace = true
 [features]
 default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
+test-panic-hart1 = ["vifast-runtime/test-panic-hart1"]
 test-ap-stall = ["vifast-platform-x86_64/test-ap-stall"]
 
 [dependencies]

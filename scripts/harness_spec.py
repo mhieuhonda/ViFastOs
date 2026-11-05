@@ -51,6 +51,7 @@ FORBIDDEN = [
     "STALL",
     "BOOT HANDOFF FAIL",
     "KERNEL IRQ OUTSIDE IDLE",
+    "AP PIC IRQ",
 ]
 
 FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000]
@@ -65,9 +66,11 @@ ARCH = {
     "riscv64": [
         ("SMP OK", "both harts online"),
         ("ipi=1", "maintenance IPI acknowledged"),
+        ("SMP TIMER OK (hart1_ticks=T)", "secondary timer ran, exactly once"),
         ("SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)", "idle accounting, exactly once"),
+        ("SMP PREEMPT OK (user_ticks=U, preempts=P)", "secondary timer preempted a busy user task, exactly once"),
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "secondary scheduling, exactly once"),
-        ("SMP WORKERS OK (a=50, b=50)", "both secondary workers completed"),
+        ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
     ],
     "aarch64": [
@@ -75,8 +78,9 @@ ARCH = {
         ("ipi=1", "maintenance IPI acknowledged"),
         ("SMP TIMER OK (hart1_ticks=T)", "secondary timer ran, exactly once"),
         ("SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)", "idle accounting, exactly once"),
+        ("SMP PREEMPT OK (user_ticks=U, preempts=P)", "secondary timer preempted a busy user task, exactly once"),
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "secondary scheduling, exactly once"),
-        ("SMP WORKERS OK (a=50, b=50)", "both secondary workers completed"),
+        ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
     ],
     "x86_64": [
@@ -93,7 +97,7 @@ ARCH = {
         ("SMP TIMER RATE (ap=T, bsp=B)", "AP and BSP timer rates agree, exactly once"),
         ("SMP IPI COUNT (sent=X, seen=Y)", "AP maintenance IPI accounting, exactly once"),
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "AP scheduling, exactly once"),
-        ("SMP WORKERS OK (a=50, b=50)", "both AP workers completed"),
+        ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker AP idle proof"),
     ],
 }
@@ -111,6 +115,7 @@ ARCH_EXACT_ONE = {
     "riscv64": [
         "SMP OK",
         "SMP IDLE OK",
+        "SMP PREEMPT OK",
         "SMP SCHED OK",
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
@@ -119,25 +124,28 @@ ARCH_EXACT_ONE = {
         "SMP OK",
         "SMP TIMER OK",
         "SMP IDLE OK",
+        "SMP PREEMPT OK",
         "SMP SCHED OK",
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK", "SMP TIMER RATE", "SMP IPI COUNT", "SMP SCHED OK", "SMP WORKERS OK", "SMP POST IDLE OK"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK", "SMP PREEMPT OK", "SMP TIMER RATE", "SMP IPI COUNT", "SMP SCHED OK", "SMP WORKERS OK", "SMP POST IDLE OK"],
 }
 
 NUMERIC = {
     "riscv64": [
         "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
         "ROOT SWITCH n > 1",
-        "N > 1, M >= 100, W > 0, S <= I",
+        "N > 1, M >= 100, W > 0, W <= S, S <= I",
+        "U >= 3, P >= 1, U <= T",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "aarch64": [
         "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
         "ROOT SWITCH n > 1",
         "T > 0, I >= 1",
-        "N > 1, M >= 100, W > 0, S <= I",
+        "N > 1, M >= 100, W > 0, W <= S, S <= I",
+        "U >= 3, P >= 1, U <= T",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "x86_64": [
@@ -147,7 +155,8 @@ NUMERIC = {
         "T > 0, I >= 1",
         "B/2 <= T <= 2B, B >= 5",
         "1 <= Y <= X, Wt <= T, Ws <= Y",
-        "N > 1, M >= 100, W > 0, S <= I",
+        "N > 1, M >= 100, W > 0, W <= S, S <= I",
+        "U >= 3, P >= 1, U <= T",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
 }
@@ -161,6 +170,7 @@ IDLE_RE = re.compile(
     r"wake_timer=(\d+), wake_sgi=(\d+)\)"
 )
 TIMER_RE = re.compile(r"SMP TIMER OK \(hart1_ticks=(\d+)\)")
+PREEMPT_RE = re.compile(r"SMP PREEMPT OK \(user_ticks=(\d+), preempts=(\d+)\)")
 TRAMPOLINE_RE = re.compile(r"AP TRAMPOLINE OK \(page=0x([0-9a-fA-F]+)\)")
 ACPI_RE = re.compile(r"ACPI MADT OK \(cpus=(\d+), bsp=\d+, lapic=0x[0-9a-fA-F]+\)")
 POST_RE = re.compile(
@@ -198,6 +208,15 @@ def accept(
     require_disk: bool = True,
     feature_mode: str | None = None,
 ) -> bool:
+    if feature_mode == "test-panic-hart1":
+        marker = "PANIC (hart=1)"
+        if output.count(marker) != 1 or "PANIC (hart=0)" in output:
+            return False
+        after = output.split(marker, 1)[1]
+        for line in after.splitlines():
+            if any(token in line for token in ("ROOT", "SMP ", "USER FAULT", "PANIC (hart=")):
+                return False
+        return True
     if rc not in EXIT_CODES[name]:
         return False
     if not all(text in output for text, _ in COMMON):
@@ -235,7 +254,15 @@ def accept(
         sched = smp_sched(output)
         if sched[0] <= 1 or sched[1] < 100 or sched[3] <= 0 or sched[2] > sched[4]:
             return False
-        if output.count("SMP WORKERS OK (a=50, b=50)") != 1:
+        timer = TIMER_RE.search(output)
+        preempt = PREEMPT_RE.search(output)
+        if not timer or int(timer.group(1)) <= 0 or not preempt:
+            return False
+        if int(preempt.group(1)) < 3 or int(preempt.group(2)) < 1 or int(preempt.group(1)) > int(timer.group(1)):
+            return False
+        if sched[3] > sched[2]:
+            return False
+        if output.count("SMP WORKERS OK (a=50, b=50, c=1)") != 1:
             return False
         idle = smp_idle(output)
         if min(idle) < 0 or idle[0] <= 0:
@@ -278,9 +305,12 @@ def accept(
         if idle[2] > int(timer.group(1)) or idle[3] > seen:
             return False
         sched = smp_sched(output)
-        if sched[0] <= 1 or sched[1] < 100 or sched[3] <= 0 or sched[2] > sched[4]:
+        if sched[0] <= 1 or sched[1] < 100 or sched[3] <= 0 or sched[2] > sched[4] or sched[3] > sched[2]:
             return False
-        if output.count("SMP WORKERS OK (a=50, b=50)") != 1:
+        preempt = PREEMPT_RE.search(output)
+        if not preempt or int(preempt.group(1)) < 3 or int(preempt.group(2)) < 1 or int(preempt.group(1)) > int(timer.group(1)):
+            return False
+        if output.count("SMP WORKERS OK (a=50, b=50, c=1)") != 1:
             return False
         post = POST_RE.search(output)
         if not post:
