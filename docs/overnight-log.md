@@ -65,7 +65,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `ba5cf4ed440ad125e0d02eeca978e40fa2760ac5d92195c4499c8c5d66afbfbd`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `75f420ae5cb729a146487e1d9789cd6a69c24d92930b98c18ae022bc63bee342`.
 
 ---
 
@@ -208,6 +208,20 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.15 — BKL audit + x86 fault path + per-CPU groundwork (vòng 02)
+
+- Commit `fix: make bkl cover all kernel entries and assert release on user return`.
+- BKL bọc thêm x86 exception/page-fault; x86 `enter_user` đọc state per-CPU qua
+  GS base và assert BKL đã nhả. RISC-V/AArch64 cũng assert trước enter_user.
+- Mỗi trap entry assert IRQ đã tắt: RISC-V SIE, AArch64 DAIF.I, x86 RFLAGS.IF.
+- IPI maintenance của hart phụ không lấy BKL; comment lý do tránh deadlock khi
+  hart 0 đang giữ BKL và chờ ACK TLB shootdown.
+- `BigKernelLock` giữ Acquire/Release ordering; chưa chuyển ticket lock.
+- Task 4: tách trap stack/IST/TSS thành mảng `MAX_HARTS=4`; CPU state có
+  `hart_id`, `current_tcb`, `trap_stack_top`; hart 0 đọc qua tp/TPIDR_EL1/GS.
+- Host test `vifast-arch` 2/2; QEMU 3/3 PASS ×3; persist 3/3 PASS.
+- RISC-V kernel end `0x803?` / headroom `462672` byte (per-CPU stacks làm giảm).
 
 ## 8.14 — RISC-V VirtIO-MMIO block + docs sync (vòng 02)
 

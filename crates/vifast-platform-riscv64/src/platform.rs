@@ -57,6 +57,14 @@ static IPI_PENDING: AtomicBool = AtomicBool::new(false);
 static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
 static BKL: BigKernelLock = BigKernelLock::new();
 
+fn assert_irqs_disabled() {
+    let sstatus: u64;
+    unsafe {
+        core::arch::asm!("csrr {}, sstatus", out(reg) sstatus);
+    }
+    assert!(sstatus & (1 << 1) == 0, "BKL entered with SIE set");
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TrapFrame {
@@ -108,6 +116,8 @@ unsafe fn set_timer(at: u64) {
 
 #[no_mangle]
 pub extern "C" fn rust_secondary(_hartid: usize) -> ! {
+    // Maintenance-only hart: do NOT take BKL here. Hart 0 holds BKL while
+    // waiting for the TLB-shootdown ACK from this loop.
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
         if IPI_PENDING.swap(false, Ordering::SeqCst) {
@@ -578,6 +588,7 @@ impl Platform for RiscvPlatform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
+        assert!(!BKL.is_held(), "BKL held before user return");
         unsafe {
             core::arch::asm!("csrw sstatus, {}", in(reg) context.sstatus);
             core::arch::asm!("csrw sepc, {}", in(reg) context.sepc);
@@ -679,10 +690,13 @@ extern "C" {
 
 #[no_mangle]
 extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
-    let _bkl = BKL.lock();
+    let bkl = BKL.lock();
+    assert_irqs_disabled();
     let frame = unsafe { &mut *frame };
     if frame.scause == 0x8000_0000_0000_0005 {
         vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
+        drop(bkl);
+        assert!(!BKL.is_held(), "BKL held on timer return");
         return;
     }
     if frame.scause != 8 {
@@ -697,6 +711,8 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
             core::arch::asm!("csrr {}, stval", out(reg) stval);
         }
         vifast_runtime::fault::suspend::<RiscvPlatform>(frame, frame.scause, stval);
+        drop(bkl);
+        assert!(!BKL.is_held(), "BKL held on fault return");
         return;
     }
     let number = frame.regs[17];
@@ -710,4 +726,6 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         frame.regs[15],
     ];
     vifast_runtime::syscall::dispatch::<RiscvPlatform>(frame, number, args);
+    drop(bkl);
+    assert!(!BKL.is_held(), "BKL held on syscall return");
 }

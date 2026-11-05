@@ -67,6 +67,14 @@ static IPI_PENDING: AtomicBool = AtomicBool::new(false);
 static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
 static BKL: BigKernelLock = BigKernelLock::new();
 
+fn assert_irqs_disabled() {
+    let daif: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, daif", out(reg) daif);
+    }
+    assert!(daif & (1 << 7) != 0, "BKL entered with IRQ unmasked");
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TrapFrame {
@@ -148,6 +156,8 @@ fn pan_supported() -> bool {
 
 #[no_mangle]
 pub extern "C" fn rust_secondary(_context: u64) -> ! {
+    // Maintenance-only hart: do NOT take BKL here. Hart 0 holds BKL while
+    // waiting for the TLB-shootdown ACK from this loop.
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
         if IPI_PENDING.swap(false, Ordering::SeqCst) {
@@ -625,6 +635,7 @@ impl Platform for Aarch64Platform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
+        assert!(!BKL.is_held(), "BKL held before user return");
         let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36);
         let mair: u64 = 0xFF;
         unsafe {
@@ -782,11 +793,14 @@ extern "C" {
 
 #[no_mangle]
 extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
-    let _bkl = BKL.lock();
+    let bkl = BKL.lock();
+    assert_irqs_disabled();
     let frame = unsafe { &mut *frame };
     let ec = (frame.esr >> 26) & 0x3f;
     if ec != 0x15 {
         vifast_runtime::fault::suspend::<Aarch64Platform>(frame, frame.esr, frame.far);
+        drop(bkl);
+        assert!(!BKL.is_held(), "BKL held on fault return");
         return;
     }
     let number = frame.regs[8];
@@ -799,17 +813,24 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
         frame.regs[5],
     ];
     vifast_runtime::syscall::dispatch::<Aarch64Platform>(frame, number, args);
+    drop(bkl);
+    assert!(!BKL.is_held(), "BKL held on syscall return");
 }
 
 #[no_mangle]
 extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
-    let _bkl = BKL.lock();
+    let bkl = BKL.lock();
+    assert_irqs_disabled();
     let frame = unsafe { &mut *frame };
     let iar = read32(GICC + 0x00C);
     let irq = iar & 0x3FF;
     if irq != TIMER_IRQ {
         write32(GICC + 0x010, irq);
+        drop(bkl);
+        assert!(!BKL.is_held(), "BKL held on IRQ return");
         return;
     }
     vifast_runtime::timer::on_timer::<Aarch64Platform>(frame);
+    drop(bkl);
+    assert!(!BKL.is_held(), "BKL held on timer return");
 }

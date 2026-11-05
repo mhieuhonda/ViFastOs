@@ -69,6 +69,14 @@ static mut ACTIVE_ASID: u16 = 0;
 static mut PCID_ENABLED: bool = false;
 static BKL: BigKernelLock = BigKernelLock::new();
 
+fn assert_irqs_disabled() {
+    let flags: u64;
+    unsafe {
+        core::arch::asm!("pushfq; pop {}", out(reg) flags);
+    }
+    assert!(flags & (1 << 9) == 0, "BKL entered with IF set");
+}
+
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct DescriptorTablePtr {
@@ -1058,6 +1066,7 @@ impl Platform for X86Platform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
+        assert!(!BKL.is_held(), "BKL held before user return");
         let base = context as *const TrapFrame as usize;
         unsafe {
             core::arch::asm!(
@@ -1158,6 +1167,8 @@ extern "efiapi" {
 
 #[no_mangle]
 extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: u64) -> ! {
+    let bkl = BKL.lock();
+    assert_irqs_disabled();
     if matches!(vector, 2 | 8 | 18) {
         vifast_kernel::klog!(
             X86Platform,
@@ -1180,11 +1191,15 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
     }
     let mut context = TrapFrame::empty();
     vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, error);
+    drop(bkl);
+    assert!(!BKL.is_held(), "BKL held before user fault return");
     <X86Platform as Platform>::enter_user(&context);
 }
 
 #[no_mangle]
 extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
+    let bkl = BKL.lock();
+    assert_irqs_disabled();
     let cr2: u64;
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
@@ -1201,23 +1216,31 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
     }
     let mut context = TrapFrame::empty();
     vifast_runtime::fault::suspend::<X86Platform>(&mut context, error, cr2);
+    drop(bkl);
+    assert!(!BKL.is_held(), "BKL held before user page-fault return");
     <X86Platform as Platform>::enter_user(&context);
 }
 
 #[no_mangle]
 extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
-    let _bkl = BKL.lock();
+    let bkl = BKL.lock();
+    assert_irqs_disabled();
     let frame = unsafe { &mut *frame };
     let number = frame.rax;
     let args = [
         frame.rdi, frame.rsi, frame.rdx, frame.rcx, frame.r8, frame.r9,
     ];
     vifast_runtime::syscall::dispatch::<X86Platform>(frame, number, args);
+    drop(bkl);
+    assert!(!BKL.is_held(), "BKL held on x86 syscall return");
 }
 
 #[no_mangle]
 extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
-    let _bkl = BKL.lock();
+    let bkl = BKL.lock();
+    assert_irqs_disabled();
     let frame = unsafe { &mut *frame };
     vifast_runtime::timer::on_timer::<X86Platform>(frame);
+    drop(bkl);
+    assert!(!BKL.is_held(), "BKL held on x86 IRQ return");
 }
