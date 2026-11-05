@@ -78,6 +78,16 @@ def dump_timeout_artifacts(
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(2.0)
                 sock.connect(monitor)
+                # Drain the human monitor banner and its first prompt.
+                banner = b""
+                while b"(qemu)" not in banner:
+                    try:
+                        chunk = sock.recv(65536)
+                    except socket.timeout:
+                        break
+                    if not chunk:
+                        break
+                    banner += chunk
                 sock.sendall(b"info registers -a\n")
                 chunks: list[bytes] = []
                 while True:
