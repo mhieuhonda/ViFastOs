@@ -2393,9 +2393,14 @@ extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
         X86_64::halt();
     }
     assert_irqs_disabled();
+    let frame = unsafe { &mut *frame };
+    if frame.rax == vifast_abi::SyscallId::GetTime as u64 {
+        frame.rax = 0;
+        frame.rdi = X86Platform::kernel().fast_time();
+        return;
+    }
     let bkl = bkl_lock();
     assert_current_tcb("trap");
-    let frame = unsafe { &mut *frame };
     let number = frame.rax;
     let args = [
         frame.rdi, frame.rsi, frame.rdx, frame.rcx, frame.r8, frame.r9,

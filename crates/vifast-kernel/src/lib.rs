@@ -217,6 +217,7 @@ pub struct Kernel {
     pub(crate) current: [Option<ObjRef>; MAX_HARTS],
     pub(crate) seq: u64,
     pub(crate) ticks: [u64; MAX_HARTS],
+    pub(crate) system_ticks: core::sync::atomic::AtomicU64,
     pub(crate) root: Option<ObjRef>,
     pub(crate) fs: fs::RamFs,
     pub(crate) stats: KernelStats,
@@ -242,6 +243,7 @@ impl Kernel {
             current: [None; MAX_HARTS],
             seq: 0,
             ticks: [0; MAX_HARTS],
+            system_ticks: core::sync::atomic::AtomicU64::new(0),
             root: None,
             fs: fs::RamFs::new(),
             stats: KernelStats {
@@ -270,6 +272,8 @@ impl Kernel {
         self.current = [None; MAX_HARTS];
         self.seq = 0;
         self.ticks = [0; MAX_HARTS];
+        self.system_ticks
+            .store(0, core::sync::atomic::Ordering::Release);
         self.root = None;
         self.fs = fs::RamFs::new();
         self.stats = KernelStats {
@@ -3201,7 +3205,18 @@ impl Kernel {
         if let Some(counter) = self.ticks.get_mut(hart) {
             *counter = counter.wrapping_add(1);
             self.stats.ticks = *counter;
+            if hart == 0 {
+                self.system_ticks
+                    .store(*counter, core::sync::atomic::Ordering::Release);
+            }
         }
+    }
+
+    /// Lock-free system time source.  Only the BSP updates it; all harts may
+    /// read it without taking the BKL.
+    pub fn fast_time(&self) -> u64 {
+        self.system_ticks
+            .load(core::sync::atomic::Ordering::Acquire)
     }
 
     /// BSP ticks.  System-wide test timing always uses hart 0 so that the AP
@@ -3267,7 +3282,7 @@ impl Kernel {
             // proof, but a task that migrates between harts must never see
             // wall time jump backwards or forwards.
             return UserAction::Return {
-                value: self.ticks(),
+                value: self.fast_time(),
                 error: KError::Ok,
             };
         }

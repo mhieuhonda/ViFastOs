@@ -1366,11 +1366,16 @@ fn count_user_trap() {
 #[no_mangle]
 extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
     assert_irqs_disabled();
-    let bkl = bkl_lock();
-    assert_current_tcb();
     let frame = unsafe { &mut *frame };
     count_user_trap();
     let ec = (frame.esr >> 26) & 0x3f;
+    if ec == 0x15 && frame.regs[8] == vifast_abi::SyscallId::GetTime as u64 {
+        frame.regs[0] = 0;
+        frame.regs[1] = Aarch64Platform::kernel().fast_time();
+        return;
+    }
+    let bkl = bkl_lock();
+    assert_current_tcb();
     if ec != 0x15 {
         vifast_runtime::fault::suspend::<Aarch64Platform>(frame, frame.esr, frame.far);
         drop(bkl);

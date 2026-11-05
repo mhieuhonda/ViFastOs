@@ -1349,6 +1349,12 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         }
         return;
     }
+    if frame.scause == 8 && frame.regs[17] == vifast_abi::SyscallId::GetTime as u64 {
+        frame.regs[10] = 0;
+        frame.regs[11] = RiscvPlatform::kernel().fast_time();
+        frame.sepc = frame.sepc.wrapping_add(4);
+        return;
+    }
     assert_irqs_disabled();
     let bkl = bkl_lock();
     assert_current_tcb();
