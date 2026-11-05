@@ -414,8 +414,9 @@ pub struct Message {
     pub _pad: [u8; 7],
     /// Slot number of a transferred capability, or `CAP_NONE`.
     pub cap: u64,
-    /// Sender badge captured from the endpoint capability.  Receiver sees
-    /// this in the message value register.
+    /// Sender badge captured from the endpoint capability.  The receiver
+    /// gets it only in the dedicated badge register (a7/x7/r10), never in
+    /// the message value word.
     pub badge: u64,
     pub data: [u64; MSG_MAX_WORDS],
 }

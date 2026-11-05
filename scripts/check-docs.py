@@ -68,12 +68,16 @@ def main() -> int:
         "hai worker affinity",
         "panic không dừng hart khác",
         "sector 0 (magic",
+        "BootInfo v2",
+        "stack 1 trang",
+        "phase âm magic sai",
         "timer đa hart",
         "x86 sẽ theo D2",
         "x86 AP scheduler/user",
     ]
     for value in forbidden:
-        if value in summary or value in handoff:
+        needle = value.casefold()
+        if needle in summary.casefold() or needle in handoff.casefold():
             fail(f"stale string present: {value}")
 
     if "SMP TIMER OK (hart1_ticks=T)" not in summary:

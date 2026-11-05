@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `1e8c778c30a4465f6e0478eedc2a385ab67d45c3a995619828c0c8d9b0684bd0`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `282f2b7fe48c847a9decb59b3864292ea7ccf0c95cfe49a5a829ae0f628b469e`.
 
 ---
 
@@ -567,3 +567,14 @@ follow-up `62b31f4`.
 - `test-panic-hart1` 5/5 mỗi kiến trúc; AArch rc=1, x86 rc=7, RISC rc=0
   (QEMU sifive_test không mang exit-code — nợ R2).
 - Persistence 6 phase × 3 PASS; harness 263 case âm.
+
+
+## 8.29 — RISC-V panic, D6 badge, GetTime, FS small, per-VA TLB (vòng 18)
+
+- `2851cdf`: RISC-V panic ghi `(1<<16)|0x3333`; QEMU rc=1 (5/5).
+- `763f6ff`: D6 badge register a7/x7/r10, CapMint source badge0, server badge0 reject.
+- `5e9c11c`: GetTime dùng `ticks[0]` toàn hệ thống.
+- `2ea3944`: `vifast-fs` FormatOptions + ảnh 48/49 block, ENOSPC, dir 1 block.
+- `111e072`: per-VA TLB + `harts_loaded`, TLB_VA mailbox, 50/50 cả 3.
+- Final: build 0 warning; QEMU 10/10 và 50/50 cả 3; persist 6/6; panic 5/5;
+  handoff 10/10; harness 300 case; RISC headroom `138672` B.
