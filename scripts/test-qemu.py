@@ -19,7 +19,7 @@ import tempfile
 import time
 import glob
 
-from harness_spec import ARCH, COMMON, EXACT_ONE, FAULT_ADDRESSES, FORBIDDEN
+from harness_spec import accept
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QEMU_RV = "qemu-system-riscv64"
@@ -206,83 +206,7 @@ def run_qemu(
     root_rust_at = output.find("ROOT RUST")
     server_at = output.find("Server")
     client_at = output.find("Client")
-    ok = (
-        all(value in output for value, _ in COMMON)
-        and all(
-            value.split(" (")[0] in output for value, _ in ARCH[name]
-        )
-        and all(output.count(value) == 1 for value in EXACT_ONE)
-        and all(value not in output for value in FORBIDDEN)
-        and all(f"addr=0x{value:x}" in output for value in FAULT_ADDRESSES)
-        and "SELFTEST PASS" in output
-        and "booting on" in output
-        and "BOOT UNTYPED" in output
-        and "PREEMPT OK" in output
-        and root_switch_count(output) > 1
-        and "Isolation" in output
-        and "Server" in output
-        and "Client" in output
-        and "Mapped" in output
-        and "Cap OK" in output
-        and "ViFastOS ramfs" in output
-        and "ViFastOS write" in output
-        and "IPC BUF OK" in output
-        and "Reply OK" in output
-        and output.count("VFS SERVER OK") == 1
-        and output.count("VFS OK") == 1
-        and output.count("VFS STAT OK") == 1
-        and output.count("IOMMU OK") == 1
-        and output.count("PERCPU CLOBBER OK") == 1
-        and "PERCPU CLOBBER BAD" not in output
-        and "VFS BAD" not in output
-        and len(faults) == 4
-        and 0x8000_0000 in faults
-        and 0x1000002000 in faults
-        and 0x1000301000 in faults
-        and output.count("ROOT RUST") == 1
-        and output.count("BOOTINFO OK") == 1
-        and output.count("RUST MODULES OK") == 1
-        and output.count("CLIENT VSPACE OK") == 1
-        and output.count("FAULT EP OK") == 1
-        and output.count("ROOT READY") == 1
-        and "ROOT PANIC" not in output
-        and "STALL" not in output
-        and root_rust_at >= 0
-        and server_at > root_rust_at
-        and client_at > root_rust_at
-        and "Zero OK" in output
-        and (name != "x86_64" or "KERNEL DATA NX OK" in output)
-        and (not require_smp or ("SMP OK" in output and "ipi=1" in output))
-        and (not require_block or "BLOCK OK" in output)
-        and (not require_disk or "FS DISK OK" in output)
-        and (
-            name != "aarch64"
-            or (
-                output.count("SMP TIMER OK") == 1
-                and output.count("SMP IDLE OK") == 1
-                and aarch64_idle_ok(output)
-                and output.count("SMP SCHED OK") == 1
-                and smp_sched(output)[0] > 1
-                and smp_sched(output)[1] >= 100
-                and smp_sched(output)[3] > 0
-                and smp_sched(output)[2] <= smp_sched(output)[4]
-                and output.count("SMP WORKERS OK (a=50, b=50)") == 1
-            )
-        )
-        and (
-            name != "riscv64"
-            or (
-                output.count("SMP IDLE OK") == 1
-                and hart1_wakeups(output) > 0
-                and output.count("SMP SCHED OK") == 1
-                and smp_sched(output)[0] > 1
-                and smp_sched(output)[1] >= 100
-                and smp_sched(output)[3] > 0
-                and smp_sched(output)[2] <= smp_sched(output)[4]
-                and output.count("SMP WORKERS OK (a=50, b=50)") == 1
-            )
-        )
-    )
+    ok = accept(name, output, rc, require_block, require_disk)
     if timed_out:
         print("FAIL: timeout")
         return False

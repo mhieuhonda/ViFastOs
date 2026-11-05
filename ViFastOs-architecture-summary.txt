@@ -1051,12 +1051,26 @@ QEMU test:
 - `FAULT EP OK` — fault endpoint delivered all fault records
 - `ROOT READY` — root finished initialisation
 - `Zero OK` — zero page / BSS path verified
+- `BLOCK OK` — block device backend responded
+- `FS DISK OK` — filesystem disk path responded
 
 Mỗi dòng sau đúng một lần:
-- `VFS SERVER OK`, `VFS OK`, `VFS STAT OK`, `IOMMU OK`, `PERCPU CLOBBER OK`
+- `VFS SERVER OK` — exactly once
+- `VFS OK` — exactly once
+- `VFS STAT OK` — exactly once
+- `IOMMU OK` — exactly once
+- `PERCPU CLOBBER OK` — exactly once
 
 Cấm xuất hiện:
-- `PERCPU CLOBBER BAD`, `VFS BAD`, `ROOT PANIC`, `STALL`
+- `PERCPU CLOBBER BAD` — forbidden
+- `VFS BAD` — forbidden
+- `ROOT PANIC` — forbidden
+- `STALL` — forbidden
+
+Exit code:
+- riscv64: 0
+- aarch64: 0
+- x86_64: 3
 
 Theo kiến trúc:
 - riscv64:
@@ -1081,6 +1095,7 @@ Theo kiến trúc:
   - N > 1, M >= 100, W > 0, S <= I
 - x86_64:
   - `KERNEL DATA NX OK` — kernel data is non-executable
+  - `SMP SKIP` — x86 AP bring-up is not enabled yet
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
 ### END GENERATED pass

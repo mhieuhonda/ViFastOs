@@ -1,11 +1,14 @@
 """Shared QEMU acceptance conditions.
 
-This module is imported by ``test-qemu.py`` and by ``gen-docs.py`` so the
-summary cannot silently drift away from the harness.  Adding a condition here
-also adds it to the harness (and therefore only tightens acceptance).
+This module is the single source of truth for the guest contract.  It is
+imported by ``test-qemu.py`` and by ``gen-docs.py``.  The negative test in
+``scripts/test-harness-spec.py`` removes each condition from a synthetic
+output and asserts that acceptance fails.
 """
 
 from __future__ import annotations
+
+import re
 
 COMMON = [
     ("SELFTEST PASS", "kernel host self-test passed in guest"),
@@ -28,6 +31,8 @@ COMMON = [
     ("FAULT EP OK", "fault endpoint delivered all fault records"),
     ("ROOT READY", "root finished initialisation"),
     ("Zero OK", "zero page / BSS path verified"),
+    ("BLOCK OK", "block device backend responded"),
+    ("FS DISK OK", "filesystem disk path responded"),
 ]
 
 # Exactly one occurrence is required for each of these lines.
@@ -48,6 +53,12 @@ FORBIDDEN = [
 
 FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000]
 
+EXIT_CODES = {
+    "riscv64": {0},
+    "aarch64": {0},
+    "x86_64": {3},
+}
+
 ARCH = {
     "riscv64": [
         ("SMP OK", "both harts online"),
@@ -66,7 +77,26 @@ ARCH = {
     ],
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
+        ("SMP SKIP", "x86 AP bring-up is not enabled yet"),
     ],
+}
+
+# Generated pass block: each architecture line must be present exactly once.
+ARCH_EXACT_ONE = {
+    "riscv64": [
+        "SMP OK",
+        "SMP IDLE OK",
+        "SMP SCHED OK",
+        "SMP WORKERS OK",
+    ],
+    "aarch64": [
+        "SMP OK",
+        "SMP TIMER OK",
+        "SMP IDLE OK",
+        "SMP SCHED OK",
+        "SMP WORKERS OK",
+    ],
+    "x86_64": ["KERNEL DATA NX OK", "SMP SKIP"],
 }
 
 NUMERIC = {
@@ -86,3 +116,84 @@ NUMERIC = {
         "ROOT SWITCH n > 1",
     ],
 }
+
+SCHED_RE = re.compile(
+    r"SMP SCHED OK \(hart0=(\d+), hart1=(\d+), resched_sent=(\d+), "
+    r"resched_wake=(\d+), idle_entries=(\d+)\)"
+)
+IDLE_RE = re.compile(
+    r"SMP IDLE OK \(hart1_wakeups=(\d+), idle_entries=(\d+), "
+    r"wake_timer=(\d+), wake_sgi=(\d+)\)"
+)
+TIMER_RE = re.compile(r"SMP TIMER OK \(hart1_ticks=(\d+)\)")
+ROOT_SWITCH_RE = re.compile(r"ROOT SWITCH\s+(\d+)")
+FAULT_RE = re.compile(r"USER FAULT.*?addr=(0x[0-9a-fA-F]+)")
+
+
+def fault_addresses(output: str) -> list[int]:
+    return [int(value, 16) for value in FAULT_RE.findall(output)]
+
+
+def smp_sched(output: str) -> tuple[int, int, int, int, int]:
+    match = SCHED_RE.search(output)
+    if not match:
+        return (-1, -1, -1, -1, -1)
+    return tuple(int(match.group(i)) for i in range(1, 6))
+
+
+def smp_idle(output: str) -> tuple[int, int, int, int]:
+    match = IDLE_RE.search(output)
+    if not match:
+        return (-1, -1, -1, -1)
+    return tuple(int(match.group(i)) for i in range(1, 5))
+
+
+def accept(
+    name: str,
+    output: str,
+    rc: int,
+    require_block: bool = True,
+    require_disk: bool = True,
+) -> bool:
+    if rc not in EXIT_CODES[name]:
+        return False
+    if not all(text in output for text, _ in COMMON):
+        return False
+    if require_block and "BLOCK OK" not in output:
+        return False
+    if require_disk and "FS DISK OK" not in output:
+        return False
+    if not all(output.count(text) == 1 for text in EXACT_ONE):
+        return False
+    if any(text in output for text in FORBIDDEN):
+        return False
+    if not all(value.split(" (")[0] in output for value, _ in ARCH[name]):
+        return False
+    if not all(output.count(anchor) == 1 for anchor in ARCH_EXACT_ONE[name]):
+        return False
+    faults = fault_addresses(output)
+    if len(faults) != 4:
+        return False
+    if not all(address in faults for address in FAULT_ADDRESSES):
+        return False
+    match = ROOT_SWITCH_RE.search(output)
+    if not match or int(match.group(1)) <= 1:
+        return False
+    if output.find("Server") <= output.find("ROOT RUST"):
+        return False
+    if output.find("Client") <= output.find("ROOT RUST"):
+        return False
+    if name in ("riscv64", "aarch64"):
+        sched = smp_sched(output)
+        if sched[0] <= 1 or sched[1] < 100 or sched[3] <= 0 or sched[2] > sched[4]:
+            return False
+        if output.count("SMP WORKERS OK (a=50, b=50)") != 1:
+            return False
+        idle = smp_idle(output)
+        if min(idle) < 0 or idle[0] <= 0:
+            return False
+    if name == "aarch64":
+        timer = TIMER_RE.search(output)
+        if not timer or int(timer.group(1)) <= 0:
+            return False
+    return True

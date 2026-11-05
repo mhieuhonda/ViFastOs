@@ -95,10 +95,14 @@ def pass_conditions() -> str:
     lines += [f"- `{value}` — {description}" for value, description in harness_spec.COMMON]
     lines.append("")
     lines.append("Mỗi dòng sau đúng một lần:")
-    lines.append("- " + ", ".join(f"`{value}`" for value in harness_spec.EXACT_ONE))
+    lines += [f"- `{value}` — exactly once" for value in harness_spec.EXACT_ONE]
     lines.append("")
     lines.append("Cấm xuất hiện:")
-    lines.append("- " + ", ".join(f"`{value}`" for value in harness_spec.FORBIDDEN))
+    lines += [f"- `{value}` — forbidden" for value in harness_spec.FORBIDDEN]
+    lines.append("")
+    lines.append("Exit code:")
+    for arch, codes in harness_spec.EXIT_CODES.items():
+        lines.append(f"- {arch}: {', '.join(str(code) for code in sorted(codes))}")
     lines.append("")
     lines.append("Theo kiến trúc:")
     for arch in ("riscv64", "aarch64", "x86_64"):

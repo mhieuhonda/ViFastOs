@@ -65,6 +65,26 @@ def main() -> int:
     if "SMP TIMER OK (hart1_ticks=T)" not in summary:
         fail("missing AArch64 timer contract in summary")
 
+    generated = gen_docs.pass_conditions().splitlines()
+    generated_count = sum(
+        1
+        for line in generated
+        if (line.startswith("- ") or line.startswith("  - "))
+        and line not in ("- riscv64:", "- aarch64:", "- x86_64:")
+    )
+    expected_count = (
+        len(harness_spec.COMMON)
+        + len(harness_spec.EXACT_ONE)
+        + len(harness_spec.FORBIDDEN)
+        + sum(len(values) for values in harness_spec.ARCH.values())
+        + sum(len(values) for values in harness_spec.NUMERIC.values())
+        + len(harness_spec.EXIT_CODES)
+    )
+    if generated_count != expected_count:
+        fail(
+            f"generated pass condition count {generated_count} != spec {expected_count}"
+        )
+
     print("docs check: PASS")
     return 0
 

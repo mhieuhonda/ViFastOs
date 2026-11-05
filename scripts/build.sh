@@ -14,6 +14,7 @@ cargo test -p vifast-pte
 cargo test -p vifast-elf
 cargo test -p vifast-runtime
 cargo test -p vifast-user
+python3 scripts/test-harness-spec.py
 
 echo "== root ELF build/validate (Step 6.3) =="
 HOST="$(rustc -vV | sed -n 's/^host: //p')"
