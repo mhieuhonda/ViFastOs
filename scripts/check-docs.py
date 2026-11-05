@@ -19,22 +19,34 @@ def fail(message: str) -> None:
 
 
 def main() -> int:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "gen_docs", ROOT / "scripts" / "gen-docs.py"
+    )
+    if spec is None or spec.loader is None:
+        fail("cannot load scripts/gen-docs.py")
+    gen_docs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen_docs)
+    import harness_spec
+
     summary = SUMMARY.read_text()
     handoff = HANDOFF.read_text()
     text = summary + "\n" + handoff
 
-    required = [
-        "20 TcbSetAffinity",
-        "SMP WORKERS OK (a=50, b=50)",
-        "SMP IDLE OK (hart1_wakeups=K)",
-        "SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)",
-        "PERCPU CLOBBER OK",
-        "sched_harts: u32",
-        "WFI",
+    required_markers = [
+        "### BEGIN GENERATED commits",
+        "### BEGIN GENERATED syscalls",
+        "### BEGIN GENERATED tests",
+        "### BEGIN GENERATED pass",
     ]
-    for value in required:
-        if value not in text:
-            fail(f"missing required string: {value}")
+    for marker in required_markers:
+        if marker not in summary:
+            fail(f"missing generated marker: {marker}")
+
+    expected = gen_docs.render()
+    if expected != summary:
+        fail("summary generated sections are stale; run scripts/gen-docs.py")
 
     forbidden = [
         "hart phụ idle",
@@ -42,41 +54,16 @@ def main() -> int:
         "chỉ idle",
         "chưa vào scheduler",
         "chưa chọn task",
+        "maintenance-only",
+        "resched=R",
+        "AArch64/x86 hart phụ",
     ]
     for value in forbidden:
         if value in summary or value in handoff:
             fail(f"stale string present: {value}")
 
-    # Every non-docs commit since the multi-arch checkpoint must be listed.
-    log = subprocess.check_output(
-        ["git", "log", "--reverse", "--format=%h %s", "456d5ef..HEAD"], cwd=ROOT, text=True
-    )
-    expected = ["- 456d5ef checkpoint: multi-arch microkernel before hardening"]
-    expected += [
-        f"- {line}"
-        for line in log.splitlines()
-        if not line.split(" ", 1)[1].startswith("docs:")
-    ]
-    start = summary.index("Các mốc hiện tại:")
-    start = summary.index("\n", start) + 1
-    end = summary.index("\nCập nhật code gần nhất", start)
-    actual = [line for line in summary[start:end].splitlines() if line.startswith("- ")]
-    if actual != expected:
-        fail("summary commit list is not the exact non-docs git log order")
-
-    # Counts are checked as positive anchors; build.sh prints the authoritative
-    # live test result and is run before make-bundle.
-    for count in ("87/87", "5/5", "11/11", "17/17"):
-        if count not in summary:
-            fail(f"missing host-test count: {count}")
-    if "headroom 458.336 B" not in summary:
-        fail("summary headroom is stale")
-
-    # The harness strings are deliberately duplicated here: if an assertion is
-    # added to test-qemu.py without documenting it, this check must be updated.
-    for harness in ("SMP WORKERS OK", "SMP SCHED OK", "SMP IDLE OK", "SMP OK"):
-        if harness not in summary:
-            fail(f"harness assertion not documented: {harness}")
+    if "SMP TIMER OK (hart1_ticks=T)" not in summary:
+        fail("missing AArch64 timer contract in summary")
 
     print("docs check: PASS")
     return 0

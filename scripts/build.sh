@@ -2,6 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+BUILD_LOG="${VIFAST_BUILD_LOG:-target/vifast-build.log}"
+mkdir -p "$(dirname "$BUILD_LOG")"
+: > "$BUILD_LOG"
+exec > >(tee "$BUILD_LOG") 2>&1
+
 echo "== host portable-kernel tests =="
 cargo test -p vifast-kernel
 cargo test -p vifast-arch

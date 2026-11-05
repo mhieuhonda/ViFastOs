@@ -19,6 +19,8 @@ import tempfile
 import time
 import glob
 
+from harness_spec import ARCH, COMMON, EXACT_ONE, FAULT_ADDRESSES, FORBIDDEN
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QEMU_RV = "qemu-system-riscv64"
 QEMU_ARM = "qemu-system-aarch64"
@@ -205,7 +207,14 @@ def run_qemu(
     server_at = output.find("Server")
     client_at = output.find("Client")
     ok = (
-        "SELFTEST PASS" in output
+        all(value in output for value, _ in COMMON)
+        and all(
+            value.split(" (")[0] in output for value, _ in ARCH[name]
+        )
+        and all(output.count(value) == 1 for value in EXACT_ONE)
+        and all(value not in output for value in FORBIDDEN)
+        and all(f"addr=0x{value:x}" in output for value in FAULT_ADDRESSES)
+        and "SELFTEST PASS" in output
         and "booting on" in output
         and "BOOT UNTYPED" in output
         and "PREEMPT OK" in output

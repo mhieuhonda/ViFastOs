@@ -181,7 +181,7 @@ Kernel không biết chi tiết phần cứng. Nó gọi các trait/primitive do
 | Notification | ✅ | signal/wait/poll, chuyển cap notification |
 | Fault endpoint | ✅ | 4 fault demo, fault handler tối giản |
 | Scheduler | ✅ cơ bản | priority, timer, preemption |
-| SMP | ⚠️ maintenance | 2 hart, IPI, full TLB shootdown; hart phụ chưa chạy task |
+| SMP | ✅ | RISC-V/AArch64: 2 hart, worker hart phụ, IPI, full TLB shootdown; x86 AP chưa có |
 | ASID/PCID | ✅ | ASID theo VSpace; PCID nếu CPUID |
 | VFS user-space | ✅ | `/motd`, `/scratch`, `STAT` |
 | VFS đầy đủ | ❌ | chưa directory/permission/nhiều file |
@@ -628,9 +628,10 @@ Giữ `/motd`, `/scratch`, các string harness cũ. Thêm test:
 - `PREEMPT OK`
 - `ROOT SWITCH n` với `n > 1`
 - `PERCPU CLOBBER OK` đúng 1 lần; không có `PERCPU CLOBBER BAD`
-- RISC-V `SMP IDLE OK (hart1_wakeups=K)` đúng 1 lần, K > 0
-- RISC-V `SMP WORKERS OK (a=50, b=50)` đúng 1 lần
-- RISC-V `SMP SCHED OK (hart0=N, hart1=M, resched=R)` đúng 1 lần, N > 1, M >= 100, R > 0
+- RISC-V/AArch64 `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` đúng 1 lần; AArch64 thêm `SMP TIMER OK`
+- RISC-V/AArch64 `SMP WORKERS OK (a=50, b=50)` đúng 1 lần
+- RISC-V/AArch64 `SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)` đúng 1 lần, N > 1, M >= 100, W > 0, S <= I
+- RISC-V/AArch64 `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` đúng 1 lần; AArch64 thêm `SMP TIMER OK`
 - `Isolation`
 - `Server`
 - `Client`
