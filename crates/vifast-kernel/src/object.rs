@@ -476,6 +476,8 @@ pub struct Tcb {
     pub fds: [Option<Fd>; MAX_FDS],
     pub queued: bool,
     pub queue_seq: u64,
+    /// Bitmask of harts allowed to run this TCB.  Default: hart 0 only.
+    pub affinity: u8,
 }
 
 impl Tcb {
@@ -500,6 +502,7 @@ impl Tcb {
             fds: [None; MAX_FDS],
             queued: false,
             queue_seq: 0,
+            affinity: 1,
         }
     }
 }

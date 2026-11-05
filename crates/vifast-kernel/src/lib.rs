@@ -2844,6 +2844,17 @@ impl Kernel {
         self.runq_len += 1;
     }
 
+    pub fn has_ready_on(&self, hart: usize) -> bool {
+        if hart >= MAX_HARTS {
+            return false;
+        }
+        self.runq[..self.runq_len].iter().flatten().any(|r| {
+            self.tcb(*r)
+                .map(|tcb| tcb.affinity & (1u8 << hart) != 0)
+                .unwrap_or(false)
+        })
+    }
+
     pub fn pick(&mut self) -> Option<ObjRef> {
         self.pick_on(0)
     }
@@ -2856,6 +2867,9 @@ impl Kernel {
         for i in 0..self.runq_len {
             let Some(r) = self.runq[i] else { continue };
             let Some(tcb) = self.tcb(r) else { continue };
+            if tcb.affinity & (1u8 << hart) == 0 {
+                continue;
+            }
             let candidate = (i, tcb.priority, tcb.queue_seq);
             best = match best {
                 None => Some(candidate),
@@ -4723,6 +4737,7 @@ mod tests {
             }
         );
         let child = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        kernel.tcb_mut(child).unwrap().affinity = 1 << 1;
         kernel.enqueue(child);
         assert_eq!(kernel.pick_on(1), Some(child));
         let usage_before = kernel.untyped_usage(untyped).unwrap();
@@ -7281,10 +7296,27 @@ mod tests {
     }
 
     #[test]
+    fn affinity_filters_pick_on_hart() {
+        let mut kernel = Kernel::new();
+        let only_one = kernel.create_tcb("only1", 1).unwrap();
+        let either = kernel.create_tcb("either", 1).unwrap();
+        kernel.tcb_mut(only_one).unwrap().affinity = 1 << 1;
+        kernel.tcb_mut(either).unwrap().affinity = 0b11;
+        kernel.enqueue(only_one);
+        kernel.enqueue(either);
+        assert!(kernel.has_ready_on(1));
+        assert_eq!(kernel.pick_on(0), Some(either));
+        assert_eq!(kernel.pick_on(1), Some(only_one));
+        assert_eq!(kernel.pick_on(2), None);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn current_tcb_is_per_hart_and_running_is_unique() {
         let mut kernel = Kernel::new();
         let hart0 = kernel.create_tcb("hart0", 1).unwrap();
         let hart1 = kernel.create_tcb("hart1", 1).unwrap();
+        kernel.tcb_mut(hart1).unwrap().affinity = 1 << 1;
         kernel.enqueue(hart0);
         kernel.enqueue(hart1);
         assert_eq!(kernel.pick_on(0), Some(hart0));

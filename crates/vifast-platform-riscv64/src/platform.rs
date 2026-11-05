@@ -1,9 +1,9 @@
 //! RISC-V QEMU `virt` platform: Sv39 MMU, SBI timer, trap entry and SMP.
 
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
-use vifast_arch::bkl::BigKernelLock;
+use vifast_arch::bkl::{BigKernelGuard, BigKernelLock};
 use vifast_arch::{Arch, CpuState, MAX_HARTS};
 use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
@@ -53,8 +53,12 @@ struct TrapStack([u8; 32768]);
 static mut TRAP_STACKS: [TrapStack; MAX_HARTS] = [TrapStack([0; 32768]); MAX_HARTS];
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
+static SCHED_READY: AtomicBool = AtomicBool::new(false);
 const MAINT_TLB: u32 = 1;
 const MAINT_ICACHE: u32 = 2;
+const MAINT_RESCHEDULE: u32 = 4;
 static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
@@ -74,6 +78,48 @@ static MAINT_KIND: [AtomicU32; MAX_HARTS] = [
     AtomicU32::new(0),
 ];
 static BKL: BigKernelLock = BigKernelLock::new();
+static BKL_OWNER: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+struct PlatformBklGuard {
+    _guard: BigKernelGuard,
+    hart: usize,
+}
+
+impl Drop for PlatformBklGuard {
+    fn drop(&mut self) {
+        if BKL_OWNER.load(Ordering::Acquire) == self.hart {
+            BKL_OWNER.store(usize::MAX, Ordering::Release);
+        }
+    }
+}
+
+fn bkl_lock() -> PlatformBklGuard {
+    let state = cpu_state();
+    let hart = if state.is_null() {
+        0
+    } else {
+        unsafe { (*state).hart_id }
+    };
+    let guard = BKL.lock_with(poll_maintenance);
+    BKL_OWNER.store(hart, Ordering::Release);
+    PlatformBklGuard {
+        _guard: guard,
+        hart,
+    }
+}
+
+fn assert_bkl_released() {
+    let state = cpu_state();
+    let hart = if state.is_null() {
+        0
+    } else {
+        unsafe { (*state).hart_id }
+    };
+    assert!(
+        BKL_OWNER.load(Ordering::Acquire) != hart,
+        "BKL held on current hart before user return"
+    );
+}
 
 fn poll_maintenance() {
     let state = cpu_state();
@@ -114,7 +160,10 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
     if state.is_null() || unsafe { (*state).hart_id } == target {
         return false;
     }
-    assert!(BKL.is_held(), "maintenance IPI sender must hold BKL");
+    assert!(
+        BKL_OWNER.load(Ordering::Acquire) != usize::MAX,
+        "maintenance IPI sender must hold BKL"
+    );
     let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
     MAINT_KIND[target].fetch_or(kind, Ordering::AcqRel);
     if target == 1 {
@@ -200,13 +249,48 @@ unsafe fn set_timer(at: u64) {
 
 #[no_mangle]
 pub extern "C" fn rust_secondary(hartid: usize) -> ! {
-    // Maintenance-only hart: do NOT take BKL here.  Hart 0 holds BKL while
-    // waiting for the TLB-shootdown ACK from this loop.
-    unsafe { init_cpu(hartid) };
+    unsafe {
+        init_cpu(hartid);
+        core::arch::asm!("csrw stvec, {}", in(reg) trap_entry as *const () as usize);
+        // Keep SIE clear: idle uses WFI plus explicit SIP polling, avoiding
+        // an S-mode trap/sret path that OpenSBI rejects on this hart.
+        core::arch::asm!("csrs sie, {}", in(reg) (1u64 << 5) | (1u64 << 1));
+        set_timer(Riscv64::now() + TIMER_INTERVAL);
+    }
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
-        poll_maintenance();
+        if !SCHED_READY.load(Ordering::Acquire) {
+            poll_maintenance();
+            core::hint::spin_loop();
+            continue;
+        }
+        // Affinity defaults to hart 0, so this is expected to stay None in
+        // step D.  Taking BKL also services mailbox IPIs while spinning.
+        let bkl = bkl_lock();
+        let _ = RiscvPlatform::kernel().pick_on(1);
+        drop(bkl);
+        // BKL is released before the idle poll.  Pending SSIP/STIP are
+        // deliberately left set until after the idle step; they are consumed
+        // below.  QEMU/OpenSBI on this hart does not reliably wake WFI with
+        // SIE clear, so use a bounded idle spin instead of sleeping forever.
         core::hint::spin_loop();
+        let sip: u64;
+        unsafe {
+            core::arch::asm!("csrr {}, sip", out(reg) sip);
+        }
+        if sip & (1u64 << 5) != 0 {
+            SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+            unsafe {
+                set_timer(Riscv64::now() + TIMER_INTERVAL);
+            }
+        }
+        if sip & (1u64 << 1) != 0 {
+            SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+            unsafe {
+                core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
+            }
+            poll_maintenance();
+        }
     }
 }
 
@@ -508,6 +592,19 @@ impl Platform for RiscvPlatform {
         }
     }
 
+    fn secondary_wakeups() -> (usize, usize) {
+        (
+            SECONDARY_TIMER_WAKES.load(Ordering::Relaxed),
+            SECONDARY_IPI_WAKES.load(Ordering::Relaxed),
+        )
+    }
+
+    fn wake_hart(hart: usize) {
+        if hart == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
+            let _ = send_maintenance(1, MAINT_RESCHEDULE);
+        }
+    }
+
     fn init_block() {
         let (lo, hi) = PageOps.kernel_accessible_range();
         let (dma_lo, dma_hi) = vifast_virtio::dma_range();
@@ -731,7 +828,10 @@ impl Platform for RiscvPlatform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
-        assert!(!BKL.is_held(), "BKL held before user return");
+        assert_bkl_released();
+        // Boot hart releases hart 1 only here: the BKL assertion above must
+        // run before hart 1 can acquire the global lock and make this fail.
+        SCHED_READY.store(true, Ordering::Release);
         unsafe {
             core::arch::asm!("csrw sstatus, {}", in(reg) context.sstatus);
             core::arch::asm!("csrw sepc, {}", in(reg) context.sepc);
@@ -808,7 +908,7 @@ impl Platform for RiscvPlatform {
             spins += 1;
         }
         if SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            let bkl = BKL.lock_with(poll_maintenance);
+            let bkl = bkl_lock();
             let ipi_ok = request_ipi();
             drop(bkl);
             if ipi_ok {
@@ -841,13 +941,13 @@ extern "C" {
 #[no_mangle]
 extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
     assert_irqs_disabled();
-    let bkl = BKL.lock_with(poll_maintenance);
+    let bkl = bkl_lock();
     assert_current_tcb();
     let frame = unsafe { &mut *frame };
     if frame.scause == 0x8000_0000_0000_0005 {
         vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
         drop(bkl);
-        assert!(!BKL.is_held(), "BKL held on timer return");
+        assert_bkl_released();
         return;
     }
     if frame.scause != 8 {
@@ -863,7 +963,7 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         }
         vifast_runtime::fault::suspend::<RiscvPlatform>(frame, frame.scause, stval);
         drop(bkl);
-        assert!(!BKL.is_held(), "BKL held on fault return");
+        assert_bkl_released();
         return;
     }
     let number = frame.regs[17];
@@ -878,5 +978,5 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
     ];
     vifast_runtime::syscall::dispatch::<RiscvPlatform>(frame, number, args);
     drop(bkl);
-    assert!(!BKL.is_held(), "BKL held on syscall return");
+    assert_bkl_released();
 }

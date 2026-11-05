@@ -129,6 +129,14 @@ pub trait Platform: Arch + Console {
         0
     }
 
+    /// (timer wakeups, IPI wakeups) observed by secondary harts.
+    fn secondary_wakeups() -> (usize, usize) {
+        (0, 0)
+    }
+
+    /// Nudge an idle hart when a TCB with matching affinity becomes ready.
+    fn wake_hart(_hart: usize) {}
+
     fn block_read(_lba: u64, _out: &mut [u8; 512]) -> bool {
         false
     }
@@ -729,6 +737,9 @@ pub mod syscall {
         let action = kernel.user_syscall(
             tcb, number, args[0], args[1], args[2], args[3], args[4], args[5],
         );
+        if hart == 0 && kernel.has_ready_on(1) {
+            A::wake_hart(1);
+        }
         match action {
             UserAction::Return { value, error } => {
                 A::write_result(context, error, value, 0, [0; 4]);
@@ -952,6 +963,10 @@ pub mod timer {
                 kernel.ticks(),
                 switches
             );
+            let (timer_wakes, ipi_wakes) = A::secondary_wakeups();
+            if timer_wakes + ipi_wakes > 0 {
+                vifast_kernel::klog!(A, "SMP IDLE OK (hart1_wakeups={})", timer_wakes + ipi_wakes);
+            }
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
             if let Some((size, bump, objects, max_objects)) =
                 kernel.untyped_usage_by_base(A::data_page().as_ptr() as usize)

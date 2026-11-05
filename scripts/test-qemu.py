@@ -57,6 +57,11 @@ def cleanup_disks() -> None:
     DISK_DIRS.clear()
 
 
+def hart1_wakeups(output: str) -> int:
+    match = re.search(r"SMP IDLE OK \(hart1_wakeups=(\d+)\)", output)
+    return int(match.group(1)) if match else -1
+
+
 def root_switch_count(output: str) -> int:
     match = re.search(r"ROOT SWITCH\s+(\d+)", output)
     return int(match.group(1)) if match else -1
@@ -138,6 +143,13 @@ def run_qemu(
         and (not require_smp or ("SMP OK" in output and "ipi=1" in output))
         and (not require_block or "BLOCK OK" in output)
         and (not require_disk or "FS DISK OK" in output)
+        and (
+            name != "riscv64"
+            or (
+                output.count("SMP IDLE OK") == 1
+                and hart1_wakeups(output) > 0
+            )
+        )
     )
     if timed_out:
         print("FAIL: timeout")
