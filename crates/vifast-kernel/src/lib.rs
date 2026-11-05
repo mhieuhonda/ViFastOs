@@ -70,6 +70,17 @@ pub enum UserAction {
         ptr: u64,
         len: u64,
     },
+    /// A TCB was suspended; wake its previous hart if it was running.
+    TcbSuspended {
+        hart: Option<usize>,
+    },
+    /// Replace an existing leaf mapping in place (test/remap path).
+    FrameRemap {
+        space: ObjRef,
+        frame: ObjRef,
+        va: u64,
+        rights: Rights,
+    },
     /// Read one 512-byte block sector into a user buffer.
     BlockRead {
         lba: u64,
@@ -599,13 +610,114 @@ impl Kernel {
         Ok(())
     }
 
+    pub fn set_tcb_priority(
+        &mut self,
+        target: ObjRef,
+        priority: u8,
+        caller: ObjRef,
+    ) -> KResult<()> {
+        if priority > MAX_PRIORITY {
+            return Err(KError::PrioTooHigh);
+        }
+        let caller_priority = self.tcb(caller).ok_or(KError::InvalidCap)?.priority;
+        let table = self.tcb(target).ok_or(KError::WrongType)?;
+        if priority > table.priority || priority > caller_priority {
+            return Err(KError::PrioTooHigh);
+        }
+        self.tcb_mut(target).ok_or(KError::WrongType)?.priority = priority;
+        Ok(())
+    }
+
+    fn remove_from_runq(&mut self, tcb: ObjRef) {
+        let mut index = 0;
+        while index < self.runq_len {
+            if self.runq[index] == Some(tcb) {
+                let mut shift = index;
+                while shift + 1 < self.runq_len {
+                    self.runq[shift] = self.runq[shift + 1];
+                    shift += 1;
+                }
+                self.runq_len -= 1;
+                self.runq[self.runq_len] = None;
+            } else {
+                index += 1;
+            }
+        }
+        if let Some(table) = self.tcb_mut(tcb) {
+            table.queued = false;
+        }
+    }
+
+    /// Suspend a TCB.  Running targets keep their saved `current` slot until
+    /// the next timer switch; Endpoint/Notification waiters are removed from
+    /// their queues and receive `WouldBlock` when resumed.  Root and the
+    /// caller itself are never suspendable.
+    pub fn suspend_tcb(&mut self, target: ObjRef, caller: ObjRef) -> KResult<Option<usize>> {
+        if self.root == Some(target) || target == caller {
+            return Err(KError::IllegalOperation);
+        }
+        let state = self.tcb(target).ok_or(KError::WrongType)?.state;
+        match state {
+            ThreadState::Inactive | ThreadState::Faulted | ThreadState::BlockedFault => {
+                return Err(KError::IllegalOperation)
+            }
+            ThreadState::Suspended => return Err(KError::AlreadyMapped),
+            ThreadState::BlockedReply => return Err(KError::IllegalOperation),
+            ThreadState::Running => {
+                let hart = (0..MAX_HARTS)
+                    .find(|hart| self.current[*hart] == Some(target))
+                    .ok_or(KError::IllegalOperation)?;
+                self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?.state = ThreadState::Suspended;
+                return Ok(Some(hart));
+            }
+            ThreadState::Ready => {
+                self.remove_from_runq(target);
+            }
+            ThreadState::BlockedSend
+            | ThreadState::BlockedRecv
+            | ThreadState::BlockedNotification => {
+                self.remove_from_runq(target);
+                for i in 0..MAX_OBJECTS {
+                    let r = ObjRef {
+                        index: i as u8,
+                        gen: self.objs[i].gen,
+                    };
+                    match self.objs[i].kind {
+                        Kind::Endpoint(_) => {
+                            if let Some(endpoint) = self.endpoint_mut(r) {
+                                endpoint.send.remove(target);
+                                endpoint.recv.remove(target);
+                            }
+                        }
+                        Kind::Notification(_) => {
+                            if let Some(notification) = self.notification_mut(r) {
+                                if notification.waiter == Some(target) {
+                                    notification.waiter = None;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let table = self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?;
+                table.pending = None;
+                table.resume = Some(Message::empty(0));
+                table.resume_error = Some(KError::WouldBlock);
+            }
+        }
+        self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?.state = ThreadState::Suspended;
+        Ok(None)
+    }
+
     pub fn resume_tcb(&mut self, tcb: ObjRef) -> KResult<()> {
         let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
         if table.entry == 0 || table.vspace.is_none() {
             return Err(KError::IllegalOperation);
         }
-        if table.state == ThreadState::Running {
-            return Err(KError::AlreadyMapped);
+        if table.state == ThreadState::Running || table.state == ThreadState::Suspended {
+            table.state = ThreadState::Ready;
+            self.enqueue(tcb);
+            return Ok(());
         }
         table.state = ThreadState::Ready;
         self.enqueue(tcb);
@@ -1507,6 +1619,81 @@ impl Kernel {
         }
     }
 
+    /// Replace an existing leaf mapping without an unmapped window.  The new
+    /// PTE is written first, then one per-VA shootdown publishes it to every
+    /// hart that may hold the old translation.  This is the path used by the
+    /// continuous-reader TLB test, where unmap+map would fault the reader.
+    pub fn remap_frame(
+        &mut self,
+        vspace: ObjRef,
+        frame_obj: ObjRef,
+        va: u64,
+        rights: Rights,
+    ) -> KResult<Mapping> {
+        let allowed = Rights::READ | Rights::WRITE | Rights::EXEC;
+        if rights.is_empty() || !allowed.contains(rights) || !rights.contains(Rights::READ) {
+            return Err(KError::InvalidArg);
+        }
+        if rights.contains(Rights::WRITE) && rights.contains(Rights::EXEC) {
+            return Err(KError::NoRights);
+        }
+        let old = self.mapping_at(vspace, va).ok_or(KError::NotMapped)?;
+        if old.frame == frame_obj {
+            return Err(KError::AlreadyMapped);
+        }
+        let frame = *self.frame(frame_obj).ok_or(KError::WrongType)?;
+        let page_size = self
+            .vspace(vspace)
+            .map(|space| space.page_size)
+            .ok_or(KError::WrongType)?;
+        if frame.size < page_size as usize || frame.pa as u64 % page_size != 0 {
+            return Err(KError::Alignment);
+        }
+        let wants_w = rights.contains(Rights::WRITE);
+        let wants_x = rights.contains(Rights::EXEC);
+        if (wants_w && frame.mapped_x != 0) || (wants_x && frame.mapped_w != 0) {
+            return Err(KError::NoRights);
+        }
+        let next_w = if wants_w {
+            frame.mapped_w.checked_add(1).ok_or(KError::OutOfMemory)?
+        } else {
+            frame.mapped_w
+        };
+        let next_x = if wants_x {
+            frame.mapped_x.checked_add(1).ok_or(KError::OutOfMemory)?
+        } else {
+            frame.mapped_x
+        };
+        let root = self
+            .vspace(vspace)
+            .map(|space| space.root)
+            .ok_or(KError::WrongType)?;
+        if self.page_table_ops.is_some() {
+            self.replace_leaf(root, va, frame.pa as u64, rights)?;
+        }
+        let mapping = Mapping {
+            va,
+            pa: frame.pa as u64,
+            len: page_size,
+            rights,
+            frame: frame_obj,
+        };
+        let index = self
+            .vspace(vspace)
+            .and_then(|space| space.mapping_index(va))
+            .ok_or(KError::NotMapped)?;
+        self.note_frame_unmapping(old);
+        self.vspace_mut(vspace).ok_or(KError::WrongType)?.mappings[index] = Some(mapping);
+        self.set_frame_mapping_counts(frame_obj, next_w, next_x);
+        self.flush_vspace_range(vspace, va, 1);
+        if rights.contains(Rights::EXEC) {
+            if let Some(ops) = self.page_table_ops {
+                ops.sync_icache(frame.pa as u64, page_size as usize);
+            }
+        }
+        Ok(mapping)
+    }
+
     /// Validate and install a user mapping through the generic page-table
     /// walk.  No platform-specific map function is used.  Intermediate page
     /// tables must already exist; otherwise `MissingPageTable` is returned.
@@ -1600,6 +1787,11 @@ impl Kernel {
             return Err(error);
         }
         self.set_frame_mapping_counts(frame_obj, next_w, next_x);
+        // Publish the new leaf to every hart that may still hold an older
+        // translation for this VA.  This also covers a remap performed after
+        // an unmap: the previous remote invalidation raced with the PTE store
+        // on x86, so the map itself must be part of the shootdown.
+        self.flush_vspace_range(vspace, va, (page_size / 4096).max(1) as usize);
         if rights.contains(Rights::EXEC) {
             if let Some(ops) = self.page_table_ops {
                 ops.sync_icache(frame.pa as u64, page_size as usize);
@@ -2038,7 +2230,8 @@ impl Kernel {
                 let Some(tcb) = self.tcb(current) else {
                     return Err(KError::ObjectDestroyed);
                 };
-                if tcb.state != ThreadState::Running || tcb.queued {
+                if !matches!(tcb.state, ThreadState::Running | ThreadState::Suspended) || tcb.queued
+                {
                     return Err(KError::IllegalOperation);
                 }
                 for other in (hart + 1)..MAX_HARTS {
@@ -2124,29 +2317,38 @@ impl Kernel {
     pub fn delete_cap(&mut self, tcb: ObjRef, slot: u8) -> KResult<Cap> {
         let addr = SlotAddr { tcb, slot };
         let cap = self.cap_at(addr).ok_or(KError::InvalidCap)?;
-        if cap.ty == ObjType::Untyped {
-            let target = CapRef { addr, id: cap.id };
-            let has_live_objects = self.objs.iter().any(|object| {
-                object.owner == Some(cap.obj)
-                    && object
-                        .creator
-                        .is_some_and(|creator| self.cap_ref_is_descendant(creator, target))
-            });
-            let has_child_caps = (0..MAX_OBJECTS).any(|i| {
-                let r = ObjRef {
-                    index: i as u8,
-                    gen: self.objs[i].gen,
-                };
-                self.cspace(r).is_some_and(|slots| {
-                    slots
-                        .iter()
-                        .flatten()
-                        .any(|child| child.parent.is_some() && self.is_descendant(child, target))
-                })
-            });
-            if has_live_objects || has_child_caps {
-                return Err(KError::IllegalOperation);
-            }
+        // Rule: a caller may not delete its own TCB cap or its current VSpace
+        // cap.  The kernel holds strong references for scheduling, but keeping
+        // these visible prevents a task from boxing itself out of TCB/VSpace
+        // operations while it is running.
+        let own_vspace = self.tcb(tcb).and_then(|table| table.vspace);
+        if cap.obj == tcb || own_vspace == Some(cap.obj) {
+            return Err(KError::IllegalOperation);
+        }
+        // A deletion that would orphan a live object or a child capability is
+        // refused for every cap type, not just Untyped.  The object itself is
+        // not destroyed: deleting a cap only removes the slot.
+        let target = CapRef { addr, id: cap.id };
+        let has_live_objects = self.objs.iter().any(|object| {
+            object.owner == Some(cap.obj)
+                && object
+                    .creator
+                    .is_some_and(|creator| self.cap_ref_is_descendant(creator, target))
+        });
+        let has_child_caps = (0..MAX_OBJECTS).any(|i| {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            self.cspace(r).is_some_and(|slots| {
+                slots
+                    .iter()
+                    .flatten()
+                    .any(|child| child.parent.is_some() && self.is_descendant(child, target))
+            })
+        });
+        if has_live_objects || has_child_caps {
+            return Err(KError::IllegalOperation);
         }
         self.cspace_mut(tcb)
             .and_then(|slots| slots.get_mut(slot as usize)?.take())
@@ -2430,6 +2632,35 @@ impl Kernel {
                 Pte::Invalid => return Err(KError::MissingPageTable),
                 Pte::Table(next) if !last => table = next,
                 Pte::Table(_) | Pte::Leaf(_, _) => return Err(KError::AlreadyMapped),
+            }
+        }
+        Err(KError::MissingPageTable)
+    }
+
+    fn replace_leaf(&self, root: u64, va: u64, pa: u64, rights: Rights) -> KResult<()> {
+        let ops = self.page_table_ops.ok_or(KError::MissingPageTable)?;
+        let levels = ops.levels();
+        if levels == 0 {
+            return Err(KError::MissingPageTable);
+        }
+        let mut table = root;
+        for level in 0..levels {
+            let idx = ops.index(va, level);
+            let pte = ops.read_pte(table, idx);
+            let last = level + 1 == levels;
+            match ops.decode_at(pte, level) {
+                Pte::Invalid if last => {
+                    ops.write_pte(table, idx, ops.encode_leaf(pa, rights));
+                    ops.flush_va(va);
+                    return Ok(());
+                }
+                Pte::Leaf(_, _) if last => {
+                    ops.write_pte(table, idx, ops.encode_leaf(pa, rights));
+                    ops.flush_va(va);
+                    return Ok(());
+                }
+                Pte::Table(next) if !last => table = next,
+                _ => return Err(KError::AlreadyMapped),
             }
         }
         Err(KError::MissingPageTable)
@@ -3041,12 +3272,18 @@ impl Kernel {
         // The runtime's switch_blocked() saves it, then pick() replaces it.
         let current = *self.current.get(hart)?;
         let current = current?;
+        let mut suspended = false;
         if let Some(tcb) = self.tcb_mut(current) {
-            if tcb.state == ThreadState::Running {
+            if tcb.state == ThreadState::Suspended {
+                tcb.queued = false;
+                suspended = true;
+            } else if tcb.state == ThreadState::Running {
                 tcb.state = ThreadState::Ready;
             }
         }
-        self.enqueue(current);
+        if !suspended {
+            self.enqueue(current);
+        }
         Some(current)
     }
 
@@ -3769,6 +4006,39 @@ impl Kernel {
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
+            n if n == SyscallId::TcbSuspend as u64 => {
+                let cap = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.suspend_tcb(cap.obj, tcb) {
+                    Ok(hart) => UserAction::TcbSuspended { hart },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbSetPriority as u64 => {
+                let cap = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.set_tcb_priority(cap.obj, a1 as u8, tcb) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
             n if n == SyscallId::TcbResume as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
@@ -3808,6 +4078,16 @@ impl Kernel {
                 };
                 match self.set_ipc_buffer(target.obj, frame.obj, a2) {
                     Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::CapDelete as u64 => {
+                let slot = slot_arg(a0).unwrap_or(0);
+                match self.delete_cap(tcb, slot) {
+                    Ok(_) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,
                     },
@@ -3892,6 +4172,14 @@ impl Kernel {
                     return UserAction::Return {
                         value: 0,
                         error: KError::NoRights,
+                    };
+                }
+                if a4 != 0 {
+                    return UserAction::FrameRemap {
+                        space: space.obj,
+                        frame: frame.obj,
+                        va: a2,
+                        rights,
                     };
                 }
                 match self.map_frame(space.obj, frame.obj, a2, rights) {
@@ -8411,5 +8699,183 @@ mod tests {
             core::mem::size_of::<Cap>(),
             core::mem::size_of::<Option<Cap>>()
         );
+    }
+
+    #[test]
+    fn capdelete_syscall_removes_leaf_and_reuses_slot() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(frame, ObjType::Frame, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::CapDelete as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert!(kernel.lookup_cap(root, 1, None, Rights::NONE).is_err());
+        assert!(kernel.get(frame).is_some());
+        kernel
+            .install_cap(root, 1, Cap::new(frame, ObjType::Frame, Rights::READ))
+            .unwrap();
+        assert!(kernel
+            .lookup_cap(root, 1, Some(ObjType::Frame), Rights::READ)
+            .is_ok());
+    }
+
+    #[test]
+    fn capdelete_refuses_child_caps_and_self_tcb_or_vspace() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let child = kernel.create_tcb("child", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        kernel.copy_cap(root, 1, child, 1, Rights::READ, 0).unwrap();
+        assert_eq!(kernel.delete_cap(root, 1), Err(KError::IllegalOperation));
+        assert!(kernel
+            .lookup_cap(child, 1, Some(ObjType::Endpoint), Rights::READ)
+            .is_ok());
+
+        kernel
+            .install_cap(root, 2, Cap::new(root, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(kernel.delete_cap(root, 2), Err(KError::IllegalOperation));
+        let space = kernel
+            .create_vspace(0x8000, 0x10_0000_0000, 0x10_0000)
+            .unwrap();
+        kernel.set_tcb_vspace(root, space).unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(space, ObjType::VSpace, Rights::ALL))
+            .unwrap();
+        assert_eq!(kernel.delete_cap(root, 3), Err(KError::IllegalOperation));
+    }
+
+    #[test]
+    fn capdelete_does_not_strand_queued_sender() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let sender = kernel.create_tcb("sender", 1).unwrap();
+        let receiver = kernel.create_tcb("receiver", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        let sent = kernel
+            .send(
+                sender,
+                endpoint,
+                0,
+                Message::new(0x42, &[7]).unwrap(),
+                false,
+            )
+            .unwrap();
+        assert!(!sent);
+        assert!(kernel.delete_cap(root, 1).is_ok());
+        let received = kernel.recv(receiver, endpoint, 4).unwrap().unwrap();
+        assert_eq!(received.label, 0x42);
+        assert_eq!(received.words()[0], 7);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn tcb_set_priority_only_lowers_within_caller_priority() {
+        let mut kernel = Kernel::new();
+        let caller = kernel.create_tcb("caller", 5).unwrap();
+        let target = kernel.create_tcb("target", 10).unwrap();
+        kernel
+            .install_cap(caller, 1, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(caller, SyscallId::TcbSetPriority as u64, 1, 7, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::PrioTooHigh
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(caller, SyscallId::TcbSetPriority as u64, 1, 5, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(kernel.tcb(target).unwrap().priority, 5);
+        assert_eq!(
+            kernel.user_syscall(caller, SyscallId::TcbSetPriority as u64, 1, 6, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::PrioTooHigh
+            }
+        );
+    }
+
+    #[test]
+    fn tcb_suspend_refuses_root_and_handles_ready_and_running() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("target", 5).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(root, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.suspend_tcb(root, root),
+            Err(KError::IllegalOperation)
+        );
+        let space = kernel
+            .create_vspace(0x8000, 0x10_0000_0000, 0x10_0000)
+            .unwrap();
+        kernel.set_tcb_vspace(target, space).unwrap();
+        kernel
+            .configure_tcb(target, 0x1000, 0x9000, space, 5)
+            .unwrap();
+        kernel.set_tcb_affinity(target, 0b10).unwrap();
+        kernel.resume_tcb(target).unwrap();
+        assert_eq!(kernel.suspend_tcb(target, root), Ok(None));
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Suspended);
+        assert!(!kernel.has_ready_on(1));
+        kernel.resume_tcb(target).unwrap();
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Ready);
+        assert!(kernel.has_ready_on(1));
+        let picked = kernel.pick_on(1).unwrap();
+        assert_eq!(picked, target);
+        assert_eq!(kernel.suspend_tcb(target, root), Ok(Some(1)));
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Suspended);
+        // Emulate the timer switching away from the suspended current TCB.
+        kernel.current[1] = None;
+        kernel.resume_tcb(target).unwrap();
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Ready);
+    }
+
+    #[test]
+    fn tcb_suspend_removes_blocked_receiver_from_endpoint_queue() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("target", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        let space = kernel
+            .create_vspace(0x8000, 0x10_0000_0000, 0x10_0000)
+            .unwrap();
+        kernel
+            .configure_tcb(target, 0x1000, 0x9000, space, 5)
+            .unwrap();
+        assert_eq!(kernel.recv(target, endpoint, 4), Ok(None));
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::BlockedRecv);
+        assert_eq!(kernel.suspend_tcb(target, root), Ok(None));
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Suspended);
+        assert!(kernel.endpoint(endpoint).unwrap().recv.is_empty());
+        assert_eq!(kernel.take_resume_error(target), Some(KError::WouldBlock));
+        kernel.resume_tcb(target).unwrap();
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Ready);
     }
 }

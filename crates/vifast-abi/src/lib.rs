@@ -52,10 +52,13 @@ pub mod user_layout {
     pub const WORKER_C_STACK_TOP: usize = CODE_VA + 0x11000;
     pub const WORKER_D_STACK_BASE: usize = CODE_VA + 0x11000;
     pub const WORKER_D_STACK_TOP: usize = CODE_VA + 0x12000;
+    pub const WORKER_E_STACK_BASE: usize = CODE_VA + 0x12000;
+    pub const WORKER_E_STACK_TOP: usize = CODE_VA + 0x13000;
     const _: () = assert!(WORKER_A_STACK_BASE > DATA_VA);
     const _: () = assert!(WORKER_A_STACK_TOP <= WORKER_B_STACK_BASE);
     const _: () = assert!(WORKER_B_STACK_TOP <= WORKER_C_STACK_BASE);
     const _: () = assert!(WORKER_C_STACK_TOP <= WORKER_D_STACK_BASE);
+    const _: () = assert!(WORKER_D_STACK_TOP <= WORKER_E_STACK_BASE);
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one
@@ -381,6 +384,7 @@ pub enum ThreadState {
     BlockedNotification = 6,
     Faulted = 7,
     BlockedFault = 8,
+    Suspended = 9,
 }
 
 impl ThreadState {
@@ -558,13 +562,13 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::CapCopy, true),
     (SyscallId::CapMint, true),
     (SyscallId::CNodeMint, false),
-    (SyscallId::CapDelete, false),
+    (SyscallId::CapDelete, true),
     (SyscallId::CapRevoke, true),
     (SyscallId::TcbConfigure, true),
     (SyscallId::TcbResume, true),
-    (SyscallId::TcbSuspend, false),
+    (SyscallId::TcbSuspend, true),
     (SyscallId::TcbRestart, false),
-    (SyscallId::TcbSetPriority, false),
+    (SyscallId::TcbSetPriority, true),
     (SyscallId::TcbSetAffinity, true),
     (SyscallId::TcbBindNotification, false),
     (SyscallId::SchedContextConfigure, false),

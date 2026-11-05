@@ -258,6 +258,7 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
     MAINT_ACK[target].load(Ordering::Acquire) >= seq
 }
 
+#[cfg_attr(feature = "test-skip-tlb-ipi", allow(dead_code))]
 fn send_tlb_va(target: usize, asid: u16, va: u64, pages: usize) -> bool {
     if target >= MAX_HARTS || !maintenance_target_online(target) {
         return false;
@@ -681,6 +682,7 @@ impl vifast_kernel::PageTableOps for PageOps {
             return;
         }
         let me = current_hart();
+        #[cfg(not(feature = "test-skip-tlb-ipi"))]
         for target in 0..MAX_HARTS {
             if target == me || !maintenance_target_online(target) {
                 continue;
@@ -693,6 +695,8 @@ impl vifast_kernel::PageTableOps for PageOps {
                 TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
             }
         }
+        #[cfg(feature = "test-skip-tlb-ipi")]
+        let _ = (me, targets);
     }
 
     fn flush_all_asid(&self, asid: u16, targets: u32) {

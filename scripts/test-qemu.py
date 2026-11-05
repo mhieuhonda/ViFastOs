@@ -208,6 +208,17 @@ def run_qemu(
     root_rust_at = output.find("ROOT RUST")
     server_at = output.find("Server")
     client_at = output.find("Client")
+    if feature_mode == "test-skip-tlb-ipi":
+        bad = "TLB REMAP BAD (stale)" in output
+        good = "TLB REMAP OK" in output
+        if not bad or good:
+            if timed_out:
+                print("FAIL: mutation timeout without TLB REMAP BAD")
+            else:
+                print("FAIL: mutation was not detected")
+            return False
+        print("PASS (expected TLB failure detected)")
+        return True
     ok = accept(name, output, rc, require_block, require_disk, feature_mode)
     if timed_out:
         print("FAIL: timeout")
@@ -227,6 +238,8 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         kernel_name = "vifast-kernel-riscv64-handoff"
     elif feature == "test-panic-hart1":
         kernel_name = "vifast-kernel-riscv64-panic"
+    elif feature == "test-skip-tlb-ipi":
+        kernel_name = "vifast-kernel-riscv64-skip-tlb"
     else:
         kernel_name = "vifast-kernel-riscv64"
     kernel = os.path.join(
@@ -315,7 +328,11 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
         "release",
         "vifast-kernel-x86_64-uefi-panic.efi"
         if feature == "test-panic-hart1"
-        else "vifast-kernel-x86_64-uefi.efi",
+        else (
+            "vifast-kernel-x86_64-uefi-skip-tlb.efi"
+            if feature == "test-skip-tlb-ipi"
+            else "vifast-kernel-x86_64-uefi.efi"
+        ),
     )
     tmp = tempfile.mkdtemp(prefix="vifast-uefi-")
     esp = os.path.join(tmp, "esp")
@@ -385,7 +402,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--feature",
-        choices=("test-boot-handoff", "test-panic-hart1"),
+        choices=("test-boot-handoff", "test-panic-hart1", "test-skip-tlb-ipi"),
         help="run a test-only feature build",
     )
     args = parser.parse_args()
@@ -393,6 +410,8 @@ def main() -> int:
         parser.error("--repeat must be at least 1")
     if args.feature == "test-boot-handoff" and args.arch not in (None, "riscv64"):
         parser.error("--feature test-boot-handoff only applies to riscv64")
+    if args.feature == "test-skip-tlb-ipi" and args.arch == "aarch64":
+        parser.error("--feature test-skip-tlb-ipi only applies to riscv64/x86_64")
     if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
         print("missing QEMU binaries")
         return 2
@@ -401,7 +420,12 @@ def main() -> int:
         "aarch64": lambda index: test_aarch64(index, args.feature),
         "x86_64": lambda index: test_x86_64(index, args.feature),
     }
-    names = [args.arch] if args.arch else ["riscv64", "aarch64", "x86_64"]
+    if args.arch:
+        names = [args.arch]
+    elif args.feature == "test-skip-tlb-ipi":
+        names = ["riscv64", "x86_64"]
+    else:
+        names = ["riscv64", "aarch64", "x86_64"]
     results: dict[str, list[bool]] = {name: [] for name in names}
     try:
         for index in range(1, args.repeat + 1):

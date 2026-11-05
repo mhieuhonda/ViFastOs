@@ -10,6 +10,7 @@ default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
 test-panic-hart1 = ["vifast-runtime/test-panic-hart1"]
 test-boot-handoff = []
+test-skip-tlb-ipi = ["vifast-runtime/test-skip-tlb-ipi", "vifast-platform-riscv64/test-skip-tlb-ipi"]
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }

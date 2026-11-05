@@ -890,6 +890,7 @@ unsafe fn process_maintenance() {
     AP_MAINT_ACK.store(seq, Ordering::Release);
 }
 
+#[cfg_attr(feature = "test-skip-tlb-ipi", allow(dead_code))]
 unsafe fn send_tlb_va_ap(asid: u16, va: u64, pages: usize) -> bool {
     if !unsafe { AP_STARTED } || AP_APIC_ID == 0 {
         return false;
@@ -1629,6 +1630,7 @@ impl vifast_kernel::PageTableOps for PageOps {
             return;
         }
         let me = X86Platform::hart_id();
+        #[cfg(not(feature = "test-skip-tlb-ipi"))]
         for target in 0..MAX_HARTS {
             if target == me {
                 continue;
@@ -1642,6 +1644,8 @@ impl vifast_kernel::PageTableOps for PageOps {
                 TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
             }
         }
+        #[cfg(feature = "test-skip-tlb-ipi")]
+        let _ = (me, targets);
     }
 
     fn flush_all_asid(&self, _asid: u16, targets: u32) {

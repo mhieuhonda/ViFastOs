@@ -318,6 +318,11 @@ pub fn cap_copy(src_slot: u8, dst_tcb_slot: u8, dst_slot: u8, rights: u8) -> Sys
     result(e, v)
 }
 
+pub fn cap_delete(slot: u8) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::CapDelete as u64, [slot as u64, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn cap_mint(
     src_slot: u8,
     dst_tcb_slot: u8,
@@ -373,6 +378,23 @@ pub fn frame_write(frame_slot: u8, offset: u64, ptr: u64, len: u64) -> SyscallRe
         syscall(
             SyscallId::FrameWrite as u64,
             [frame_slot as u64, offset, ptr, len, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn frame_remap(space_slot: u8, frame_slot: u8, va: u64, rights: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::FrameMap as u64,
+            [
+                space_slot as u64,
+                frame_slot as u64,
+                va,
+                rights as u64,
+                1,
+                0,
+            ],
         )
     };
     result(e, v)
@@ -902,6 +924,26 @@ pub fn tcb_set_ipc_buffer(tcb_slot: u8, frame_slot: u8, va: u64) -> SyscallResul
         syscall(
             SyscallId::TcbSetIpcBuffer as u64,
             [tcb_slot as u64, frame_slot as u64, va, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn tcb_suspend(tcb_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::TcbSuspend as u64,
+            [tcb_slot as u64, 0, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn tcb_set_priority(tcb_slot: u8, priority: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::TcbSetPriority as u64,
+            [tcb_slot as u64, priority as u64, 0, 0, 0, 0],
         )
     };
     result(e, v)

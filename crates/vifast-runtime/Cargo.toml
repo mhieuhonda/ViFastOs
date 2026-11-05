@@ -10,6 +10,7 @@ license.workspace = true
 # Production/user builds should leave this disabled.
 test-exit = []
 test-panic-hart1 = []
+test-skip-tlb-ipi = []
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }

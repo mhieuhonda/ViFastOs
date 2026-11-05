@@ -14,6 +14,7 @@ use vifast_abi::user_layout::{
     SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
     WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
     WORKER_C_STACK_BASE, WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP,
+    WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
 };
 use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_user::SyscallResult;
@@ -41,10 +42,15 @@ const WORKER_LABEL_B: u64 = 0x5750_0002;
 const WORKER_LABEL_C: u64 = 0x5750_0003;
 const WORKER_LABEL_D_READY: u64 = 0x5750_0004;
 const WORKER_LABEL_D_DONE: u64 = 0x5750_0005;
+const WORKER_LABEL_C_RUNNING: u64 = 0x5750_0006;
 const TLB_TEST_VA: u64 = CODE_VA as u64 + 0x40_0000;
+const SUSPEND_FLAG_VA: u64 = TLB_TEST_VA + 0x1000;
+const TCB_SUSPEND_OK: &[u8] = b"TCB SUSPEND OK\n";
+const TCB_SUSPEND_BAD: &[u8] = b"TCB SUSPEND BAD\n";
 const TLB_A: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 const TLB_B: u64 = 0xBBBB_BBBB_BBBB_BBBB;
 const TLB_REMAP_OK: &[u8] = b"TLB REMAP OK (seen_new=1)\n";
+const TLB_REMAP_BAD: &[u8] = b"TLB REMAP BAD (stale)\n";
 const SMP_WORKERS_OK: &[u8] = b"SMP WORKERS OK (a=50, b=50, c=1)\n";
 const TIME_MONOTONIC_OK: &[u8] = b"TIME MONOTONIC OK\n";
 const TIME_MONOTONIC_BAD: &[u8] = b"TIME MONOTONIC BAD\n";
@@ -90,20 +96,34 @@ pub extern "C" fn smp_worker_b() -> ! {
 #[no_mangle]
 pub extern "C" fn smp_worker_c() -> ! {
     let start = vifast_user::get_time().value;
+    let _ = vifast_user::send(1, WORKER_LABEL_C_RUNNING, start, 0, 0);
     let mut last = start;
-    loop {
+    // Busy until root has suspended/resumed us and sets the shared flag.
+    while unsafe { core::ptr::read_volatile(SUSPEND_FLAG_VA as *const u64) } == 0 {
         let now = vifast_user::get_time().value;
         if now < last {
             write(TIME_MONOTONIC_BAD);
             panic!("GetTime went backwards on hart 1");
         }
         last = now;
-        if now >= start.saturating_add(5) {
-            break;
-        }
     }
+    let elapsed = vifast_user::get_time().value.saturating_sub(start);
     let _ = vifast_user::signal_bits(3, 2);
-    let _ = vifast_user::send(1, WORKER_LABEL_C, 1, 0, 0);
+    let _ = vifast_user::send(1, WORKER_LABEL_C, 1, elapsed, 0);
+    let _ = vifast_user::wait(2);
+    loop {
+        let _ = vifast_user::yield_now();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn smp_worker_e() -> ! {
+    let start = vifast_user::get_time().value;
+    // Keeper for the five-tick suspension window: C is the only busy task,
+    // so hart 1 needs another runnable TCB or its timer would find no task.
+    while vifast_user::get_time().value < start.saturating_add(12) {
+        let _ = vifast_user::yield_now();
+    }
     let _ = vifast_user::wait(2);
     loop {
         let _ = vifast_user::yield_now();
@@ -113,24 +133,39 @@ pub extern "C" fn smp_worker_c() -> ! {
 #[no_mangle]
 pub extern "C" fn smp_worker_d() -> ! {
     let start = vifast_user::get_time().value;
-    // Wait until the root task has mapped A and this hart has actually
-    // executed in the shared root VSpace.
-    let value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
-    if value != TLB_A {
-        let _ = vifast_user::send(1, WORKER_LABEL_D_DONE, 0, 0, 0);
-        let _ = vifast_user::wait(2);
-        loop {
-            let _ = vifast_user::yield_now();
+    let mut next_ready = start;
+    let mut a_seen = 0u64;
+    let mut seen_new = false;
+    let done_at;
+    loop {
+        let now = vifast_user::get_time().value;
+        // Continuous polling while root performs the unmap/remap.  Do not
+        // block or switch root: the stale TLB entry must be observable.
+        let value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
+        if value == TLB_A {
+            a_seen = a_seen.saturating_add(1);
+            if now >= next_ready {
+                let _ = vifast_user::send(1, WORKER_LABEL_D_READY, 1, 0, 0);
+                next_ready = now.saturating_add(5);
+            }
+        }
+        if value == TLB_B {
+            seen_new = true;
+            done_at = now;
+            break;
+        }
+        if now >= start.saturating_add(50) {
+            done_at = now;
+            break;
         }
     }
-    let _ = vifast_user::send(1, WORKER_LABEL_D_READY, 1, 0, 0);
-    // The dedicated notification is signalled only after root unmaps A and
-    // maps B, so this worker cannot spin on the AP and starve worker c.
-    let _ = vifast_user::wait(2);
-    let new_value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
-    let seen_new = (new_value == TLB_B) as u64;
-    let elapsed = vifast_user::get_time().value.saturating_sub(start);
-    let _ = vifast_user::send(1, WORKER_LABEL_D_DONE, seen_new, elapsed, 0);
+    let _ = vifast_user::send(
+        1,
+        WORKER_LABEL_D_DONE,
+        seen_new as u64,
+        a_seen,
+        done_at.saturating_sub(start),
+    );
     let _ = vifast_user::wait(2);
     loop {
         let _ = vifast_user::yield_now();
@@ -317,7 +352,7 @@ fn spawn_worker(
     stack_base: usize,
     stack_top: usize,
     slots: &mut SlotAllocator,
-) {
+) -> u8 {
     let tcb = slots.alloc();
     retype(meta_untyped, ObjType::Tcb, tcb);
     let stack_frame = slots.alloc();
@@ -344,6 +379,7 @@ fn spawn_worker(
     }
     check(vifast_user::tcb_set_affinity(tcb, 0b10));
     check(vifast_user::tcb_resume(tcb));
+    tcb
 }
 
 #[no_mangle]
@@ -393,7 +429,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let notification_slot = slots.alloc();
     let root_notification_slot = slots.alloc();
     let completion_notification_slot = slots.alloc();
-    let tlb_notification_slot = slots.alloc();
     let fault1_tcb = slots.alloc();
     let fault2_tcb = slots.alloc();
     let fault3_tcb = slots.alloc();
@@ -410,7 +445,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         ObjType::Notification,
         completion_notification_slot,
     );
-    retype(meta_untyped, ObjType::Notification, tlb_notification_slot);
     retype(meta_untyped, ObjType::Tcb, fault1_tcb);
     retype(meta_untyped, ObjType::Tcb, fault2_tcb);
     retype(meta_untyped, ObjType::Tcb, fault3_tcb);
@@ -656,13 +690,32 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         &mut slots,
     );
 
+    let suspend_flag_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, suspend_flag_frame);
+    let zero = 0u64;
+    check(vifast_user::frame_write(
+        suspend_flag_frame,
+        0,
+        &zero as *const u64 as u64,
+        8,
+    ));
+    map_with_tables(
+        data_untyped,
+        root_vspace,
+        suspend_flag_frame,
+        SUSPEND_FLAG_VA,
+        Rights::READ,
+        &mut slots,
+    );
+
+    let mut worker_c_tcb = 0u8;
     if info.sched_harts & 0b10 != 0 {
         spawn_worker(
             meta_untyped,
             data_untyped,
             root_vspace,
             fault_endpoint_slot,
-            tlb_notification_slot,
+            root_notification_slot,
             Rights::READ,
             None,
             8,
@@ -699,7 +752,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             WORKER_B_STACK_TOP,
             &mut slots,
         );
-        spawn_worker(
+        worker_c_tcb = spawn_worker(
             meta_untyped,
             data_untyped,
             root_vspace,
@@ -720,34 +773,83 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut workers_ok = false;
     let mut tlb_remapped = false;
     let mut tlb_done = false;
+    let mut suspend_done = false;
+    let mut suspend_ok = false;
+    let mut suspend_printed = false;
     loop {
         let message = unsafe { vifast_user::recv_message(fault_endpoint_slot, 0) };
         if message.error == KError::Ok {
-            if message.label == WORKER_LABEL_D_READY {
-                if !tlb_remapped {
-                    check(vifast_user::frame_unmap(
-                        root_vspace,
-                        TLB_TEST_VA,
-                        tlb_frame_a,
-                    ));
-                    map_with_tables(
+            if message.label == WORKER_LABEL_C_RUNNING {
+                if !suspend_done {
+                    spawn_worker(
+                        meta_untyped,
                         data_untyped,
+                        root_vspace,
+                        fault_endpoint_slot,
+                        root_notification_slot,
+                        Rights::READ,
+                        None,
+                        1,
+                        smp_worker_e as *const () as usize,
+                        WORKER_E_STACK_BASE,
+                        WORKER_E_STACK_TOP,
+                        &mut slots,
+                    );
+                    let suspended = vifast_user::tcb_suspend(worker_c_tcb);
+                    let started = vifast_user::get_time().value;
+                    while vifast_user::get_time().value < started.saturating_add(5) {
+                        let _ = vifast_user::yield_now();
+                    }
+                    let resumed = vifast_user::tcb_resume(worker_c_tcb);
+                    // Keep C busy for five more ticks after resume so the AP
+                    // timer observes preemption again before the flag ends it.
+                    let resumed_at = vifast_user::get_time().value;
+                    while vifast_user::get_time().value < resumed_at.saturating_add(5) {
+                        let _ = vifast_user::yield_now();
+                    }
+                    let one = 1u64;
+                    check(vifast_user::frame_write(
+                        suspend_flag_frame,
+                        0,
+                        &one as *const u64 as u64,
+                        8,
+                    ));
+                    suspend_ok = suspended.error == KError::Ok && resumed.error == KError::Ok;
+                    suspend_done = true;
+                }
+            } else if message.label == WORKER_LABEL_D_READY {
+                if !tlb_remapped {
+                    check(vifast_user::frame_remap(
                         root_vspace,
                         tlb_frame_b,
                         TLB_TEST_VA,
-                        Rights::READ,
-                        &mut slots,
-                    );
+                        Rights::READ.0,
+                    ));
                     tlb_remapped = true;
-                    check(vifast_user::signal_bits(tlb_notification_slot, 1));
                 }
             } else if message.label == WORKER_LABEL_D_DONE {
                 if !tlb_done {
+                    tlb_done = true;
                     if message.data[0] == 1 {
-                        tlb_done = true;
                         write(TLB_REMAP_OK);
                         let mut digits = [0u8; 20];
                         let mut value = message.data[1];
+                        let mut at = digits.len();
+                        loop {
+                            at -= 1;
+                            digits[at] = b'0' + (value % 10) as u8;
+                            value /= 10;
+                            if value == 0 {
+                                break;
+                            }
+                        }
+                        let _ = vifast_user::debug_write(b"TLB A SEEN (count=".as_ptr() as u64, 18);
+                        let _ = vifast_user::debug_write(
+                            digits[at..].as_ptr() as u64,
+                            (digits.len() - at) as u64,
+                        );
+                        let _ = vifast_user::debug_write(b")\n".as_ptr() as u64, 2);
+                        let mut value = message.data[2];
                         let mut at = digits.len();
                         loop {
                             at -= 1;
@@ -764,25 +866,8 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             (digits.len() - at) as u64,
                         );
                         let _ = vifast_user::debug_write(b")\n".as_ptr() as u64, 2);
-                    } else if !tlb_remapped {
-                        // A rare lost/queued READY must not strand worker d
-                        // until the test harness timeout.  Remap now; d keeps
-                        // polling and reports the successful transition.
-                        check(vifast_user::frame_unmap(
-                            root_vspace,
-                            TLB_TEST_VA,
-                            tlb_frame_a,
-                        ));
-                        map_with_tables(
-                            data_untyped,
-                            root_vspace,
-                            tlb_frame_b,
-                            TLB_TEST_VA,
-                            Rights::READ,
-                            &mut slots,
-                        );
-                        tlb_remapped = true;
-                        check(vifast_user::signal_bits(tlb_notification_slot, 1));
+                    } else {
+                        write(TLB_REMAP_BAD);
                     }
                 }
             } else if message.label == WORKER_LABEL_A {
@@ -797,6 +882,14 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 let bits = vifast_user::poll(completion_notification_slot);
                 if message.data[0] == 1 && bits.error == KError::Ok && bits.value & 2 != 0 {
                     worker_bits |= 4;
+                    if suspend_done && !suspend_printed {
+                        suspend_printed = true;
+                        if suspend_ok && message.data[1] >= 5 {
+                            write(TCB_SUSPEND_OK);
+                        } else {
+                            write(TCB_SUSPEND_BAD);
+                        }
+                    }
                 }
             } else {
                 write_fault_addr(message.data[0]);

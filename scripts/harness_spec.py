@@ -49,6 +49,9 @@ EXACT_ONE = [
     "PERCPU CLOBBER OK",
     "TIME MONOTONIC OK",
     "TLB REMAP OK",
+    "CAP DELETE OK",
+    "TCB SUSPEND OK",
+    "FS LARGE OK",
 ]
 
 FORBIDDEN = [
@@ -66,6 +69,9 @@ FORBIDDEN = [
     "BADGE SPOOF BAD",
     "TIME MONOTONIC BAD",
     "TLB REMAP BAD",
+    "CAP DELETE BAD",
+    "TCB SUSPEND BAD",
+    "FS LARGE BAD",
 ]
 
 FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000]
@@ -87,7 +93,7 @@ ARCH = {
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "secondary scheduling, exactly once"),
         ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
-        ("TLB STATS (va_flush=2, ipi=1, skipped=1)", "per-VA TLB accounting"),
+        ("TLB STATS (va_flush=V, ipi=I, skipped=K)", "per-VA TLB accounting"),
     ],
     "aarch64": [
         ("SMP OK", "both CPUs online"),
@@ -99,7 +105,7 @@ ARCH = {
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "secondary scheduling, exactly once"),
         ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
-        ("TLB STATS (va_flush=2, ipi=0, skipped=0)", "per-VA TLB accounting"),
+        ("TLB STATS (va_flush=V, ipi=I, skipped=K)", "per-VA TLB accounting"),
     ],
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
@@ -117,7 +123,7 @@ ARCH = {
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "AP scheduling, exactly once"),
         ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker AP idle proof"),
-        ("TLB STATS (va_flush=2, ipi=1, skipped=1)", "per-VA TLB accounting"),
+        ("TLB STATS (va_flush=V, ipi=I, skipped=K)", "per-VA TLB accounting"),
     ],
 }
 
@@ -161,6 +167,7 @@ NUMERIC = {
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
         "B >= 5 and B/2 <= T <= 2B",
+        "TLB STATS: V >= 1, I >= 1, K >= 1 (regex, exactly once)",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "aarch64": [
@@ -170,6 +177,7 @@ NUMERIC = {
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
         "B >= 5 and B/2 <= T <= 2B",
+        "TLB STATS: V >= 1, I == 0 (regex, exactly once)",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "x86_64": [
@@ -181,6 +189,7 @@ NUMERIC = {
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
         "B >= 5 and B/2 <= T <= 2B",
+        "TLB STATS: V >= 1, I >= 1, K >= 1 (regex, exactly once)",
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
 }

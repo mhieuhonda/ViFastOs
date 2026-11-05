@@ -26,6 +26,8 @@ static TEST_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 static TEST_FS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
 static TEST_TLB_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-skip-tlb-ipi")]
+static TEST_TLB_BAD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
 static TEST_EXPECT_WORKERS: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
@@ -962,6 +964,21 @@ pub mod syscall {
                     }
                 }
             }
+            UserAction::TcbSuspended { hart } => {
+                if let Some(hart) = hart {
+                    A::wake_hart(hart);
+                }
+                A::write_result(context, KError::Ok, 0, 0, [0; 4]);
+            }
+            UserAction::FrameRemap {
+                space,
+                frame,
+                va,
+                rights,
+            } => match kernel.remap_frame(space, frame, va, rights) {
+                Ok(mapping) => A::write_result(context, KError::Ok, mapping.va, 0, [0; 4]),
+                Err(error) => A::write_result(context, error, 0, 0, [0; 4]),
+            },
             UserAction::FrameWrite {
                 frame,
                 offset,
@@ -1029,6 +1046,15 @@ pub mod syscall {
                             .any(|window| window == b"TLB REMAP OK");
                         if tlb_done {
                             TEST_TLB_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
+                        }
+                        #[cfg(feature = "test-skip-tlb-ipi")]
+                        {
+                            let tlb_bad = buf[..len]
+                                .windows(b"TLB REMAP BAD".len())
+                                .any(|window| window == b"TLB REMAP BAD");
+                            if tlb_bad {
+                                TEST_TLB_BAD.store(true, core::sync::atomic::Ordering::SeqCst);
+                            }
                         }
                     }
                     for byte in &buf[..len] {
@@ -1177,6 +1203,11 @@ pub mod timer {
             contexts[old.index as usize] = *context;
         }
         kernel.tick(hart);
+        #[cfg(feature = "test-skip-tlb-ipi")]
+        if hart == 0 && TEST_TLB_BAD.load(core::sync::atomic::Ordering::SeqCst) {
+            vifast_kernel::klog!(A, "TLB MUTATION DETECTED");
+            A::exit(0);
+        }
         #[cfg(feature = "test-panic-hart1")]
         if hart == 1 {
             panic!("test-panic-hart1");
