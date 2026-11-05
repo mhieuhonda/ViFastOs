@@ -25,6 +25,7 @@ COMMON = [
     ("FS V2 OK", "FS v2 namespace/data demo completed"),
     ("FS FSCK OK", "server fsck passed after demo"),
     ("FS PERM OK", "badge-based FS permissions behaved"),
+    ("BADGE SPOOF DENIED OK", "rebadging and badge spoofing were denied"),
     ("IPC BUF OK", "IPC buffer transfer succeeded"),
     ("BLOCK DENIED OK", "client was denied BlockWrite without a device cap"),
     ("Reply OK", "reply path succeeded"),
@@ -60,6 +61,7 @@ FORBIDDEN = [
     "FS CORRUPT",
     "FS V2 BAD",
     "FS PERM BAD",
+    "BADGE SPOOF BAD",
 ]
 
 FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000]

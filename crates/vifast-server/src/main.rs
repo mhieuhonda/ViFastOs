@@ -416,7 +416,20 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
     if request.error != KError::Ok {
         return (vfs::ERR, vfs::EIO, 0, 0);
     }
-    let uid = request.value as u16;
+    let badge = request.badge;
+    if badge == 0 {
+        return (vfs::ERR, vfs::EACCES, 0, 0);
+    }
+    if request.label == vfs::BADGE_PROBE {
+        return (vfs::OK, badge, 0, 0);
+    }
+    let uid = if badge == vifast_abi::BADGE_SUPERUSER {
+        0
+    } else if badge <= u16::MAX as u64 {
+        badge as u16
+    } else {
+        return (vfs::ERR, vfs::EACCES, 0, 0);
+    };
     match request.label {
         0x1234 => {
             let _ = vifast_user::debug_write(IPC_BUF_SERVER_VA as u64, 11);

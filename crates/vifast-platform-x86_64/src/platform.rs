@@ -2005,6 +2005,11 @@ impl Platform for X86Platform {
         context.rcx = data[1];
         context.r8 = data[2];
         context.r9 = data[3];
+        context.r10 = 0;
+    }
+
+    fn write_badge(context: &mut TrapFrame, badge: u64) {
+        context.r10 = badge;
     }
 
     fn start_timer() {

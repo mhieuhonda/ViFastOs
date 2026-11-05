@@ -527,6 +527,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         Rights::WRITE.0,
         2,
     ));
+    // Give the client a cap to its own TCB so it can attempt an illegal
+    // rebadge of the badge-2 endpoint.  The endpoint itself remains the only
+    // client endpoint cap; there is no badge-0 endpoint in the client.
+    copy(client_tcb, client_tcb, 7, Rights::WRITE);
     copy(client_vspace, client_tcb, 2, Rights::WRITE);
     copy(client_untyped, client_tcb, 3, Rights::WRITE);
     copy(

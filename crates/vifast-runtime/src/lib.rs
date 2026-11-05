@@ -114,6 +114,10 @@ pub trait Platform: Arch + Console {
         data: [u64; 4],
     );
 
+    /// Write the badge to its dedicated ABI return register.  This is never
+    /// shared with the ordinary message value word.
+    fn write_badge(_context: &mut Self::Context, _badge: u64) {}
+
     fn write_message(context: &mut Self::Context, message: &Message) {
         let mut data = [0u64; 4];
         let words = message.words();
@@ -122,7 +126,8 @@ pub trait Platform: Arch + Console {
             data[i] = words[i];
             i += 1;
         }
-        Self::write_result(context, KError::Ok, message.badge, message.label, data);
+        Self::write_result(context, KError::Ok, 0, message.label, data);
+        Self::write_badge(context, message.badge);
     }
 
     fn prepare_user() {}
@@ -896,7 +901,10 @@ pub mod syscall {
                 value,
                 label,
                 data,
-            } => A::write_result(context, error, value, label, data),
+            } => {
+                A::write_result(context, error, 0, label, data);
+                A::write_badge(context, value);
+            }
             UserAction::ConfigureTcb { tcb, entry, stack } => {
                 let contexts = A::contexts();
                 if let Some(slot) = contexts.get_mut(tcb.index as usize) {

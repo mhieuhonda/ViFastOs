@@ -495,12 +495,27 @@ pub extern "C" fn client_main() -> ! {
     if !unlink_denied {
         let _ = vifast_user::debug_write(b"PERM UNLINK BAD\n".as_ptr() as u64, 16);
     }
+    let mut badge_ok = vifast_user::cap_mint(6, 7, 8, vifast_abi::Rights::WRITE.0, 0).error
+        == KError::IllegalOperation;
+    let probe = unsafe { vifast_user::call_message(6, vfs::BADGE_PROBE, 0, 0xFFFF, 0) };
+    badge_ok &= probe.error == KError::Ok && probe.data[0] == 2;
+    if let Some((fd, _)) = vfs_open_via(6, b"/priv/f", 0) {
+        badge_ok &= vfs_write_via(6, fd, 0, b"spoof").is_none();
+        let _ = vfs_close(fd);
+    } else {
+        badge_ok = false;
+    }
     let _ = vfs_unlink(b"/priv/f");
     let _ = vfs_unlink(b"/priv");
     write(if perm {
         b"FS PERM OK\n"
     } else {
         b"FS PERM BAD\n"
+    });
+    write(if badge_ok {
+        b"BADGE SPOOF DENIED OK\n"
+    } else {
+        b"BADGE SPOOF BAD\n"
     });
 
     loop {

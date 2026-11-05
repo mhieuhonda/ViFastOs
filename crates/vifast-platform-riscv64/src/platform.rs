@@ -1126,6 +1126,11 @@ impl Platform for RiscvPlatform {
         context.regs[14] = data[1];
         context.regs[15] = data[2];
         context.regs[16] = data[3];
+        context.regs[17] = 0;
+    }
+
+    fn write_badge(context: &mut TrapFrame, badge: u64) {
+        context.regs[17] = badge;
     }
 
     fn start_timer() {

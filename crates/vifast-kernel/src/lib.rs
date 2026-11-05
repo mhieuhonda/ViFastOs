@@ -3544,6 +3544,14 @@ impl Kernel {
                         error: KError::WrongType,
                     };
                 }
+                // D6: a badge is an identity boundary.  Only an unbudged
+                // source cap can be minted; no cap can be rebadged.
+                if source.badge != 0 {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::IllegalOperation,
+                    };
+                }
                 let rights = Rights((a3 as u8) & Rights::ALL.0) & source.rights;
                 match self.copy_cap(tcb, src_slot, dest.obj, dst_slot, rights, a4) {
                     Ok(()) => UserAction::Return {
@@ -8062,5 +8070,69 @@ mod tests {
             .lookup_cap(child, 1, Some(ObjType::Endpoint), Rights::READ)
             .unwrap();
         assert_eq!(cap.badge, 7);
+    }
+
+    #[test]
+    fn capmint_rejects_rebadging_an_already_badged_cap() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        kernel.copy_cap(root, 1, root, 2, Rights::ALL, 2).unwrap();
+        let child = kernel.create_tcb("child", 5).unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(child, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::CapMint as u64,
+                2,
+                3,
+                1,
+                Rights::READ.0 as u64,
+                0,
+                0,
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::IllegalOperation
+            }
+        );
+        assert!(kernel.lookup_cap(child, 1, None, Rights::NONE).is_err());
+    }
+
+    #[test]
+    fn kernel_overwrites_sender_badge_on_direct_and_queued_delivery() {
+        let mut kernel = Kernel::new();
+        let sender = kernel.create_tcb("sender", 5).unwrap();
+        let receiver = kernel.create_tcb("receiver", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+
+        // Receiver waits: direct delivery path.
+        assert_eq!(kernel.recv(receiver, endpoint, 4), Ok(None));
+        let mut forged = Message::new(0xAA, &[7]).unwrap();
+        forged.badge = 0xFFFF;
+        assert_eq!(kernel.send(sender, endpoint, 2, forged, false), Ok(true));
+        let delivered = kernel.take_resume(receiver).expect("direct message");
+        assert_eq!(delivered.badge, 2);
+        assert_eq!(
+            delivered.badge, 2,
+            "sender-supplied badge was not overwritten"
+        );
+
+        // No receiver: sender queues; recv must still stamp the cap badge.
+        let receiver2 = kernel.create_tcb("receiver2", 5).unwrap();
+        let endpoint2 = kernel.create_endpoint().unwrap();
+        let mut forged = Message::new(0xBB, &[9]).unwrap();
+        forged.badge = 0;
+        assert_eq!(kernel.send(sender, endpoint2, 2, forged, false), Ok(false));
+        let queued = kernel
+            .recv(receiver2, endpoint2, 4)
+            .unwrap()
+            .expect("queued");
+        assert_eq!(queued.badge, 2);
     }
 }

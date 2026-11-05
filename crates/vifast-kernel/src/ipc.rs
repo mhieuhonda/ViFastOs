@@ -118,6 +118,10 @@ impl Kernel {
             self.stats.ipc_sent += 1;
             Ok(true)
         } else {
+            let mut msg = msg;
+            // The badge is kernel-owned metadata and must be fixed before a
+            // sender can park in the queue.
+            msg.badge = badge;
             let pending = PendingSend {
                 badge,
                 msg,

@@ -1053,6 +1053,11 @@ impl Platform for Aarch64Platform {
         context.regs[4] = data[1];
         context.regs[5] = data[2];
         context.regs[6] = data[3];
+        context.regs[7] = 0;
+    }
+
+    fn write_badge(context: &mut TrapFrame, badge: u64) {
+        context.regs[7] = badge;
     }
 
     fn start_timer() {

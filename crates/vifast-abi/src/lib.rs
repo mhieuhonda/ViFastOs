@@ -159,6 +159,11 @@ pub const LABEL_NOTIFICATION: u64 = 0xFFFF_0002;
 /// Sentinel used instead of `Option<u64>` in the wire message.
 pub const CAP_NONE: u64 = u64::MAX;
 
+/// Endpoint badge identity rules (D6).  Badge 0 has no identity;
+/// the single superuser badge is 0xFFFF.
+pub const BADGE_NONE: u64 = 0;
+pub const BADGE_SUPERUSER: u64 = 0xFFFF;
+
 /// File open flags for the tiny ramfs.
 pub const O_RDONLY: u64 = 0;
 pub const O_WRONLY: u64 = 1;
@@ -181,6 +186,8 @@ pub mod vfs {
     pub const TRUNCATE: u64 = 0x200A;
     pub const FSYNC: u64 = 0x200B;
     pub const FSCK: u64 = 0x200C;
+    /// Identity probe: server returns the kernel-stamped badge in data[0].
+    pub const BADGE_PROBE: u64 = 0x200D;
 
     pub const ENOENT: u64 = 1;
     pub const EEXIST: u64 = 2;

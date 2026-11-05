@@ -80,7 +80,7 @@ pub unsafe fn syscall(number: u64, args: [u64; 6]) -> (u64, u64) {
         let value: u64;
         core::arch::asm!(
             "ecall",
-            in("a7") number,
+            inlateout("a7") number => _,
             inlateout("a0") args[0] => error,
             inlateout("a1") args[1] => value,
             inlateout("a2") args[2] => _,
@@ -112,7 +112,10 @@ pub unsafe fn syscall(number: u64, args: [u64; 6]) -> (u64, u64) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MessageResult {
     pub error: KError,
+    /// Legacy message value.  Badge identity is in `badge`, never here.
     pub value: u64,
+    /// Dedicated ABI badge register: RISC-V a7, AArch64 x7, x86_64 r10.
+    pub badge: u64,
     pub label: u64,
     pub data: [u64; 4],
 }
@@ -122,6 +125,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let label: u64;
         let d0: u64;
         let d1: u64;
@@ -136,7 +140,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
             lateout("rcx") d1,
             lateout("r8") d2,
             lateout("r9") d3,
-            lateout("r10") _,
+            lateout("r10") badge,
             lateout("r11") _,
             lateout("r12") _,
             lateout("r13") _,
@@ -146,6 +150,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label,
             data: [d0, d1, d2, d3],
         }
@@ -154,6 +159,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let label: u64;
         let d0: u64;
         let d1: u64;
@@ -169,7 +175,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
             lateout("x4") d1,
             lateout("x5") d2,
             lateout("x6") d3,
-            lateout("x7") _,
+            lateout("x7") badge,
             lateout("x9") _,
             lateout("x10") _,
             lateout("x11") _,
@@ -183,6 +189,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label,
             data: [d0, d1, d2, d3],
         }
@@ -191,6 +198,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let label: u64;
         let d0: u64;
         let d1: u64;
@@ -198,7 +206,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
         let d3: u64;
         core::arch::asm!(
             "ecall",
-            in("a7") SyscallId::Recv as u64,
+            inlateout("a7") SyscallId::Recv as u64 => badge,
             inlateout("a0") endpoint_slot as u64 => error,
             inlateout("a1") recv_slot as u64 => value,
             lateout("a2") label,
@@ -217,6 +225,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label,
             data: [d0, d1, d2, d3],
         }
@@ -231,6 +240,7 @@ pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
         MessageResult {
             error: KError::NotImplemented,
             value: 0,
+            badge: 0,
             label: 0,
             data: [0; 4],
         }
@@ -524,6 +534,7 @@ pub unsafe fn call_message(
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let out_label: u64;
         let d0: u64;
         let d1: u64;
@@ -538,7 +549,7 @@ pub unsafe fn call_message(
             inlateout("rcx") data1 => d1,
             inlateout("r8") data2 => d2,
             inlateout("r9") cap => d3,
-            lateout("r10") _,
+            lateout("r10") badge,
             lateout("r11") _,
             lateout("r12") _,
             lateout("r13") _,
@@ -548,6 +559,7 @@ pub unsafe fn call_message(
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label: out_label,
             data: [d0, d1, d2, d3],
         }
@@ -556,6 +568,7 @@ pub unsafe fn call_message(
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let out_label: u64;
         let d0: u64;
         let d1: u64;
@@ -571,7 +584,7 @@ pub unsafe fn call_message(
             inlateout("x4") data2 => d1,
             inlateout("x5") cap => d2,
             lateout("x6") d3,
-            lateout("x7") _,
+            lateout("x7") badge,
             lateout("x9") _,
             lateout("x10") _,
             lateout("x11") _,
@@ -585,6 +598,7 @@ pub unsafe fn call_message(
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label: out_label,
             data: [d0, d1, d2, d3],
         }
@@ -593,6 +607,7 @@ pub unsafe fn call_message(
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let out_label: u64;
         let d0: u64;
         let d1: u64;
@@ -600,7 +615,7 @@ pub unsafe fn call_message(
         let d3: u64;
         core::arch::asm!(
             "ecall",
-            in("a7") SyscallId::Call as u64,
+            inlateout("a7") SyscallId::Call as u64 => badge,
             inlateout("a0") endpoint_slot as u64 => error,
             inlateout("a1") label => value,
             inlateout("a2") data0 => out_label,
@@ -619,6 +634,7 @@ pub unsafe fn call_message(
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label: out_label,
             data: [d0, d1, d2, d3],
         }
@@ -633,6 +649,7 @@ pub unsafe fn call_message(
         MessageResult {
             error: KError::NotImplemented,
             value: 0,
+            badge: 0,
             label: 0,
             data: [0; 4],
         }
@@ -653,6 +670,7 @@ pub unsafe fn reply_recv_message(
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let out_label: u64;
         let d0: u64;
         let d1: u64;
@@ -667,7 +685,7 @@ pub unsafe fn reply_recv_message(
             inlateout("rcx") reply0 => d1,
             inlateout("r8") reply1 => d2,
             inlateout("r9") reply2 => d3,
-            lateout("r10") _,
+            lateout("r10") badge,
             lateout("r11") _,
             lateout("r12") _,
             lateout("r13") _,
@@ -677,6 +695,7 @@ pub unsafe fn reply_recv_message(
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label: out_label,
             data: [d0, d1, d2, d3],
         }
@@ -685,6 +704,7 @@ pub unsafe fn reply_recv_message(
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let out_label: u64;
         let d0: u64;
         let d1: u64;
@@ -700,7 +720,7 @@ pub unsafe fn reply_recv_message(
             inlateout("x4") reply1 => d1,
             inlateout("x5") reply2 => d2,
             lateout("x6") d3,
-            lateout("x7") _,
+            lateout("x7") badge,
             lateout("x9") _,
             lateout("x10") _,
             lateout("x11") _,
@@ -714,6 +734,7 @@ pub unsafe fn reply_recv_message(
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label: out_label,
             data: [d0, d1, d2, d3],
         }
@@ -722,6 +743,7 @@ pub unsafe fn reply_recv_message(
     {
         let error: u64;
         let value: u64;
+        let badge: u64;
         let out_label: u64;
         let d0: u64;
         let d1: u64;
@@ -729,7 +751,7 @@ pub unsafe fn reply_recv_message(
         let d3: u64;
         core::arch::asm!(
             "ecall",
-            in("a7") SyscallId::ReplyRecv as u64,
+            inlateout("a7") SyscallId::ReplyRecv as u64 => badge,
             inlateout("a0") endpoint_slot as u64 => error,
             inlateout("a1") recv_slot as u64 => value,
             inlateout("a2") reply_label => out_label,
@@ -748,6 +770,7 @@ pub unsafe fn reply_recv_message(
         MessageResult {
             error: KError::from_u32(error as u32),
             value,
+            badge,
             label: out_label,
             data: [d0, d1, d2, d3],
         }
@@ -769,6 +792,7 @@ pub unsafe fn reply_recv_message(
         MessageResult {
             error: KError::NotImplemented,
             value: 0,
+            badge: 0,
             label: 0,
             data: [0; 4],
         }
