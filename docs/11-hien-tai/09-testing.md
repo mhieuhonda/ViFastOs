@@ -136,8 +136,8 @@ Script chạy:
 - `Client`;
 - `Mapped`;
 - `Cap OK`;
-- `ViFastOS ramfs`;
-- `ViFastOS write`;
+- `ViFastOs ramfs`;
+- `ViFastOs write`;
 - `Reply OK`;
 - đúng 3 `USER FAULT`, có `addr=0x80000000` và `addr=0x1000002000`;
 - `ROOT RUST` và `ROOT READY` mỗi chuỗi đúng 1 lần, trước `Server`/`Client`;

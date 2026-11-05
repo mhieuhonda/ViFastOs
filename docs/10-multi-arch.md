@@ -84,7 +84,7 @@ nếu không có VM/emulation. Vì vậy:
 - QEMU x86_64/OVMF (`-smp 2`): self-test + ring3 IPC + frame map/unmap + PIC/PIT;
   AP bring-up chưa có.
 - `scripts/test-qemu.py` chạy lặp lại và kiểm tra `SELFTEST PASS`, banner,
-  `Server`, `Mapped`, `ViFastOS ramfs`, `ViFastOS write`, `Client`, `Fault`,
+  `Server`, `Mapped`, `ViFastOs ramfs`, `ViFastOs write`, `Client`, `Fault`,
   `ROOT RUST`, `ROOT READY`, `Isolation`, `USER FAULT` x3, `Zero OK`, `Cap OK`,
   `Reply OK`, `PREEMPT OK`, `ROOT SWITCH n>1`.
 

@@ -189,7 +189,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 347568 byte (`kernel_end=0x803ab250`)
 - `Kernel = 651352`, `Object = 4704`, `Tcb = 4656`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 50`): x86_64 50/50
+- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -203,7 +203,7 @@ Output tiêu biểu:
 - ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000), LAPIC OK (id=0) trên x86_64
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
-  "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
+  "Zero OK", "Server", "Mapped", "ViFastOs ramfs", "ViFastOs write",
   "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "IOMMU OK",
   "SMP OK (... ipi=1)", "SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)",
   "SMP TIMER OK (hart1_ticks=T)" trên cả 3 kiến trúc,
@@ -894,9 +894,9 @@ Client B:
   Client CapRevoke(slot 3) chỉ hủy Frame do client tạo, không hủy object
   root/server tạo qua cap gốc của cùng Untyped.
 - FrameMap, DebugWrite "Mapped".
-- Gọi VFS IPC: Open /motd / Read / DebugWrite "ViFastOS ramfs".
+- Gọi VFS IPC: Open /motd / Read / DebugWrite "ViFastOs ramfs".
 - Gọi VFS IPC: Open /scratch O_CREATE|O_RDWR, Write qua IPC buffer, Close,
-  Open lại, Read, DebugWrite "ViFastOS write", Close, in "VFS OK".
+  Open lại, Read, DebugWrite "ViFastOs write", Close, in "VFS OK".
 - FrameUnmap(vspace slot 2, VA, frame slot 4); thiếu cap Frame hoặc sai PA
   trả InvalidCap/NoRights, không thể phá mapping của task khác.
 - DebugWrite "Client".
@@ -1091,8 +1091,8 @@ QEMU test:
 - `Client` — user VFS client ran
 - `Mapped` — client VSpace mapping succeeded
 - `Cap OK` — capability transfer demo succeeded
-- `ViFastOS ramfs` — ramfs read path ran
-- `ViFastOS write` — ramfs write path ran
+- `ViFastOs ramfs` — ramfs read path ran
+- `ViFastOs write` — ramfs write path ran
 - `FS V2 OK` — FS v2 namespace/data demo completed
 - `FS FSCK OK` — server fsck passed after demo
 - `FS PERM OK` — badge-based FS permissions behaved

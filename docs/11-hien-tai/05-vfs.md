@@ -32,7 +32,7 @@ pub struct RamFile {
 ```
 
 - `format()` xoá toàn bộ và tạo:
-  - `/motd` = `"ViFastOS ramfs\n"`;
+  - `/motd` = `"ViFastOs ramfs\n"`;
   - `/hello` = `"hello from ViFastOs\n"`.
 - `create(name, data)` tạo file mới nếu còn slot.
 - `find(name)` so sánh chính xác từng byte; không có path walker.
@@ -100,15 +100,15 @@ Client thực hiện:
 
 1. mở `/motd`, đọc và in;
 2. mở `/scratch` bằng `O_CREATE | O_RDWR`;
-3. ghi `"ViFastOS write\n"`;
+3. ghi `"ViFastOs write\n"`;
 4. seek 0, đọc lại, in;
 5. đóng fd, unmap page.
 
 Vì vậy log QEMU có cả:
 
 ```text
-ViFastOS ramfs
-ViFastOS write
+ViFastOs ramfs
+ViFastOs write
 ```
 
 ## 8. Chưa có

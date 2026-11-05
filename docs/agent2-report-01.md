@@ -88,7 +88,7 @@ Commit:
 - Mục 14: danh sách PASS khớp `scripts/test-qemu.py`:
   - `SELFTEST PASS`, `booting on`, `BOOT UNTYPED`, `PREEMPT OK`
   - `Isolation`, `Server`, `Client`, `Mapped`, `Cap OK`
-  - `ViFastOS ramfs`, `ViFastOS write`, `IPC BUF OK`, `Reply OK`
+  - `ViFastOs ramfs`, `ViFastOs write`, `IPC BUF OK`, `Reply OK`
   - `VFS SERVER OK`/`VFS OK`/`VFS STAT OK`/`IOMMU OK` đúng 1 lần
   - không `VFS BAD`
   - đúng 4 `USER FAULT` với các địa chỉ bắt buộc
@@ -148,7 +148,7 @@ không thay đổi protocol VFS.
 - Kiểm tra sector 0 sau khi boot:
   - magic `VF01`
   - length đúng
-  - payload đúng `ViFastOS write\n` do client ghi.
+  - payload đúng `ViFastOs write\n` do client ghi.
 
 **Phase 2 — cùng disk**
 

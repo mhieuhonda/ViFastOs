@@ -120,8 +120,8 @@ random_2000_operations_with_checks
 - Data Untyped còn lại sau boot/test: RISC-V `45/64` dùng (19 trang free),
   AArch64 `46/64` (18 free), x86_64 `48/64` (16 free).
 - RISC-V headroom: `400912` byte.
-- Output giữ `FS DISK OK`, `VFS SERVER OK`, `ViFastOS ramfs`,
-  `ViFastOS write`, `VFS OK`, `VFS STAT OK`; thêm `FS V2 OK`, `FS FSCK OK`,
+- Output giữ `FS DISK OK`, `VFS SERVER OK`, `ViFastOs ramfs`,
+  `ViFastOs write`, `VFS OK`, `VFS STAT OK`; thêm `FS V2 OK`, `FS FSCK OK`,
   `FS PERM OK`; cấm `FS CORRUPT`, `FS V2 BAD`, `FS PERM BAD`.
 
 ## 8. Task 6 — persistence log một kiến trúc

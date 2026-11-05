@@ -129,7 +129,7 @@ DebugWrite "Mapped"
 
 Open("/motd"), Read, DebugWrite file content
 Open("/scratch", O_CREATE|O_RDWR)
-Write("ViFastOS write\n"), Seek(0), Read, DebugWrite
+Write("ViFastOs write\n"), Seek(0), Read, DebugWrite
 Close
 FrameUnmap(VSpace slot 2, VA, Frame slot 4)
 

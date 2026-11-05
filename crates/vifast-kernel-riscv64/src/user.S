@@ -269,7 +269,7 @@ user_motd_path:
 user_scratch_path:
     .ascii "/scratch"
 user_write_text:
-    .asciz "ViFastOS write\n"
+    .asciz "ViFastOs write\n"
 user_message_a:
     .asciz "Server\n"
 user_message_b:

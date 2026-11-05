@@ -110,7 +110,7 @@ cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
 Kết quả mong đợi:
 
 ```
-ViFastOS booting on riscv64
+ViFastOs booting on riscv64
 ...
 [ok]   install endpoint capability
 ...
@@ -121,8 +121,8 @@ USER FAULT ...
 Zero OK
 Server
 Mapped
-ViFastOS ramfs
-ViFastOS write
+ViFastOs ramfs
+ViFastOs write
 Client
 Cap OK
 Reply OK
@@ -175,7 +175,7 @@ rồi `Reply`; các Call sau không chuyển cap nữa để slot không bị ch
 sau khi resume các TCB thì block bằng `Wait`. Fault thread cố ý load từ
 `0x8000_0000`; kernel log `USER FAULT`, suspend thread và chạy tiếp. Client
 `Poll` và in `Cap OK`. Client cũng mở `/motd`, đọc vào page vừa map, in nội dung qua
-`DebugWrite`, tạo `/scratch`, ghi `ViFastOS write`, seek/đọc lại, rồi đóng fd
+`DebugWrite`, tạo `/scratch`, ghi `ViFastOs write`, seek/đọc lại, rồi đóng fd
 và unmap. Khi IPC block, kernel lưu context, chọn TCB
 khác, rồi áp dụng `resume` message khi đánh thức. Timer preempts; binary test
 bật feature `test-exit` để sau 20 tick in `PREEMPT OK` và thoát QEMU. Chạy host test:

@@ -68,7 +68,7 @@ impl RamFs {
         for file in self.files.iter_mut() {
             *file = RamFile::default();
         }
-        let _ = self.create(b"/motd", b"ViFastOS ramfs\n");
+        let _ = self.create(b"/motd", b"ViFastOs ramfs\n");
         let _ = self.create(b"/hello", b"hello from ViFastOs\n");
     }
 

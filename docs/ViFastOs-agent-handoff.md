@@ -1,4 +1,4 @@
-# ViFastOS — Báo cáo bàn giao đầy đủ cho agent
+# ViFastOs — Báo cáo bàn giao đầy đủ cho agent
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
@@ -118,9 +118,9 @@ x86_64 : SELFTEST PASS
 
 ---
 
-## 2. ViFastOS là gì?
+## 2. ViFastOs là gì?
 
-ViFastOS là một **microkernel** viết bằng Rust, hướng tới nhiều kiến trúc:
+ViFastOs là một **microkernel** viết bằng Rust, hướng tới nhiều kiến trúc:
 
 - RISC-V 64
 - AArch64
@@ -634,8 +634,8 @@ Giữ `/motd`, `/scratch`, các string harness cũ. Thêm test:
 - `Client`
 - `Mapped`
 - `Cap OK`
-- `ViFastOS ramfs`
-- `ViFastOS write`
+- `ViFastOs ramfs`
+- `ViFastOs write`
 - `IPC BUF OK`
 - `Reply OK`
 - `VFS SERVER OK` đúng 1 lần
@@ -894,7 +894,7 @@ Khi summary thay đổi, cập nhật SHA-256 trong `docs/overnight-log.md`.
 ## 15. Prompt copy-paste cho agent tiếp nhận
 
 ```text
-Bạn là kỹ sư tiếp nhận dự án ViFastOS tại /Users/mps/dvchd/ViFastOs.
+Bạn là kỹ sư tiếp nhận dự án ViFastOs tại /Users/mps/dvchd/ViFastOs.
 
 Hãy đọc trước:
 - docs/ViFastOs-agent-handoff.md (báo cáo này)
@@ -904,7 +904,7 @@ Hãy đọc trước:
 - crates/vifast-kernel/src/lib.rs
 - crates/vifast-runtime/src/lib.rs
 
-Mục tiêu: tiếp tục hoàn thiện các phần còn lại của ViFastOS, mỗi lần làm xong
+Mục tiêu: tiếp tục hoàn thiện các phần còn lại của ViFastOs, mỗi lần làm xong
 một phần thì chạy đầy đủ test và commit.
 
 Ưu tiên:
@@ -941,7 +941,7 @@ Nếu bị kẹt ở SMP/BKL hoặc persistence, báo rõ đã thử gì và log
 
 ## 16. Kết luận
 
-ViFastOS đang ở trạng thái **nguyên mẫu microkernel đa kiến trúc có baseline xanh**, với các cơ chế lõi đã chạy thật trên QEMU:
+ViFastOs đang ở trạng thái **nguyên mẫu microkernel đa kiến trúc có baseline xanh**, với các cơ chế lõi đã chạy thật trên QEMU:
 
 - Boot 3 kiến trúc.
 - User mode + ELF + VSpace.

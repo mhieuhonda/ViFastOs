@@ -102,7 +102,7 @@ python3 scripts/test-qemu.py
 ```
 
 Kỳ vọng: cả 3 dòng `riscv64`, `aarch64`, `x86_64` đều `PASS`, mỗi log có
-`SELFTEST PASS`, `Server`, `Mapped`, `ViFastOS ramfs`, `ViFastOS write`,
+`SELFTEST PASS`, `Server`, `Mapped`, `ViFastOs ramfs`, `ViFastOs write`,
 `Client`, `Fault`, `USER FAULT`, `Zero OK`, `Cap OK`, `Reply OK` và `PREEMPT OK`.
 
 ## Tài liệu thành phần

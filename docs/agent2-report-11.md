@@ -105,7 +105,7 @@ trước khi stop hart 1. Flag `__boot_handoff_from` làm runtime in:
 
 ```text
 Boot HART ID                : 0
-ViFastOS booting on riscv64 (hart=0, dtb=0x0)
+ViFastOs booting on riscv64 (hart=0, dtb=0x0)
 BOOT HANDOFF OK (from=1)
 SMP OK (harts=2, ipi=1)
 SMP POST IDLE OK (ticks=21, idle_entries=22, wake_timer=21)

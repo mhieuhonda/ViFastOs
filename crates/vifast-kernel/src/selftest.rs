@@ -239,7 +239,7 @@ pub fn run<A: Console>(k: &mut Kernel) -> bool {
         Err(_) => return fail::<A>(passed, "read /motd"),
     };
     check!(
-        &file_buf[..read] == b"ViFastOS ramfs\n",
+        &file_buf[..read] == b"ViFastOs ramfs\n",
         "ramfs open/read returns /motd"
     );
     check!(

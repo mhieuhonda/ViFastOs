@@ -385,7 +385,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     A::init_platform(info);
     vifast_kernel::klog!(
         A,
-        "ViFastOS booting on {} (hart={}, dtb={:#x})",
+        "ViFastOs booting on {} (hart={}, dtb={:#x})",
         <A as Console>::NAME,
         info.hartid,
         info.dtb

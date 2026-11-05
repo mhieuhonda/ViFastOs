@@ -287,6 +287,6 @@ user_motd_path:
 user_scratch_path:
     .ascii "/scratch"
 user_write_text:
-    .asciz "ViFastOS write\n"
+    .asciz "ViFastOs write\n"
     .globl user_program_end
 user_program_end:

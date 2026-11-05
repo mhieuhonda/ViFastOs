@@ -379,7 +379,7 @@ follow-up `62b31f4`.
 - Commit: `test: hermetic two-boot persistence check` (Agent 2).
 - Thêm `scripts/test-persist.py`: disk nằm trong temp dir riêng, xóa sau test.
 - Phase 1 disk trắng: yêu cầu `FS DISK OK`, **không** có `FS PERSIST OK`;
-  kiểm tra sector 0 có `VF01` + `ViFastOS write`.
+  kiểm tra sector 0 có `VF01` + `ViFastOs write`.
 - Phase 2 seed nonce ngẫu nhiên vào `VF01` sector 0; yêu cầu `FS PERSIST OK`
   và server in `FS PERSIST DATA <nonce>` đúng nonce.
 - Phase âm magic sai: yêu cầu `FS DISK OK`, không có `FS PERSIST OK`.

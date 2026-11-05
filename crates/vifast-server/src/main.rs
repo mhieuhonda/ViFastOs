@@ -17,7 +17,7 @@ core::arch::global_asm!(include_str!("start_riscv64.S"));
 
 const SERVER: &[u8] = b"Server\n";
 const VFS_READY: &[u8] = b"VFS SERVER OK\n";
-const MOTD: &[u8] = b"ViFastOS ramfs\n";
+const MOTD: &[u8] = b"ViFastOs ramfs\n";
 const BLOCK_CAP: u8 = 2;
 const FD_COUNT: usize = 16;
 
