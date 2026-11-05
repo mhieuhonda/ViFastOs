@@ -130,6 +130,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 8342553 fix: wait for fs large demo before test exit
 - c37982e feat: per-hart ready queues with work stealing
 - 925f633 feat: vfs bulk read and fs hard links
+- 36147fb feat: fs symlinks and object capacity headroom
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -182,13 +183,13 @@ Test hiện tại:
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
-- `cargo test -p vifast-fs`: 14/14 PASS
+- `cargo test -p vifast-fs`: 16/16 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 392624 byte (`kernel_end=0x803a0250`)
-- `Kernel = 613720`, `Object = 4704`, `Tcb = 4656`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 10`): riscv64 10/10, aarch64 10/10, x86_64 10/10
+- RISC-V headroom: 347568 byte (`kernel_end=0x803ab250`)
+- `Kernel = 651352`, `Object = 4704`, `Tcb = 4656`, `Cap = 64` byte
+- QEMU lần chạy gần nhất (`--repeat 50`): x86_64 50/50
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -493,7 +494,7 @@ Root task sau đó tự:
 7. OBJECT MODEL VÀ CAPABILITY
 -----------------------------
 Giới hạn cố định:
-- MAX_OBJECTS = 128
+- MAX_OBJECTS = 136
 - MAX_TCBS = 16
 - MAX_CAPS_ROOT = 96
 - MAX_CAPS_TASK = 64
@@ -1121,6 +1122,7 @@ Mỗi dòng sau đúng một lần:
 - `TCB SUSPEND OK` — exactly once
 - `FS LARGE OK` — exactly once
 - `HARD LINK OK` — exactly once
+- `SYMLINK OK` — exactly once
 
 Cấm xuất hiện:
 - `PERCPU CLOBBER BAD` — forbidden
@@ -1141,6 +1143,7 @@ Cấm xuất hiện:
 - `TCB SUSPEND BAD` — forbidden
 - `FS LARGE BAD` — forbidden
 - `HARD LINK BAD` — forbidden
+- `SYMLINK BAD` — forbidden
 
 Exit code:
 - riscv64: 0
@@ -1336,7 +1339,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - Boot-time check walk leaf thật từ root: trap entry có X, stack/IST/GDT/TSS/IDT/
   KERNEL_STORAGE có W, tất cả non-user; kiểm tra toàn bộ kernel_accessible_range.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
-- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (128).
+- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (136); data Untyped 64 object.
 - Data Untyped 256 KiB/max48; metadata Untyped max32; boot Untyped 128 KiB/max32.
 - vifast-kernel bỏ dependency vifast-arch; dùng Console trait.
 - x86 page-fault/exception entry dùng efiapi rcx/rdx/r8; vector 0..31 có handler.
