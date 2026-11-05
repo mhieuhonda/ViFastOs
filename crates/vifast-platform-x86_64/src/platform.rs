@@ -77,6 +77,7 @@ static BKL: BigKernelLock = BigKernelLock::new();
 static mut ACPI_CPUS: usize = 0;
 static mut ACPI_BSP: u32 = 0;
 static mut ACPI_LAPIC_BASE: u64 = 0;
+static mut AP_TRAMPOLINE: u64 = 0;
 
 unsafe fn identity_u32(address: u64) -> Option<u32> {
     if address.saturating_add(4) > 0x4000_0000 {
@@ -1101,8 +1102,15 @@ impl Platform for X86Platform {
     fn init_platform(info: PlatformInfo) {
         unsafe {
             init_acpi(info.acpi_rsdp);
+            AP_TRAMPOLINE = info.ap_trampoline;
             build_kernel_page_tables();
             init_cpu(info.hartid);
+            let trampoline = AP_TRAMPOLINE;
+            if trampoline != 0 {
+                vifast_kernel::klog!(X86Platform, "AP TRAMPOLINE OK (page={:#x})", trampoline);
+            } else {
+                vifast_kernel::klog!(X86Platform, "SMP FAIL (trampoline alloc)");
+            }
         }
     }
     fn set_current_tcb(tcb: Option<usize>) {

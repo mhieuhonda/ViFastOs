@@ -80,6 +80,7 @@ ARCH = {
     ],
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
+        ("AP TRAMPOLINE OK (page=0x...)", "AP trampoline allocated below 1 MiB"),
         ("ACPI MADT OK (cpus=C, bsp=ID, lapic=0x...)", "ACPI MADT parsed"),
         ("LAPIC OK", "BSP local APIC enabled"),
         ("SMP SKIP", "x86 AP bring-up is not enabled yet"),
@@ -103,7 +104,7 @@ ARCH_EXACT_ONE = {
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "SMP SKIP"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "SMP SKIP"],
 }
 
 NUMERIC = {
@@ -136,6 +137,7 @@ IDLE_RE = re.compile(
     r"wake_timer=(\d+), wake_sgi=(\d+)\)"
 )
 TIMER_RE = re.compile(r"SMP TIMER OK \(hart1_ticks=(\d+)\)")
+TRAMPOLINE_RE = re.compile(r"AP TRAMPOLINE OK \(page=0x([0-9a-fA-F]+)\)")
 ACPI_RE = re.compile(r"ACPI MADT OK \(cpus=(\d+), bsp=\d+, lapic=0x[0-9a-fA-F]+\)")
 POST_RE = re.compile(
     r"SMP POST IDLE OK \(ticks=(\d+), idle_entries=(\d+), wake_timer=(\d+)\)"
@@ -221,6 +223,12 @@ def accept(
     if name == "x86_64":
         acpi = ACPI_RE.search(output)
         if not acpi or int(acpi.group(1)) != 2:
+            return False
+        trampoline = TRAMPOLINE_RE.search(output)
+        if not trampoline:
+            return False
+        page = int(trampoline.group(1), 16)
+        if page >= 0xA0000 or page & 0xfff != 0:
             return False
     if name == "aarch64":
         timer = TIMER_RE.search(output)

@@ -37,6 +37,7 @@ def fixture(arch: str) -> str:
             "KERNEL DATA NX OK",
             "ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000)",
             "LAPIC OK (id=0)",
+            "AP TRAMPOLINE OK (page=0x90000)",
             "SMP SKIP (x86 AP bootstrap pending)",
         ]
     for address in [0] + spec.FAULT_ADDRESSES:

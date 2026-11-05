@@ -52,6 +52,7 @@ const LOADED_IMAGE_GUID: Guid = Guid {
 
 type HandleProtocol =
     unsafe extern "efiapi" fn(*mut c_void, *const Guid, *mut *mut c_void) -> usize;
+type AllocatePages = unsafe extern "efiapi" fn(u32, u32, usize, *mut u64) -> usize;
 
 unsafe fn check_loaded_image(image_handle: *mut c_void, system_table: *mut c_void) -> bool {
     if image_handle.is_null() || system_table.is_null() {
@@ -168,6 +169,25 @@ unsafe fn find_acpi_rsdp(system_table: *mut c_void) -> u64 {
     0
 }
 
+unsafe fn allocate_trampoline(system_table: *mut c_void) -> u64 {
+    if system_table.is_null() {
+        return 0;
+    }
+    let boot_services = *((system_table as *const u8).add(96) as *const *mut c_void);
+    if boot_services.is_null() {
+        return 0;
+    }
+    let allocate = *((boot_services as *const u8).add(40) as *const AllocatePages);
+    let mut address = 0x9F000u64;
+    // AllocateMaxAddress, LoaderData, one page.  Boot-services method
+    // pointers omit the implicit services-table argument.
+    let status = allocate(1, 2, 1, &mut address);
+    if status != 0 || address == 0 || address + 4096 > 0xA0000 || address & 0xfff != 0 {
+        return 0;
+    }
+    address
+}
+
 #[no_mangle]
 pub extern "efiapi" fn efi_main(image_handle: *mut c_void, system_table: *mut c_void) -> usize {
     if !unsafe { check_loaded_image(image_handle, system_table) } {
@@ -178,6 +198,7 @@ pub extern "efiapi" fn efi_main(image_handle: *mut c_void, system_table: *mut c_
         PlatformInfo {
             system_table: system_table as usize,
             acpi_rsdp: unsafe { find_acpi_rsdp(system_table) },
+            ap_trampoline: unsafe { allocate_trampoline(system_table) },
             memory_base: 0,
             memory_size: 0,
             ..PlatformInfo::default()

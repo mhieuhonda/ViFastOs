@@ -34,6 +34,7 @@ pub struct PlatformInfo {
     pub dtb: u64,
     pub system_table: usize,
     pub acpi_rsdp: u64,
+    pub ap_trampoline: u64,
     pub memory_base: u64,
     pub memory_size: u64,
 }
