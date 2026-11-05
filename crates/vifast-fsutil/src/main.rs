@@ -54,7 +54,7 @@ impl BlockDev for FileDev {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: vifast-fsutil mkfs <disk> | fsck <disk> | put <disk> <path> <text> | put-file <disk> <path> <host-file> | link <disk> <old> <new> | get <disk> <path> | ls <disk> <path> | inject-journal <disk> --valid|--torn");
+    eprintln!("usage: vifast-fsutil mkfs <disk> | fsck <disk> | put <disk> <path> <text> | put-file <disk> <path> <host-file> | link <disk> <old> <new> | symlink <disk> <target> <path> | readlink <disk> <path> | get <disk> <path> | ls <disk> <path> | inject-journal <disk> --valid|--torn");
     std::process::exit(2)
 }
 
@@ -160,6 +160,31 @@ fn main() -> ExitCode {
                 fs.write(ino, 0, &data, 0)
                     .map(|_| ())
                     .map_err(|e| format!("write: {e:?}"))
+            }
+            "symlink" => {
+                if args.len() != 5 {
+                    usage();
+                }
+                let dev = FileDev::open(disk, true)?;
+                let mut fs = Fs::mount(dev).map_err(|e| format!("mount: {e:?}"))?;
+                ensure_parent(&mut fs, args[4].as_str())?;
+                fs.symlink(args[3].as_bytes(), args[4].as_bytes(), 0)
+                    .map(|_| ())
+                    .map_err(|e| format!("symlink: {e:?}"))
+            }
+            "readlink" => {
+                if args.len() != 4 {
+                    usage();
+                }
+                let path = args[3].as_str();
+                let dev = FileDev::open(disk, true)?;
+                let mut fs = Fs::mount(dev).map_err(|e| format!("mount: {e:?}"))?;
+                let (target, len) = fs
+                    .readlink(path.as_bytes(), 0)
+                    .map_err(|e| format!("readlink: {e:?}"))?;
+                std::io::stdout()
+                    .write_all(&target[..len])
+                    .map_err(|e| e.to_string())
             }
             "get" => {
                 if args.len() != 4 {

@@ -195,6 +195,10 @@ pub mod vfs {
     pub const BADGE_PROBE: u64 = 0x200D;
     /// Hard link: old path in buffer[0], new path in buffer[MAX_PATH].
     pub const LINK: u64 = 0x200E;
+    /// Symlink: target in buffer[0], link path in buffer[MAX_PATH].
+    pub const SYMLINK: u64 = 0x200F;
+    /// Read symlink target through the IPC buffer.
+    pub const READLINK: u64 = 0x2010;
 
     pub const ENOENT: u64 = 1;
     pub const EEXIST: u64 = 2;

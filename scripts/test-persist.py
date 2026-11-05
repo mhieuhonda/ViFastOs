@@ -213,6 +213,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
         handle.write(large)
     fsutil("put-file", disk, "/p/large", large_path)
     fsutil("link", disk, "/p/large", "/p/large2")
+    fsutil("symlink", disk, "/p/large", "/p/large-sym")
     rc, output, timeout = boot(disk, serial)
     require(not timeout and "FS LARGE OK" in output, f"{name}: large boot")
     require("FS FSCK OK" in output, f"{name}: large fsck")
@@ -220,6 +221,10 @@ def run_phases(name: str, tmp: str, boot) -> None:
     require(got == large, f"{name}: large host readback")
     got2 = fsutil("get", disk, "/p/large2").stdout
     require(got2 == large, f"{name}: hard-link host readback")
+    got3 = fsutil("get", disk, "/p/large-sym").stdout
+    require(got3 == large, f"{name}: symlink host readback")
+    link_target = fsutil("readlink", disk, "/p/large-sym").stdout
+    require(link_target == b"/p/large", f"{name}: readlink host result")
     fsutil("fsck", disk)
     print(f"{name}: phase 7 large indirect file PASS")
 

@@ -31,6 +31,9 @@ static TEST_FS_LARGE_DONE: core::sync::atomic::AtomicBool =
 static TEST_HARD_LINK_DONE: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
+static TEST_SYMLINK_DONE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-exit")]
 static TEST_TLB_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-skip-tlb-ipi")]
 static TEST_TLB_BAD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -421,7 +424,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
     const RUNTIME_OBJECTS: usize = 5;
     const META_MAX_OBJECTS: usize = 32;
-    const DATA_MAX_OBJECTS: usize = 56;
+    const DATA_MAX_OBJECTS: usize = 64;
     const BOOT_MAX_OBJECTS: usize = 32;
     if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS + BOOT_MAX_OBJECTS
         > vifast_kernel::MAX_OBJECTS
@@ -1059,6 +1062,12 @@ pub mod syscall {
                         if hard_link_done {
                             TEST_HARD_LINK_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
                         }
+                        let symlink_done = buf[..len]
+                            .windows(b"SYMLINK OK".len())
+                            .any(|window| window == b"SYMLINK OK");
+                        if symlink_done {
+                            TEST_SYMLINK_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
+                        }
                         let tlb_done = buf[..len]
                             .windows(b"TLB REMAP OK".len())
                             .any(|window| window == b"TLB REMAP OK");
@@ -1236,6 +1245,7 @@ pub mod timer {
             && TEST_FS_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && TEST_FS_LARGE_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && TEST_HARD_LINK_DONE.load(core::sync::atomic::Ordering::SeqCst)
+            && TEST_SYMLINK_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && TEST_TLB_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && A::post_idle_ready()
             && kernel.ticks_on(0) >= TIMER_TICKS

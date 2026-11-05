@@ -200,6 +200,34 @@ fn vfs_unlink(path: &[u8]) -> Result<(), u64> {
     vfs_unlink_via(1, path)
 }
 
+fn vfs_symlink(target: &[u8], path: &[u8]) -> Result<u64, u64> {
+    let target_len = core::cmp::min(target.len(), vfs::MAX_PATH);
+    let path_len = core::cmp::min(path.len(), vfs::MAX_PATH);
+    unsafe {
+        core::ptr::copy_nonoverlapping(target.as_ptr(), IPC_BUF_CLIENT_VA as *mut u8, target_len);
+        core::ptr::copy_nonoverlapping(
+            path.as_ptr(),
+            (IPC_BUF_CLIENT_VA + vfs::MAX_PATH) as *mut u8,
+            path_len,
+        );
+    }
+    let reply = unsafe {
+        vifast_user::call_message(1, vfs::SYMLINK, target_len as u64, path_len as u64, 0)
+    };
+    vfs_reply(reply).map(|reply| reply.data[0])
+}
+
+fn vfs_readlink(path: &[u8], out: &mut [u8; vfs::MAX_PATH]) -> Option<usize> {
+    let len = copy_path(path);
+    let reply = unsafe { vifast_user::call_message(1, vfs::READLINK, len as u64, 0, 0) };
+    let reply = vfs_reply(reply).ok()?;
+    let count = core::cmp::min(reply.label as usize, out.len());
+    unsafe {
+        core::ptr::copy_nonoverlapping(IPC_BUF_CLIENT_VA as *const u8, out.as_mut_ptr(), count);
+    }
+    Some(count)
+}
+
 fn vfs_link(old: &[u8], new: &[u8]) -> Result<(), u64> {
     let old_len = copy_path(old);
     let new_len = core::cmp::min(new.len(), vfs::MAX_PATH);
@@ -629,6 +657,69 @@ pub extern "C" fn client_main() -> ! {
         b"HARD LINK OK\n"
     } else {
         b"HARD LINK BAD\n"
+    });
+    let _ = vfs_unlink(b"/sym_link");
+    let _ = vfs_unlink(b"/sym_target");
+    let mut sym_ok = true;
+    if let Some((fd, _)) =
+        vfs_open_via(1, b"/sym_target", vifast_abi::O_CREATE | vifast_abi::O_RDWR)
+    {
+        let mut chunk = [0u8; vfs::MAX_IO];
+        for block in 0..2usize {
+            for (index, byte) in chunk.iter_mut().enumerate() {
+                *byte = (0x30u8).wrapping_add((block * 23 + index * 5) as u8);
+            }
+            sym_ok &= vfs_write_via(1, fd, (block * vfs::MAX_IO) as u64, &chunk).is_some();
+        }
+        let _ = vfs_close(fd);
+        if vfs_symlink(b"/sym_target", b"/sym_link").is_err() {
+            sym_ok = false;
+        }
+        let mut target = [0u8; vfs::MAX_PATH];
+        let target_len = vfs_readlink(b"/sym_link", &mut target);
+        if target_len != Some(b"/sym_target".len())
+            || !target_len.is_some_and(|len| &target[..len] == b"/sym_target")
+        {
+            sym_ok = false;
+        }
+        if let Some((fd, _)) = vfs_open_via(1, b"/sym_link", 0) {
+            let mut out = [0u8; vfs::MAX_IO];
+            for block in 0..2usize {
+                if vfs_read_via(1, fd, (block * vfs::MAX_IO) as u64, vfs::MAX_IO, &mut out)
+                    != Some(vfs::MAX_IO)
+                {
+                    sym_ok = false;
+                    break;
+                }
+                for (index, byte) in out.iter().enumerate() {
+                    if *byte != (0x30u8).wrapping_add((block * 23 + index * 5) as u8) {
+                        sym_ok = false;
+                    }
+                }
+            }
+            let _ = vfs_close(fd);
+        } else {
+            sym_ok = false;
+        }
+        if vfs_unlink(b"/sym_link").is_err() {
+            sym_ok = false;
+        }
+        if let Some((fd, _)) = vfs_open_via(1, b"/sym_target", 0) {
+            let _ = vfs_close(fd);
+        } else {
+            sym_ok = false;
+        }
+        sym_ok &= vfs_unlink(b"/sym_target").is_ok();
+        if !vfs_fsck() {
+            sym_ok = false;
+        }
+    } else {
+        sym_ok = false;
+    }
+    write(if sym_ok {
+        b"SYMLINK OK\n"
+    } else {
+        b"SYMLINK BAD\n"
     });
 
     loop {

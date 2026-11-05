@@ -34,6 +34,8 @@ pub const ROOT_INO: u16 = 1;
 pub const INODE_FREE: u8 = 0;
 pub const INODE_FILE: u8 = 1;
 pub const INODE_DIR: u8 = 2;
+pub const INODE_SYMLINK: u8 = 3;
+pub const MAX_SYMLINK_DEPTH: usize = 8;
 
 /// Format-time geometry.  `total_blocks == 0` uses the device capacity.
 #[derive(Clone, Copy, Debug)]
@@ -540,13 +542,13 @@ impl<D: BlockDev> Fs<D> {
             if !used[index] {
                 return Err(FsError::Corrupt);
             }
-            if inode.kind != INODE_FILE && inode.kind != INODE_DIR {
+            if inode.kind != INODE_FILE && inode.kind != INODE_DIR && inode.kind != INODE_SYMLINK {
                 return Err(FsError::Corrupt);
             }
             if inode.size as usize > self.max_file_size {
                 return Err(FsError::Corrupt);
             }
-            if inode.kind == INODE_FILE {
+            if inode.kind == INODE_FILE || inode.kind == INODE_SYMLINK {
                 if inode.blocks_used() != ((inode.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) {
                     return Err(FsError::Corrupt);
                 }
@@ -555,7 +557,7 @@ impl<D: BlockDev> Fs<D> {
                 return Err(FsError::Corrupt);
             }
             let used_blocks = inode.blocks_used();
-            if inode.kind == INODE_FILE {
+            if inode.kind == INODE_FILE || inode.kind == INODE_SYMLINK {
                 if used_blocks > self.max_file_blocks {
                     return Err(FsError::Corrupt);
                 }
@@ -960,24 +962,102 @@ impl<D: BlockDev> Fs<D> {
         Ok(None)
     }
 
-    fn lookup_path(&mut self, path: &[u8], uid: u16) -> Result<u16, FsError> {
+    fn readlink_inode(&mut self, ino: u16) -> Result<([u8; MAX_PATH], usize), FsError> {
+        let inode = *self.inodes.get(ino as usize - 1).ok_or(FsError::BadFd)?;
+        if inode.kind != INODE_SYMLINK {
+            return Err(FsError::Invalid);
+        }
+        let len = core::cmp::min(inode.size as usize, MAX_PATH);
+        let mut target = [0u8; MAX_PATH];
+        if len != 0 {
+            self.read(ino, 0, &mut target[..len], 0)?;
+        }
+        Ok((target, len))
+    }
+
+    fn lookup_path_follow(
+        &mut self,
+        path: &[u8],
+        uid: u16,
+        follow_final: bool,
+    ) -> Result<u16, FsError> {
+        let _ = uid;
         if path.is_empty() || path[0] != b'/' || path.len() > MAX_PATH {
             return Err(FsError::Invalid);
         }
-        let mut ino = ROOT_INO;
+        let mut buf = [0u8; MAX_PATH];
+        buf[..path.len()].copy_from_slice(path);
+        let mut path_len = path.len();
         let mut pos = 0usize;
-        while let Some(name) = Self::next_component(path, &mut pos)? {
+        let mut ino = ROOT_INO;
+        let mut symlinks = 0usize;
+        loop {
             let current = self.inodes[ino as usize - 1];
             if current.kind != INODE_DIR {
                 return Err(FsError::NotDir);
             }
-            if !self.can_read(&current, uid) && uid != 0 {
-                // Directory search is not a data read; keep traversal allowed
-                // for permission probes such as badge 2 reading /priv.
+            while pos < path_len && buf[pos] == b'/' {
+                pos += 1;
             }
-            ino = self.lookup_child(ino, name)?.ok_or(FsError::NotFound)?;
+            if pos >= path_len {
+                return Ok(ino);
+            }
+            let name_start = pos;
+            while pos < path_len && buf[pos] != b'/' {
+                pos += 1;
+            }
+            let name = &buf[name_start..pos];
+            if name.len() > MAX_NAME || name == b"." || name == b".." {
+                return Err(if name.len() > MAX_NAME {
+                    FsError::NameTooLong
+                } else {
+                    FsError::Invalid
+                });
+            }
+            let parent = ino;
+            let child = self.lookup_child(parent, name)?.ok_or(FsError::NotFound)?;
+            let child_inode = self.inodes[child as usize - 1];
+            let mut probe = pos;
+            while probe < path_len && buf[probe] == b'/' {
+                probe += 1;
+            }
+            let has_more = probe < path_len;
+            if child_inode.kind == INODE_SYMLINK && (follow_final || has_more) {
+                symlinks += 1;
+                if symlinks > MAX_SYMLINK_DEPTH {
+                    return Err(FsError::Invalid);
+                }
+                let (target, target_len) = self.readlink_inode(child)?;
+                if target_len == 0 || target[0] != b'/' && name_start == 0 {
+                    return Err(FsError::Invalid);
+                }
+                let suffix = &buf[pos..path_len];
+                let mut next = [0u8; MAX_PATH];
+                let prefix_len = if target[0] == b'/' { 0 } else { name_start };
+                if prefix_len != 0 {
+                    next[..prefix_len].copy_from_slice(&buf[..prefix_len]);
+                }
+                if prefix_len + target_len + suffix.len() > MAX_PATH {
+                    return Err(FsError::Invalid);
+                }
+                next[prefix_len..prefix_len + target_len].copy_from_slice(&target[..target_len]);
+                next[prefix_len + target_len..prefix_len + target_len + suffix.len()]
+                    .copy_from_slice(suffix);
+                path_len = prefix_len + target_len + suffix.len();
+                buf = next;
+                pos = 0;
+                ino = if target[0] == b'/' { ROOT_INO } else { parent };
+                continue;
+            }
+            ino = child;
+            if !has_more {
+                return Ok(ino);
+            }
         }
-        Ok(ino)
+    }
+
+    fn lookup_path(&mut self, path: &[u8], uid: u16) -> Result<u16, FsError> {
+        self.lookup_path_follow(path, uid, true)
     }
 
     fn resolve_parent(
@@ -988,31 +1068,21 @@ impl<D: BlockDev> Fs<D> {
         if path.len() < 2 || path[0] != b'/' || path.len() > MAX_PATH {
             return Err(FsError::Invalid);
         }
-        let mut parent = ROOT_INO;
         let mut pos = 0usize;
-        let mut last = [0u8; MAX_NAME];
+        let mut last_start = 0usize;
         let mut last_len = 0usize;
         while let Some(name) = Self::next_component(path, &mut pos)? {
-            let next_pos = pos;
-            let mut probe = next_pos;
-            let has_more = match Self::next_component(path, &mut probe)? {
-                Some(_) => true,
-                None => false,
-            };
-            if !has_more {
-                last[..name.len()].copy_from_slice(name);
-                last_len = name.len();
-                break;
-            }
-            let inode = self.inodes[parent as usize - 1];
-            if inode.kind != INODE_DIR {
-                return Err(FsError::NotDir);
-            }
-            parent = self.lookup_child(parent, name)?.ok_or(FsError::NotFound)?;
+            last_start = pos.saturating_sub(name.len());
+            last_len = name.len();
         }
         if last_len == 0 {
             return Err(FsError::Invalid);
         }
+        let parent = if last_start == 0 {
+            ROOT_INO
+        } else {
+            self.lookup_path(&path[..last_start], uid)?
+        };
         let parent_inode = self.inodes[parent as usize - 1];
         if parent_inode.kind != INODE_DIR {
             return Err(FsError::NotDir);
@@ -1020,6 +1090,8 @@ impl<D: BlockDev> Fs<D> {
         if !self.can_write(&parent_inode, uid) {
             return Err(FsError::NoAccess);
         }
+        let mut last = [0u8; MAX_NAME];
+        last[..last_len].copy_from_slice(&path[last_start..last_start + last_len]);
         Ok((parent, last, last_len))
     }
 
@@ -1109,6 +1181,50 @@ impl<D: BlockDev> Fs<D> {
 
     pub fn mkdir(&mut self, path: &[u8], uid: u16) -> Result<u16, FsError> {
         self.create(path, uid, INODE_DIR)
+    }
+
+    pub fn symlink(&mut self, target: &[u8], path: &[u8], uid: u16) -> Result<u16, FsError> {
+        if target.is_empty() || target.len() > MAX_PATH {
+            return Err(FsError::Invalid);
+        }
+        if path.len() < 2 || path[0] != b'/' || path.len() > MAX_PATH {
+            return Err(FsError::Invalid);
+        }
+        self.tx_count = 0;
+        let (parent, name, name_len) = self.resolve_parent(path, uid)?;
+        if self.lookup_child(parent, &name[..name_len])?.is_some() {
+            return Err(FsError::Exists);
+        }
+        let ino = self.alloc_inode()?;
+        let block_no = self.alloc_block()?;
+        let mut block = zero_block();
+        block[..target.len()].copy_from_slice(target);
+        self.stage(block_no, &block)?;
+        {
+            let inode = &mut self.inodes[ino as usize - 1];
+            inode.kind = INODE_SYMLINK;
+            inode.mode = 0b0111;
+            inode.uid = uid;
+            inode.nlink = 1;
+            inode.size = target.len() as u32;
+            inode.blocks[0] = block_no;
+        }
+        self.stage_bitmap()?;
+        self.stage_inode(ino)?;
+        if let Err(error) = self.write_dir_entry(parent, &name[..name_len], ino) {
+            self.tx_count = 0;
+            return Err(error);
+        }
+        self.commit()?;
+        Ok(ino)
+    }
+
+    pub fn readlink(&mut self, path: &[u8], uid: u16) -> Result<([u8; MAX_PATH], usize), FsError> {
+        let (parent, name, name_len) = self.resolve_parent(path, uid)?;
+        let ino = self
+            .lookup_child(parent, &name[..name_len])?
+            .ok_or(FsError::NotFound)?;
+        self.readlink_inode(ino)
     }
 
     pub fn lookup(&mut self, path: &[u8], uid: u16) -> Result<u16, FsError> {
@@ -2204,6 +2320,47 @@ mod tests {
             let size = mounted.info(ino).unwrap().size as usize;
             assert!(size == 11 * BLOCK_SIZE || size == 12 * BLOCK_SIZE);
         }
+    }
+
+    #[test]
+    fn symlink_follows_final_and_intermediate_components() {
+        let mut fs = fresh();
+        let target = fs.create(b"/target", 1, INODE_FILE).unwrap();
+        fs.write(target, 0, b"symlink-data", 1).unwrap();
+        fs.symlink(b"/target", b"/link", 1).unwrap();
+        assert_eq!(fs.lookup(b"/link", 1).unwrap(), target);
+        let (name, len) = fs.readlink(b"/link", 1).unwrap();
+        assert_eq!(&name[..len], b"/target");
+        fs.fsck().unwrap();
+
+        fs.mkdir(b"/d", 1).unwrap();
+        let inside = fs.create(b"/d/f", 1, INODE_FILE).unwrap();
+        fs.symlink(b"/d", b"/dlink", 1).unwrap();
+        assert_eq!(fs.lookup(b"/dlink/f", 1).unwrap(), inside);
+        fs.symlink(b"d", b"/relative", 1).unwrap();
+        assert_eq!(fs.lookup(b"/relative/f", 1).unwrap(), inside);
+        fs.fsck().unwrap();
+
+        fs.symlink(b"/missing", b"/dangling", 1).unwrap();
+        assert_eq!(fs.lookup(b"/dangling", 1), Err(FsError::NotFound));
+        fs.symlink(b"/loop", b"/loop", 1).unwrap();
+        assert_eq!(fs.lookup(b"/loop", 1), Err(FsError::Invalid));
+        fs.fsck().unwrap();
+
+        fs.unlink(b"/link", 1).unwrap();
+        assert_eq!(fs.lookup(b"/link", 1), Err(FsError::NotFound));
+        assert_eq!(fs.lookup(b"/target", 1).unwrap(), target);
+        fs.fsck().unwrap();
+    }
+
+    #[test]
+    fn symlink_rejects_empty_target_and_existing_name() {
+        let mut fs = fresh();
+        assert_eq!(fs.symlink(b"", b"/x", 1), Err(FsError::Invalid));
+        fs.symlink(b"/target", b"/x", 1).unwrap();
+        assert_eq!(fs.symlink(b"/other", b"/x", 1), Err(FsError::Exists));
+        assert_eq!(fs.readlink(b"/x", 1).unwrap().1, 7);
+        fs.fsck().unwrap();
     }
 
     #[test]

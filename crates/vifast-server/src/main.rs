@@ -380,6 +380,51 @@ fn rename_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
     }
 }
 
+fn symlink_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
+    let target_len = data[0] as usize;
+    let path_len = data[1] as usize;
+    if target_len == 0 || target_len > vfs::MAX_PATH || path_len == 0 || path_len > vfs::MAX_PATH {
+        return (vfs::ERR, vfs::EINVAL, 0, 0);
+    }
+    let mut paths = [0u8; vfs::MAX_PATH * 2];
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            IPC_BUF_SERVER_VA as *const u8,
+            paths.as_mut_ptr(),
+            vfs::MAX_PATH * 2,
+        );
+    }
+    match fs().symlink(
+        &paths[..target_len],
+        &paths[vfs::MAX_PATH..vfs::MAX_PATH + path_len],
+        uid,
+    ) {
+        Ok(ino) => (vfs::OK, ino as u64, 0, 0),
+        Err(error) => err(error),
+    }
+}
+
+fn readlink_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
+    let len = data[0] as usize;
+    let path = match read_path(data, 0) {
+        Ok(path) => path,
+        Err(error) => return error,
+    };
+    match fs().readlink(path_slice(&path, len), uid) {
+        Ok((target, target_len)) => {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    target.as_ptr(),
+                    IPC_BUF_SERVER_VA as *mut u8,
+                    target_len,
+                );
+            }
+            (target_len as u64, 0, 0, 0)
+        }
+        Err(error) => err(error),
+    }
+}
+
 fn link_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
     let len1 = data[0] as usize;
     let len2 = data[1] as usize;
@@ -476,6 +521,8 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
         vfs::UNLINK => unlink_request(request.data, uid),
         vfs::RENAME => rename_request(request.data, uid),
         vfs::LINK => link_request(request.data, uid),
+        vfs::SYMLINK => symlink_request(request.data, uid),
+        vfs::READLINK => readlink_request(request.data, uid),
         vfs::TRUNCATE => truncate_request(request.data, uid),
         vfs::FSYNC => (vfs::OK, 0, 0, 0),
         vfs::FSCK => {
