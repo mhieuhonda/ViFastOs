@@ -10088,6 +10088,61 @@ mod tests {
     }
 
     #[test]
+    fn cnode_caps_participate_in_delete_and_revoke() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("cnode-target", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000_0000, 4096, 4096, 8)
+            .unwrap();
+        let cnode = kernel.retype(untyped, ObjType::CNode).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(cnode, ObjType::CNode, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::CNodeMint as u64,
+                1,
+                1,
+                2,
+                Rights::READ.0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::CNodeInstall as u64, 3, 1, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(kernel.delete_cap(root, 2), Err(KError::IllegalOperation));
+        assert!(kernel.revoke_cap(root, 2).unwrap() >= 1);
+        assert!(kernel.cnode(cnode).unwrap().slots[1].is_none());
+        assert_eq!(
+            kernel.lookup_cap(target, 1, Some(ObjType::Endpoint), Rights::READ),
+            Err(KError::InvalidCap)
+        );
+        assert_eq!(kernel.destroy_object(cnode), Err(KError::IllegalOperation));
+        kernel.user_syscall(root, SyscallId::CNodeInstall as u64, 3, 0, 0, 0, 0, 0);
+        kernel.destroy_object(cnode).unwrap();
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn cnode_mint_rejects_occupied_and_bad_destinations() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
