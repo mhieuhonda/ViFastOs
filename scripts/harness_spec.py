@@ -225,6 +225,8 @@ def accept(
     feature_mode: str | None = None,
 ) -> bool:
     if feature_mode == "test-panic-hart1":
+        if rc == 0:
+            return False
         marker = "PANIC (hart=1)"
         if output.count(marker) != 1 or "PANIC (hart=0)" in output:
             return False

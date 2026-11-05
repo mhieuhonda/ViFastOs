@@ -257,7 +257,7 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         cmd,
         serial,
         20,
-        {0},
+        {1} if feature == "test-panic-hart1" else {0},
         require_smp=True,
         require_block=True,
         require_disk=True,

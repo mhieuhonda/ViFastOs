@@ -115,12 +115,12 @@ static BKL: BigKernelLock = BigKernelLock::new();
 const SIFIVE_TEST: u64 = 0x10_0000;
 const SIFIVE_TEST_FAIL: u32 = 0x3333;
 
-/// QEMU's `sifive_test` finisher does not carry an exit-code field; this is
-/// recorded as a platform limitation in the round report.  The file is still
-/// mapped and used exactly as the virt-machine contract requires.
-pub fn panic_exit(_code: u8) -> ! {
+/// QEMU's `sifive_test` finisher takes the process exit code in the upper
+/// 16 bits; the low half is the FAIL command.  Writing only FAIL exits 0.
+pub fn panic_exit(code: u8) -> ! {
+    let value = ((code as u32) << 16) | SIFIVE_TEST_FAIL;
     unsafe {
-        core::ptr::write_volatile(SIFIVE_TEST as *mut u32, SIFIVE_TEST_FAIL);
+        core::ptr::write_volatile(SIFIVE_TEST as *mut u32, value);
     }
     loop {
         unsafe {
@@ -517,7 +517,17 @@ impl Arch for RiscvPlatform {
         Riscv64::halt()
     }
     fn exit(code: u8) -> ! {
-        Riscv64::exit(code)
+        // The virt-machine success path uses the PASS command.  A nonzero
+        // code keeps the same upper-16-bit encoding as panic_exit.
+        let value = if code == 0 {
+            0x5555u32
+        } else {
+            ((code as u32) << 16) | SIFIVE_TEST_FAIL
+        };
+        unsafe {
+            core::ptr::write_volatile(SIFIVE_TEST as *mut u32, value);
+        }
+        Riscv64::halt()
     }
 }
 

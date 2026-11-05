@@ -175,8 +175,11 @@ def main() -> int:
     panic_base = "booting on x86_64\nPANIC (hart=1)\n"
     for arch in ("riscv64", "aarch64", "x86_64"):
         cases += 1
-        if not spec.accept(arch, panic_base, 0, feature_mode="test-panic-hart1"):
+        if not spec.accept(arch, panic_base, 1, feature_mode="test-panic-hart1"):
             failures.append(f"{arch}: panic feature accepted")
+        cases += 1
+        if spec.accept(arch, panic_base, 0, feature_mode="test-panic-hart1"):
+            failures.append(f"{arch}: panic zero exit accepted")
         for label, output in {
             "missing": "booting on x86_64\n",
             "hart0": "PANIC (hart=0)\n",
