@@ -30,6 +30,30 @@ pub const INODE_FREE: u8 = 0;
 pub const INODE_FILE: u8 = 1;
 pub const INODE_DIR: u8 = 2;
 
+/// Format-time geometry.  `total_blocks == 0` uses the device capacity.
+#[derive(Clone, Copy, Debug)]
+pub struct FormatOptions {
+    pub total_blocks: u32,
+    pub inode_limit: u16,
+    pub dir_block_limit: u8,
+}
+
+impl Default for FormatOptions {
+    fn default() -> Self {
+        Self {
+            total_blocks: 0,
+            inode_limit: MAX_INODES as u16,
+            dir_block_limit: MAX_BLOCKS_PER_INODE as u8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SuperInfo {
+    inode_limit: usize,
+    dir_block_limit: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FsError {
     Io,
@@ -129,13 +153,18 @@ fn inode_decode(input: &[u8]) -> Inode {
     inode
 }
 
-fn encode_super(total_blocks: u32, root: u16) -> [u8; BLOCK_SIZE] {
+fn encode_super(
+    total_blocks: u32,
+    root: u16,
+    inode_limit: u16,
+    dir_block_limit: u8,
+) -> [u8; BLOCK_SIZE] {
     let mut block = [0u8; BLOCK_SIZE];
     block[..4].copy_from_slice(b"VF02");
     put_u32(&mut block, 4, 2);
     put_u32(&mut block, 8, BLOCK_SIZE as u32);
     put_u32(&mut block, 12, total_blocks);
-    put_u32(&mut block, 16, MAX_INODES as u32);
+    put_u32(&mut block, 16, inode_limit as u32);
     put_u32(&mut block, 20, BITMAP_START);
     put_u32(&mut block, 24, BITMAP_BLOCKS);
     put_u32(&mut block, 28, INODE_START);
@@ -144,12 +173,13 @@ fn encode_super(total_blocks: u32, root: u16) -> [u8; BLOCK_SIZE] {
     put_u32(&mut block, 40, JOURNAL_BLOCKS);
     put_u32(&mut block, 44, DATA_START);
     put_u32(&mut block, 48, root as u32);
-    let crc = crc32(&block[..52]);
-    put_u32(&mut block, 52, crc);
+    put_u32(&mut block, 52, dir_block_limit as u32);
+    let crc = crc32(&block[..56]);
+    put_u32(&mut block, 56, crc);
     block
 }
 
-fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<u32, FsError> {
+fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<SuperInfo, FsError> {
     if &block[..4] != b"VF02" || get_u32(block, 4) != 2 || get_u32(block, 8) != BLOCK_SIZE as u32 {
         return Err(FsError::Invalid);
     }
@@ -157,7 +187,12 @@ fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<u32, FsErro
     if total < DATA_START + 2 || total > TOTAL_BLOCKS || total > capacity {
         return Err(FsError::Invalid);
     }
-    if get_u32(block, 16) != MAX_INODES as u32
+    let inode_limit = get_u32(block, 16) as usize;
+    let dir_block_limit = get_u32(block, 52) as usize;
+    if inode_limit == 0
+        || inode_limit > MAX_INODES
+        || dir_block_limit == 0
+        || dir_block_limit > MAX_BLOCKS_PER_INODE
         || get_u32(block, 20) != BITMAP_START
         || get_u32(block, 24) != BITMAP_BLOCKS
         || get_u32(block, 28) != INODE_START
@@ -165,20 +200,21 @@ fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<u32, FsErro
         || get_u32(block, 36) != JOURNAL_START
         || get_u32(block, 40) != JOURNAL_BLOCKS
         || get_u32(block, 44) != DATA_START
+        || get_u32(block, 48) != ROOT_INO as u32
     {
         return Err(FsError::Invalid);
     }
-    if get_u32(block, 48) != ROOT_INO as u32 {
-        return Err(FsError::Invalid);
-    }
     let mut copy = *block;
-    let expected = get_u32(block, 52);
-    put_u32(&mut copy, 52, 0);
-    // CRC was computed with the CRC field absent (zero in a copy).
-    if crc32(&copy[..52]) != expected {
+    let expected = get_u32(block, 56);
+    put_u32(&mut copy, 56, 0);
+    if crc32(&copy[..56]) != expected {
         return Err(FsError::Corrupt);
     }
-    Ok(total)
+    let _ = total;
+    Ok(SuperInfo {
+        inode_limit,
+        dir_block_limit,
+    })
 }
 
 fn zero_block() -> [u8; BLOCK_SIZE] {
@@ -189,13 +225,39 @@ fn zero_block() -> [u8; BLOCK_SIZE] {
 /// journaled (there is no old filesystem to preserve); every call is
 /// deterministic and writes all metadata.
 pub fn format<D: BlockDev>(dev: &mut D) -> Result<(), FsError> {
+    format_with_options(dev, FormatOptions::default())
+}
+
+pub fn format_with_options<D: BlockDev>(
+    dev: &mut D,
+    options: FormatOptions,
+) -> Result<(), FsError> {
     if dev.block_count() < DATA_START + 2 {
         return Err(FsError::NoSpace);
     }
-    let total = dev.block_count().min(TOTAL_BLOCKS);
+    if options.inode_limit == 0 || options.inode_limit as usize > MAX_INODES {
+        return Err(FsError::Invalid);
+    }
+    if options.dir_block_limit == 0 || options.dir_block_limit as usize > MAX_BLOCKS_PER_INODE {
+        return Err(FsError::Invalid);
+    }
+    let capacity = dev.block_count();
+    let total = if options.total_blocks == 0 {
+        capacity.min(TOTAL_BLOCKS)
+    } else {
+        options.total_blocks.min(capacity).min(TOTAL_BLOCKS)
+    };
+    if total < DATA_START + 2 {
+        return Err(FsError::NoSpace);
+    }
     let mut zero = zero_block();
     dev.write(0, &zero)?;
-    let superblock = encode_super(total, ROOT_INO);
+    let superblock = encode_super(
+        total,
+        ROOT_INO,
+        options.inode_limit,
+        options.dir_block_limit,
+    );
     dev.write(1, &superblock)?;
     zero = zero_block();
     for lba in BITMAP_START..BITMAP_START + BITMAP_BLOCKS {
@@ -233,6 +295,8 @@ pub struct Fs<D: BlockDev> {
     seq: u32,
     replay_status: u8,
     migrated: bool,
+    inode_limit: usize,
+    dir_block_limit: usize,
 }
 
 const EMPTY_INODE: Inode = Inode {
@@ -257,6 +321,8 @@ impl<D: BlockDev> Fs<D> {
             seq: 1,
             replay_status: 0,
             migrated: false,
+            inode_limit: MAX_INODES,
+            dir_block_limit: MAX_BLOCKS_PER_INODE,
         }
     }
 
@@ -271,6 +337,8 @@ impl<D: BlockDev> Fs<D> {
         self.seq = 1;
         self.replay_status = 0;
         self.migrated = false;
+        self.inode_limit = MAX_INODES;
+        self.dir_block_limit = MAX_BLOCKS_PER_INODE;
         let capacity = self.dev.block_count();
         let mut superblock = zero_block();
         self.dev.read(1, &mut superblock)?;
@@ -285,7 +353,9 @@ impl<D: BlockDev> Fs<D> {
             format(&mut self.dev)?;
             self.dev.read(1, &mut superblock)?;
         }
-        validate_super(&superblock, capacity)?;
+        let info = validate_super(&superblock, capacity)?;
+        self.inode_limit = info.inode_limit;
+        self.dir_block_limit = info.dir_block_limit;
         self.load_metadata()?;
         self.replay()?;
         if self.replay_status != 0 {
@@ -320,7 +390,9 @@ impl<D: BlockDev> Fs<D> {
     pub fn fsck(&mut self) -> Result<(), FsError> {
         let mut superblock = zero_block();
         self.dev.read(1, &mut superblock)?;
-        validate_super(&superblock, self.dev.block_count())?;
+        let info = validate_super(&superblock, self.dev.block_count())?;
+        let inode_limit = info.inode_limit;
+        let dir_limit_bytes = info.dir_block_limit as u32 * BLOCK_SIZE as u32;
         let mut used = [false; MAX_INODES];
         let mut nlink = [0u16; MAX_INODES];
         let mut block_used = [0u8; (BITMAP_BLOCKS as usize) * BLOCK_SIZE];
@@ -335,7 +407,7 @@ impl<D: BlockDev> Fs<D> {
             let inode = self.inodes[ino as usize - 1];
             if inode.kind == INODE_DIR {
                 if inode.size % BLOCK_SIZE as u32 != 0
-                    || inode.size > MAX_FILE_SIZE as u32
+                    || inode.size > dir_limit_bytes
                     || inode.blocks_used() != (inode.size / BLOCK_SIZE as u32) as usize
                 {
                     return Err(FsError::Corrupt);
@@ -361,7 +433,7 @@ impl<D: BlockDev> Fs<D> {
                         let name_len = data[off + 2] as usize;
                         if name_len == 0
                             || name_len > MAX_NAME
-                            || child as usize > MAX_INODES
+                            || child as usize > inode_limit
                             || child == 0
                         {
                             return Err(FsError::Corrupt);
@@ -394,7 +466,7 @@ impl<D: BlockDev> Fs<D> {
                 }
             }
         }
-        for index in 0..MAX_INODES {
+        for index in 0..inode_limit {
             let inode = self.inodes[index];
             if inode.kind == INODE_FREE {
                 continue;
@@ -620,7 +692,7 @@ impl<D: BlockDev> Fs<D> {
 
     fn stage_inode(&mut self, ino: u16) -> Result<(), FsError> {
         let index = ino as usize - 1;
-        if index >= MAX_INODES {
+        if index >= self.inode_limit {
             return Err(FsError::Invalid);
         }
         let table_block = index / 8;
@@ -669,7 +741,7 @@ impl<D: BlockDev> Fs<D> {
     }
 
     fn alloc_inode(&mut self) -> Result<u16, FsError> {
-        for index in 1..MAX_INODES {
+        for index in 1..self.inode_limit {
             if self.inodes[index].kind == INODE_FREE {
                 let ino = (index + 1) as u16;
                 self.inodes[index] = Inode {
@@ -820,7 +892,7 @@ impl<D: BlockDev> Fs<D> {
                 }
             }
         }
-        if inode.blocks_used() >= MAX_BLOCKS_PER_INODE {
+        if inode.blocks_used() >= self.dir_block_limit {
             return Err(FsError::NoSpace);
         }
         let block_no = self.alloc_block()?;
@@ -1295,6 +1367,11 @@ mod tests {
                 data: vec![0u8; TOTAL_BLOCKS as usize * BLOCK_SIZE],
             }
         }
+        fn with_blocks(blocks: u32) -> Self {
+            Self {
+                data: vec![0u8; blocks as usize * BLOCK_SIZE],
+            }
+        }
     }
     impl BlockDev for MemDev {
         fn read(&mut self, lba: u32, out: &mut [u8; BLOCK_SIZE]) -> Result<(), FsError> {
@@ -1308,7 +1385,7 @@ mod tests {
             Ok(())
         }
         fn block_count(&self) -> u32 {
-            TOTAL_BLOCKS
+            (self.data.len() / BLOCK_SIZE) as u32
         }
     }
 
@@ -1335,7 +1412,7 @@ mod tests {
             Ok(())
         }
         fn block_count(&self) -> u32 {
-            TOTAL_BLOCKS
+            (self.data.len() / BLOCK_SIZE) as u32
         }
     }
 
@@ -1708,5 +1785,125 @@ mod tests {
             }
         }
         fs.fsck().unwrap();
+    }
+
+    fn small_fs(options: FormatOptions) -> Fs<MemDev> {
+        let mut dev = MemDev::with_blocks(48);
+        format_with_options(&mut dev, options).unwrap();
+        Fs::mount(dev).unwrap()
+    }
+
+    #[test]
+    fn small_disk_enospc_then_free_and_reuse() {
+        let mut fs = small_fs(FormatOptions {
+            total_blocks: 48,
+            inode_limit: 64,
+            dir_block_limit: 12,
+        });
+        let full = fs.create(b"/full", 1, INODE_FILE).unwrap();
+        assert_eq!(
+            fs.write(full, 0, &[0x11; MAX_FILE_SIZE], 1).unwrap(),
+            MAX_FILE_SIZE
+        );
+        let rest = fs.create(b"/rest", 1, INODE_FILE).unwrap();
+        assert_eq!(
+            fs.write(rest, 0, &[0x22; 5 * BLOCK_SIZE], 1).unwrap(),
+            5 * BLOCK_SIZE
+        );
+        let third = fs.create(b"/third", 1, INODE_FILE).unwrap();
+        assert_eq!(
+            fs.write(third, 0, &[0x33; BLOCK_SIZE], 1),
+            Err(FsError::NoSpace)
+        );
+        let image = fs.dev.data.clone();
+        let mut mounted = Fs::mount(MemDev { data: image }).unwrap();
+        mounted.fsck().unwrap();
+        assert_eq!(mounted.unlink(b"/full", 1), Ok(()));
+        let again = mounted.create(b"/again", 1, INODE_FILE).unwrap();
+        assert_eq!(
+            mounted.write(again, 0, &[0x44; 8 * BLOCK_SIZE], 1).unwrap(),
+            8 * BLOCK_SIZE
+        );
+        mounted.fsck().unwrap();
+    }
+
+    #[test]
+    fn one_block_directory_reaches_full_then_reuses_slot() {
+        let mut fs = small_fs(FormatOptions {
+            total_blocks: 48,
+            inode_limit: 64,
+            dir_block_limit: 1,
+        });
+        for index in 0..DIR_ENTRIES_PER_BLOCK {
+            let mut path = [0u8; 5];
+            path[..2].copy_from_slice(b"/f");
+            path[2] = b'0' + (index / 10) as u8;
+            path[3] = b'0' + (index % 10) as u8;
+            fs.create(&path[..4], 1, INODE_FILE).unwrap();
+        }
+        let mut extra = [0u8; 5];
+        extra[..2].copy_from_slice(b"/f");
+        extra[2] = b'1';
+        extra[3] = b'6';
+        assert_eq!(fs.create(&extra[..4], 1, INODE_FILE), Err(FsError::NoSpace));
+        let image = fs.dev.data.clone();
+        let mut mounted = Fs::mount(MemDev { data: image }).unwrap();
+        mounted.fsck().unwrap();
+        assert_eq!(mounted.unlink(b"/f00", 1), Ok(()));
+        mounted.create(b"/g", 1, INODE_FILE).unwrap();
+        mounted.fsck().unwrap();
+    }
+
+    #[test]
+    fn crash_near_full_small_image_keeps_all_or_nothing() {
+        let mut dev = MemDev::with_blocks(49);
+        format_with_options(
+            &mut dev,
+            FormatOptions {
+                total_blocks: 49,
+                inode_limit: 64,
+                dir_block_limit: 12,
+            },
+        )
+        .unwrap();
+        let mut fs = Fs::mount(dev).unwrap();
+        let full = fs.create(b"/full", 1, INODE_FILE).unwrap();
+        fs.write(full, 0, &[0x11; MAX_FILE_SIZE], 1).unwrap();
+        let rest = fs.create(b"/rest", 1, INODE_FILE).unwrap();
+        fs.write(rest, 0, &[0x22; 5 * BLOCK_SIZE], 1).unwrap();
+        fs.create(b"/spare", 1, INODE_FILE).unwrap();
+        fs.fsck().unwrap();
+        let baseline = fs.dev.data.clone();
+        let mut probe = Fs::mount(CrashDev {
+            data: baseline.clone(),
+            writes: 0,
+            fail_at: usize::MAX,
+            failed: false,
+        })
+        .unwrap();
+        let spare = probe.lookup(b"/spare", 1).unwrap();
+        probe.write(spare, 0, b"one", 1).unwrap();
+        let total = probe.dev.writes;
+        assert!(total >= 5);
+        for k in 0..=total {
+            let mut crashed = Fs::mount(CrashDev {
+                data: baseline.clone(),
+                writes: 0,
+                fail_at: k,
+                failed: false,
+            })
+            .unwrap();
+            let spare = crashed.lookup(b"/spare", 1).unwrap();
+            let _ = crashed.write(spare, 0, b"one", 1);
+            let image = crashed.dev.data;
+            let mut mounted = Fs::mount(MemDev { data: image }).unwrap();
+            mounted.fsck().unwrap();
+            let spare = mounted.lookup(b"/spare", 1).unwrap();
+            let size = mounted.info(spare).unwrap().size;
+            assert!(
+                size == 0 || size == 3,
+                "partial write at k={k}: size={size}"
+            );
+        }
     }
 }
