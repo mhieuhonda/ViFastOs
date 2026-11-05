@@ -63,6 +63,10 @@ struct BootPool([u8; 131072]);
 static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 const MAINT_TLB: u32 = 1;
 const MAINT_ICACHE: u32 = 2;
 static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
@@ -228,6 +232,42 @@ unsafe fn init_cpu(hartid: usize) {
     core::arch::asm!("msr tpidr_el1, {}", in(reg) state);
 }
 
+fn init_gic_cpu1() {
+    // CPU1 writes its own banked PPIs/SGIs and CPU interface state.
+    write32(GICD + 0x000, 1);
+    write32(GICD + 0x100, (1 << TIMER_IRQ) | 1);
+    write8(GICD + 0x400 + TIMER_IRQ as u64, 0xA0);
+    write8(GICD + 0x800 + TIMER_IRQ as u64, 1);
+    write32(GICC + 0x004, 0xFF);
+    write32(GICC + 0x000, 1);
+}
+
+fn daif_i_set() -> bool {
+    let daif: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, daif", out(reg) daif);
+    }
+    daif & (1 << 7) != 0
+}
+
+fn service_gic() {
+    loop {
+        let iar = read32(GICC + 0x00C);
+        let irq = iar & 0x3FF;
+        if irq == 1023 {
+            return;
+        }
+        write32(GICC + 0x010, irq);
+        if irq == TIMER_IRQ {
+            SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+            init_timer();
+        } else {
+            SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+            poll_maintenance();
+        }
+    }
+}
+
 fn init_timer() {
     let freq: u64;
     unsafe {
@@ -252,16 +292,25 @@ fn pan_supported() -> bool {
 
 #[no_mangle]
 pub extern "C" fn rust_secondary(_context: u64) -> ! {
-    // Maintenance-only hart: do NOT take BKL here.  Hart 0 holds BKL while
-    // waiting for the TLB-shootdown ACK from this loop.
-    unsafe { init_cpu(1) };
+    unsafe {
+        init_cpu(1);
+        core::arch::asm!("msr daifset, #0xf");
+        init_gic_cpu1();
+        init_timer();
+    }
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
-        poll_maintenance();
+        assert!(daif_i_set(), "AArch64 CPU1 must keep DAIF.I set");
+        // 1.2: masked WFI; pending interrupts wake without entering a vector.
+        SECONDARY_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            core::arch::asm!("wfi");
+        }
+        service_gic();
+        assert!(daif_i_set(), "AArch64 CPU1 lost DAIF.I after WFI");
         core::hint::spin_loop();
     }
 }
-
 fn cpu_state() -> *mut CpuState {
     let state: *mut CpuState;
     unsafe {
@@ -832,6 +881,17 @@ impl Platform for Aarch64Platform {
         } else {
             unsafe { (*state).hart_id }
         }
+    }
+
+    fn secondary_wakeups() -> (usize, usize) {
+        (
+            SECONDARY_TIMER_WAKES.load(Ordering::Relaxed),
+            SECONDARY_IPI_WAKES.load(Ordering::Relaxed),
+        )
+    }
+
+    fn secondary_timer_ticks() -> usize {
+        SECONDARY_TIMER_TICKS.load(Ordering::Relaxed)
     }
 
     fn init_block() {

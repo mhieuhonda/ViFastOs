@@ -155,6 +155,15 @@ def run_qemu(
         and (not require_block or "BLOCK OK" in output)
         and (not require_disk or "FS DISK OK" in output)
         and (
+            name != "aarch64"
+            or (
+                output.count("SMP TIMER OK") == 1
+                and re.search(r"SMP TIMER OK \(hart1_ticks=[1-9][0-9]*\)", output)
+                and output.count("SMP IDLE OK") == 1
+                and re.search(r"SMP IDLE OK \(hart1_wakeups=[1-9][0-9]*\)", output)
+            )
+        )
+        and (
             name != "riscv64"
             or (
                 output.count("SMP IDLE OK") == 1
