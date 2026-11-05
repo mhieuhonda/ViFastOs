@@ -985,9 +985,24 @@ extern "C" {
     static __kernel_end: u8;
 }
 
+fn count_user_entry() {
+    let state = cpu_state();
+    if state.is_null() {
+        return;
+    }
+    let hart = unsafe { (*state).hart_id };
+    if let Some(counter) = USER_ENTRIES.get(hart) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 #[no_mangle]
-extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
+pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
     let frame = unsafe { &mut *frame };
+    // Count every return to user, not only the first enter_user.
+    if frame.sstatus & (1 << 8) == 0 {
+        count_user_entry();
+    }
     if frame.scause == 0x8000_0000_0000_0001 {
         unsafe {
             core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
@@ -1005,17 +1020,6 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         return;
     }
     if frame.scause != 8 {
-        vifast_kernel::klog!(
-            RiscvPlatform,
-            "TRAP hart={} cause={:#x} sepc={:#x}",
-            if let Some(state) = unsafe { cpu_state().as_ref() } {
-                state.hart_id
-            } else {
-                99
-            },
-            frame.scause,
-            frame.sepc
-        );
         /* SPP=1 means the fault came from S-mode.  That is a kernel bug,
         not a user fault, and must not be suspended. */
         if frame.sstatus & (1 << 8) != 0 {
@@ -1032,16 +1036,6 @@ extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         return;
     }
     let number = frame.regs[17];
-    if let Some(state) = unsafe { cpu_state().as_ref() } {
-        if state.hart_id == 1 {
-            vifast_kernel::klog!(
-                RiscvPlatform,
-                "SYSCALL hart1 n={} sepc={:#x}",
-                number,
-                frame.sepc
-            );
-        }
-    }
     frame.sepc = frame.sepc.wrapping_add(4);
     let args = [
         frame.regs[10],

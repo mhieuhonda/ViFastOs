@@ -34,6 +34,9 @@ const ROOT_PANIC: &[u8] = b"ROOT PANIC\n";
 const MODULES_OK: &[u8] = b"RUST MODULES OK\n";
 const IOMMU_OK: &[u8] = b"IOMMU OK\n";
 const MODULE_WINDOW: u64 = 0x10_0000;
+const WORKER_LABEL_A: u64 = 0x5750_0001;
+const WORKER_LABEL_B: u64 = 0x5750_0002;
+const SMP_WORKERS_OK: &[u8] = b"SMP WORKERS OK (a=50, b=50)\n";
 #[cfg(target_arch = "riscv64")]
 const USER_ELF_MACHINE: u16 = 243;
 #[cfg(target_arch = "aarch64")]
@@ -43,20 +46,32 @@ const USER_ELF_MACHINE: u16 = 62;
 const CLIENT_UNTYPED_SIZE: usize = 0x1_0000;
 const CLIENT_UNTYPED_OBJECTS: usize = 8;
 
-#[cfg(target_arch = "riscv64")]
-#[no_mangle]
-pub extern "C" fn smp_worker_entry() -> ! {
-    // Small scheduler probe: force context switches on hart 1, then exit.
+#[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
+fn worker_loop(label: u64) -> ! {
     let mut i = 0;
     while i < 50 {
         let _ = vifast_user::yield_now();
         i += 1;
     }
-    // Do not call Exit: the identity used by this demo would shut down the
-    // whole machine.  Keep yielding until the hart-0 harness exits.
+    // Endpoint slot 1 is installed by spawn_worker.  The root task services
+    // this endpoint while it is already blocked for fault delivery; a
+    // notification-only design would block fault4 handling.
+    let _ = vifast_user::send(1, label, 50, 0, 0);
     loop {
         let _ = vifast_user::yield_now();
     }
+}
+
+#[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
+#[no_mangle]
+pub extern "C" fn smp_worker_a() -> ! {
+    worker_loop(WORKER_LABEL_A)
+}
+
+#[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
+#[no_mangle]
+pub extern "C" fn smp_worker_b() -> ! {
+    worker_loop(WORKER_LABEL_B)
 }
 
 fn check(result: SyscallResult) {
@@ -195,6 +210,41 @@ fn load_module(
         }
     }
     image.entry
+}
+
+#[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
+fn spawn_worker(
+    meta_untyped: u8,
+    data_untyped: u8,
+    root_vspace: u8,
+    fault_endpoint: u8,
+    entry: usize,
+    stack_base: usize,
+    stack_top: usize,
+    slots: &mut SlotAllocator,
+) {
+    let tcb = slots.alloc();
+    retype(meta_untyped, ObjType::Tcb, tcb);
+    let stack_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, stack_frame);
+    map_with_tables(
+        data_untyped,
+        root_vspace,
+        stack_frame,
+        stack_base as u64,
+        Rights::READ | Rights::WRITE,
+        slots,
+    );
+    check(vifast_user::tcb_configure(
+        tcb,
+        entry as u64,
+        stack_top as u64,
+        root_vspace,
+        5,
+    ));
+    copy(fault_endpoint, tcb, 1, Rights::WRITE);
+    check(vifast_user::tcb_set_affinity(tcb, 0b10));
+    check(vifast_user::tcb_resume(tcb));
 }
 
 #[no_mangle]
@@ -430,36 +480,51 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     ));
     check(vifast_user::tcb_resume(fault4_tcb));
 
-    #[cfg(target_arch = "riscv64")]
+    #[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
     {
-        let worker_tcb = slots.alloc();
-        retype(meta_untyped, ObjType::Tcb, worker_tcb);
-        let worker_stack = slots.alloc();
-        retype(data_untyped, ObjType::Frame, worker_stack);
-        map_with_tables(
+        spawn_worker(
+            meta_untyped,
             data_untyped,
             root_vspace,
-            worker_stack,
-            vifast_abi::user_layout::WORKER_STACK_BASE as u64,
-            Rights::READ | Rights::WRITE,
+            fault_endpoint_slot,
+            smp_worker_a as *const () as usize,
+            vifast_abi::user_layout::WORKER_A_STACK_BASE,
+            vifast_abi::user_layout::WORKER_A_STACK_TOP,
             &mut slots,
         );
-        check(vifast_user::tcb_configure(
-            worker_tcb,
-            smp_worker_entry as *const () as usize as u64,
-            vifast_abi::user_layout::WORKER_STACK_TOP as u64,
+        spawn_worker(
+            meta_untyped,
+            data_untyped,
             root_vspace,
-            5,
-        ));
-        check(vifast_user::tcb_set_affinity(worker_tcb, 0b10));
-        check(vifast_user::tcb_resume(worker_tcb));
+            fault_endpoint_slot,
+            smp_worker_b as *const () as usize,
+            vifast_abi::user_layout::WORKER_B_STACK_BASE,
+            vifast_abi::user_layout::WORKER_B_STACK_TOP,
+            &mut slots,
+        );
     }
     write(ROOT_READY);
 
+    let mut worker_bits = 0u8;
+    let mut workers_ok = false;
     loop {
         let message = unsafe { vifast_user::recv_message(fault_endpoint_slot, 0) };
         if message.error == KError::Ok {
-            write_fault_addr(message.data[0]);
+            if message.label == WORKER_LABEL_A {
+                if message.data[0] == 50 {
+                    worker_bits |= 1;
+                }
+            } else if message.label == WORKER_LABEL_B {
+                if message.data[0] == 50 {
+                    worker_bits |= 2;
+                }
+            } else {
+                write_fault_addr(message.data[0]);
+            }
+            if worker_bits == 3 && !workers_ok {
+                write(SMP_WORKERS_OK);
+                workers_ok = true;
+            }
         }
     }
 }

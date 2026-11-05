@@ -158,8 +158,10 @@ def run_qemu(
                 output.count("SMP IDLE OK") == 1
                 and hart1_wakeups(output) > 0
                 and output.count("SMP SCHED OK") == 1
-                and smp_sched(output)[1] > 0
+                and smp_sched(output)[0] > 1
+                and smp_sched(output)[1] >= 100
                 and smp_sched(output)[2] > 0
+                and output.count("SMP WORKERS OK (a=50, b=50)") == 1
             )
         )
     )
