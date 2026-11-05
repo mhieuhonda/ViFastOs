@@ -296,11 +296,12 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
             let context = RiscvPlatform::contexts()[tcb.index as usize];
             <RiscvPlatform as Platform>::enter_user(&context);
         }
-        // BKL is released before the idle poll.  Pending SSIP/STIP are
-        // deliberately left set until after the idle step; they are consumed
-        // below.  QEMU/OpenSBI on this hart does not reliably wake WFI with
-        // SIE clear, so use a bounded idle spin instead of sleeping forever.
-        core::hint::spin_loop();
+        // BKL is released before WFI.  Pending SSIP/STIP are deliberately
+        // left set while sleeping; SIE stays zero, so WFI only wakes without
+        // entering a trap.  They are consumed by polling after it returns.
+        unsafe {
+            core::arch::asm!("wfi");
+        }
         let sip: u64;
         unsafe {
             core::arch::asm!("csrr {}, sip", out(reg) sip);
