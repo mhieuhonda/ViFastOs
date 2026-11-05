@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `83875a7` (ACPI MADT + LAPIC x86; AP trampoline chưa làm)
+**Mốc code hiện tại:** `03e8c1d` (x86 AP online + maintenance, PDPT[3] kernel slot)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
@@ -110,7 +110,7 @@ AArch64: SELFTEST PASS
          FS DISK OK
 
 x86_64 : SELFTEST PASS
-         SMP SKIP (x86 AP bootstrap pending)
+         SMP OK (harts=2, ipi=1)
          BLOCK OK
          FS DISK OK
 ```

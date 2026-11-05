@@ -105,10 +105,16 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 9b8f031 feat: parse acpi madt on x86
 - 627f054 feat: map and enable x86 local apic
 - 83875a7 fix: use madt lapic base before mapping
+- 78af406 feat: allocate x86 ap trampoline page below 1 mib
+- dd07e6b feat: x86 ap reaches real mode via init-sipi-sipi
+- 7dc8a94 feat: x86 ap enters long mode
+- 49c4522 feat: x86 ap online with maintenance ipi
+- 03e8c1d fix: treat x86 lapic pdpt slot as kernel shared
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit 83875a7): ACPI MADT + LAPIC x86, docs rules,
-bounded boot handoff; RISC-V/AArch64 10/10, x86 10/10; persistent
+Cập nhật code gần nhất (commit 03e8c1d): x86 AP trampoline/INIT-SIPI-SIPI,
+long mode, maintenance online, PDPT[3] kernel slot; QEMU 10/10 cả 3,
+x86 50/50; persistent
 VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
@@ -143,7 +149,7 @@ hardening và vifast-user.
 Đã chạy được trên QEMU:
 - RISC-V64 (OpenSBI, -smp 2)
 - AArch64 (QEMU virt, GICv2, -smp 2)
-- x86_64 (OVMF/UEFI, -smp 2; x86 AP chưa boot được nên SMP SKIP)
+- x86_64 (OVMF/UEFI, -smp 2; AP online, chỉ maintenance)
 
 Test hiện tại:
 ### BEGIN GENERATED tests
@@ -169,7 +175,7 @@ Output tiêu biểu:
 - SELFTEST PASS
 - SMP OK (harts=2, ipi=1) trên RISC-V/AArch64
 - ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000), LAPIC OK (id=0) trên x86_64
-- SMP SKIP (x86 AP bootstrap pending) trên x86_64
+- SMP OK (harts=2, ipi=1) trên x86_64
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
@@ -357,20 +363,21 @@ vifast-platform-aarch64
 - Files: platform.rs, trap.S, smp.S.
 
 vifast-platform-x86_64
+crates/vifast-acpi/src/lib.rs
 - X86Platform newtype.
 - UEFI entry phối hợp qua PlatformInfo.
 - GDT/TSS/IDT.
 - PIC + PIT 100 Hz.
 - Tự dựng PML4/PDPT/PD/PT boot 4 KiB; identity map 0..1 GiB.
-- VSpace retype tạo PML4 + PDPT riêng, chỉ PDPT[0] dùng chung PD kernel.
+- VSpace retype tạo PML4 + PDPT riêng; PDPT[0] dùng chung PD kernel, PDPT[3]
+  dùng chung cửa sổ LAPIC supervisor-only.
 - User range 64..128 GiB: boot code/stack mappings ở 64 GiB;
   code RX; stack/data RW+NX; unmap thật.
 - SMEP/SMAP nếu CPU hỗ trợ; user copy dùng STAC/CLAC.
 - ring3 qua iretq; CR3 chuyển sang PML4 riêng.
-- AP bootstrap qua UEFI MP Services đã thử nhưng OVMF hiện tại không trả
-  interface; code MP đã gỡ khỏi build, start_smp chỉ in SMP SKIP.
-  Hướng triển khai là ACPI MADT + LAPIC/SIPI, không dùng MP Services.
-- Files: platform.rs, trap.S.
+- ACPI MADT parse, LAPIC BSP map/enable; AP trampoline 16→32→64-bit qua
+  INIT-SIPI-SIPI, vào long mode và chỉ maintenance. Không dùng MP Services.
+- Files: platform.rs, trap.S; `vifast-acpi` parser dùng chung.
 
 vifast-kernel-riscv64 / aarch64 / x86_64-uefi
 - Binary mỏng (RISC-V 81, AArch64 80, x86 UEFI 144 dòng main.rs).
@@ -633,12 +640,13 @@ Portable generic page-table walk + reverse map:
 - Mỗi PageTable lưu {vspace, va_base, level}; gắn lần hai trả AlreadyMapped.
 - Walk dừng ở leaf cấp cao; không ghi vào bảng kernel dùng chung.
 - x86/AArch64: PML4/L0 là **riêng** cho từng VSpace; entry 0 trỏ tới
-  PDPT/L1 **riêng**. Chỉ PDPT[0]/L1[0..=1] trỏ PD/L2 kernel dùng chung;
+  PDPT/L1 **riêng**. PDPT[0] và PDPT[3] trỏ bảng kernel dùng chung;
   các entry user 64..127 trỏ bảng user riêng. PageTableMap đi xuyên qua entry 0
   nhưng không thay nó.
 - AArch64 hiện dùng L1[0] cho MMIO thấp (GIC/PL011) và L1[1] cho RAM kernel
   0x4000_0000..; cả hai là KERNEL_SHARED_SLOTS. RISC-V copy root[0] (UART) và
-  root[2] (kernel RAM); x86 copy PDPT[0] (identity 0..1 GiB).
+  root[2] (kernel RAM); x86 copy PDPT[0] (identity 0..1 GiB) và PDPT[3]
+  (LAPIC MMIO).
 - Revoke Untyped: Frame trước (unmap leaf), PageTable sâu nhất trước
   (xoá entry cha + flush), cuối cùng VSpace.
 - validate_user_range() walk page table thật cho từng trang: leaf phải non-kernel,
@@ -694,11 +702,13 @@ x86_64:
 - Data 64 GiB+0xa000: để trống trong root VSpace; client FrameMap RW + NX + U.
 - FrameMap/FrameUnmap đi generic walk, không còn platform map riêng.
 - CR3 chuyển sang PML4 riêng trước iretq.
-- PML4[0] và PDPT là riêng mỗi VSpace; PDPT[0] trỏ PD kernel dùng chung
+- PML4[0] và PDPT là riêng mỗi VSpace; PDPT[0] trỏ PD kernel dùng chung,
+  PDPT[3] trỏ LAPIC supervisor-only
   cho identity 0..1 GiB; user 64..128 GiB dùng PDPT[64..127] trỏ bảng riêng.
 - SMEP/SMAP bật nếu CPUID hỗ trợ; EFER.NXE + tách 2 MiB để đánh dấu NX cho static data kernel (S2).
 - I-cache và D-cache coherent; sync_icache là no-op.
-- x86 AP/SMP scheduler chưa có; RISC-V/AArch64 hart phụ đã có scheduler + worker.
+- x86 AP mới maintenance; chưa chạy scheduler/user task. RISC-V/AArch64
+  hart phụ đã có scheduler + worker.
 
 10. VFS / RAMFS
 ---------------
@@ -898,8 +908,9 @@ Cap transfer:
 - AArch64: PSCI CPU_ON CPU1; GIC banked/timer riêng, DAIF.I=1, WFI polling
   `GICC_IAR`, per-hart BKL/current, TTBR0 theo VSpace; hai worker affinity
   CPU1 và reschedule SGI chỉ khi idle.
-- x86_64: chưa boot AP; SMP SKIP. Hướng tiếp theo là ACPI MADT +
-  LAPIC/SIPI, không dùng UEFI MP Services sau ExitBootServices.
+- x86_64: AP online qua trampoline 16→32→64-bit, INIT-SIPI-SIPI; đến
+  long mode rồi maintenance, IF=0, poll mailbox bằng `pause` (D2).
+  Chưa chạy scheduler/user task trên AP.
 - Scheduler dùng `pick_on(hart)`; RISC-V và AArch64 có scheduler hart phụ,
   x86_64 hiện chỉ hart 0.
 - BigKernelLock đã là ticket lock FIFO (`next`/`serving`) + RAII guard, bọc
@@ -1026,7 +1037,8 @@ Boot assert (không tính vào host test):
 - quyền R/W/X, RISC-V W-thiếu-R bị từ chối;
 - AArch64 leaf L3 RO+X, RW+NX, có/không bit EL0 và leaf_is_user;
 - dải user 3 kiến trúc không giao kernel identity;
-- RISC-V < 256 GiB; x86/AArch64 chỉ dùng chung PDPT[0]/L1[0..1];
+- RISC-V < 256 GiB; x86/AArch64 chỉ dùng chung PDPT[0]/L1[0..1], thêm
+  PDPT[3] x86 cho LAPIC;
 - table_span từng level và biên.
 
 QEMU test:
@@ -1114,7 +1126,11 @@ Theo kiến trúc:
   - `KERNEL DATA NX OK` — kernel data is non-executable
   - `ACPI MADT OK (cpus=C, bsp=ID, lapic=0x...)` — ACPI MADT parsed
   - `LAPIC OK` — BSP local APIC enabled
-  - `SMP SKIP` — x86 AP bring-up is not enabled yet
+  - `AP TRAMPOLINE OK (page=0x...)` — AP trampoline allocated below 1 MiB
+  - `AP REAL MODE OK (apic=...)` — AP executed real-mode trampoline
+  - `AP LONG MODE OK (cpu=1)` — AP entered long mode
+  - `SMP OK` — both CPUs online
+  - `ipi=1` — AP maintenance mailbox acknowledged
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
   - ACPI MADT cpus == 2
@@ -1259,7 +1275,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   task và chạy worker; x86 chưa có scheduler đa hart.
 - SMP full TLB shootdown đã có qua SBI IPI/GICv2 SGI; remote I-cache fence
   RISC-V đã có qua maintenance IPI, AArch64 broadcast; còn per-VA TLB shootdown.
-- x86_64 chưa boot AP.
+- x86_64 AP mới maintenance, chưa chạy scheduler/user task.
 - Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
   chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
@@ -1333,7 +1349,8 @@ B. Bộ nhớ
 6. IOMMU — mô hình phần mềm đã có; hardware IOMMU/VT-d/SMMU còn thiếu.
 
 C. SMP
-1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI.
+1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI — đã xong maintenance;
+   scheduler/user trên AP là bước tiếp theo.
 2. Per-hart context/runqueue.
 3. BKL trước, lock mịn sau.
 4. IPI wakeup/reschedule — RISC-V IPI và AArch64 SGI đã chạy; chỉ gửi khi
@@ -1521,6 +1538,12 @@ E. Desktop / Space
 54. Vòng 10: D1 áp dụng cho cả RISC-V/AArch64; xử lý boot hart bất kỳ,
     runqueue hart phụ rỗng không exit, per-hart BKL owner, CPACR CPU1,
     post-worker idle timer; docs generator và harness spec.
+55. Vòng 11: harness spec + case âm; post-worker `SMP POST IDLE OK`;
+    boot-handoff feature; syscall status implemented/placeholder.
+56. Vòng 12: ACPI MADT parser + LAPIC BSP map/enable; x86 vẫn AP chưa online.
+57. Vòng 13: x86 AP trampoline, INIT-SIPI-SIPI, long mode, maintenance.
+58. D2 (vòng 12): AP x86 IF=0 mọi lúc; idle poll mailbox + `pause`, không
+    `hlt`/`sti; hlt`; IPI chỉ nhận qua vector khi AP đang ring 3.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
@@ -1572,5 +1595,5 @@ task có VSpace riêng; client dùng Untyped con. 8.4/8.4b đã xong: runtime c�
 Rust ELF qua BootInfo staging, root loader nạp vào VSpace riêng; 8.5 đã có VFS
 IPC server bước đầu. Đã có block cả 3 kiến trúc, persistence test hermetic, BKL ticket + per-CPU
 an toàn, current theo hart, ASID/PCID, IPI/TLB full shootdown và remote fence.i.
-Khoảng trống lớn tiếp theo là x86 AP/ACPI, FS v2, per-VA TLB, hardware
-IOMMU, network/input và compositor/ViFastKey.
+Khoảng trống lớn tiếp theo là x86 AP scheduler/user, FS v2, per-VA TLB,
+hardware IOMMU, network/input và compositor/ViFastKey.

@@ -63,6 +63,8 @@ def main() -> int:
         "AArch64 chưa",
         "(hart0, hart1, resched)",
         "458.336",
+        "SMP SKIP (x86 AP bootstrap pending)",
+        "start_smp chỉ in SMP SKIP",
     ]
     for value in forbidden:
         if value in summary or value in handoff:
@@ -70,6 +72,15 @@ def main() -> int:
 
     if "SMP TIMER OK (hart1_ticks=T)" not in summary:
         fail("missing AArch64 timer contract in summary")
+
+    bundle_rounds = sorted(
+        int(path.stem.rsplit("-", 1)[1])
+        for path in (ROOT / "docs" / "bundles").glob("ViFastOs-round-*.md")
+        if path.stem.rsplit("-", 1)[-1].isdigit()
+    )
+    for round_number in bundle_rounds:
+        if re.search(rf"\n\d+\. Vòng {round_number:02d}", summary) is None and round_number >= 5:
+            fail(f"section 18 missing round {round_number:02d}")
 
     # Prose must not duplicate numbers that the generated blocks own.
     clean = re.sub(

@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `08e774bf4de87da6f7304c35b92c642829a1322ea398261bf887cdf076830bee`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `fcad9529ae4882f6f25bfd4f1efbc00534210b372f3b31349162fc024c46c54f`.
 
 ---
 
@@ -211,6 +211,15 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.24 — x86 AP online (vòng 13)
+
+- `78af406`: trang trampoline 0x9E000 <1 MiB; `AP TRAMPOLINE OK`.
+- `dd07e6b`: INIT-SIPI-SIPI, AP real mode magic.
+- `7dc8a94`: trampoline 16→32→64-bit, `AP LONG MODE OK`.
+- `49c4522`: AP maintenance online, `SMP OK (harts=2, ipi=1)`.
+- `03e8c1d`: PDPT[3] là kernel shared slot; LAPIC mapping supervisor/NX/UC.
+- x86 50/50; all 10/10; feature 10/10; persist 3/3.
 
 ## 8.23 — ACPI MADT và LAPIC x86 (vòng 12)
 
