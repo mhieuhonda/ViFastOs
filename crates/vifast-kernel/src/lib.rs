@@ -152,6 +152,16 @@ pub trait PageTableOps {
     }
     fn flush_va(&self, _va: u64) {}
     fn flush_all_user(&self) {}
+    /// Flush a VA range tagged by `asid` on the local hart and on selected
+    /// remote harts.  The default preserves the old local-only behaviour for
+    /// fake page-table implementations.
+    fn flush_va_asid(&self, _asid: u16, _va: u64, _pages: usize, _targets: u32) {
+        self.flush_va(_va);
+    }
+    /// Full-ASID fallback.  Default keeps old full-user behavior.
+    fn flush_all_asid(&self, _asid: u16, _targets: u32) {
+        self.flush_all_user();
+    }
     /// Make recently written instruction bytes visible to the local
     /// instruction fetch path before an executable mapping becomes live.
     fn sync_icache(&self, _pa: u64, _size: usize) {}
@@ -360,6 +370,33 @@ impl Kernel {
     pub fn current_asid(&self, tcb: ObjRef) -> Option<u16> {
         let space = self.tcb(tcb)?.vspace?;
         Some(self.vspace(space)?.asid)
+    }
+
+    pub fn note_vspace_hart_loaded(&mut self, tcb: ObjRef, hart: usize) {
+        if hart >= MAX_HARTS {
+            return;
+        }
+        let Some(space_ref) = self.tcb(tcb).and_then(|table| table.vspace) else {
+            return;
+        };
+        if let Some(space) = self.vspace_mut(space_ref) {
+            space.harts_loaded |= 1 << hart;
+        }
+    }
+
+    pub fn vspace_harts_loaded(&self, vspace: ObjRef) -> u32 {
+        self.vspace(vspace)
+            .map(|space| space.harts_loaded)
+            .unwrap_or(0)
+    }
+
+    pub fn clear_vspace_harts(&mut self, vspace: ObjRef, mask: u32) -> u32 {
+        if let Some(space) = self.vspace_mut(vspace) {
+            space.harts_loaded &= !mask;
+            space.harts_loaded
+        } else {
+            0
+        }
     }
 
     fn take_asid(&mut self) -> u16 {
@@ -1539,6 +1576,30 @@ impl Kernel {
         Ok(mapping)
     }
 
+    fn flush_vspace_range(&mut self, vspace: ObjRef, va: u64, pages: usize) {
+        let Some(ops) = self.page_table_ops else {
+            return;
+        };
+        let Some((asid, mask, page_size)) = self
+            .vspace(vspace)
+            .map(|space| (space.asid, space.harts_loaded, space.page_size))
+        else {
+            return;
+        };
+        if mask == 0 {
+            return;
+        }
+        if pages > 16 || pages.saturating_mul(page_size as usize) > 16 * 4096 {
+            ops.flush_all_asid(asid, mask);
+            // A full-ASID flush on every loaded hart makes the mask empty.
+            if let Some(space) = self.vspace_mut(vspace) {
+                space.harts_loaded = 0;
+            }
+        } else {
+            ops.flush_va_asid(asid, va, pages, mask);
+        }
+    }
+
     /// Remove a mapping from the portable shadow table.  The architecture
     /// handler clears the actual entry and flushes its TLB.
     pub fn unmap_frame(&mut self, vspace: ObjRef, va: u64) -> KResult<Mapping> {
@@ -1558,6 +1619,7 @@ impl Kernel {
             space.mappings[index].take().ok_or(KError::NotMapped)?
         };
         self.note_frame_unmapping(mapping);
+        self.flush_vspace_range(vspace, va, 1);
         Ok(mapping)
     }
 
@@ -3151,8 +3213,12 @@ impl Kernel {
             };
         }
         if number == SyscallId::GetTime as u64 {
+            // System-wide monotonic time is the BSP tick source.  Per-hart
+            // counters remain internal for the SMP harness and preemption
+            // proof, but a task that migrates between harts must never see
+            // wall time jump backwards or forwards.
             return UserAction::Return {
-                value: self.ticks_on(hart),
+                value: self.ticks(),
                 error: KError::Ok,
             };
         }
@@ -8134,5 +8200,33 @@ mod tests {
             .unwrap()
             .expect("queued");
         assert_eq!(queued.badge, 2);
+    }
+
+    #[test]
+    fn gettime_is_system_wide_bsp_time_not_per_hart() {
+        let mut kernel = Kernel::new();
+        let a = kernel.create_tcb("time-a", 5).unwrap();
+        let b = kernel.create_tcb("time-b", 5).unwrap();
+        kernel.tick(0);
+        kernel.tick(0);
+        kernel.tick(1);
+        kernel.tick(1);
+        kernel.tick(1);
+        let a1 = kernel.user_syscall_on(a, 0, SyscallId::GetTime as u64, 0, 0, 0, 0, 0, 0);
+        let b1 = kernel.user_syscall_on(b, 1, SyscallId::GetTime as u64, 0, 0, 0, 0, 0, 0);
+        let UserAction::Return { value: av, .. } = a1 else {
+            panic!("GetTime did not return");
+        };
+        let UserAction::Return { value: bv, .. } = b1 else {
+            panic!("GetTime did not return");
+        };
+        assert_eq!(av, 2);
+        assert_eq!(bv, 2);
+        kernel.tick(1);
+        let b2 = kernel.user_syscall_on(b, 1, SyscallId::GetTime as u64, 0, 0, 0, 0, 0, 0);
+        let UserAction::Return { value: bv2, .. } = b2 else {
+            panic!("GetTime did not return");
+        };
+        assert_eq!(bv2, 2, "AP ticks must not leak into system time");
     }
 }

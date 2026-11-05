@@ -40,6 +40,8 @@ const WORKER_LABEL_A: u64 = 0x5750_0001;
 const WORKER_LABEL_B: u64 = 0x5750_0002;
 const WORKER_LABEL_C: u64 = 0x5750_0003;
 const SMP_WORKERS_OK: &[u8] = b"SMP WORKERS OK (a=50, b=50, c=1)\n";
+const TIME_MONOTONIC_OK: &[u8] = b"TIME MONOTONIC OK\n";
+const TIME_MONOTONIC_BAD: &[u8] = b"TIME MONOTONIC BAD\n";
 #[cfg(target_arch = "riscv64")]
 const USER_ELF_MACHINE: u16 = 243;
 #[cfg(target_arch = "aarch64")]
@@ -82,8 +84,14 @@ pub extern "C" fn smp_worker_b() -> ! {
 #[no_mangle]
 pub extern "C" fn smp_worker_c() -> ! {
     let start = vifast_user::get_time().value;
+    let mut last = start;
     loop {
         let now = vifast_user::get_time().value;
+        if now < last {
+            write(TIME_MONOTONIC_BAD);
+            panic!("GetTime went backwards on hart 1");
+        }
+        last = now;
         if now >= start.saturating_add(5) {
             break;
         }
@@ -636,6 +644,23 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             if worker_bits == 7 && !workers_ok {
                 write(SMP_WORKERS_OK);
                 workers_ok = true;
+                // The AP worker already checked its own sequence.  Repeat the
+                // check on the BSP so a task on each hart observed monotonic
+                // system time, then publish one aggregate line.
+                let mut last = vifast_user::get_time().value;
+                let mut monotonic = true;
+                for _ in 0..8 {
+                    let now = vifast_user::get_time().value;
+                    if now < last {
+                        monotonic = false;
+                    }
+                    last = now;
+                }
+                if monotonic {
+                    write(TIME_MONOTONIC_OK);
+                } else {
+                    write(TIME_MONOTONIC_BAD);
+                }
             }
         }
     }
