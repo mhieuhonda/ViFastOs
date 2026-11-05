@@ -4112,6 +4112,15 @@ impl Kernel {
         Some(cap.obj)
     }
 
+    /// Slot in the faulting TCB's cspace used for its fault endpoint.
+    /// Runtime fault messages expose this value so a supervisor can identify
+    /// which faulting task generated the record without trusting the address.
+    pub fn fault_endpoint_slot(&self, tcb: ObjRef) -> Option<u8> {
+        let fault = self.tcb(tcb)?.fault_ep?;
+        self.fault_endpoint(tcb)?;
+        Some(fault.addr.slot)
+    }
+
     /// Deliver a fault message to the TCB's configured endpoint and leave the
     /// faulting thread in `BlockedFault`.  If the receiver is not waiting the
     /// message is queued without making the faulting thread runnable again.
@@ -4881,6 +4890,24 @@ impl Kernel {
                     }
                 };
                 match self.set_tcb_cnode(target.obj, cnode) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbDestroy as u64 => {
+                let target = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.destroy_object(target.obj) {
                     Ok(()) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,
@@ -7573,6 +7600,36 @@ mod tests {
         kernel.objs[root.index as usize].owner = Some(untyped);
         assert_eq!(kernel.revoke_cap(root, 1), Err(KError::IllegalOperation));
         assert!(kernel.get(root).is_some());
+    }
+
+    #[test]
+    fn tcb_destroy_frees_pool_slot_and_rejects_current_root() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let child = kernel.create_tcb("doomed", 1).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(child, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbDestroy as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok,
+            }
+        );
+        assert!(kernel.get(child).is_none());
+        assert!(kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).is_none());
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbDestroy as u64, 0, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidCap,
+            }
+        );
+        assert_eq!(kernel.destroy_object(root), Err(KError::IllegalOperation));
+        while kernel.tcb_count() < MAX_TCBS {
+            assert!(kernel.create_tcb("replacement", 1).is_some());
+        }
     }
 
     #[test]

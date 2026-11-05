@@ -67,6 +67,10 @@ pub mod user_layout {
     /// Separate stack for the user-space pager service.
     pub const PAGER_SERVER_STACK_BASE: usize = CODE_VA + 0x1a000;
     pub const PAGER_SERVER_STACK_TOP: usize = CODE_VA + 0x1b000;
+    /// Second pager client proves the service handles more than one faulting
+    /// VSpace/TCB.
+    pub const PAGER2_STACK_BASE: usize = CODE_VA + 0x1c000;
+    pub const PAGER2_STACK_TOP: usize = CODE_VA + 0x1d000;
     const _: () = assert!(WORKER_A_STACK_BASE > DATA_VA);
     const _: () = assert!(WORKER_A_STACK_TOP <= WORKER_B_STACK_BASE);
     const _: () = assert!(WORKER_B_STACK_TOP <= WORKER_C_STACK_BASE);
@@ -76,6 +80,7 @@ pub mod user_layout {
     const _: () = assert!(IDLE_STACK_TOP <= CNODE_STACK_BASE);
     const _: () = assert!(CNODE_STACK_TOP <= PAGER_STACK_BASE);
     const _: () = assert!(PAGER_STACK_TOP <= PAGER_SERVER_STACK_BASE);
+    const _: () = assert!(PAGER_SERVER_STACK_TOP <= PAGER2_STACK_BASE);
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one
@@ -205,6 +210,10 @@ pub const O_RDWR: u64 = 2;
 pub const O_CREATE: u64 = 4;
 pub const O_TRUNC: u64 = 8;
 pub const O_APPEND: u64 = 16;
+/// Fail instead of opening an existing file created with `O_CREATE`.
+pub const O_EXCL: u64 = 32;
+/// Require the opened path to be a directory.
+pub const O_DIRECTORY: u64 = 64;
 
 /// Minimal user-space VFS request/reply protocol carried by the ordinary IPC
 /// message label and three data words.  Reads and writes are deliberately
@@ -591,6 +600,8 @@ pub enum SyscallId {
     ConsoleRead = 47,
     /// Install or remove a flat CNode as a TCB's capability space.
     CNodeInstall = 48,
+    /// Destroy a non-current TCB after revoking/reparenting its cspace caps.
+    TcbDestroy = 49,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -646,6 +657,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::Sleep, true),
     (SyscallId::ConsoleRead, true),
     (SyscallId::CNodeInstall, true),
+    (SyscallId::TcbDestroy, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

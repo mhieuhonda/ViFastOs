@@ -45,8 +45,8 @@ struct DataPool([u8; 311296]);
 static mut USER_DATA: DataPool = DataPool([0; 311296]);
 #[allow(dead_code)]
 #[repr(align(16))]
-struct Metadata([u8; 65536]);
-static mut METADATA: Metadata = Metadata([0; 65536]);
+struct Metadata([u8; 81920]);
+static mut METADATA: Metadata = Metadata([0; 81920]);
 static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
 #[allow(dead_code)]
 #[repr(align(4096))]
@@ -1103,7 +1103,7 @@ impl Platform for RiscvPlatform {
 
     fn metadata_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(METADATA) as *mut u8, 65536)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(METADATA) as *mut u8, 81920)
         }
     }
 

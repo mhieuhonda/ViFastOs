@@ -262,8 +262,18 @@ fn open_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
         Err(error) => return error,
     };
     let fs = fs();
+    if flags & vifast_abi::O_DIRECTORY != 0 && flags & vifast_abi::O_CREATE != 0 {
+        return err(FsError::Invalid);
+    }
     let ino = match fs.lookup(path_slice(&path, len), uid) {
-        Ok(ino) => ino,
+        Ok(ino) => {
+            if flags & (vifast_abi::O_CREATE | vifast_abi::O_EXCL)
+                == (vifast_abi::O_CREATE | vifast_abi::O_EXCL)
+            {
+                return err(FsError::Exists);
+            }
+            ino
+        }
         Err(FsError::NotFound) if flags & vifast_abi::O_CREATE != 0 => {
             match fs.create(path_slice(&path, len), uid, INODE_FILE) {
                 Ok(ino) => ino,
@@ -276,6 +286,9 @@ fn open_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
         Ok(info) => info,
         Err(error) => return err(error),
     };
+    if flags & vifast_abi::O_DIRECTORY != 0 && info.kind != INODE_DIR {
+        return err(FsError::NotDir);
+    }
     if info.kind == INODE_DIR {
         // Directory opens are allowed for READDIR.
     } else if flags & (vifast_abi::O_WRONLY | vifast_abi::O_RDWR) != 0 {

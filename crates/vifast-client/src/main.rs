@@ -858,6 +858,35 @@ pub extern "C" fn client_main() -> ! {
         b"FS APPEND BAD\n"
     });
 
+    let _ = vfs_unlink(b"/excl");
+    let mut open_flags_ok = true;
+    if let Some((fd, _)) = vfs_open(
+        b"/excl",
+        vifast_abi::O_CREATE | vifast_abi::O_EXCL | vifast_abi::O_RDWR,
+    ) {
+        open_flags_ok &= vfs_close(fd).is_some();
+    } else {
+        open_flags_ok = false;
+    }
+    open_flags_ok &= vfs_open_error(
+        b"/excl",
+        vifast_abi::O_CREATE | vifast_abi::O_EXCL | vifast_abi::O_RDWR,
+    ) == vfs::EEXIST;
+    open_flags_ok &= vfs_open_error(b"/excl", vifast_abi::O_DIRECTORY) == vfs::ENOTDIR;
+    open_flags_ok &=
+        vfs_open_error(b"/dirflag", vifast_abi::O_CREATE | vifast_abi::O_DIRECTORY) == vfs::EINVAL;
+    if let Some((fd, _)) = vfs_open(b"/", vifast_abi::O_DIRECTORY) {
+        open_flags_ok &= vfs_close(fd).is_some();
+    } else {
+        open_flags_ok = false;
+    }
+    open_flags_ok &= vfs_unlink(b"/excl").is_ok();
+    write(if open_flags_ok {
+        b"FS OPEN FLAGS OK\n"
+    } else {
+        b"FS OPEN FLAGS BAD\n"
+    });
+
     let _ = vfs_unlink(b"/hard_a");
     let _ = vfs_unlink(b"/hard_b");
     let mut hard_ok = true;

@@ -426,7 +426,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
     const RUNTIME_OBJECTS: usize = 5;
-    const META_MAX_OBJECTS: usize = 32;
+    const META_MAX_OBJECTS: usize = 34;
     const DATA_MAX_OBJECTS: usize = 76;
     const BOOT_MAX_OBJECTS: usize = 32;
     if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS + BOOT_MAX_OBJECTS
@@ -1215,7 +1215,11 @@ pub mod fault {
         let next = match old {
             Some(old) if kernel.fault_endpoint(old).is_some() => {
                 let endpoint = kernel.fault_endpoint(old).unwrap();
-                match Message::new(LABEL_FAULT, &[addr, cause, 0, 0]) {
+                let fault_slot = kernel
+                    .fault_endpoint_slot(old)
+                    .map(u64::from)
+                    .unwrap_or(u64::MAX);
+                match Message::new(LABEL_FAULT, &[addr, cause, fault_slot, old.index as u64]) {
                     Ok(message) => match kernel.fault_to_endpoint(old, endpoint, message) {
                         Ok(()) => {
                             let next = kernel.pick_on(hart);

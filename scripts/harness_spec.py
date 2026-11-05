@@ -55,11 +55,14 @@ EXACT_ONE = [
     "TCB SUSPEND OK",
     "FS LARGE OK",
     "FS APPEND OK",
+    "FS OPEN FLAGS OK",
     "HARD LINK OK",
     "SYMLINK OK",
     "IRQ OK",
     "CNODE OK",
+    "TCB REAP OK",
     "PAGER OK",
+    "PAGER2 OK",
 ]
 
 FORBIDDEN = [
@@ -81,13 +84,16 @@ FORBIDDEN = [
     "TCB SUSPEND BAD",
     "FS LARGE BAD",
     "FS APPEND BAD",
+    "FS OPEN FLAGS BAD",
+    "TCB REAP BAD",
+    "PAGER2 BAD",
     "HARD LINK BAD",
     "SYMLINK BAD",
     "IRQ BAD",
     "PAGER BAD",
 ]
 
-FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000, 0x1001000000]
+FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000]
 
 EXIT_CODES = {
     "riscv64": {0},
@@ -288,7 +294,7 @@ def accept(
     if not all(output.count(anchor) == 1 for anchor in ARCH_EXACT_ONE[name]):
         return False
     faults = fault_addresses(output)
-    if len(faults) != 5:
+    if len(faults) != 6:
         return False
     if not all(address in faults for address in FAULT_ADDRESSES):
         return False

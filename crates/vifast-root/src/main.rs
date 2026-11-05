@@ -11,8 +11,9 @@ use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
     CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_STACK_BASE, CLIENT_STACK_TOP,
     CLIENT_UART_IRQ_SLOT, CLIENT_UART_NOTIFICATION_SLOT, CNODE_STACK_BASE, CNODE_STACK_TOP,
-    CODE_VA, FAULT1_STACK_TOP, FAULT2_STACK_TOP, FAULT3_STACK_TOP, FAULT4_STACK_BASE,
-    FAULT4_STACK_TOP, IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
+    CODE_VA, FAULT1_STACK_TOP, FAULT1_TCB_SLOT, FAULT2_STACK_TOP, FAULT2_TCB_SLOT,
+    FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IDLE_STACK_BASE,
+    IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, PAGER2_STACK_BASE, PAGER2_STACK_TOP,
     PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP,
     SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
     WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
@@ -55,16 +56,25 @@ const TCB_SUSPEND_OK: &[u8] = b"TCB SUSPEND OK\n";
 const TCB_SUSPEND_BAD: &[u8] = b"TCB SUSPEND BAD\n";
 const SCHED_CTX_OK: &[u8] = b"SCHED CTX OK\n";
 const CNODE_OK: &[u8] = b"CNODE OK\n";
+const TCB_REAP_OK: &[u8] = b"TCB REAP OK\n";
+const TCB_REAP_BAD: &[u8] = b"TCB REAP BAD\n";
 const CNODE_LABEL: u64 = 0x434E_4F44;
 const PAGER_LABEL: u64 = 0x5041_4745;
 const PAGER_VA: u64 = CODE_VA as u64 + 0x100_0000;
 const PAGER_VALUE: u64 = 0x5041_4745_5200_0001;
+const PAGER2_LABEL: u64 = 0x5041_4746;
+const PAGER2_VA: u64 = PAGER_VA + 0x1000;
+const PAGER2_VALUE: u64 = 0x5041_4745_5200_0002;
+const PAGER2_OK: &[u8] = b"PAGER2 OK\n";
+const PAGER2_BAD: &[u8] = b"PAGER2 BAD\n";
 const PAGER_OK: &[u8] = b"PAGER OK\n";
 const PAGER_BAD: &[u8] = b"PAGER BAD\n";
 const PAGER_SERVER_ENDPOINT: u8 = 1;
 const PAGER_SERVER_TCB: u8 = 2;
 const PAGER_SERVER_VSPACE: u8 = 3;
 const PAGER_SERVER_FRAME: u8 = 4;
+const PAGER_SERVER_TCB2: u8 = 5;
+const PAGER_SERVER_FRAME2: u8 = 6;
 const TLB_A: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 const TLB_B: u64 = 0xBBBB_BBBB_BBBB_BBBB;
 const TLB_REMAP_OK: &[u8] = b"TLB REMAP OK (seen_new=1)\n";
@@ -109,6 +119,15 @@ pub extern "C" fn pager_client() -> ! {
 }
 
 #[no_mangle]
+pub extern "C" fn pager2_client() -> ! {
+    let value = unsafe { core::ptr::read_volatile(PAGER2_VA as *const u64) };
+    let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER2_LABEL, value, 0, 0);
+    loop {
+        let _ = vifast_user::yield_now();
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn pager_server() -> ! {
     loop {
         let message = unsafe { vifast_user::recv_message(PAGER_SERVER_ENDPOINT, 0) };
@@ -117,14 +136,22 @@ pub extern "C" fn pager_server() -> ! {
             continue;
         }
         if message.label == LABEL_FAULT {
+            let (frame_slot, tcb_slot) = if message.data[0] == PAGER_VA {
+                (PAGER_SERVER_FRAME, PAGER_SERVER_TCB)
+            } else if message.data[0] == PAGER2_VA {
+                (PAGER_SERVER_FRAME2, PAGER_SERVER_TCB2)
+            } else {
+                write(PAGER_BAD);
+                continue;
+            };
             let mapped = vifast_user::frame_map(
                 PAGER_SERVER_VSPACE,
-                PAGER_SERVER_FRAME,
-                PAGER_VA,
+                frame_slot,
+                message.data[0],
                 Rights::READ.0,
             );
             if mapped.error == KError::Ok {
-                let _ = vifast_user::tcb_resume(PAGER_SERVER_TCB);
+                let _ = vifast_user::tcb_resume(tcb_slot);
             } else {
                 write(PAGER_BAD);
             }
@@ -133,6 +160,12 @@ pub extern "C" fn pager_server() -> ! {
                 PAGER_OK
             } else {
                 PAGER_BAD
+            });
+        } else if message.label == PAGER2_LABEL {
+            write(if message.data[0] == PAGER2_VALUE {
+                PAGER2_OK
+            } else {
+                PAGER2_BAD
             });
         }
     }
@@ -293,6 +326,7 @@ fn write_fault_addr(addr: u64) {
         hex.as_ptr() as u64,
         hex.len() as u64,
     ));
+    check(vifast_user::debug_write(b"\n".as_ptr() as u64, 1));
 }
 
 fn copy(src: u8, tcb: u8, dst: u8, rights: Rights) {
@@ -443,7 +477,7 @@ fn spawn_cnode_demo(
     root_vspace: u8,
     endpoint_slot: u8,
     slots: &mut SlotAllocator,
-) {
+) -> u8 {
     let cnode = slots.alloc();
     retype(data_untyped, ObjType::CNode, cnode);
     let tcb = slots.alloc();
@@ -474,13 +508,20 @@ fn spawn_cnode_demo(
     ));
     check(vifast_user::cnode_install(tcb, cnode));
     check(vifast_user::tcb_resume(tcb));
+    tcb
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_pager(
     meta_untyped: u8,
     data_untyped: u8,
     root_vspace: u8,
     endpoint_slot: u8,
+    stack_base: usize,
+    stack_top: usize,
+    fault_va: u64,
+    value: u64,
+    entry: usize,
     slots: &mut SlotAllocator,
 ) -> (u8, u8) {
     let pager_tcb = slots.alloc();
@@ -491,13 +532,12 @@ fn spawn_pager(
         data_untyped,
         root_vspace,
         stack_frame,
-        PAGER_STACK_BASE as u64,
+        stack_base as u64,
         Rights::READ | Rights::WRITE,
         slots,
     );
     let page_frame = slots.alloc();
     retype(data_untyped, ObjType::Frame, page_frame);
-    let value = PAGER_VALUE;
     check(vifast_user::frame_write(
         page_frame,
         0,
@@ -510,16 +550,16 @@ fn spawn_pager(
         data_untyped,
         root_vspace,
         page_frame,
-        PAGER_VA,
+        fault_va,
         Rights::READ,
         slots,
     );
-    check(vifast_user::frame_unmap(root_vspace, PAGER_VA, page_frame));
+    check(vifast_user::frame_unmap(root_vspace, fault_va, page_frame));
     copy(endpoint_slot, pager_tcb, 1, Rights::WRITE);
     check(vifast_user::tcb_configure_fault(
         pager_tcb,
-        pager_client as usize as u64,
-        PAGER_STACK_TOP as u64,
+        entry as u64,
+        stack_top as u64,
         root_vspace,
         5,
         1,
@@ -535,6 +575,8 @@ fn spawn_pager_server(
     endpoint_slot: u8,
     pager_tcb: u8,
     pager_frame: u8,
+    pager2_tcb: u8,
+    pager2_frame: u8,
     slots: &mut SlotAllocator,
 ) {
     let server_tcb = slots.alloc();
@@ -558,6 +600,8 @@ fn spawn_pager_server(
     copy(pager_tcb, server_tcb, PAGER_SERVER_TCB, Rights::WRITE);
     copy(root_vspace, server_tcb, PAGER_SERVER_VSPACE, Rights::WRITE);
     copy(pager_frame, server_tcb, PAGER_SERVER_FRAME, Rights::READ);
+    copy(pager2_tcb, server_tcb, PAGER_SERVER_TCB2, Rights::WRITE);
+    copy(pager2_frame, server_tcb, PAGER_SERVER_FRAME2, Rights::READ);
     check(vifast_user::tcb_configure(
         server_tcb,
         pager_server as usize as u64,
@@ -680,30 +724,42 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     retype(meta_untyped, ObjType::Tcb, fault4_tcb);
     retype(meta_untyped, ObjType::Endpoint, fault_endpoint_slot);
 
-    check(vifast_user::tcb_configure(
-        fault1_tcb,
-        USER_ENTRY_FAULT1 as u64,
-        FAULT1_STACK_TOP as u64,
-        root_vspace,
-        6,
-    ));
-    check(vifast_user::tcb_resume(fault1_tcb));
-    check(vifast_user::tcb_configure(
-        fault2_tcb,
-        USER_ENTRY_FAULT2 as u64,
-        FAULT2_STACK_TOP as u64,
-        root_vspace,
-        6,
-    ));
-    check(vifast_user::tcb_resume(fault2_tcb));
-    check(vifast_user::tcb_configure(
-        fault3_tcb,
-        USER_ENTRY_FAULT3 as u64,
-        FAULT3_STACK_TOP as u64,
-        root_vspace,
-        6,
-    ));
-    check(vifast_user::tcb_resume(fault3_tcb));
+    for (fault_tcb, entry, stack, fault_slot) in [
+        (
+            fault1_tcb,
+            USER_ENTRY_FAULT1,
+            FAULT1_STACK_TOP,
+            FAULT1_TCB_SLOT,
+        ),
+        (
+            fault2_tcb,
+            USER_ENTRY_FAULT2,
+            FAULT2_STACK_TOP,
+            FAULT2_TCB_SLOT,
+        ),
+        (
+            fault3_tcb,
+            USER_ENTRY_FAULT3,
+            FAULT3_STACK_TOP,
+            FAULT3_TCB_SLOT,
+        ),
+    ] {
+        copy(
+            fault_endpoint_slot,
+            fault_tcb,
+            fault_slot as u8,
+            Rights::READ | Rights::WRITE,
+        );
+        check(vifast_user::tcb_configure_fault(
+            fault_tcb,
+            entry as u64,
+            stack as u64,
+            root_vspace,
+            6,
+            fault_slot as u8,
+        ));
+        check(vifast_user::tcb_resume(fault_tcb));
+    }
 
     let client_vspace = slots.alloc();
     retype(data_untyped, ObjType::VSpace, client_vspace);
@@ -920,7 +976,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     ));
     check(vifast_user::tcb_resume(fault4_tcb));
     spawn_idle(meta_untyped, data_untyped, root_vspace, &mut slots);
-    spawn_cnode_demo(
+    let cnode_tcb = spawn_cnode_demo(
         meta_untyped,
         data_untyped,
         root_vspace,
@@ -934,6 +990,23 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         data_untyped,
         root_vspace,
         pager_endpoint,
+        PAGER_STACK_BASE,
+        PAGER_STACK_TOP,
+        PAGER_VA,
+        PAGER_VALUE,
+        pager_client as usize,
+        &mut slots,
+    );
+    let (pager2_tcb, pager2_frame) = spawn_pager(
+        meta_untyped,
+        data_untyped,
+        root_vspace,
+        pager_endpoint,
+        PAGER2_STACK_BASE,
+        PAGER2_STACK_TOP,
+        PAGER2_VA,
+        PAGER2_VALUE,
+        pager2_client as usize,
         &mut slots,
     );
     spawn_pager_server(
@@ -943,6 +1016,8 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         pager_endpoint,
         pager_tcb,
         pager_frame,
+        pager2_tcb,
+        pager2_frame,
         &mut slots,
     );
 
@@ -1086,48 +1161,25 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut suspend_done = false;
     let mut suspend_ok = false;
     let mut suspend_printed = false;
+    let mut reaped = 0u8;
+    let mut reap_ok = true;
+    let mut reap_done = false;
+    let mut pending_worker_e = false;
+    let mut start_worker_e = false;
     loop {
         let message = unsafe { vifast_user::recv_message(fault_endpoint_slot, 0) };
         if message.error == KError::Ok {
             if message.label == CNODE_LABEL {
                 write(CNODE_OK);
+                reap_ok &= vifast_user::tcb_destroy(cnode_tcb).error == KError::Ok;
+                reaped = reaped.saturating_add(1);
             } else if message.label == WORKER_LABEL_C_RUNNING {
                 if !suspend_done {
-                    spawn_worker(
-                        meta_untyped,
-                        data_untyped,
-                        root_vspace,
-                        fault_endpoint_slot,
-                        root_notification_slot,
-                        Rights::READ,
-                        None,
-                        5,
-                        smp_worker_e as *const () as usize,
-                        WORKER_E_STACK_BASE,
-                        WORKER_E_STACK_TOP,
-                        &mut slots,
-                    );
-                    let suspended = vifast_user::tcb_suspend(worker_c_tcb);
-                    let started = vifast_user::get_time().value;
-                    while vifast_user::get_time().value < started.saturating_add(5) {
-                        let _ = vifast_user::yield_now();
+                    if reaped >= 3 {
+                        start_worker_e = true;
+                    } else {
+                        pending_worker_e = true;
                     }
-                    let resumed = vifast_user::tcb_resume(worker_c_tcb);
-                    // Keep C busy for five more ticks after resume so the AP
-                    // timer observes preemption again before the flag ends it.
-                    let resumed_at = vifast_user::get_time().value;
-                    while vifast_user::get_time().value < resumed_at.saturating_add(5) {
-                        let _ = vifast_user::yield_now();
-                    }
-                    let one = 1u64;
-                    check(vifast_user::frame_write(
-                        suspend_flag_frame,
-                        0,
-                        &one as *const u64 as u64,
-                        8,
-                    ));
-                    suspend_ok = suspended.error == KError::Ok && resumed.error == KError::Ok;
-                    suspend_done = true;
                 }
             } else if message.label == WORKER_LABEL_D_READY {
                 if !tlb_remapped {
@@ -1203,8 +1255,68 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                     }
                 }
+            } else if message.label == LABEL_FAULT {
+                write_fault_addr(message.data[0]);
+                let victim = match message.data[2] {
+                    slot if slot == FAULT1_TCB_SLOT as u64 => Some(fault1_tcb),
+                    slot if slot == FAULT2_TCB_SLOT as u64 => Some(fault2_tcb),
+                    slot if slot == FAULT3_TCB_SLOT as u64 => Some(fault3_tcb),
+                    6 => Some(fault4_tcb),
+                    _ => None,
+                };
+                if let Some(victim) = victim {
+                    let result = vifast_user::tcb_destroy(victim);
+                    reap_ok &= result.error == KError::Ok;
+                    reaped = reaped.saturating_add(1);
+                }
             } else {
                 write_fault_addr(message.data[0]);
+            }
+            if reaped == 5 && !reap_done {
+                reap_done = true;
+                write(if reap_ok { TCB_REAP_OK } else { TCB_REAP_BAD });
+            }
+            if pending_worker_e && reaped >= 3 {
+                pending_worker_e = false;
+                start_worker_e = true;
+            }
+            if start_worker_e && !suspend_done {
+                start_worker_e = false;
+                spawn_worker(
+                    meta_untyped,
+                    data_untyped,
+                    root_vspace,
+                    fault_endpoint_slot,
+                    root_notification_slot,
+                    Rights::READ,
+                    None,
+                    5,
+                    smp_worker_e as *const () as usize,
+                    WORKER_E_STACK_BASE,
+                    WORKER_E_STACK_TOP,
+                    &mut slots,
+                );
+                let suspended = vifast_user::tcb_suspend(worker_c_tcb);
+                let started = vifast_user::get_time().value;
+                while vifast_user::get_time().value < started.saturating_add(5) {
+                    let _ = vifast_user::yield_now();
+                }
+                let resumed = vifast_user::tcb_resume(worker_c_tcb);
+                // Keep C busy for five more ticks after resume so the AP timer
+                // observes preemption again before the flag ends it.
+                let resumed_at = vifast_user::get_time().value;
+                while vifast_user::get_time().value < resumed_at.saturating_add(5) {
+                    let _ = vifast_user::yield_now();
+                }
+                let one = 1u64;
+                check(vifast_user::frame_write(
+                    suspend_flag_frame,
+                    0,
+                    &one as *const u64 as u64,
+                    8,
+                ));
+                suspend_ok = suspended.error == KError::Ok && resumed.error == KError::Ok;
+                suspend_done = true;
             }
             if worker_bits == 7 && !workers_ok {
                 write(SMP_WORKERS_OK);
