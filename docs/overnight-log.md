@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `282f2b7fe48c847a9decb59b3864292ea7ccf0c95cfe49a5a829ae0f628b469e`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `055b60cc0d736f5f7ee4e6b91f7956269c62d1b655c47c1e5a7cbb9bdb60cb66`.
 
 ---
 
@@ -578,3 +578,15 @@ follow-up `62b31f4`.
 - `111e072`: per-VA TLB + `harts_loaded`, TLB_VA mailbox, 50/50 cả 3.
 - Final: build 0 warning; QEMU 10/10 và 50/50 cả 3; persist 6/6; panic 5/5;
   handoff 10/10; harness 300 case; RISC headroom `138672` B.
+
+
+## 8.30 — Headroom, TLB mutation, CapDelete, suspend, FS v3, GetTime fast (vòng 19)
+
+- `334e5c1`: root cspace 96 + task cspace 64; RISC headroom 392.624 B; guard 192 KiB.
+- `4688353`: fuzz seed 100k × 3 PTE + invariant.
+- `d8b762e`: FS v3 single-indirect, file 69 KiB, 12 host test, persist phase 7.
+- `aa10090`: GetTime atomic fast path before BKL.
+- `b029aac`: TLB mutation (`TLB REMAP BAD` 5/5 RISC/x86), CapDelete, TcbSuspend/TcbSetPriority.
+- `8342553`: test-exit chờ FS LARGE để tránh race.
+- Final: QEMU 10/10, 50/50 cả 3; mutation 5/5; panic 5/5; handoff 10/10;
+  persist 7 phase ×3; harness 327 case; 0 warning; headroom 392.624 B.

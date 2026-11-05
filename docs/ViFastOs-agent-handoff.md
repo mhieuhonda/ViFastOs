@@ -2,8 +2,8 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `111e072` (per-VA TLB, D6 badge, GetTime, FS small image)
-**Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
+**Mốc code hiện tại:** `8342553` (TLB mutation, CapDelete, cross-hart suspend, FS v3 indirect, GetTime lock-free)
+**Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** vòng 19
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
 
@@ -24,12 +24,12 @@
 - Boot QEMU trên **RISC-V 64**, **AArch64**, **x86_64 UEFI**.
 - User mode, nạp Rust ELF, VSpace riêng, capability, IPC, notification.
 - Scheduler cơ bản, timer preemption, 4 fault demo.
-- VFS server chạy user-space qua IPC: `/motd`, `/scratch`, `STAT`.
+- VFS server chạy user-space qua IPC: FS v3 journal, permission, file 69 KiB, 7 phase persistence.
 - Block device:
   - AArch64: VirtIO-MMIO, polling.
   - x86_64: ATA PIO, polling.
   - RISC-V: VirtIO-MMIO, polling; slot `0x10008000`, version 2.
-- `/scratch` bền vững trên cả 3 kiến trúc qua sector 0.
+- FS v3 bền vững trên cả 3 kiến trúc; legacy VF01 migrate, VF02 mount-compatible.
 - Software IOMMU: domain, reverse map, `IoMap`/`IoUnmap`, 32 mapping/domain.
 - SMP: cả 3 kiến trúc có 2 hart, scheduler + worker hart phụ; RISC/x86 targeted per-VA TLB IPI, AArch64 broadcast; x86 AP đã bật.
 - BKL ticket FIFO + RAII, mailbox maintenance đối xứng, per-CPU state dùng sscratch/swapgs/TPIDR_EL1; test `PERCPU CLOBBER OK`.
@@ -37,20 +37,20 @@
 
 ### Chưa có / còn yếu
 
-- Per-hart runqueue, khóa mịn/x2APIC, CapDelete syscall.
+- Per-hart runqueue, khóa mịn/x2APIC, hardware IOMMU.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
-- Block cache/indirect block/hard link/symlink; flush barrier cho đĩa thật.
+- Block cache/double indirect/hard link/symlink; flush barrier cho đĩa thật.
 - VirtIO network/input.
 - Compositor/ViFastKey/GUI.
 - ABI placeholder CNode/SchedContext/Irq.
 - RISC-V panic QEMU rc=1 đã đạt; giữ test 5/5.
-- FS v2, persistence 6 phase, badge D6, tick toàn hệ thống và per-VA TLB đã xong.
+- FS v3 single-indirect, persistence 7 phase, badge D6, tick lock-free, CapDelete và suspend/priority đã xong.
 
 ### Việc nên làm ngay, theo thứ tự
 
 1. **Hardware IOMMU** (VT-d/SMMU) sau mô hình phần mềm.
-2. **Per-hart runqueue + khóa mịn/x2APIC**, rồi `CapDelete`.
-3. **Block cache/indirect block/hard link/symlink + barrier**.
+2. **Per-hart runqueue + khóa mịn/x2APIC**.
+3. **Block cache/double indirect/hard link/symlink + barrier**.
 4. **VirtIO net/input**.
 5. **Compositor/ViFastKey**.
 
@@ -61,8 +61,8 @@
 | Mục | Giá trị |
 |---|---|
 | Repo | `/Users/mps/dvchd/ViFastOs` |
-| Git baseline | `1b3dc12` |
-| Feature commit gần nhất | `fe569c1` — x86 ATA block |
+| Git baseline | `b029aac` |
+| Feature commit gần nhất | `b029aac` — TLB mutation/capdelete/suspend |
 | Working tree lúc lập báo cáo | sạch |
 | Ngôn ngữ | Rust |
 | Kernel/runtime | `no_std`, `forbid(unsafe_code)` |
@@ -181,7 +181,7 @@ Kernel không biết chi tiết phần cứng. Nó gọi các trait/primitive do
 | Scheduler | ✅ cơ bản | priority, timer, preemption |
 | SMP | ✅ | 3 kiến trúc: 2 hart, worker, IPI, per-VA TLB, preempt 50/50 |
 | ASID/PCID | ✅ | ASID theo VSpace; PCID nếu CPUID |
-| VFS user-space | ✅ | `vifast-fs` v2, journal, directory, permission, 6 phase persistence |
+| VFS user-space | ✅ | `vifast-fs` v3, journal, directory, permission, indirect, 7 phase persistence |
 | VFS đầy đủ | ⚠️ | chưa block cache/indirect/hard link/symlink |
 | Block AArch64 | ✅ | VirtIO-MMIO, polling |
 | Block x86_64 | ✅ | ATA PIO, polling |
@@ -454,16 +454,16 @@ Chưa có:
 |---|---|---|---|
 | — | SMP đa hart đã chạy cả 3 | Scheduler/worker/IPI/preempt đã có | Duy trì 50/50 |
 | — | x86 AP boot đã xong | AP scheduler + worker | 50/50 |
-| — | FS v2 đã có | Journal, directory, permission, 6 phase | Giới hạn 6 KiB/64 inode |
+| — | FS v3 đã có | Journal, directory, permission, indirect, 7 phase | 69 KiB/64 inode |
 | — | Per-VA TLB đã có | Mask harts_loaded + TLB_VA | AArch broadcast |
-| P1 | Chưa remote I-cache | Code mới có thể chạy sai trên hart khác | Cần IPI + fence |
+| — | Per-VA TLB + remote I-cache | Targeted IPI, AArch broadcast | Đã xong |
 | P1 | IOMMU chỉ mô phỏng | Không cách ly DMA thật | VT-d/SMMU |
 | P1 | `static mut` ở platform/server | SMP sẽ có data race | Cần khóa/per-CPU |
-| P1 | TOCTOU validate-copy | SMP có thể đổi mapping giữa validate và copy | Cần BKL hoặc pin page |
+| — | Double-fetch audit | Mọi syscall copy user đúng một lần | Đã audit vòng 19 |
 | P1 | Object table cố định | Hết object là `OutOfMemory` | 128 object; TCB 16 |
 | P1 | QEMU-specific driver | Không chạy được máy thật | ATA legacy, VirtIO-MMIO |
 | P2 | x86 identity map 0..1 GiB | RAM/UEFI vượt 1 GiB có thể hỏng | Cần memory map |
-| P2 | RISC kernel accessible 4 MiB | Headroom 454.192 B | Theo dõi kích thước |
+| P2 | RISC kernel accessible 4 MiB | Headroom 392.624 B; guard 192 KiB | Theo dõi kích thước |
 | P2 | Tài liệu có chỗ cũ | Agent dễ làm sai | Summary có mục stale |
 | P2 | CNode/SchedContext/Irq placeholder | ABI trông đầy đủ nhưng chưa chạy | Implement hoặc đánh dấu rõ |
 | P2 | Chưa có CI | Dễ commit đỏ | Thêm CI chạy build + QEMU |
@@ -472,7 +472,7 @@ Chưa có:
 ### Rủi ro lớn nhất
 
 1. **SMP + `static mut`**: scheduler đa hart đã có BKL nhưng vẫn cần audit data race.
-2. **FS v2 chưa có barrier phần cứng**: journal giả định sector ghi nguyên tử; đĩa thật cần flush.
+2. **FS v3 chưa có barrier phần cứng**: journal giả định sector ghi nguyên tử; đĩa thật cần flush.
 3. **BKL/IPI**: không được để hart phụ lấy BKL khi hart 0 đang chờ TLB ACK.
 4. **QEMU-specific**: pass QEMU không đảm bảo pass máy thật.
 5. **Harness dễ bị "làm yếu"**: không được sửa test cho dễ pass.
@@ -526,12 +526,12 @@ Chưa có:
 
 ### P1 — Filesystem, TLB, IOMMU
 
-#### P1.1 FS v2
+#### P1.1 FS v3 (đã xong phần lõi)
 
 Đề xuất format tối giản nhưng đúng:
 
 - Superblock ở LBA 0 hoặc 1:
-  - magic `VF02`
+  - magic `VF03` (mount VF02)
   - version
   - block size
   - tổng block
@@ -778,7 +778,7 @@ FS DISK OK
 VFS OK
 PREEMPT OK (ticks=20, switches=539932)
 ROOT SWITCH 35
-DATA UNTYPED pages=36/64 objects=21/48
+DATA UNTYPED pages=51/64 objects=48/56
 ```
 
 ### AArch64
@@ -797,7 +797,7 @@ FS DISK OK
 VFS OK
 PREEMPT OK (ticks=20, switches=1147894)
 ROOT SWITCH 35
-DATA UNTYPED pages=37/64 objects=21/48
+DATA UNTYPED pages=52/64 objects=48/56
 ```
 
 ### x86_64
@@ -909,8 +909,8 @@ một phần thì chạy đầy đủ test và commit.
 
 Ưu tiên:
 1. Full SMP: x86 AP, scheduler đa hart, BKL audit.
-2. FS v2: nhiều file, directory, permission, crash-safe.
-3. Per-VA TLB shootdown + remote I-cache.
+2. FS v3: indirect, permission, crash-safe — đã xong.
+3. Per-VA TLB + remote I-cache — đã xong.
 4. Hardware IOMMU.
 5. VirtIO network/input.
 6. Compositor/ViFastKey.
@@ -947,15 +947,15 @@ ViFastOS đang ở trạng thái **nguyên mẫu microkernel đa kiến trúc c�
 - User mode + ELF + VSpace.
 - Capability + IPC.
 - VFS user-space.
-- Block device + FS v2 bền vững trên cả 3 kiến trúc.
-- SMP maintenance IPI/TLB per-VA + preempt 50/50.
+- Block device + FS v3 bền vững trên cả 3 kiến trúc.
+- SMP maintenance IPI/TLB per-VA + capability delete/suspend + preempt 50/50.
 - IOMMU mô hình phần mềm.
 
 Các phần còn thiếu lớn nhất là:
 
 - Hardware IOMMU.
-- Per-hart runqueue/khóa mịn/x2APIC/CapDelete.
-- Block cache/indirect + barrier.
+- Per-hart runqueue/khóa mịn/x2APIC.
+- Block cache/double indirect + barrier.
 - Network/input/GUI.
 
 Đây là nền tảng tốt để tiếp tục, nhưng **chưa phải hệ điều hành hoàn chỉnh** và chưa nên dùng cho mục đích production hoặc bảo mật thật.

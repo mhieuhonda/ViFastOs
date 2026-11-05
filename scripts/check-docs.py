@@ -74,6 +74,8 @@ def main() -> int:
         "timer đa hart",
         "x86 sẽ theo D2",
         "x86 AP scheduler/user",
+        "ba worker",
+        "597624",
     ]
     for value in forbidden:
         needle = value.casefold()
@@ -82,6 +84,26 @@ def main() -> int:
 
     if "SMP TIMER OK (hart1_ticks=T)" not in summary:
         fail("missing AArch64 timer contract in summary")
+
+    object_source = (ROOT / "crates" / "vifast-kernel" / "src" / "object.rs").read_text()
+    for name in (
+        "MAX_OBJECTS",
+        "MAX_TCBS",
+        "MAX_CAPS_ROOT",
+        "MAX_CAPS_TASK",
+        "MAX_QUEUE",
+        "MAX_FDS",
+        "MAX_MAPPINGS",
+        "MAX_IOMMU_MAPPINGS",
+    ):
+        match = re.search(rf"pub const {name}: usize = (\d+);", object_source)
+        if not match:
+            fail(f"cannot parse {name} from vifast-kernel")
+        doc_match = re.search(rf"^- {name} = (\d+)$", summary, re.M)
+        if not doc_match:
+            fail(f"summary missing {name}")
+        if doc_match.group(1) != match.group(1):
+            fail(f"{name} mismatch: docs={doc_match.group(1)} code={match.group(1)}")
 
     bundle_rounds = sorted(
         int(path.stem.rsplit("-", 1)[1])
