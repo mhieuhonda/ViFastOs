@@ -264,6 +264,32 @@ pub fn get_time() -> SyscallResult {
     result(e, v)
 }
 
+pub fn sleep(ticks: u64) -> SyscallResult {
+    // Bring-up uses cooperative polling: the runtime has no BSP idle task, so
+    // a task that blocks alone on hart 0 would otherwise leave the scheduler
+    // with nothing to return to.  The in-kernel Sleep syscall (with a
+    // BlockedSleep state) is available and host-tested, but this wrapper keeps
+    // user programs non-blocking until an idle TCB exists.
+    if ticks == 0 {
+        return result(KError::Ok as u64, 0);
+    }
+    let start = get_time();
+    if start.error != KError::Ok {
+        return start;
+    }
+    let deadline = start.value.saturating_add(ticks);
+    loop {
+        let now = get_time();
+        if now.error != KError::Ok {
+            return now;
+        }
+        if now.value >= deadline {
+            return result(KError::Ok as u64, 0);
+        }
+        core::hint::spin_loop();
+    }
+}
+
 pub fn yield_now() -> SyscallResult {
     let (e, v) = unsafe { syscall(SyscallId::Yield as u64, [0; 6]) };
     result(e, v)

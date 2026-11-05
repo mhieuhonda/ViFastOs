@@ -391,6 +391,7 @@ pub enum ThreadState {
     Faulted = 7,
     BlockedFault = 8,
     Suspended = 9,
+    BlockedSleep = 10,
 }
 
 impl ThreadState {
@@ -401,6 +402,7 @@ impl ThreadState {
                 | ThreadState::BlockedRecv
                 | ThreadState::BlockedReply
                 | ThreadState::BlockedNotification
+                | ThreadState::BlockedSleep
         )
     }
 }
@@ -550,6 +552,7 @@ pub enum SyscallId {
     BlockRead = 43,
     BlockWrite = 44,
     BlockFlush = 45,
+    Sleep = 46,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -602,6 +605,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::BlockRead, true),
     (SyscallId::BlockWrite, true),
     (SyscallId::BlockFlush, true),
+    (SyscallId::Sleep, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

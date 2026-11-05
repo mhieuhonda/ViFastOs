@@ -103,6 +103,8 @@ pub enum UserAction {
     /// The syscall blocked the current TCB.  The architecture trap handler must
     /// save its context and schedule another TCB.
     Blocked,
+    /// Sleep until the timer deadline installed by the kernel.
+    Sleep,
     Exit,
 }
 
@@ -690,6 +692,13 @@ impl Kernel {
             }
             ThreadState::Ready => {
                 self.remove_from_runq(target);
+            }
+            ThreadState::BlockedSleep => {
+                self.remove_from_runq(target);
+                let table = self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?;
+                table.wake_at = None;
+                table.resume = Some(Message::empty(0));
+                table.resume_error = Some(KError::WouldBlock);
             }
             ThreadState::BlockedSend
             | ThreadState::BlockedRecv
@@ -3547,7 +3556,7 @@ impl Kernel {
         self.pick_on(hart)
     }
 
-    pub fn tick(&mut self, hart: usize) {
+    pub fn tick(&mut self, hart: usize) -> usize {
         if let Some(counter) = self.ticks.get_mut(hart) {
             *counter = counter.wrapping_add(1);
             self.stats.ticks = *counter;
@@ -3556,6 +3565,38 @@ impl Kernel {
                     .store(*counter, core::sync::atomic::Ordering::Release);
             }
         }
+        self.wake_sleepers(self.fast_time())
+    }
+
+    /// Move every deadline-expired `BlockedSleep` TCB to the ready queue.
+    /// Returns the number of tasks woken by this call.
+    fn wake_sleepers(&mut self, now: u64) -> usize {
+        let mut woke = 0usize;
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            let expired = match self.objs[index].kind {
+                Kind::Tcb(tcb) => {
+                    tcb.state == ThreadState::BlockedSleep
+                        && tcb.wake_at.is_some_and(|deadline| deadline <= now)
+                }
+                _ => false,
+            };
+            if !expired {
+                continue;
+            }
+            if let Some(tcb) = self.tcb_mut(reference) {
+                tcb.wake_at = None;
+                tcb.state = ThreadState::Ready;
+                tcb.resume = Some(Message::empty(0));
+                tcb.resume_error = None;
+            }
+            self.enqueue(reference);
+            woke += 1;
+        }
+        woke
     }
 
     /// Lock-free system time source.  Only the BSP updates it; all harts may
@@ -3631,6 +3672,33 @@ impl Kernel {
                 value: self.fast_time(),
                 error: KError::Ok,
             };
+        }
+        if number == SyscallId::Sleep as u64 {
+            if a0 == 0 {
+                return UserAction::Return {
+                    value: 0,
+                    error: KError::Ok,
+                };
+            }
+            if !self.has_ready_on(hart) {
+                // The runtime has no BSP idle task.  Let user space fall back
+                // to cooperative yielding until the deadline instead of
+                // parking with no runnable TCB.
+                return UserAction::Return {
+                    value: 0,
+                    error: KError::WouldBlock,
+                };
+            }
+            let deadline = self.fast_time().saturating_add(a0);
+            let Some(table) = self.tcb_mut(tcb) else {
+                return UserAction::Return {
+                    value: 0,
+                    error: KError::InvalidCap,
+                };
+            };
+            table.state = ThreadState::BlockedSleep;
+            table.wake_at = Some(deadline);
+            return UserAction::Sleep;
         }
         if number == SyscallId::DebugWrite as u64 {
             let len = (a1 as usize).min(USER_IO_MAX);
@@ -8993,6 +9061,38 @@ mod tests {
         assert_eq!(kernel.take_resume_error(target), Some(KError::WouldBlock));
         kernel.resume_tcb(target).unwrap();
         assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Ready);
+    }
+
+    #[test]
+    fn sleep_blocks_until_bsp_tick_deadline() {
+        let mut kernel = Kernel::new();
+        let sleeper = kernel.create_tcb("sleeper", 5).unwrap();
+        let idle = kernel.create_tcb("idle", 1).unwrap();
+        kernel.enqueue(idle);
+        kernel.enqueue(sleeper);
+        assert_eq!(kernel.pick_on(0), Some(sleeper));
+        assert_eq!(kernel.tick(0), 0); // system time is now 1
+        assert_eq!(
+            kernel.user_syscall_on(sleeper, 0, SyscallId::Sleep as u64, 3, 0, 0, 0, 0, 0),
+            UserAction::Sleep
+        );
+        assert_eq!(
+            kernel.tcb(sleeper).unwrap().state,
+            ThreadState::BlockedSleep
+        );
+        assert_eq!(kernel.tcb(sleeper).unwrap().wake_at, Some(4));
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(
+            kernel.tcb(sleeper).unwrap().state,
+            ThreadState::BlockedSleep
+        );
+        assert_eq!(kernel.tick(0), 1);
+        assert_eq!(kernel.tcb(sleeper).unwrap().state, ThreadState::Ready);
+        assert!(kernel.tcb(sleeper).unwrap().queued);
+        assert_eq!(kernel.pick_on(0), Some(sleeper));
+        assert!(kernel.take_resume(sleeper).is_some());
+        assert_eq!(kernel.tick(0), 0);
     }
 
     #[test]

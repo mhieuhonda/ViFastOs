@@ -487,6 +487,8 @@ pub struct Tcb {
     pub fds: [Option<Fd>; MAX_FDS],
     pub queued: bool,
     pub queue_seq: u64,
+    /// Absolute system tick at which a `BlockedSleep` TCB becomes ready.
+    pub wake_at: Option<u64>,
     /// Bitmask of harts allowed to run this TCB.  Default: hart 0 only.
     pub affinity: u8,
 }
@@ -513,6 +515,7 @@ impl Tcb {
             fds: [None; MAX_FDS],
             queued: false,
             queue_seq: 0,
+            wake_at: None,
             affinity: 1,
         }
     }

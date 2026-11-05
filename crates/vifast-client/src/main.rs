@@ -320,6 +320,16 @@ pub extern "C" fn client_main() -> ! {
     }
     let _ = vifast_user::frame_unmap(2, DATA_VA as u64, 4);
     write(CLIENT);
+    let before_sleep = vifast_user::get_time();
+    let slept = vifast_user::sleep(3);
+    let after_sleep = vifast_user::get_time();
+    write(
+        if slept.error == KError::Ok && after_sleep.value >= before_sleep.value.saturating_add(3) {
+            b"SLEEP OK\n"
+        } else {
+            b"SLEEP BAD\n"
+        },
+    );
     let denied = vifast_user::block_write(0, 0, IPC_BUF_CLIENT_VA as u64);
     write(if denied.error == KError::InvalidCap {
         b"BLOCK DENIED OK\n"

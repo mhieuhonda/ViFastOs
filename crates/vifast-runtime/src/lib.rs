@@ -1109,6 +1109,18 @@ pub mod syscall {
                     }
                 }
             }
+            UserAction::Sleep => {
+                if !switch_blocked::<A>(context) {
+                    if A::can_wait_for_work() {
+                        A::wait_for_work(hart);
+                        if !switch_blocked::<A>(context) {
+                            A::exit(1);
+                        }
+                    } else {
+                        A::exit(1);
+                    }
+                }
+            }
             UserAction::Exit => {
                 A::write_str("\r\nUSER EXIT\r\n");
                 A::exit(0);
@@ -1239,7 +1251,10 @@ pub mod timer {
         if let Some(old) = old {
             contexts[old.index as usize] = *context;
         }
-        kernel.tick(hart);
+        let woke = kernel.tick(hart);
+        if hart == 0 && woke != 0 && kernel.has_ready_on(1) {
+            A::wake_hart(1);
+        }
         #[cfg(feature = "test-skip-tlb-ipi")]
         if hart == 0 && TEST_TLB_BAD.load(core::sync::atomic::Ordering::SeqCst) {
             vifast_kernel::klog!(A, "TLB MUTATION DETECTED");

@@ -180,7 +180,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 102/102 PASS
+- `cargo test -p vifast-kernel`: 103/103 PASS
 - `cargo test -p vifast-arch`: 6/6 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -191,9 +191,9 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 339376 byte (`kernel_end=0x803ad250`)
-- `Kernel = 651352`, `Object = 4704`, `Tcb = 4656`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
+- RISC-V headroom: 335264 byte (`kernel_end=0x803ae260`)
+- `Kernel = 653528`, `Object = 4720`, `Tcb = 4672`, `Cap = 64` byte
+- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -823,6 +823,7 @@ Số syscall chính:
 43 BlockRead — implemented
 44 BlockWrite — implemented
 45 BlockFlush — implemented
+46 Sleep — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,
@@ -831,6 +832,11 @@ Số syscall chính:
   write cache của VirtIO/ATA rồi trả `Ok` hoặc `IllegalOperation`.
 - VFS `FSYNC` gọi `vifast_fs::Fs::fsync()` → `BlockDev::flush()` →
   `BlockFlush`; client demo gọi FSYNC trên file lớn/hard link/symlink.
+- `Sleep` (46): `a0` = số tick 10 ms. Kernel đặt TCB `BlockedSleep` +
+  `wake_at`; `tick()` gọi `wake_sleepers()` để đưa task hết hạn vào ready
+  queue. User wrapper `vifast_user::sleep` hiện poll `GetTime` + `spin_loop`
+  thay vì block khi không còn task khác chạy trên BSP (chưa có idle TCB);
+  syscall kernel vẫn có host test riêng.
 - `CapMint` (11): `a0` source slot, `a1` TCB đích, `a2` slot đích,
   `a3` rights (chỉ giảm), `a4` badge; chỉ Endpoint/Notification **và** source
   phải có badge 0. Server nhận uid từ badge register (RISC-V a7, AArch64 x7,
@@ -1109,6 +1115,7 @@ QEMU test:
 - `Isolation` — fault isolation demo ran
 - `Server` — user VFS server ran
 - `Client` — user VFS client ran
+- `SLEEP OK` — sleep observed the timer deadline
 - `Mapped` — client VSpace mapping succeeded
 - `Cap OK` — capability transfer demo succeeded
 - `ViFastOs ramfs` — ramfs read path ran

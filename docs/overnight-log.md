@@ -628,3 +628,13 @@ follow-up `62b31f4`.
   và double, kiểm table được giải phóng.
 - `cargo test -p vifast-fs`: 21/21; QEMU 3/3; persist phase 7 dùng file 80 KiB
   (double-indirect) trên cả 3 kiến trúc; 0 warning.
+
+## 8.70 — Sleep/timeout primitive (vòng 21)
+
+- Thêm `ThreadState::BlockedSleep`, `Tcb.wake_at` và syscall `Sleep = 46`.
+- `tick()` gọi `wake_sleepers()`; task hết hạn được đưa vào ready queue với
+  resume message `Ok`.
+- User wrapper `vifast_user::sleep` poll `GetTime` khi không có task khác trên
+  BSP để tránh runtime không có idle TCB; client in `SLEEP OK`.
+- Host test mới: block, chưa hết hạn, wake đúng tick, resume message.
+- QEMU 3/3 lặp 3 lần; harness thêm `SLEEP OK`; 0 warning.

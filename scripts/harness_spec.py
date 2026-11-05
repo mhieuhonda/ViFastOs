@@ -18,6 +18,7 @@ COMMON = [
     ("Isolation", "fault isolation demo ran"),
     ("Server", "user VFS server ran"),
     ("Client", "user VFS client ran"),
+    ("SLEEP OK", "sleep observed the timer deadline"),
     ("Mapped", "client VSpace mapping succeeded"),
     ("Cap OK", "capability transfer demo succeeded"),
     ("ViFastOs ramfs", "ramfs read path ran"),

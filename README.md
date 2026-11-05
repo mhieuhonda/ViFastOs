@@ -124,6 +124,7 @@ Mapped
 ViFastOs ramfs
 ViFastOs write
 Client
+SLEEP OK
 Cap OK
 Reply OK
 PREEMPT OK (ticks=20, switches=39)
