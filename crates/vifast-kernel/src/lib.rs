@@ -3884,9 +3884,10 @@ mod tests {
             server_elf_len: 4096,
             client_elf_va: 0x1000_2000,
             client_elf_len: 4096,
+            sched_harts: 0b11,
         };
         let base = &info as *const BootInfo as usize;
-        assert_eq!(core::mem::size_of::<BootInfo>(), 64);
+        assert_eq!(core::mem::size_of::<BootInfo>(), 72);
         for (offset, field) in [
             (0usize, &info.magic as *const u64 as usize),
             (8, &info.version as *const u32 as usize),
@@ -3903,6 +3904,7 @@ mod tests {
             (40, &info.server_elf_len as *const u64 as usize),
             (48, &info.client_elf_va as *const u64 as usize),
             (56, &info.client_elf_len as *const u64 as usize),
+            (64, &info.sched_harts as *const u32 as usize),
         ] {
             assert_eq!(field - base, offset);
         }

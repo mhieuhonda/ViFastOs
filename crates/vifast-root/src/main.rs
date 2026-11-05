@@ -46,7 +46,6 @@ const USER_ELF_MACHINE: u16 = 62;
 const CLIENT_UNTYPED_SIZE: usize = 0x1_0000;
 const CLIENT_UNTYPED_OBJECTS: usize = 8;
 
-#[cfg(target_arch = "riscv64")]
 fn worker_loop(label: u64) -> ! {
     let mut i = 0;
     while i < 50 {
@@ -62,13 +61,11 @@ fn worker_loop(label: u64) -> ! {
     }
 }
 
-#[cfg(target_arch = "riscv64")]
 #[no_mangle]
 pub extern "C" fn smp_worker_a() -> ! {
     worker_loop(WORKER_LABEL_A)
 }
 
-#[cfg(target_arch = "riscv64")]
 #[no_mangle]
 pub extern "C" fn smp_worker_b() -> ! {
     worker_loop(WORKER_LABEL_B)
@@ -212,7 +209,6 @@ fn load_module(
     image.entry
 }
 
-#[cfg(target_arch = "riscv64")]
 fn spawn_worker(
     meta_untyped: u8,
     data_untyped: u8,
@@ -276,6 +272,8 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         || info.server_elf_len == 0
         || info.client_elf_va == 0
         || info.client_elf_len == 0
+        || info.sched_harts & 0b01 == 0
+        || info.sched_harts & !0b11 != 0
     {
         panic!("invalid BootInfo slots");
     }
@@ -480,8 +478,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     ));
     check(vifast_user::tcb_resume(fault4_tcb));
 
-    #[cfg(target_arch = "riscv64")]
-    {
+    if info.sched_harts & 0b10 != 0 {
         spawn_worker(
             meta_untyped,
             data_untyped,

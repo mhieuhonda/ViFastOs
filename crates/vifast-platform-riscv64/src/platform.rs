@@ -686,6 +686,10 @@ impl Platform for RiscvPlatform {
         }
     }
 
+    fn sched_harts() -> u32 {
+        0b11
+    }
+
     fn user_entries(hart: usize) -> usize {
         USER_ENTRIES
             .get(hart)

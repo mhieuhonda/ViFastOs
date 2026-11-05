@@ -141,6 +141,11 @@ pub trait Platform: Arch + Console {
         0
     }
 
+    /// Harts that can schedule ordinary user tasks.
+    fn sched_harts() -> u32 {
+        0b01
+    }
+
     fn resched_sent() -> usize {
         0
     }
@@ -237,6 +242,11 @@ fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
         pa,
         core::mem::offset_of!(BootInfo, client_elf_len),
         &info.client_elf_len.to_le_bytes(),
+    );
+    ops.copy_to_frame_at(
+        pa,
+        core::mem::offset_of!(BootInfo, sched_harts),
+        &info.sched_harts.to_le_bytes(),
     );
 }
 
@@ -635,6 +645,15 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     let Some(boot_info_pa) = kernel.frame(boot_info_frame).map(|frame| frame.pa as u64) else {
         A::exit(1);
     };
+    let sched_harts = A::sched_harts();
+    assert!(
+        sched_harts & 0b01 != 0,
+        "BootInfo must include the boot hart"
+    );
+    assert!(
+        sched_harts & !0b11 == 0,
+        "BootInfo advertises an unsupported hart"
+    );
     let boot_info = BootInfo {
         magic: BOOTINFO_MAGIC,
         version: BOOTINFO_VERSION,
@@ -651,6 +670,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         server_elf_len: image.server_elf.len() as u64,
         client_elf_va: vifast_abi::user_layout::ROOT_MODULE_CLIENT_VA as u64,
         client_elf_len: image.client_elf.len() as u64,
+        sched_harts,
     };
     write_bootinfo::<A>(boot_info_pa, &boot_info);
     if kernel

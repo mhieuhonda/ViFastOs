@@ -107,7 +107,7 @@ pub mod user_layout {
 }
 /// Magic value for the read-only boot information page (`VFBOOT01` LE).
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VFBOOT01");
-pub const BOOTINFO_VERSION: u32 = 1;
+pub const BOOTINFO_VERSION: u32 = 2;
 
 /// Fixed layout passed to the root task as its first argument.  All fields are
 /// integers so the ABI has no Rust layout surprises; `free_slot_start` is the
@@ -130,6 +130,8 @@ pub struct BootInfo {
     pub server_elf_len: u64,
     pub client_elf_va: u64,
     pub client_elf_len: u64,
+    /// Bitmask of harts that can run normal user tasks (bit 0 always set).
+    pub sched_harts: u32,
 }
 const _: () = assert!(core::mem::size_of::<BootInfo>() <= 4096);
 
