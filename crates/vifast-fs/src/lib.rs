@@ -111,6 +111,125 @@ pub trait BlockDev {
     }
 }
 
+/// Number of 512-byte blocks kept in the write-through cache.
+///
+/// Eight slots cost about 4 KiB and fit comfortably in the VFS server's
+/// static storage.  Keeping the cache small also makes eviction predictable:
+/// the wrapper uses first-free, then round-robin replacement.
+pub const CACHE_SLOTS: usize = 8;
+
+#[derive(Clone, Copy)]
+struct CacheSlot {
+    lba: u32,
+    data: [u8; BLOCK_SIZE],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub writes: u64,
+}
+
+/// A small write-through block cache.
+///
+/// Reads are cached, writes go to the underlying device first and then update
+/// the cache.  There are no dirty blocks, so journal ordering is unchanged.
+/// This is deliberately simpler than a write-back cache; the next step can add
+/// dirty tracking and explicit flushes once the block layer has a real barrier.
+pub struct CachedDev<D> {
+    inner: D,
+    slots: [Option<CacheSlot>; CACHE_SLOTS],
+    next: usize,
+    hits: u64,
+    misses: u64,
+    writes: u64,
+}
+
+impl<D> CachedDev<D> {
+    pub const fn new(inner: D) -> Self {
+        Self {
+            inner,
+            slots: [None; CACHE_SLOTS],
+            next: 0,
+            hits: 0,
+            misses: 0,
+            writes: 0,
+        }
+    }
+
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            writes: self.writes,
+        }
+    }
+
+    pub fn inner(&self) -> &D {
+        &self.inner
+    }
+
+    pub fn inner_mut(&mut self) -> &mut D {
+        &mut self.inner
+    }
+
+    /// Drop all cached blocks.  Used after formatting a device outside the
+    /// cache or after an external writer changes the disk.
+    pub fn clear(&mut self) {
+        self.slots = [None; CACHE_SLOTS];
+        self.next = 0;
+    }
+
+    fn insert(&mut self, lba: u32, data: &[u8; BLOCK_SIZE]) {
+        for slot in self.slots.iter_mut().flatten() {
+            if slot.lba == lba {
+                slot.data.copy_from_slice(data);
+                return;
+            }
+        }
+        let index = self
+            .slots
+            .iter()
+            .position(|slot| slot.is_none())
+            .unwrap_or_else(|| {
+                let index = self.next;
+                self.next = (self.next + 1) % CACHE_SLOTS;
+                index
+            });
+        self.slots[index] = Some(CacheSlot { lba, data: *data });
+    }
+}
+
+impl<D: BlockDev> BlockDev for CachedDev<D> {
+    fn read(&mut self, lba: u32, out: &mut [u8; BLOCK_SIZE]) -> Result<(), FsError> {
+        for slot in self.slots.iter().flatten() {
+            if slot.lba == lba {
+                out.copy_from_slice(&slot.data);
+                self.hits = self.hits.wrapping_add(1);
+                return Ok(());
+            }
+        }
+        let mut data = [0u8; BLOCK_SIZE];
+        self.inner.read(lba, &mut data)?;
+        out.copy_from_slice(&data);
+        self.insert(lba, &data);
+        self.misses = self.misses.wrapping_add(1);
+        Ok(())
+    }
+
+    fn write(&mut self, lba: u32, data: &[u8; BLOCK_SIZE]) -> Result<(), FsError> {
+        self.inner.write(lba, data)?;
+        self.insert(lba, data);
+        self.writes = self.writes.wrapping_add(1);
+        Ok(())
+    }
+
+    fn block_count(&self) -> u32 {
+        self.inner.block_count()
+    }
+}
+
 fn get_u16(data: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([data[off], data[off + 1]])
 }
@@ -436,6 +555,16 @@ impl<D: BlockDev> Fs<D> {
 
     pub fn replayed(&self) -> u8 {
         self.replay_status
+    }
+
+    /// Access the underlying device for cache statistics, explicit format, or
+    /// future flush operations.
+    pub fn dev(&self) -> &D {
+        &self.dev
+    }
+
+    pub fn dev_mut(&mut self) -> &mut D {
+        &mut self.dev
     }
 
     fn fsck_mark_block(
@@ -1713,6 +1842,34 @@ mod tests {
         }
     }
 
+    struct CountingDev {
+        inner: MemDev,
+        reads: usize,
+        writes: usize,
+    }
+    impl CountingDev {
+        fn new() -> Self {
+            Self {
+                inner: MemDev::new(),
+                reads: 0,
+                writes: 0,
+            }
+        }
+    }
+    impl BlockDev for CountingDev {
+        fn read(&mut self, lba: u32, out: &mut [u8; BLOCK_SIZE]) -> Result<(), FsError> {
+            self.reads += 1;
+            self.inner.read(lba, out)
+        }
+        fn write(&mut self, lba: u32, input: &[u8; BLOCK_SIZE]) -> Result<(), FsError> {
+            self.writes += 1;
+            self.inner.write(lba, input)
+        }
+        fn block_count(&self) -> u32 {
+            self.inner.block_count()
+        }
+    }
+
     struct CrashDev {
         data: Vec<u8>,
         writes: usize,
@@ -1747,6 +1904,60 @@ mod tests {
     }
     fn reopen(fs: &Fs<MemDev>) -> Fs<MemDev> {
         Fs::mount(fs.dev.clone()).unwrap()
+    }
+
+    #[test]
+    fn cached_device_hits_and_write_through() {
+        let mut cache = CachedDev::new(CountingDev::new());
+        let data = [0xab; BLOCK_SIZE];
+        cache.write(3, &data).unwrap();
+        assert_eq!(cache.inner().writes, 1);
+
+        let mut out = [0u8; BLOCK_SIZE];
+        cache.read(3, &mut out).unwrap();
+        assert_eq!(out, data);
+        assert_eq!(cache.stats().hits, 1);
+        assert_eq!(cache.stats().misses, 0);
+        assert_eq!(cache.inner().reads, 0);
+
+        cache.read(4, &mut out).unwrap();
+        assert_eq!(out, [0u8; BLOCK_SIZE]);
+        assert_eq!(cache.stats().hits, 1);
+        assert_eq!(cache.stats().misses, 1);
+        assert_eq!(cache.inner().reads, 1);
+    }
+
+    #[test]
+    fn cached_device_evicts_round_robin() {
+        let mut cache = CachedDev::new(CountingDev::new());
+        let mut out = [0u8; BLOCK_SIZE];
+        for lba in 0..CACHE_SLOTS as u32 {
+            cache.write(lba + 1, &[lba as u8; BLOCK_SIZE]).unwrap();
+        }
+        cache.read(1, &mut out).unwrap();
+        assert_eq!(out[0], 0);
+        assert_eq!(cache.stats().hits, 1);
+
+        // The next miss replaces slot 0 (LBA 1).
+        cache.read(CACHE_SLOTS as u32 + 1, &mut out).unwrap();
+        cache.read(1, &mut out).unwrap();
+        assert_eq!(cache.stats().misses, 2);
+    }
+
+    #[test]
+    fn cached_device_wraps_filesystem() {
+        let mut dev = CountingDev::new();
+        format(&mut dev).unwrap();
+        let mut fs = Fs::mount(CachedDev::new(dev)).unwrap();
+        let file = fs.create(b"/cache", 0, INODE_FILE).unwrap();
+        fs.write(file, 0, b"through-cache", 0).unwrap();
+
+        let mut out = [0u8; 13];
+        fs.read(file, 0, &mut out, 0).unwrap();
+        assert_eq!(&out, b"through-cache");
+        assert!(fs.dev().stats().hits > 0);
+        assert!(fs.dev().stats().writes > 0);
+        fs.fsck().unwrap();
     }
 
     #[test]

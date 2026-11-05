@@ -6,7 +6,7 @@ use core::panic::PanicInfo;
 use vifast_abi::user_layout::IPC_BUF_SERVER_VA;
 use vifast_abi::vfs;
 use vifast_abi::KError;
-use vifast_fs::{BlockDev, Fs, FsError, BLOCK_SIZE, INODE_DIR, INODE_FILE};
+use vifast_fs::{BlockDev, CachedDev, Fs, FsError, BLOCK_SIZE, INODE_DIR, INODE_FILE};
 
 #[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(include_str!("start_x86_64.S"));
@@ -46,6 +46,8 @@ impl BlockDev for ServerDev {
     }
 }
 
+type ServerFs = Fs<CachedDev<ServerDev>>;
+
 #[derive(Clone, Copy)]
 struct Fd {
     ino: u16,
@@ -61,7 +63,7 @@ const EMPTY_FD: Fd = Fd {
     used: false,
 };
 
-static mut FS: Fs<ServerDev> = Fs::empty(ServerDev);
+static mut FS: ServerFs = Fs::empty(CachedDev::new(ServerDev));
 static mut FDS: [Fd; FD_COUNT] = [EMPTY_FD; FD_COUNT];
 static mut DISK_OK: bool = false;
 static mut PERSISTED: bool = false;
@@ -71,7 +73,7 @@ fn write(bytes: &[u8]) {
     let _ = vifast_user::debug_write(bytes.as_ptr() as u64, bytes.len() as u64);
 }
 
-fn fs() -> &'static mut Fs<ServerDev> {
+fn fs() -> &'static mut ServerFs {
     unsafe { &mut *core::ptr::addr_of_mut!(FS) }
 }
 
@@ -174,12 +176,12 @@ fn init_fs() {
     let formatted = match first {
         Ok(()) => false,
         Err(FsError::Invalid) => {
-            let mut dev = ServerDev;
-            if vifast_fs::format(&mut dev).is_err() {
+            if vifast_fs::format(fs().dev_mut()).is_err() {
                 write(b"FS DISK RAM\n");
                 write(VFS_READY);
                 return;
             }
+            fs().dev_mut().clear();
             match fs().initialize() {
                 Ok(()) => true,
                 Err(_) => {
@@ -277,7 +279,7 @@ fn open_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
     }
 }
 
-fn fs_can_write(fs: &Fs<ServerDev>, ino: u16, uid: u16) -> bool {
+fn fs_can_write(fs: &ServerFs, ino: u16, uid: u16) -> bool {
     // The public FS write path enforces this; ask with a one-byte probe only
     // at open time by checking the inode metadata directly through stat.
     let _ = fs;

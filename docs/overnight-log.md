@@ -600,3 +600,11 @@ follow-up `62b31f4`.
 - Final: QEMU 10/10, 50/50 cả 3; mutation 5/5 RISC/x86; panic 5/5;
   handoff 10/10; persist 7 phase ×3; harness 336 case; 0 warning;
   headroom 392.624 B; Kernel 613.720 B.
+
+## 8.55 — VFS write-through block cache (vòng 21)
+
+- `vifast-fs`: thêm `CachedDev<D>` 8 slot x 512 B, write-through, thống kê
+  `hits/misses/writes`; clear cache sau format để không giữ superblock cũ.
+- VFS server dùng `Fs<CachedDev<ServerDev>>`; không đổi ABI/userland.
+- Host test mới: cache hit/write-through, eviction round-robin, bọc filesystem.
+- `cargo test -p vifast-fs`: 19/19; QEMU 3/3; persist 7 phase ×3; 0 warning.

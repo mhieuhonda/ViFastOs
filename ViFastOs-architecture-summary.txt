@@ -131,6 +131,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - c37982e feat: per-hart ready queues with work stealing
 - 925f633 feat: vfs bulk read and fs hard links
 - 36147fb feat: fs symlinks and object capacity headroom
+- 49de105 chore: normalize ViFastOs spelling
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -183,11 +184,11 @@ Test hiện tại:
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
-- `cargo test -p vifast-fs`: 16/16 PASS
+- `cargo test -p vifast-fs`: 19/19 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 347568 byte (`kernel_end=0x803ab250`)
+- RISC-V headroom: 343472 byte (`kernel_end=0x803ac250`)
 - `Kernel = 651352`, `Object = 4704`, `Tcb = 4656`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
@@ -748,6 +749,11 @@ User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
 - Block syscall 43/44 bắt buộc cap `ObjType::BlockDevice`; runtime cài cap
   vào root slot từ BootInfo v3, root chỉ copy cho server. Client thử
   BlockWrite không cap và in `BLOCK DENIED OK`.
+- Server bọc block device trong `CachedDev<ServerDev>`: cache write-through
+  8 slot x 512 byte (khoảng 4 KiB). Đọc hit không xuống thiết bị; ghi xuống
+  thiết bị trước rồi cập nhật cache nên không có dirty block và thứ tự journal
+  không đổi. Thống kê `hits/misses/writes` có test host; cache được clear sau
+  format để không giữ superblock cũ.
 - Server tự format đĩa trắng (`FS FORMAT OK`), mount đĩa hợp lệ
   (`FS PERSIST OK`), migrate `VF01` sang `/scratch` (`FS MIGRATE OK`), và
   replay/torn journal (`FS RECOVER OK (replayed=1|0)`). FSCK sau demo in
