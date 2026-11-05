@@ -27,6 +27,7 @@ MARKERS = {
     "syscalls": ("### BEGIN GENERATED syscalls", "### END GENERATED syscalls"),
     "tests": ("### BEGIN GENERATED tests", "### END GENERATED tests"),
     "pass": ("### BEGIN GENERATED pass", "### END GENERATED pass"),
+    "status": ("### BEGIN GENERATED status", "### END GENERATED status"),
 }
 
 
@@ -53,7 +54,22 @@ def syscalls() -> str:
     entries = re.findall(r"^\s*(\w+)\s*=\s*(\d+)\s*,", match.group(1), re.M)
     if len(entries) < 40:
         raise SystemExit("gen-docs: SyscallId parse unexpectedly short")
-    return "\n".join(f"{number} {name}" for name, number in entries)
+    status_match = re.search(r"pub const SYSCALL_STATUS:.*?= &\[(.*?)\n\];", source, re.S)
+    if not status_match:
+        raise SystemExit("gen-docs: SYSCALL_STATUS table not found")
+    status = {
+        name: value == "true"
+        for name, value in re.findall(
+            r"\(SyscallId::(\w+),\s*(true|false)\)", status_match.group(1)
+        )
+    }
+    lines = []
+    for name, number in entries:
+        if name not in status:
+            raise SystemExit(f"gen-docs: syscall {name} missing status")
+        label = "implemented" if status[name] else "placeholder (NotImplemented)"
+        lines.append(f"{number} {name} — {label}")
+    return "\n".join(lines)
 
 
 def build_results() -> str:
@@ -79,14 +95,6 @@ def build_results() -> str:
     for package in PACKAGES:
         passed, failed = counts[package]
         lines.append(f"- `cargo test -p {package}`: {passed}/{passed + failed} PASS")
-    match = re.search(
-        r"RISC-V kernel_end=(0x[0-9a-f]+|\d+) limit=\S+ headroom=(\d+)", text
-    )
-    if not match:
-        raise SystemExit("gen-docs: build log missing RISC-V headroom")
-    lines.append(
-        f"- RISC-V headroom: {match.group(2)} byte (`kernel_end={match.group(1)}`)"
-    )
     return "\n".join(lines)
 
 
@@ -114,12 +122,48 @@ def pass_conditions() -> str:
     return "\n".join(lines)
 
 
+def qemu_status() -> str:
+    result_path = ROOT / "target" / "vifast-qemu-last.json"
+    if not result_path.exists():
+        raise SystemExit(
+            "gen-docs: target/vifast-qemu-last.json missing; run test-qemu.py first"
+        )
+    import json
+
+    data = json.loads(result_path.read_text())
+    results = data.get("results", {})
+    if not results:
+        raise SystemExit("gen-docs: QEMU result file has no results")
+    pieces = [
+        f"{name} {value[0]}/{value[1]}"
+        for name, value in results.items()
+        if isinstance(value, list) and len(value) == 2
+    ]
+    build = BUILD_LOG.read_text()
+    match = re.search(
+        r"RISC-V kernel_end=(0x[0-9a-f]+|\d+) limit=\S+ headroom=(\d+)", build
+    )
+    if not match:
+        raise SystemExit("gen-docs: build log missing RISC-V headroom")
+    end = match.group(1)
+    if not end.startswith("0x"):
+        end = hex(int(end))
+    return "\n".join(
+        [
+            f"- RISC-V headroom: {match.group(2)} byte (`kernel_end={end}`)",
+            f"- QEMU lần chạy gần nhất (`--repeat {data.get('repeat', '?')}`): "
+            + ", ".join(pieces),
+        ]
+    )
+
+
 def generated() -> dict[str, str]:
     return {
         "commits": git_commits(),
         "syscalls": syscalls(),
         "tests": build_results(),
         "pass": pass_conditions(),
+        "status": qemu_status(),
     }
 
 

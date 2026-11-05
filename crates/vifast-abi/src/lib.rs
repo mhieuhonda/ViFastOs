@@ -495,6 +495,57 @@ pub enum SyscallId {
     BlockWrite = 44,
 }
 
+/// Dispatch status for every ABI number.  `true` means the portable kernel
+/// has a real handler; `false` means the number is reserved/placeholder and
+/// reaches the `NotImplemented` fallback.  `gen-docs.py` reads this table.
+pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
+    (SyscallId::Send, true),
+    (SyscallId::Call, true),
+    (SyscallId::Recv, true),
+    (SyscallId::Reply, true),
+    (SyscallId::ReplyRecv, true),
+    (SyscallId::Signal, true),
+    (SyscallId::Wait, true),
+    (SyscallId::Poll, true),
+    (SyscallId::Yield, true),
+    (SyscallId::Retype, true),
+    (SyscallId::CapCopy, true),
+    (SyscallId::CapMint, false),
+    (SyscallId::CNodeMint, false),
+    (SyscallId::CapDelete, false),
+    (SyscallId::CapRevoke, true),
+    (SyscallId::TcbConfigure, true),
+    (SyscallId::TcbResume, true),
+    (SyscallId::TcbSuspend, false),
+    (SyscallId::TcbRestart, false),
+    (SyscallId::TcbSetPriority, false),
+    (SyscallId::TcbSetAffinity, true),
+    (SyscallId::TcbBindNotification, false),
+    (SyscallId::SchedContextConfigure, false),
+    (SyscallId::SchedContextBind, false),
+    (SyscallId::PageTableMap, true),
+    (SyscallId::FrameMap, true),
+    (SyscallId::FrameUnmap, true),
+    (SyscallId::IoMap, true),
+    (SyscallId::IoUnmap, true),
+    (SyscallId::IrqGet, false),
+    (SyscallId::IrqSetNotification, false),
+    (SyscallId::IrqAck, false),
+    (SyscallId::DebugWrite, true),
+    (SyscallId::GetTime, true),
+    (SyscallId::Exit, true),
+    (SyscallId::Open, true),
+    (SyscallId::Read, true),
+    (SyscallId::Write, true),
+    (SyscallId::Close, true),
+    (SyscallId::Stat, true),
+    (SyscallId::Seek, true),
+    (SyscallId::TcbSetIpcBuffer, true),
+    (SyscallId::FrameWrite, true),
+    (SyscallId::BlockRead, true),
+    (SyscallId::BlockWrite, true),
+];
+
 /// Generic register arguments for a syscall.  Architecture ports decode
 /// `SyscallId` + these words; the kernel validates them.
 #[repr(C)]

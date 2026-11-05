@@ -98,6 +98,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - cce094a feat: run tasks on aarch64 secondary cpu
 - ec090c9 chore: generate summary sections from abi, harness and git
 - 17aee2a test: restore and negative-test every harness condition
+- d8424e5 test: prove timer wakes idle secondary harts after workers block
+- b122c05 test: inject boot hart handoff on riscv
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit cce094a): RISC-V 50/50 sau khi xử lý boot hart
@@ -140,22 +142,22 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 87/87 PASS
+- `cargo test -p vifast-kernel`: 88/88 PASS
 - `cargo test -p vifast-arch`: 5/5 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
-- RISC-V headroom: 458288 byte (`kernel_end=2151219664`)
 ### END GENERATED tests
+### BEGIN GENERATED status
+- RISC-V headroom: 454192 byte (`kernel_end=0x803911d0`)
+- QEMU lần chạy gần nhất (`--repeat 10`): riscv64 10/10, aarch64 10/10, x86_64 10/10
+### END GENERATED status
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
-- root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
-  headroom 458.336 B dưới 0x80400000
+- root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
-- python3 scripts/test-qemu.py: 3/3 PASS
-- Chạy lặp 3 lần liên tiếp: RISC-V, AArch64, x86_64 đều PASS
 
 Output tiêu biểu:
 - SELFTEST PASS
@@ -741,51 +743,51 @@ Giới hạn:
 -------------------------
 Số syscall chính:
 ### BEGIN GENERATED syscalls
-0 Send
-1 Call
-2 Recv
-3 Reply
-4 ReplyRecv
-5 Signal
-6 Wait
-7 Poll
-8 Yield
-9 Retype
-10 CapCopy
-11 CapMint
-12 CNodeMint
-13 CapDelete
-14 CapRevoke
-15 TcbConfigure
-16 TcbResume
-17 TcbSuspend
-18 TcbRestart
-19 TcbSetPriority
-20 TcbSetAffinity
-21 TcbBindNotification
-22 SchedContextConfigure
-23 SchedContextBind
-24 PageTableMap
-25 FrameMap
-26 FrameUnmap
-27 IoMap
-28 IoUnmap
-29 IrqGet
-30 IrqSetNotification
-31 IrqAck
-32 DebugWrite
-33 GetTime
-34 Exit
-35 Open
-36 Read
-37 Write
-38 Close
-39 Stat
-40 Seek
-41 TcbSetIpcBuffer
-42 FrameWrite
-43 BlockRead
-44 BlockWrite
+0 Send — implemented
+1 Call — implemented
+2 Recv — implemented
+3 Reply — implemented
+4 ReplyRecv — implemented
+5 Signal — implemented
+6 Wait — implemented
+7 Poll — implemented
+8 Yield — implemented
+9 Retype — implemented
+10 CapCopy — implemented
+11 CapMint — placeholder (NotImplemented)
+12 CNodeMint — placeholder (NotImplemented)
+13 CapDelete — placeholder (NotImplemented)
+14 CapRevoke — implemented
+15 TcbConfigure — implemented
+16 TcbResume — implemented
+17 TcbSuspend — placeholder (NotImplemented)
+18 TcbRestart — placeholder (NotImplemented)
+19 TcbSetPriority — placeholder (NotImplemented)
+20 TcbSetAffinity — implemented
+21 TcbBindNotification — placeholder (NotImplemented)
+22 SchedContextConfigure — placeholder (NotImplemented)
+23 SchedContextBind — placeholder (NotImplemented)
+24 PageTableMap — implemented
+25 FrameMap — implemented
+26 FrameUnmap — implemented
+27 IoMap — implemented
+28 IoUnmap — implemented
+29 IrqGet — placeholder (NotImplemented)
+30 IrqSetNotification — placeholder (NotImplemented)
+31 IrqAck — placeholder (NotImplemented)
+32 DebugWrite — implemented
+33 GetTime — implemented
+34 Exit — implemented
+35 Open — implemented
+36 Read — implemented
+37 Write — implemented
+38 Close — implemented
+39 Stat — implemented
+40 Seek — implemented
+41 TcbSetIpcBuffer — implemented
+42 FrameWrite — implemented
+43 BlockRead — implemented
+44 BlockWrite — implemented
 ### END GENERATED syscalls
 
 
@@ -911,12 +913,12 @@ Cap transfer:
   `ic ivau` + `dsb ish` đã broadcast.
 - Mailbox maintenance đối xứng theo hart đích: `MAINT_SEQ/ACK/KIND`, TLB,
   I-cache, reschedule; sender giữ BKL và bỏ qua hart chưa online.
-- AArch64 CPU1 giữ DAIF.I=1, GIC banked/timer riêng, idle WFI và polling
-  `GICC_IAR`; `SMP TIMER OK`, `SMP IDLE OK`, `SMP SCHED OK`, worker qua SGI.
 - Hart 1 RISC-V có `SCHED_READY`, timer SBI, vòng idle lấy BKL → `pick_on(1)`
   → nhả BKL → WFI khi SIE=0 → đọc `sip`; timer/IPI wakeups in `SMP IDLE OK`.
 - Hai worker affinity hart 1, stack riêng, nhận diện qua endpoint label;
-  in `SMP WORKERS OK (a=50, b=50)` và `SMP SCHED OK (hart0, hart1, resched)`;
+  in `SMP WORKERS OK (a=50, b=50)` và `SMP SCHED OK (hart0=N, hart1=M,
+  resched_sent=S, resched_wake=W, idle_entries=I)`; post-worker timer qua
+  `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)`.
   affinity qua syscall 20 `TcbSetAffinity`.
 - WFI với SIE=0 (sie.SSIE|STIE bật) đã ổn định 10/10 trong vòng 07; không mở
   interrupt trong kernel (D1).
@@ -1245,8 +1247,8 @@ Exit code:
 - Hart 0 scheduler; RISC-V/AArch64 hart 1 chạy hai worker; x86 hart phụ
   chưa có scheduler user task.
 - BKL ticket + RAII đã bọc trap/syscall/IRQ + x86 fault/page-fault;
-  đã assert nhả trước user và IRQ tắt khi giữ. RISC-V hart 1 đã chọn task;
-  AArch64/x86 chưa có scheduler đa hart.
+  đã assert nhả trước user và IRQ tắt khi giữ. RISC-V/AArch64 hart 1 đã chọn
+  task và chạy worker; x86 chưa có scheduler đa hart.
 - SMP full TLB shootdown đã có qua SBI IPI/GICv2 SGI; remote I-cache fence
   RISC-V đã có qua maintenance IPI, AArch64 broadcast; còn per-VA TLB shootdown.
 - x86_64 chưa boot AP.
@@ -1324,7 +1326,8 @@ C. SMP
 1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI.
 2. Per-hart context/runqueue.
 3. BKL trước, lock mịn sau.
-4. IPI wakeup/reschedule — RISC-V reschedule IPI đã chạy; AArch64 chưa.
+4. IPI wakeup/reschedule — RISC-V IPI và AArch64 SGI đã chạy; chỉ gửi khi
+   hart đích idle.
 5. TLB shootdown đa hart — full shootdown đã có; per-VA chưa.
 6. Timer đa hart.
 
@@ -1505,6 +1508,9 @@ E. Desktop / Space
 53. Vòng 09: AArch64 CPU1 GIC banked/timer + masked WFI; `SMP TIMER OK`
     và `SMP IDLE OK`; R5: hủy tái hiện 1.0 vì đường DAIF.I=1 trong `smp.S`
     đã ổn định liên tục.
+54. Vòng 10: D1 áp dụng cho cả RISC-V/AArch64; xử lý boot hart bất kỳ,
+    runqueue hart phụ rỗng không exit, per-hart BKL owner, CPACR CPU1,
+    post-worker idle timer; docs generator và harness spec.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
@@ -1552,5 +1558,5 @@ task có VSpace riêng; client dùng Untyped con. 8.4/8.4b đã xong: runtime c�
 Rust ELF qua BootInfo staging, root loader nạp vào VSpace riêng; 8.5 đã có VFS
 IPC server bước đầu. Đã có block cả 3 kiến trúc, persistence test hermetic, BKL ticket + per-CPU
 an toàn, current theo hart, ASID/PCID, IPI/TLB full shootdown và remote fence.i.
-Khoảng trống lớn tiếp theo là AArch64 hart phụ scheduler, x86 AP, FS v2,
-per-VA TLB, hardware IOMMU, network/input và compositor/ViFastKey.
+Khoảng trống lớn tiếp theo là x86 AP/ACPI, FS v2, per-VA TLB, hardware
+IOMMU, network/input và compositor/ViFastKey.

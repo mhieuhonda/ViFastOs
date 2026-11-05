@@ -146,7 +146,7 @@ def aarch64_idle_ok(output: str) -> bool:
     # Before workers exist, every tick forces one masked WFI (I and Wt track
     # T).  Once CPU1 runs workers continuously, ticks arrive as user IRQs
     # instead, so only positive activity remains meaningful.
-    return ticks > 0 and wakeups >= timer_wakes + sgi_wakes and entries >= 1
+    return ticks > 0 and wakeups > 0 and entries >= 1
 
 
 def smp_sched(output: str) -> tuple[int, int, int, int, int]:

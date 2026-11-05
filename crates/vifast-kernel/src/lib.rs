@@ -7886,4 +7886,24 @@ mod tests {
         assert!(kernel.lookup_cap(root, 2, None, Rights::NONE).is_err());
         assert!(kernel.lookup_cap(root, 3, None, Rights::NONE).is_err());
     }
+    #[test]
+    fn syscall_status_matches_notimplemented_fallback() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        for (id, implemented) in SYSCALL_STATUS {
+            let action = kernel.user_syscall(root, *id as u64, 0, 0, 0, 0, 0, 0);
+            let not_implemented = matches!(
+                action,
+                UserAction::Return {
+                    error: KError::NotImplemented,
+                    ..
+                }
+            );
+            assert_eq!(
+                not_implemented, !*implemented,
+                "syscall {:?} status does not match dispatch",
+                id
+            );
+        }
+    }
 }

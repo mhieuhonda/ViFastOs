@@ -110,6 +110,19 @@ def main() -> int:
                 rc,
             )
 
+    feature_base = fixture("riscv64") + "BOOT HANDOFF OK (from=1)\n"
+    cases += 1
+    if not spec.accept(
+        "riscv64", feature_base, 0, feature_mode="test-boot-handoff"
+    ):
+        failures.append("riscv64: feature handoff accepted")
+    cases += 1
+    if spec.accept("riscv64", fixture("riscv64"), 0, feature_mode="test-boot-handoff"):
+        failures.append("riscv64: feature handoff missing")
+    cases += 1
+    if spec.accept("riscv64", feature_base, 0):
+        failures.append("riscv64: normal run accepted handoff marker")
+
     if failures:
         print("harness negative tests FAILED:")
         for failure in failures:

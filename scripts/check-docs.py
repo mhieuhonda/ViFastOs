@@ -39,6 +39,7 @@ def main() -> int:
         "### BEGIN GENERATED syscalls",
         "### BEGIN GENERATED tests",
         "### BEGIN GENERATED pass",
+        "### BEGIN GENERATED status",
     ]
     for marker in required_markers:
         if marker not in summary:
@@ -57,6 +58,11 @@ def main() -> int:
         "maintenance-only",
         "resched=R",
         "AArch64/x86 hart phụ",
+        "AArch64 hart phụ scheduler",
+        "AArch64/x86 chưa có scheduler",
+        "AArch64 chưa",
+        "(hart0, hart1, resched)",
+        "458.336",
     ]
     for value in forbidden:
         if value in summary or value in handoff:
