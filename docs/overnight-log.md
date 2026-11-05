@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `d503fe373f388951d550bae9f13bfd8e0c6a1d7c8dc2f89213b54ab041259201`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `2929d30982f74218d6dcdca183811a26c1f80fb0c74b5ae4c0d2540a9a529d58`.
 
 ---
 
@@ -211,6 +211,14 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.27 — SMP hardening, preempt proof, panic halt (vòng 16)
+
+- `7196a4e`: BKL owner theo hart + assert nhả khóa; AP mask LINT0/1 và panic `AP PIC IRQ`.
+- Worker c busy `GetTime`, `SMP PREEMPT OK` U/P; W chỉ resched IPI; 50/50 cả 3.
+- Panic-halt IPI: RISC SBI, AArch SGI2, x86 LAPIC 0x32; feature 5/5 mỗi kiến trúc.
+- `BKL STATS` ở test-exit; harness 237 case âm; docs R1/R7.
+- QEMU 10/10 all, x86/RISC/AArch 50/50; handoff 10/10; persist 3/3.
 
 ## 8.26 — x86 AP scheduler/worker, D4, stage (vòng 15)
 

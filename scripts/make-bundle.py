@@ -36,6 +36,22 @@ def git_value(*args: str, default: str = "unknown") -> str:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return default
 
+def latest_code_commit() -> str:
+    try:
+        log = subprocess.check_output(
+            ["git", "log", "--format=%h %s", "-n", "80"],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        for line in log.splitlines():
+            subject = line.split(" ", 1)[1] if " " in line else ""
+            if not subject.startswith("docs:"):
+                return line.split(" ", 1)[0]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return "unknown"
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -76,7 +92,7 @@ def main() -> int:
         )
         return 1
 
-    code_commit = git_value("rev-parse", "--short=7", "HEAD")
+    code_commit = latest_code_commit()
     test_summary = args.test_summary or "see the report above"
     headroom = args.headroom or "see the report above"
 

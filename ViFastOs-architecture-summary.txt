@@ -113,11 +113,12 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6ed6cde fix: single sipi sequence, per-cpu tss/gs on x86 ap, real lapic ipi
 - 03cb048 feat: x86 ap lapic timer and idle via irr polling
 - 58016c8 feat: x86 ap scheduler workers and trampoline stages
+- 7196a4e feat: smp hardening bkl owner ap preempt panic halt stats
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit 58016c8): x86 AP scheduler + hai worker, TSC/PIT
-calibration, LAPIC timer 100 Hz, D4 idle `sti; hlt; cli`, trampoline stage 1..4;
-QEMU 10/10 cả 3, x86 50/50; persistent
+Cập nhật code gần nhất (commit 7196a4e): BKL owner theo hart, AP mask LINT;
+worker c busy chứng minh preempt; panic-halt đa hart; BKL stats; x86 50/50 và
+QEMU 10/10 cả 3 kiến trúc.
 VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
@@ -152,12 +153,12 @@ hardening và vifast-user.
 Đã chạy được trên QEMU:
 - RISC-V64 (OpenSBI, -smp 2)
 - AArch64 (QEMU virt, GICv2, -smp 2)
-- x86_64 (OVMF/UEFI, -smp 2; AP scheduler + hai worker)
+- x86_64 (OVMF/UEFI, -smp 2; AP scheduler + ba worker)
 
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-kernel`: 88/88 PASS
-- `cargo test -p vifast-arch`: 5/5 PASS
+- `cargo test -p vifast-arch`: 6/6 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
@@ -166,7 +167,7 @@ Test hiện tại:
 ### END GENERATED tests
 ### BEGIN GENERATED status
 - RISC-V headroom: 454192 byte (`kernel_end=0x803911d0`)
-- QEMU lần chạy gần nhất (`--repeat 10`): riscv64 10/10, aarch64 10/10, x86_64 10/10
+- QEMU lần chạy gần nhất (`--repeat 1`): aarch64 1/1
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -178,15 +179,17 @@ Output tiêu biểu:
 - SELFTEST PASS
 - SMP OK (harts=2, ipi=1) trên cả RISC-V/AArch64/x86_64
 - ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000), LAPIC OK (id=0) trên x86_64
-- SMP OK (harts=2, ipi=1) trên x86_64
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
   "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "IOMMU OK",
   "SMP OK (... ipi=1)", "SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)",
-  "SMP TIMER OK (hart1_ticks=T)" trên AArch64/x86_64,
+  "SMP TIMER OK (hart1_ticks=T)" trên cả 3 kiến trúc,
   "SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)",
-  "SMP WORKERS OK (a=50, b=50)", "PERCPU CLOBBER OK",
+  "SMP PREEMPT OK (user_ticks=U, preempts=P)",
+  "SMP PREEMPT OK (user_ticks=U, preempts=P)",
+  "SMP WORKERS OK (a=50, b=50, c=1)", "BKL STATS (h0_acq=..., h1_acq=...)",
+  "PERCPU CLOBBER OK",
   "BLOCK OK"/"FS DISK OK", "PREEMPT OK", "ROOT SWITCH n>1";
   persistence do `scripts/test-persist.py` kiểm tra.
 - user layout chung: boot mappings tại 0x0000_0010_0000_0000 (64 GiB);
@@ -395,30 +398,7 @@ vifast-kernel-riscv64 / aarch64 / x86_64-uefi
 
 5. KÍCH THƯỚC / ĐỘ TÁCH LỚP HIỆN TẠI
 -------------------------------------
-main.rs binary:
-- RISC-V: 81 dòng
-- AArch64: 80 dòng
-- x86_64 UEFI: 144 dòng
-
-platform.rs:
-- RISC-V: 572 dòng
-- AArch64: 657 dòng
-- x86_64: 802 dòng
-
-runtime:
-- 662 dòng
-
-vifast-user:
-- khoảng 208 dòng
-
-vifast-elf:
-- 526 dòng, no_std, không unsafe
-
-vifast-root:
-- 300 dòng Rust + 31 dòng start asm; ELF build 3 target
-
-vifast-kernel:
-- khoảng 7000 dòng, không còn dependency vifast-arch
+Số dòng nguồn thay đổi liên tục; không ghi số viết tay trong tài liệu.
 
 Kích thước Kernel (host test):
 - Kernel = 597624 bytes
@@ -610,7 +590,7 @@ Scheduler:
 - Block state không nằm trong runqueue.
 - Runtime lưu/nạp Platform::Context.
 - Timer 100 Hz; binary test bật feature test-exit để sau 20 tick in PREEMPT OK và exit QEMU.
-- Cả RISC-V, AArch64 và x86_64 cho hart phụ chạy hai worker.
+- Cả RISC-V, AArch64 và x86_64 cho hart phụ chạy ba worker.
 - Worker stack A/B: `CODE_VA+0xd000` / `+0xe000`, mỗi stack 1 page; ABI
   const assert không chồng nhau và trên `DATA_VA`. Root tạo worker, cấp TCB,
   frame, endpoint cap slot 1, affinity `0b10`.
@@ -709,7 +689,7 @@ x86_64:
   cho identity 0..1 GiB; user 64..128 GiB dùng PDPT[64..127] trỏ bảng riêng.
 - SMEP/SMAP bật nếu CPUID hỗ trợ; EFER.NXE + tách 2 MiB để đánh dấu NX cho static data kernel (S2).
 - I-cache và D-cache coherent; sync_icache là no-op.
-- Cả ba kiến trúc cho CPU phụ chạy scheduler + worker; x86 dùng D4 idle
+- Cả ba kiến trúc cho CPU phụ chạy scheduler + ba worker; x86 dùng D4 idle
   `sti; hlt; cli` và LAPIC timer/IPI vector.
 
 10. VFS / RAMFS
@@ -935,7 +915,7 @@ Cap transfer:
 - Hart 1 RISC-V có `SCHED_READY`, timer SBI, vòng idle lấy BKL → `pick_on(1)`
   → nhả BKL → WFI khi SIE=0 → đọc `sip`; timer/IPI wakeups in `SMP IDLE OK`.
 - Hai worker affinity hart 1, stack riêng, nhận diện qua endpoint label;
-  in `SMP WORKERS OK (a=50, b=50)` và `SMP SCHED OK (hart0=N, hart1=M,
+  in `SMP WORKERS OK (a=50, b=50, c=1)` và `SMP SCHED OK (hart0=N, hart1=M,
   resched_sent=S, resched_wake=W, idle_entries=I)`; post-worker timer qua
   `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)`.
   affinity qua syscall 20 `TcbSetAffinity`.
@@ -945,7 +925,7 @@ Cap transfer:
   KERNEL_STORAGE, FILES/FILE_COUNT, VirtIO QUEUE/BASE/READY.
   Chúng được bảo vệ bởi BKL khi đi qua trap, nhưng chưa phải per-CPU;
   server/virtio cần khóa riêng khi SMP.
-- Chưa có per-hart runqueue, timer đa hart, per-VA TLB shootdown;
+- Chưa có per-hart runqueue, per-VA TLB shootdown;
   panic không dừng hart khác (R5).
 
 14. TEST VÀ TIÊU CHÍ PASS
@@ -1095,6 +1075,7 @@ Cấm xuất hiện:
 - `STALL` — forbidden
 - `BOOT HANDOFF FAIL` — forbidden
 - `KERNEL IRQ OUTSIDE IDLE` — forbidden
+- `AP PIC IRQ` — forbidden
 
 Exit code:
 - riscv64: 0
@@ -1105,26 +1086,31 @@ Theo kiến trúc:
 - riscv64:
   - `SMP OK` — both harts online
   - `ipi=1` — maintenance IPI acknowledged
+  - `SMP TIMER OK (hart1_ticks=T)` — secondary timer ran, exactly once
   - `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` — idle accounting, exactly once
+  - `SMP PREEMPT OK (user_ticks=U, preempts=P)` — secondary timer preempted a busy user task, exactly once
   - `SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)` — secondary scheduling, exactly once
-  - `SMP WORKERS OK (a=50, b=50)` — both secondary workers completed
+  - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
-  - N > 1, M >= 100, W > 0, S <= I
+  - N > 1, M >= 100, W > 0, W <= S, S <= I
+  - U >= 3, P >= 1, U <= T
   - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 - aarch64:
   - `SMP OK` — both CPUs online
   - `ipi=1` — maintenance IPI acknowledged
   - `SMP TIMER OK (hart1_ticks=T)` — secondary timer ran, exactly once
   - `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` — idle accounting, exactly once
+  - `SMP PREEMPT OK (user_ticks=U, preempts=P)` — secondary timer preempted a busy user task, exactly once
   - `SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)` — secondary scheduling, exactly once
-  - `SMP WORKERS OK (a=50, b=50)` — both secondary workers completed
+  - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
   - T > 0, I >= 1
-  - N > 1, M >= 100, W > 0, S <= I
+  - N > 1, M >= 100, W > 0, W <= S, S <= I
+  - U >= 3, P >= 1, U <= T
   - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 - x86_64:
   - `KERNEL DATA NX OK` — kernel data is non-executable
@@ -1140,7 +1126,7 @@ Theo kiến trúc:
   - `SMP TIMER RATE (ap=T, bsp=B)` — AP and BSP timer rates agree, exactly once
   - `SMP IPI COUNT (sent=X, seen=Y)` — AP maintenance IPI accounting, exactly once
   - `SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)` — AP scheduling, exactly once
-  - `SMP WORKERS OK (a=50, b=50)` — both AP workers completed
+  - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker AP idle proof
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
@@ -1148,7 +1134,8 @@ Theo kiến trúc:
   - T > 0, I >= 1
   - B/2 <= T <= 2B, B >= 5
   - 1 <= Y <= X, Wt <= T, Ws <= Y
-  - N > 1, M >= 100, W > 0, S <= I
+  - N > 1, M >= 100, W > 0, W <= S, S <= I
+  - U >= 3, P >= 1, U <= T
   - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 
 Thứ tự bắt buộc:
@@ -1288,14 +1275,14 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
-- Cả ba kiến trúc có scheduler trên CPU phụ và hai worker; x86 AP dùng BKL +
+- Cả ba kiến trúc có scheduler trên CPU phụ và ba worker; x86 AP dùng BKL +
   `pick_on(1)`, timer LAPIC 100 Hz, D4 idle `sti; hlt; cli`.
-- BKL ticket + RAII bọc trap/syscall/IRQ + x86 fault/page-fault; x86 không
-  dùng `is_held` toàn cục làm assert sau IRQ vì AP có thể đang giữ ticket.
+- BKL ticket + RAII bọc trap/syscall/IRQ + x86 fault/page-fault; owner theo
+  hart, assert nhả khóa trước user dùng `held_by(hart)`.
 - SMP full TLB shootdown đã có qua SBI IPI/GICv2 SGI; remote I-cache fence
   RISC-V đã có qua maintenance IPI, AArch64 broadcast; còn per-VA TLB shootdown.
-- x86 IRQ0 legacy có thể broadcast tới AP; AP ack PIC và bỏ qua, không đi vào
-  scheduler.
+- x86 LINT0/LINT1 của AP bị mask; nếu AP vẫn nhận vector PIC thì panic
+  `AP PIC IRQ` thay vì ack hộ BSP.
 - Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
   chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
 - Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
@@ -1370,7 +1357,7 @@ B. Bộ nhớ
 
 C. SMP
 1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI — đã xong scheduler/worker;
-   scheduler/user trên AP là bước tiếp theo.
+   bước tiếp theo là per-hart runqueue/TLB theo VA.
 2. Per-hart context/runqueue.
 3. BKL trước, lock mịn sau.
 4. IPI wakeup/reschedule — RISC-V IPI và AArch64 SGI đã chạy; chỉ gửi khi
@@ -1397,7 +1384,7 @@ E. Desktop / Space
 1. Ưu tiên userland/ELF trước SMP.
 2. Giữ Platform trait; có thể tách vifast-platform-api sau.
 3. Chuyển VSpace động khi làm ELF loader — đã xong ở Bước 4.
-4. x86 AP đi theo ACPI MADT + LAPIC/SIPI.
+4. x86 AP đi theo ACPI MADT + LAPIC/SIPI; D4 giữ idle `sti; hlt; cli`.
 5. Dùng BKL trước, tối ưu lock mịn sau khi đo tranh chấp.
 6. FS chuyển ra user space khi có IPC buffer; ramfs kernel chỉ là tạm
    (VFS IPC bước đầu đã chạy, kernel ramfs chỉ còn fallback/selftest).
@@ -1501,7 +1488,7 @@ E. Desktop / Space
     bước tạo/revoke Untyped con.
 40. 7.1c: PageTableOps::sync_icache(pa, size) được gọi khi mapping mới có EXEC.
     RISC-V fence.i; AArch64 dc cvau/dsb ish/ic ivau/dsb ish/isb; x86 no-op.
-    Remote fence/IPI cho SMP đã có trên RISC-V/AArch64; x86 sẽ theo D2.
+    Remote fence/IPI cho SMP đã có trên cả 3 kiến trúc; x86 dùng D4.
     Bộ đếm mapped_w/mapped_x dùng checked_add và trả OutOfMemory khi tràn u16.
 41. 7.2: Untyped con dùng `reserved` của cha để giữ quota object; điều kiện
     `objects + reserved + child_max_objects + 1 <= max_objects`. Con lấy vùng
@@ -1575,6 +1562,10 @@ E. Desktop / Space
     giữ đường preempt hiện có. Cấm poll IRR để xử lý interrupt.
 62. Vòng 15: Task 1 IRR diag, Task 2 TSC/PIT + LAPIC timer calibrated + D4,
     Task 3 BKL/`pick_on(1)` AP, Task 4 worker AP, Task 5 stage trampoline.
+63. Vòng 15 (đóng): IRR DIAG không kết luận vì mâu thuẫn SDM/số liệu vòng 14;
+    D3 đã hủy, D4 giữ nguyên.
+64. Vòng 16: BKL owner theo hart + assert nhả khóa; mask LINT AP; worker c
+    busy chứng minh preempt; panic-halt đa hart; BKL stats; docs R1/R7.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
@@ -1627,5 +1618,5 @@ task có VSpace riêng; client dùng Untyped con. 8.4/8.4b đã xong: runtime c�
 Rust ELF qua BootInfo staging, root loader nạp vào VSpace riêng; 8.5 đã có VFS
 IPC server bước đầu. Đã có block cả 3 kiến trúc, persistence test hermetic, BKL ticket + per-CPU
 an toàn, current theo hart, ASID/PCID, IPI/TLB full shootdown và remote fence.i.
-Khoảng trống lớn tiếp theo là x86 AP scheduler/user, FS v2, per-VA TLB,
-hardware IOMMU, network/input và compositor/ViFastKey.
+Khoảng trống tiếp theo, theo thứ tự: FS v2, per-VA TLB shootdown, hardware
+IOMMU, network/input, compositor/ViFastKey.
