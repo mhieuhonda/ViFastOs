@@ -68,6 +68,11 @@ static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_NONE_WAKES: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_WAIT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+static POST_STARTED: AtomicBool = AtomicBool::new(false);
+static POST_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static POST_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
+static POST_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 const MAINT_TLB: u32 = 1;
 const MAINT_ICACHE: u32 = 2;
 static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
@@ -351,6 +356,9 @@ fn service_gic() -> (bool, bool) {
         if irq == TIMER_IRQ {
             saw_timer = true;
             SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+            if POST_STARTED.load(Ordering::Relaxed) {
+                POST_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+            }
             init_timer();
         } else {
             saw_sgi = true;
@@ -386,6 +394,9 @@ fn account_gic_wake(saw_timer: bool, saw_sgi: bool) {
         SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
     } else if saw_timer {
         SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+        if POST_STARTED.load(Ordering::Relaxed) {
+            POST_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+        }
     } else {
         SECONDARY_NONE_WAKES.fetch_add(1, Ordering::Relaxed);
     }
@@ -398,6 +409,9 @@ fn park_secondary(hart: usize) {
             return;
         }
         SECONDARY_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        if POST_STARTED.load(Ordering::Relaxed) {
+            POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        }
         IDLE_HARTS[hart].store(true, Ordering::SeqCst);
         if Aarch64Platform::kernel().has_ready_on(hart) {
             IDLE_HARTS[hart].store(false, Ordering::SeqCst);
@@ -450,6 +464,9 @@ pub extern "C" fn rust_secondary(_context: u64) -> ! {
             }
         }
         SECONDARY_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        if POST_STARTED.load(Ordering::Relaxed) {
+            POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        }
         IDLE_HARTS[1].store(true, Ordering::SeqCst);
         if SCHED_READY.load(Ordering::SeqCst) && Aarch64Platform::kernel().has_ready_on(1) {
             IDLE_HARTS[1].store(false, Ordering::SeqCst);
@@ -1101,6 +1118,37 @@ impl Platform for Aarch64Platform {
 
     fn secondary_none_wakes() -> usize {
         SECONDARY_NONE_WAKES.load(Ordering::Relaxed)
+    }
+
+    fn secondary_wait_blocked() {
+        let count = SECONDARY_WAIT_BLOCKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if count == 2 {
+            POST_TIMER_TICKS.store(0, Ordering::Relaxed);
+            POST_TIMER_WAKES.store(0, Ordering::Relaxed);
+            POST_IDLE_ENTRIES.store(0, Ordering::Relaxed);
+            POST_STARTED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn post_idle_stats() -> Option<(usize, usize, usize)> {
+        if !POST_STARTED.load(Ordering::SeqCst) {
+            return None;
+        }
+        Some((
+            POST_TIMER_TICKS.load(Ordering::Relaxed),
+            POST_IDLE_ENTRIES.load(Ordering::Relaxed),
+            POST_TIMER_WAKES.load(Ordering::Relaxed),
+        ))
+    }
+
+    fn post_idle_ready() -> bool {
+        if !POST_STARTED.load(Ordering::SeqCst) {
+            return false;
+        }
+        let ticks = POST_TIMER_TICKS.load(Ordering::Relaxed);
+        ticks >= 5
+            && POST_IDLE_ENTRIES.load(Ordering::Relaxed) >= ticks.saturating_sub(2)
+            && POST_TIMER_WAKES.load(Ordering::Relaxed) >= ticks.saturating_sub(2)
     }
 
     fn init_block() {

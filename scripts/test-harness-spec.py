@@ -21,6 +21,7 @@ def fixture(arch: str) -> str:
             "SMP IDLE OK (hart1_wakeups=5, idle_entries=5, wake_timer=0, wake_sgi=5)",
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=5)",
             "SMP WORKERS OK (a=50, b=50)",
+            "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
         ]
     elif arch == "aarch64":
         lines += [
@@ -29,6 +30,7 @@ def fixture(arch: str) -> str:
             "SMP IDLE OK (hart1_wakeups=2, idle_entries=2, wake_timer=0, wake_sgi=2)",
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=2)",
             "SMP WORKERS OK (a=50, b=50)",
+            "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
         ]
     else:
         lines += ["KERNEL DATA NX OK", "SMP SKIP (x86 AP bootstrap pending)"]
@@ -79,6 +81,9 @@ def main() -> int:
                 "idle-zero": base.replace("hart1_wakeups=5", "hart1_wakeups=0")
                 .replace("hart1_wakeups=2", "hart1_wakeups=0"),
                 "workers": base.replace("SMP WORKERS OK (a=50, b=50)\n", ""),
+                "post-ticks": base.replace("ticks=6", "ticks=4"),
+                "post-entries": base.replace("idle_entries=6", "idle_entries=1"),
+                "post-wake": base.replace("wake_timer=5", "wake_timer=0"),
                 "block": base.replace("BLOCK OK", ""),
                 "disk": base.replace("FS DISK OK", ""),
             }

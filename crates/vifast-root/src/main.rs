@@ -56,6 +56,9 @@ fn worker_loop(label: u64) -> ! {
     // this endpoint while it is already blocked for fault delivery; a
     // notification-only design would block fault4 handling.
     let _ = vifast_user::send(1, label, 50, 0, 0);
+    // Slot 2 is a private notification that is never signalled.  Blocking here
+    // leaves CPU1 idle so the post-worker timer/WFI tests have a long window.
+    let _ = vifast_user::wait(2);
     loop {
         let _ = vifast_user::yield_now();
     }
@@ -214,6 +217,7 @@ fn spawn_worker(
     data_untyped: u8,
     root_vspace: u8,
     fault_endpoint: u8,
+    idle_notification: u8,
     entry: usize,
     stack_base: usize,
     stack_top: usize,
@@ -239,6 +243,7 @@ fn spawn_worker(
         5,
     ));
     copy(fault_endpoint, tcb, 1, Rights::WRITE);
+    copy(idle_notification, tcb, 2, Rights::READ);
     check(vifast_user::tcb_set_affinity(tcb, 0b10));
     check(vifast_user::tcb_resume(tcb));
 }
@@ -484,6 +489,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             data_untyped,
             root_vspace,
             fault_endpoint_slot,
+            root_notification_slot,
             smp_worker_a as *const () as usize,
             vifast_abi::user_layout::WORKER_A_STACK_BASE,
             vifast_abi::user_layout::WORKER_A_STACK_TOP,
@@ -494,6 +500,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             data_untyped,
             root_vspace,
             fault_endpoint_slot,
+            root_notification_slot,
             smp_worker_b as *const () as usize,
             vifast_abi::user_layout::WORKER_B_STACK_BASE,
             vifast_abi::user_layout::WORKER_B_STACK_TOP,

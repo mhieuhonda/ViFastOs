@@ -56,6 +56,11 @@ static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_NONE_WAKES: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_WAIT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+static POST_STARTED: AtomicBool = AtomicBool::new(false);
+static POST_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static POST_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
+static POST_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 static SCHED_READY: AtomicBool = AtomicBool::new(false);
 static RESCHED_SENT: AtomicUsize = AtomicUsize::new(0);
 static RESCHED_WAKE: AtomicUsize = AtomicUsize::new(0);
@@ -301,6 +306,9 @@ unsafe fn set_timer(at: u64) {
 /// Account one WFI wake.  If several sources are pending, prefer the IPI
 /// reason so that one sleep contributes exactly one wakeup.
 fn record_secondary_wake(sip: u64) {
+    if sip & (1u64 << 5) != 0 && POST_STARTED.load(Ordering::Relaxed) {
+        POST_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    }
     if sip & (1u64 << 1) != 0 {
         SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
         unsafe {
@@ -309,6 +317,9 @@ fn record_secondary_wake(sip: u64) {
         poll_maintenance();
     } else if sip & (1u64 << 5) != 0 {
         SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+        if POST_STARTED.load(Ordering::Relaxed) {
+            POST_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+        }
     } else {
         SECONDARY_NONE_WAKES.fetch_add(1, Ordering::Relaxed);
     }
@@ -363,6 +374,9 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
         }
         // No task and no newly-ready task: enter the masked-WFI idle window.
         IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        if POST_STARTED.load(Ordering::Relaxed) {
+            POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        }
         unsafe {
             core::arch::asm!("wfi");
         }
@@ -694,6 +708,37 @@ impl Platform for RiscvPlatform {
         SECONDARY_NONE_WAKES.load(Ordering::Relaxed)
     }
 
+    fn secondary_wait_blocked() {
+        let count = SECONDARY_WAIT_BLOCKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if count == 2 {
+            POST_TIMER_TICKS.store(0, Ordering::Relaxed);
+            POST_TIMER_WAKES.store(0, Ordering::Relaxed);
+            POST_IDLE_ENTRIES.store(0, Ordering::Relaxed);
+            POST_STARTED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn post_idle_stats() -> Option<(usize, usize, usize)> {
+        if !POST_STARTED.load(Ordering::SeqCst) {
+            return None;
+        }
+        Some((
+            POST_TIMER_TICKS.load(Ordering::Relaxed),
+            POST_IDLE_ENTRIES.load(Ordering::Relaxed),
+            POST_TIMER_WAKES.load(Ordering::Relaxed),
+        ))
+    }
+
+    fn post_idle_ready() -> bool {
+        if !POST_STARTED.load(Ordering::SeqCst) {
+            return false;
+        }
+        let ticks = POST_TIMER_TICKS.load(Ordering::Relaxed);
+        ticks >= 5
+            && POST_IDLE_ENTRIES.load(Ordering::Relaxed) >= ticks.saturating_sub(2)
+            && POST_TIMER_WAKES.load(Ordering::Relaxed) >= ticks.saturating_sub(2)
+    }
+
     fn wake_hart(hart: usize) {
         assert!(
             SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
@@ -722,6 +767,9 @@ impl Platform for RiscvPlatform {
             if RiscvPlatform::kernel().has_ready_on(hart) {
                 IDLE_HARTS[hart].store(false, Ordering::SeqCst);
                 return;
+            }
+            if POST_STARTED.load(Ordering::Relaxed) {
+                POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
             }
             unsafe {
                 core::arch::asm!("wfi");

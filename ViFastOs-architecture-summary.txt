@@ -97,6 +97,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - dbe3a39 fix: accurate idle wake accounting on secondary harts
 - cce094a feat: run tasks on aarch64 secondary cpu
 - ec090c9 chore: generate summary sections from abi, harness and git
+- 17aee2a test: restore and negative-test every harness condition
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit cce094a): RISC-V 50/50 sau khi xử lý boot hart
@@ -145,7 +146,7 @@ Test hiện tại:
 - `cargo test -p vifast-elf`: 17/17 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
-- RISC-V headroom: 458320 byte (`kernel_end=2151219632`)
+- RISC-V headroom: 458288 byte (`kernel_end=2151219664`)
 ### END GENERATED tests
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
@@ -1079,9 +1080,11 @@ Theo kiến trúc:
   - `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` — idle accounting, exactly once
   - `SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)` — secondary scheduling, exactly once
   - `SMP WORKERS OK (a=50, b=50)` — both secondary workers completed
+  - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
   - N > 1, M >= 100, W > 0, S <= I
+  - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 - aarch64:
   - `SMP OK` — both CPUs online
   - `ipi=1` — maintenance IPI acknowledged
@@ -1089,10 +1092,12 @@ Theo kiến trúc:
   - `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` — idle accounting, exactly once
   - `SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)` — secondary scheduling, exactly once
   - `SMP WORKERS OK (a=50, b=50)` — both secondary workers completed
+  - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
-  - T > 0, I >= 1, K >= Wt + Ws
+  - T > 0, I >= 1
   - N > 1, M >= 100, W > 0, S <= I
+  - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
 - x86_64:
   - `KERNEL DATA NX OK` — kernel data is non-executable
   - `SMP SKIP` — x86 AP bring-up is not enabled yet

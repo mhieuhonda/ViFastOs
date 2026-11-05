@@ -8,7 +8,8 @@
 #![forbid(unsafe_code)]
 
 use vifast_abi::{
-    BootInfo, KError, Message, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, LABEL_FAULT,
+    BootInfo, KError, Message, ObjType, Rights, SyscallId, BOOTINFO_MAGIC, BOOTINFO_VERSION,
+    LABEL_FAULT,
 };
 use vifast_arch::Arch;
 use vifast_kernel::console::Console;
@@ -151,6 +152,18 @@ pub trait Platform: Arch + Console {
 
     fn secondary_none_wakes() -> usize {
         0
+    }
+
+    /// Called when a non-primary hart blocks in Wait.  The platform uses this
+    /// to start the post-worker idle accounting window.
+    fn secondary_wait_blocked() {}
+
+    fn post_idle_stats() -> Option<(usize, usize, usize)> {
+        None
+    }
+
+    fn post_idle_ready() -> bool {
+        true
     }
 
     /// Nudge an idle hart when a TCB with matching affinity becomes ready.
@@ -808,6 +821,9 @@ pub mod syscall {
         let action = kernel.user_syscall_on(
             tcb, hart, number, args[0], args[1], args[2], args[3], args[4], args[5],
         );
+        if hart != 0 && number == SyscallId::Wait as u64 && matches!(&action, UserAction::Blocked) {
+            A::secondary_wait_blocked();
+        }
         if hart == 0 && kernel.has_ready_on(1) {
             A::wake_hart(1);
         }
@@ -1075,6 +1091,7 @@ pub mod timer {
         #[cfg(feature = "test-exit")]
         if hart == 0
             && TEST_DONE.load(core::sync::atomic::Ordering::SeqCst)
+            && A::post_idle_ready()
             && kernel.ticks() >= TIMER_TICKS
         {
             let switches = kernel.stats().context_switches.saturating_sub(1);
@@ -1100,6 +1117,15 @@ pub mod timer {
             let hart1_ticks = A::secondary_timer_ticks();
             if hart1_ticks > 0 {
                 vifast_kernel::klog!(A, "SMP TIMER OK (hart1_ticks={})", hart1_ticks);
+            }
+            if let Some((ticks, entries, timer_wakes)) = A::post_idle_stats() {
+                vifast_kernel::klog!(
+                    A,
+                    "SMP POST IDLE OK (ticks={}, idle_entries={}, wake_timer={})",
+                    ticks,
+                    entries,
+                    timer_wakes
+                );
             }
             let entries1 = A::user_entries(1);
             if entries1 > 0 {

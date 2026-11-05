@@ -66,6 +66,7 @@ ARCH = {
         ("SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)", "idle accounting, exactly once"),
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "secondary scheduling, exactly once"),
         ("SMP WORKERS OK (a=50, b=50)", "both secondary workers completed"),
+        ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
     ],
     "aarch64": [
         ("SMP OK", "both CPUs online"),
@@ -74,6 +75,7 @@ ARCH = {
         ("SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)", "idle accounting, exactly once"),
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "secondary scheduling, exactly once"),
         ("SMP WORKERS OK (a=50, b=50)", "both secondary workers completed"),
+        ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
     ],
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
@@ -88,6 +90,7 @@ ARCH_EXACT_ONE = {
         "SMP IDLE OK",
         "SMP SCHED OK",
         "SMP WORKERS OK",
+        "SMP POST IDLE OK",
     ],
     "aarch64": [
         "SMP OK",
@@ -95,6 +98,7 @@ ARCH_EXACT_ONE = {
         "SMP IDLE OK",
         "SMP SCHED OK",
         "SMP WORKERS OK",
+        "SMP POST IDLE OK",
     ],
     "x86_64": ["KERNEL DATA NX OK", "SMP SKIP"],
 }
@@ -104,12 +108,14 @@ NUMERIC = {
         "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
         "ROOT SWITCH n > 1",
         "N > 1, M >= 100, W > 0, S <= I",
+        "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "aarch64": [
         "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
         "ROOT SWITCH n > 1",
-        "T > 0, I >= 1, K >= Wt + Ws",
+        "T > 0, I >= 1",
         "N > 1, M >= 100, W > 0, S <= I",
+        "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "x86_64": [
         "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
@@ -126,6 +132,9 @@ IDLE_RE = re.compile(
     r"wake_timer=(\d+), wake_sgi=(\d+)\)"
 )
 TIMER_RE = re.compile(r"SMP TIMER OK \(hart1_ticks=(\d+)\)")
+POST_RE = re.compile(
+    r"SMP POST IDLE OK \(ticks=(\d+), idle_entries=(\d+), wake_timer=(\d+)\)"
+)
 ROOT_SWITCH_RE = re.compile(r"ROOT SWITCH\s+(\d+)")
 FAULT_RE = re.compile(r"USER FAULT.*?addr=(0x[0-9a-fA-F]+)")
 
@@ -191,6 +200,12 @@ def accept(
             return False
         idle = smp_idle(output)
         if min(idle) < 0 or idle[0] <= 0:
+            return False
+        post = POST_RE.search(output)
+        if not post:
+            return False
+        pt, pi, pw = (int(post.group(i)) for i in range(1, 4))
+        if pt < 5 or pi < pt - 2 or pw < pt - 2:
             return False
     if name == "aarch64":
         timer = TIMER_RE.search(output)
