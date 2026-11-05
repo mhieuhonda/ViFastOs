@@ -789,7 +789,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         root_notification_slot,
                         Rights::READ,
                         None,
-                        1,
+                        5,
                         smp_worker_e as *const () as usize,
                         WORKER_E_STACK_BASE,
                         WORKER_E_STACK_TOP,

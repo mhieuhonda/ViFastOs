@@ -223,8 +223,12 @@ pub struct StackSpec {
 
 pub struct Kernel {
     pub(crate) objs: [Object; MAX_OBJECTS],
-    pub(crate) runq: [Option<ObjRef>; MAX_TCBS],
-    pub(crate) runq_len: usize,
+    /// One fixed-capacity ready queue per hart.  A TCB is enqueued only once;
+    /// an idle hart may steal an eligible TCB from another queue.
+    pub(crate) runq: [[Option<ObjRef>; MAX_TCBS]; MAX_HARTS],
+    pub(crate) runq_len: [usize; MAX_HARTS],
+    pub(crate) sched_local: [u64; MAX_HARTS],
+    pub(crate) sched_steals: [u64; MAX_HARTS],
     pub(crate) current: [Option<ObjRef>; MAX_HARTS],
     pub(crate) seq: u64,
     pub(crate) ticks: [u64; MAX_HARTS],
@@ -249,8 +253,10 @@ impl Kernel {
     pub const fn new_const() -> Kernel {
         Kernel {
             objs: [Object::free(); MAX_OBJECTS],
-            runq: [None; MAX_TCBS],
-            runq_len: 0,
+            runq: [[None; MAX_TCBS]; MAX_HARTS],
+            runq_len: [0; MAX_HARTS],
+            sched_local: [0; MAX_HARTS],
+            sched_steals: [0; MAX_HARTS],
             current: [None; MAX_HARTS],
             seq: 0,
             ticks: [0; MAX_HARTS],
@@ -278,8 +284,10 @@ impl Kernel {
         for object in self.objs.iter_mut() {
             *object = Object::free();
         }
-        self.runq = [None; MAX_TCBS];
-        self.runq_len = 0;
+        self.runq = [[None; MAX_TCBS]; MAX_HARTS];
+        self.runq_len = [0; MAX_HARTS];
+        self.sched_local = [0; MAX_HARTS];
+        self.sched_steals = [0; MAX_HARTS];
         self.current = [None; MAX_HARTS];
         self.seq = 0;
         self.ticks = [0; MAX_HARTS];
@@ -605,8 +613,14 @@ impl Kernel {
         if mask == 0 || mask & !((1u8 << MAX_HARTS) - 1) != 0 {
             return Err(KError::InvalidArg);
         }
-        let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
-        table.affinity = mask;
+        let queued = self.tcb(tcb).is_some_and(|table| table.queued);
+        if queued {
+            self.remove_from_runq(tcb);
+        }
+        self.tcb_mut(tcb).ok_or(KError::WrongType)?.affinity = mask;
+        if queued {
+            self.enqueue(tcb);
+        }
         Ok(())
     }
 
@@ -629,18 +643,20 @@ impl Kernel {
     }
 
     fn remove_from_runq(&mut self, tcb: ObjRef) {
-        let mut index = 0;
-        while index < self.runq_len {
-            if self.runq[index] == Some(tcb) {
-                let mut shift = index;
-                while shift + 1 < self.runq_len {
-                    self.runq[shift] = self.runq[shift + 1];
-                    shift += 1;
+        for hart in 0..MAX_HARTS {
+            let mut index = 0;
+            while index < self.runq_len[hart] {
+                if self.runq[hart][index] == Some(tcb) {
+                    let mut shift = index;
+                    while shift + 1 < self.runq_len[hart] {
+                        self.runq[hart][shift] = self.runq[hart][shift + 1];
+                        shift += 1;
+                    }
+                    self.runq_len[hart] -= 1;
+                    self.runq[hart][self.runq_len[hart]] = None;
+                } else {
+                    index += 1;
                 }
-                self.runq_len -= 1;
-                self.runq[self.runq_len] = None;
-            } else {
-                index += 1;
             }
         }
         if let Some(table) = self.tcb_mut(tcb) {
@@ -1875,7 +1891,19 @@ impl Kernel {
     /// intentionally deterministic and allocation-free so it can run in the
     /// self-test and in a future watchdog.
     pub fn check_invariants(&self) -> KResult<()> {
-        if self.runq_len > MAX_TCBS {
+        let mut total_queued = 0usize;
+        for hart in 0..MAX_HARTS {
+            if self.runq_len[hart] > MAX_TCBS {
+                return Err(KError::IllegalOperation);
+            }
+            for slot in self.runq_len[hart]..MAX_TCBS {
+                if self.runq[hart][slot].is_some() {
+                    return Err(KError::IllegalOperation);
+                }
+            }
+            total_queued += self.runq_len[hart];
+        }
+        if total_queued > MAX_TCBS {
             return Err(KError::IllegalOperation);
         }
         let mut frame_w = [0u16; MAX_OBJECTS];
@@ -1932,9 +1960,11 @@ impl Kernel {
                     }
                     if tcb.queued {
                         let mut found = false;
-                        for queued in self.runq.iter().flatten() {
-                            if *queued == reference {
-                                found = true;
+                        for hart in 0..MAX_HARTS {
+                            for queued in self.runq[hart][..self.runq_len[hart]].iter().flatten() {
+                                if *queued == reference {
+                                    found = true;
+                                }
                             }
                         }
                         if !found {
@@ -2241,16 +2271,28 @@ impl Kernel {
                 }
             }
         }
-        for (i, queued) in self.runq.iter().flatten().enumerate() {
-            let Some(tcb) = self.tcb(*queued) else {
-                return Err(KError::ObjectDestroyed);
-            };
-            if tcb.state != ThreadState::Ready || !tcb.queued {
-                return Err(KError::IllegalOperation);
-            }
-            for other in self.runq.iter().skip(i + 1).flatten() {
-                if queued == other {
+        for hart in 0..MAX_HARTS {
+            for index in 0..self.runq_len[hart] {
+                let Some(queued) = self.runq[hart][index] else {
                     return Err(KError::IllegalOperation);
+                };
+                let Some(tcb) = self.tcb(queued) else {
+                    return Err(KError::ObjectDestroyed);
+                };
+                if tcb.state != ThreadState::Ready
+                    || !tcb.queued
+                    || tcb.affinity & (1u8 << hart) == 0
+                {
+                    return Err(KError::IllegalOperation);
+                }
+                for other_hart in 0..MAX_HARTS {
+                    for other_index in 0..self.runq_len[other_hart] {
+                        if self.runq[other_hart][other_index] == Some(queued)
+                            && (other_hart != hart || other_index != index)
+                        {
+                            return Err(KError::IllegalOperation);
+                        }
+                    }
                 }
             }
         }
@@ -2504,11 +2546,7 @@ impl Kernel {
     }
 
     fn detach_tcb(&mut self, obj: ObjRef) {
-        for slot in self.runq.iter_mut() {
-            if *slot == Some(obj) {
-                *slot = None;
-            }
-        }
+        self.remove_from_runq(obj);
         if let Some((client, _)) = self.tcb(obj).and_then(|table| table.caller) {
             self.wake_error(client, KError::ObjectDestroyed);
         }
@@ -3184,12 +3222,23 @@ impl Kernel {
     }
 
     pub fn enqueue(&mut self, tcb: ObjRef) {
-        if self.runq_len >= MAX_TCBS {
+        let Some(table) = self.tcb(tcb) else {
+            return;
+        };
+        if table.queued || !matches!(table.state, ThreadState::Inactive | ThreadState::Ready) {
             return;
         }
-        if self.tcb(tcb).is_none_or(|t| t.queued) {
-            return;
+        let affinity = table.affinity;
+        let mut target = None;
+        for hart in 0..MAX_HARTS {
+            if affinity & (1u8 << hart) != 0 && self.runq_len[hart] < MAX_TCBS {
+                target = Some(hart);
+                break;
+            }
         }
+        let Some(hart) = target else {
+            return;
+        };
         let seq = self.seq;
         self.seq = self.seq.wrapping_add(1);
         if let Some(table) = self.tcb_mut(tcb) {
@@ -3201,42 +3250,61 @@ impl Kernel {
         } else {
             return;
         }
-        self.runq[self.runq_len] = Some(tcb);
-        self.runq_len += 1;
+        self.runq[hart][self.runq_len[hart]] = Some(tcb);
+        self.runq_len[hart] += 1;
     }
 
     pub fn has_ready_on(&self, hart: usize) -> bool {
         if hart >= MAX_HARTS {
             return false;
         }
-        self.runq[..self.runq_len].iter().flatten().any(|r| {
-            self.tcb(*r)
-                .map(|tcb| tcb.affinity & (1u8 << hart) != 0)
-                .unwrap_or(false)
-        })
+        for owner in 0..MAX_HARTS {
+            for queued in self.runq[owner][..self.runq_len[owner]].iter().flatten() {
+                if self
+                    .tcb(*queued)
+                    .is_some_and(|tcb| tcb.affinity & (1u8 << hart) != 0)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn runq_depth(&self, hart: usize) -> usize {
+        self.runq_len.get(hart).copied().unwrap_or(0)
+    }
+
+    /// Local picks and steals performed by a hart since reset.
+    pub fn scheduler_stats(&self, hart: usize) -> (u64, u64) {
+        match (self.sched_local.get(hart), self.sched_steals.get(hart)) {
+            (Some(local), Some(steals)) => (*local, *steals),
+            _ => (0, 0),
+        }
     }
 
     pub fn pick(&mut self) -> Option<ObjRef> {
         self.pick_on(0)
     }
 
-    pub fn pick_on(&mut self, hart: usize) -> Option<ObjRef> {
-        if hart >= MAX_HARTS {
-            return None;
-        }
+    fn best_in_queue(&self, hart: usize, cpu: usize) -> Option<(usize, u8, u64)> {
         let mut best: Option<(usize, u8, u64)> = None;
-        for i in 0..self.runq_len {
-            let Some(r) = self.runq[i] else { continue };
-            let Some(tcb) = self.tcb(r) else { continue };
-            if tcb.affinity & (1u8 << hart) == 0 {
+        for index in 0..self.runq_len[hart] {
+            let Some(reference) = self.runq[hart][index] else {
+                continue;
+            };
+            let Some(tcb) = self.tcb(reference) else {
+                continue;
+            };
+            if tcb.affinity & (1u8 << cpu) == 0 {
                 continue;
             }
-            let candidate = (i, tcb.priority, tcb.queue_seq);
+            let candidate = (index, tcb.priority, tcb.queue_seq);
             best = match best {
                 None => Some(candidate),
-                Some((_, best_prio, best_seq)) => {
-                    if candidate.1 > best_prio
-                        || (candidate.1 == best_prio && candidate.2 < best_seq)
+                Some((_, best_priority, best_seq)) => {
+                    if candidate.1 > best_priority
+                        || (candidate.1 == best_priority && candidate.2 < best_seq)
                     {
                         Some(candidate)
                     } else {
@@ -3245,22 +3313,74 @@ impl Kernel {
                 }
             };
         }
-        let (index, _, _) = best?;
-        let chosen = self.runq[index]?;
-        let mut i = index;
-        while i + 1 < self.runq_len {
-            self.runq[i] = self.runq[i + 1];
-            i += 1;
+        best
+    }
+
+    pub fn pick_on(&mut self, hart: usize) -> Option<ObjRef> {
+        if hart >= MAX_HARTS {
+            return None;
         }
-        self.runq_len -= 1;
-        self.runq[self.runq_len] = None;
-        if let Some(tcb) = self.tcb_mut(chosen) {
+        let mut chosen = self
+            .best_in_queue(hart, hart)
+            .map(|(index, _, _)| (hart, index));
+        let mut stole = false;
+        if chosen.is_none() {
+            let mut best: Option<(usize, usize, u8, u64)> = None;
+            for owner in 0..MAX_HARTS {
+                if owner == hart {
+                    continue;
+                }
+                for index in 0..self.runq_len[owner] {
+                    let Some(reference) = self.runq[owner][index] else {
+                        continue;
+                    };
+                    let Some(tcb) = self.tcb(reference) else {
+                        continue;
+                    };
+                    if tcb.affinity & (1u8 << hart) == 0 {
+                        continue;
+                    }
+                    let candidate = (owner, index, tcb.priority, tcb.queue_seq);
+                    best = match best {
+                        None => Some(candidate),
+                        Some((_, _, priority, seq)) => {
+                            if candidate.2 > priority
+                                || (candidate.2 == priority && candidate.3 < seq)
+                            {
+                                Some(candidate)
+                            } else {
+                                best
+                            }
+                        }
+                    };
+                }
+            }
+            if let Some((owner, index, _, _)) = best {
+                chosen = Some((owner, index));
+                stole = true;
+            }
+        }
+        let (owner, index) = chosen?;
+        let reference = self.runq[owner][index]?;
+        let mut shift = index;
+        while shift + 1 < self.runq_len[owner] {
+            self.runq[owner][shift] = self.runq[owner][shift + 1];
+            shift += 1;
+        }
+        self.runq_len[owner] -= 1;
+        self.runq[owner][self.runq_len[owner]] = None;
+        if let Some(tcb) = self.tcb_mut(reference) {
             tcb.queued = false;
             tcb.state = ThreadState::Running;
         }
-        self.current[hart] = Some(chosen);
+        if stole {
+            self.sched_steals[hart] = self.sched_steals[hart].wrapping_add(1);
+        } else {
+            self.sched_local[hart] = self.sched_local[hart].wrapping_add(1);
+        }
+        self.current[hart] = Some(reference);
         self.stats.context_switches += 1;
-        Some(chosen)
+        Some(reference)
     }
 
     pub fn yield_current(&mut self) -> Option<ObjRef> {
@@ -3395,20 +3515,7 @@ impl Kernel {
         msg: Message,
     ) -> KResult<()> {
         let delivered = self.send(tcb, endpoint, 0, msg, false)?;
-        let mut index = 0;
-        while index < self.runq_len {
-            if self.runq[index] == Some(tcb) {
-                let mut shift = index;
-                while shift + 1 < self.runq_len {
-                    self.runq[shift] = self.runq[shift + 1];
-                    shift += 1;
-                }
-                self.runq_len -= 1;
-                self.runq[self.runq_len] = None;
-            } else {
-                index += 1;
-            }
-        }
+        self.remove_from_runq(tcb);
         let table = self.tcb_mut(tcb).ok_or(KError::ObjectDestroyed)?;
         table.state = ThreadState::BlockedFault;
         table.queued = false;
@@ -8877,5 +8984,47 @@ mod tests {
         assert_eq!(kernel.take_resume_error(target), Some(KError::WouldBlock));
         kernel.resume_tcb(target).unwrap();
         assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Ready);
+    }
+
+    #[test]
+    fn per_hart_runqueue_home_assignment_steal_and_affinity_move() {
+        let mut kernel = Kernel::new();
+        let local0 = kernel.create_tcb("local0", 1).unwrap();
+        let local1 = kernel.create_tcb("local1", 1).unwrap();
+        let both = kernel.create_tcb("both", 1).unwrap();
+        kernel.tcb_mut(local0).unwrap().affinity = 0b01;
+        kernel.tcb_mut(local1).unwrap().affinity = 0b10;
+        kernel.tcb_mut(both).unwrap().affinity = 0b11;
+        kernel.enqueue(local0);
+        kernel.enqueue(local1);
+        kernel.enqueue(both);
+        assert_eq!(kernel.runq_depth(0), 2);
+        assert_eq!(kernel.runq_depth(1), 1);
+        assert_eq!(kernel.pick_on(1), Some(local1));
+        assert_eq!(kernel.scheduler_stats(1), (1, 0));
+        assert_eq!(kernel.runq_depth(1), 0);
+        assert!(kernel.check_invariants().is_ok());
+
+        let mut steal = Kernel::new();
+        let mobile = steal.create_tcb("mobile", 1).unwrap();
+        steal.tcb_mut(mobile).unwrap().affinity = 0b11;
+        steal.enqueue(mobile);
+        assert_eq!(steal.runq_depth(0), 1);
+        assert_eq!(steal.runq_depth(1), 0);
+        assert_eq!(steal.pick_on(1), Some(mobile));
+        assert_eq!(steal.scheduler_stats(1), (0, 1));
+        assert_eq!(steal.runq_depth(0), 0);
+        assert!(steal.check_invariants().is_ok());
+
+        let mut moved = Kernel::new();
+        let task = moved.create_tcb("moved", 1).unwrap();
+        moved.tcb_mut(task).unwrap().affinity = 0b10;
+        moved.enqueue(task);
+        assert_eq!(moved.runq_depth(1), 1);
+        moved.set_tcb_affinity(task, 0b01).unwrap();
+        assert_eq!(moved.runq_depth(1), 0);
+        assert_eq!(moved.runq_depth(0), 1);
+        assert_eq!(moved.pick_on(0), Some(task));
+        assert!(moved.check_invariants().is_ok());
     }
 }
