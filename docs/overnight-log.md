@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `adc576b50821936436a418a349c3ef6af5d814508e312d23b2c215249c297783`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `38c77fcf62731f22894520cb7a0227b4552a35a17b81c5b581498bae10bf1067`.
 
 ---
 
@@ -211,6 +211,21 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.17 — SMP brownfield: revoke check, symmetric mailbox, RISC-V idle (vòng 05)
+
+- `31f023b`: thêm host test revoke Untyped khi TCB current trên hart 1; kiểm
+  tra current chạy sau collect (chỉ đọc), trước sort/destroy; snapshot
+  object/cap/usage không đổi.
+- `c4854d1`: mailbox maintenance theo hart đích (`MAINT_SEQ/ACK/KIND`), bỏ
+  điều kiện hart 0/1 ở gửi/poll, sender assert giữ BKL, bỏ qua hart offline.
+  Visitor TLB/I-cache; host test khóa hai chiều.
+- `76f1c41`: TCB `affinity` mặc định hart 0; `pick_on` lọc affinity; hart 1
+  RISC-V có timer SBI, idle loop BKL→pick→drop→wake; IPI reschedule qua
+  mailbox; in `SMP IDLE OK (hart1_wakeups=K)`.
+- WFI+SIE=0 làm mất wake/ACK trên QEMU/OpenSBI; idle dùng spin ngắn, 10/10
+  QEMU. Đây là deviation có chủ đích, ghi ở report.
+- Kernel 86/86, arch 5/5, headroom 458400; QEMU 10/10; persist 3/3.
 
 ## 8.16 — Per-CPU security, ticket BKL, per-hart current (vòng 03)
 

@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `74b7d75` (`feat: per-cpu security and per-hart current groundwork`)
+**Mốc code hiện tại:** `76f1c41` (`feat: riscv secondary hart idle loop and reschedule ipi`)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
@@ -32,13 +32,13 @@
 - `/scratch` bền vững trên cả 3 kiến trúc qua sector 0.
 - Software IOMMU: domain, reverse map, `IoMap`/`IoUnmap`, 32 mapping/domain.
 - SMP mức "maintenance": RISC-V/AArch64 có 2 hart, IPI và full TLB shootdown; hart phụ **chưa chạy scheduler**.
-- BKL ticket FIFO + RAII, maintenance poll khi spin; per-CPU state dùng sscratch/swapgs/TPIDR_EL1; test `PERCPU CLOBBER OK`.
+- BKL ticket FIFO + RAII, mailbox maintenance đối xứng, per-CPU state dùng sscratch/swapgs/TPIDR_EL1; test `PERCPU CLOBBER OK`.
 - ASID/PCID tagging; x86 PCID chỉ bật khi CPUID hỗ trợ, QEMU TCG thường fallback CR3.
 
 ### Chưa có / còn yếu
 
 - Full SMP scheduler; x86 AP bootstrap; per-hart runqueue.
-- Hart phụ chưa chạy scheduler (Task 5 chưa hoàn tất); x86 AP vẫn SKIP.
+- RISC-V hart 1 mới idle/timer/IPI (`SMP IDLE OK`), chưa chọn task; x86 AP và AArch64 scheduler đa hart chưa có. WFI được thay bằng idle spin vì WFI+SIE=0 mất wake trên QEMU/OpenSBI.
 - Per-VA TLB shootdown.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
 - Hệ thống file thật: mới là một sector `/scratch`, chưa có directory/permission/journal.
@@ -191,6 +191,7 @@ Kernel không biết chi tiết phần cứng. Nó gọi các trait/primitive do
 | FS bền vững 3 kiến trúc | ✅ | sector 0, magic `VF01`, test-persist |
 | BKL | ✅ ticket | FIFO + maintenance poll; trap/syscall/IRQ + x86 fault |
 | Per-CPU | ✅ secure | MAX_HARTS=4; sscratch/swapgs/TPIDR; clobber test |
+| SMP idle | ✅ RISC-V | affinity, mailbox, timer/IPI, `SMP IDLE OK` |
 | IOMMU phần mềm | ✅ | domain, 32 mapping, `IoMap`/`IoUnmap` |
 | IOMMU phần cứng | ❌ | chưa VT-d/SMMU |
 | VirtIO net | ❌ | chưa có |
@@ -625,6 +626,7 @@ Giữ `/motd`, `/scratch`, các string harness cũ. Thêm test:
 - `PREEMPT OK`
 - `ROOT SWITCH n` với `n > 1`
 - `PERCPU CLOBBER OK` đúng 1 lần; không có `PERCPU CLOBBER BAD`
+- RISC-V `SMP IDLE OK (hart1_wakeups=K)` đúng 1 lần, K > 0
 - `Isolation`
 - `Server`
 - `Client`
