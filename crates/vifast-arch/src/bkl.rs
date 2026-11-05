@@ -103,6 +103,9 @@ mod tests {
     static FIFO_MAX_INSIDE: AtomicUsize = AtomicUsize::new(0);
     static FIFO_DONE: AtomicUsize = AtomicUsize::new(0);
     static HOLD_READY: AtomicBool = AtomicBool::new(false);
+    static REVERSE_LOCK: BigKernelLock = BigKernelLock::new();
+    static REVERSE_POLLED: AtomicBool = AtomicBool::new(false);
+    static REVERSE_HOLD_READY: AtomicBool = AtomicBool::new(false);
 
     #[test]
     fn rejects_reentry_while_held() {
@@ -177,5 +180,35 @@ mod tests {
         holder.join().unwrap();
         spinner.join().unwrap();
         assert!(POLLED.load(Ordering::SeqCst));
+    }
+    #[test]
+    fn maintenance_poll_works_in_both_lock_directions() {
+        REVERSE_POLLED.store(false, Ordering::SeqCst);
+        REVERSE_HOLD_READY.store(false, Ordering::SeqCst);
+        let holder = thread::spawn(|| {
+            let guard = REVERSE_LOCK.lock();
+            REVERSE_HOLD_READY.store(true, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !REVERSE_POLLED.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                core::hint::spin_loop();
+            }
+            if !REVERSE_POLLED.load(Ordering::SeqCst) {
+                drop(guard);
+                panic!("reverse spinner did not poll maintenance");
+            }
+            drop(guard);
+        });
+        let spinner = thread::spawn(|| {
+            while !REVERSE_HOLD_READY.load(Ordering::SeqCst) {
+                core::hint::spin_loop();
+            }
+            let guard = REVERSE_LOCK.lock_with(|| {
+                REVERSE_POLLED.store(true, Ordering::SeqCst);
+            });
+            drop(guard);
+        });
+        holder.join().unwrap();
+        spinner.join().unwrap();
+        assert!(REVERSE_POLLED.load(Ordering::SeqCst));
     }
 }

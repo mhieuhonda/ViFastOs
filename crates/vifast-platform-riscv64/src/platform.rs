@@ -1,6 +1,6 @@
 //! RISC-V QEMU `virt` platform: Sv39 MMU, SBI timer, trap entry and SMP.
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::bkl::BigKernelLock;
@@ -53,22 +53,92 @@ struct TrapStack([u8; 32768]);
 static mut TRAP_STACKS: [TrapStack; MAX_HARTS] = [TrapStack([0; 32768]); MAX_HARTS];
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
-static IPI_PENDING: AtomicBool = AtomicBool::new(false);
-static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
+const MAINT_TLB: u32 = 1;
+const MAINT_ICACHE: u32 = 2;
+static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+static MAINT_ACK: [AtomicUsize; MAX_HARTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+static MAINT_KIND: [AtomicU32; MAX_HARTS] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
 static BKL: BigKernelLock = BigKernelLock::new();
 
 fn poll_maintenance() {
     let state = cpu_state();
-    if state.is_null() || unsafe { (*state).hart_id } == 0 {
+    if state.is_null() {
         return;
     }
-    if IPI_PENDING.swap(false, Ordering::SeqCst) {
+    let hart = unsafe { (*state).hart_id };
+    if hart >= MAX_HARTS {
+        return;
+    }
+    let seq = MAINT_SEQ[hart].load(Ordering::Acquire);
+    if MAINT_ACK[hart].load(Ordering::Acquire) >= seq {
+        return;
+    }
+    let kind = MAINT_KIND[hart].swap(0, Ordering::AcqRel);
+    if kind & MAINT_TLB != 0 {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
+        }
+    }
+    if kind & MAINT_ICACHE != 0 {
+        unsafe {
             core::arch::asm!("fence.i");
         }
-        IPI_ACK.fetch_add(1, Ordering::SeqCst);
     }
+    MAINT_ACK[hart].store(seq, Ordering::Release);
+}
+
+fn maintenance_target_online(target: usize) -> bool {
+    target == 0 || (target == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0)
+}
+
+fn send_maintenance(target: usize, kind: u32) -> bool {
+    if target >= MAX_HARTS || !maintenance_target_online(target) {
+        return false;
+    }
+    let state = cpu_state();
+    if state.is_null() || unsafe { (*state).hart_id } == target {
+        return false;
+    }
+    assert!(BKL.is_held(), "maintenance IPI sender must hold BKL");
+    let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
+    MAINT_KIND[target].fetch_or(kind, Ordering::AcqRel);
+    if target == 1 {
+        <Riscv64 as Arch>::send_ipi(1);
+    } else {
+        <Riscv64 as Arch>::send_ipi(0);
+    }
+    let mut spins = 0usize;
+    while MAINT_ACK[target].load(Ordering::Acquire) < seq && spins < 5_000_000 {
+        poll_maintenance();
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    MAINT_ACK[target].load(Ordering::Acquire) >= seq
+}
+
+fn request_ipi() -> bool {
+    let state = cpu_state();
+    if state.is_null() {
+        return false;
+    }
+    let self_hart = unsafe { (*state).hart_id };
+    let target = if self_hart == 0 { 1 } else { 0 };
+    send_maintenance(target, MAINT_TLB | MAINT_ICACHE)
 }
 
 fn assert_irqs_disabled() {
@@ -135,30 +205,9 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
     unsafe { init_cpu(hartid) };
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
-        if IPI_PENDING.swap(false, Ordering::SeqCst) {
-            unsafe {
-                core::arch::asm!("sfence.vma zero, zero");
-                core::arch::asm!("fence.i");
-            }
-            IPI_ACK.fetch_add(1, Ordering::SeqCst);
-        }
+        poll_maintenance();
         core::hint::spin_loop();
     }
-}
-
-fn request_ipi() -> bool {
-    if SECONDARY_ONLINE.load(Ordering::SeqCst) == 0 {
-        return false;
-    }
-    IPI_ACK.store(0, Ordering::SeqCst);
-    IPI_PENDING.store(true, Ordering::SeqCst);
-    <Riscv64 as Arch>::send_ipi(1);
-    let mut spins = 0usize;
-    while IPI_ACK.load(Ordering::SeqCst) == 0 && spins < 5_000_000 {
-        core::hint::spin_loop();
-        spins += 1;
-    }
-    IPI_ACK.load(Ordering::SeqCst) > 0
 }
 
 unsafe fn build_kernel_page_tables() {
@@ -348,20 +397,19 @@ impl vifast_kernel::PageTableOps for PageOps {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
         }
-        let _ = request_ipi();
+        if BKL.is_held() {
+            let _ = request_ipi();
+        }
     }
 
     fn sync_icache(&self, _pa: u64, _size: usize) {
         unsafe {
             core::arch::asm!("fence.i");
         }
-        // RISC-V fence.i is local.  Hart 0 sends the existing maintenance IPI,
-        // whose secondary handler executes fence.i and acknowledges it.
-        let state = cpu_state();
-        if !state.is_null()
-            && unsafe { (*state).hart_id } == 0
-            && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0
-        {
+        // fence.i is local; when called from a kernel mapping path under BKL,
+        // the symmetric mailbox fences every other online hart.  Early boot
+        // mapping runs before hart 1 can execute user code, so stay local.
+        if BKL.is_held() {
             let _ = request_ipi();
         }
     }
@@ -760,7 +808,10 @@ impl Platform for RiscvPlatform {
             spins += 1;
         }
         if SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            if request_ipi() {
+            let bkl = BKL.lock_with(poll_maintenance);
+            let ipi_ok = request_ipi();
+            drop(bkl);
+            if ipi_ok {
                 vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2, ipi=1)");
             } else {
                 vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2, ipi=pending)");
