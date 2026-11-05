@@ -1177,6 +1177,7 @@ fn count_user_entry() {
 #[no_mangle]
 pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
     if vifast_arch::panic::is_panicking() {
+        Riscv64::irq_disable();
         Riscv64::halt();
     }
     let frame = unsafe { &mut *frame };

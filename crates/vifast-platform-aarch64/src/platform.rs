@@ -345,6 +345,7 @@ fn service_gic() -> (bool, bool) {
         }
         write32(GICC + 0x010, irq);
         if irq == 2 || vifast_arch::panic::is_panicking() {
+            Aarch64::irq_disable();
             Aarch64::halt();
         }
         if irq == TIMER_IRQ {
@@ -1340,6 +1341,7 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
 #[no_mangle]
 extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
     if vifast_arch::panic::is_panicking() {
+        Aarch64::irq_disable();
         Aarch64::halt();
     }
     assert_irqs_disabled();
