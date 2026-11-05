@@ -136,6 +136,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6e415a7 feat: add real fsync and block flush
 - b9ed3bc feat: add vf04 double indirect files
 - 8f7ece9 feat: add sleep deadline primitive
+- 26b9c2c feat: implement tcb restart and bind notification
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
