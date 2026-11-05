@@ -86,7 +86,7 @@ ARCH = {
         ("AP REAL MODE OK (apic=...)", "AP executed real-mode trampoline"),
         ("AP LONG MODE OK (cpu=1)", "AP entered long mode"),
         ("SMP OK", "both CPUs online"),
-        ("ipi=1", "AP maintenance mailbox acknowledged"),
+        ("ipi=1", "AP maintenance IPI acknowledged"),
     ],
 }
 

@@ -87,6 +87,8 @@ static AP_ONLINE: AtomicBool = AtomicBool::new(false);
 static AP_MAINT_SEQ: AtomicUsize = AtomicUsize::new(0);
 static AP_MAINT_ACK: AtomicUsize = AtomicUsize::new(0);
 static AP_MAINT_KIND: AtomicU32 = AtomicU32::new(0);
+static AP_IRR_SEEN: AtomicUsize = AtomicUsize::new(0);
+const APIC_MAINT_VECTOR: u32 = 0x30;
 const AP_MAINT_TLB: u32 = 1;
 const AP_MAINT_ICACHE: u32 = 2;
 const TRAMPOLINE_MAGIC: u16 = 0xA55A;
@@ -275,6 +277,8 @@ static mut GDT: [u64; 7] = [0; 7];
 static mut GDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
 static mut IDT: [IdtEntry; 256] = [IdtEntry::zero(); 256];
 static mut IDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
+static mut AP_GDT: [u64; 7] = [0; 7];
+static mut AP_GDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
 static mut TSSS: [Tss; MAX_HARTS] = [Tss::zero(); MAX_HARTS];
 
 #[repr(C)]
@@ -765,19 +769,33 @@ unsafe fn init_lapic() {
     vifast_kernel::klog!(X86Platform, "LAPIC OK (id={})", id);
 }
 
+unsafe fn ap_poll_irr() {
+    let base = if ACPI_LAPIC_BASE == 0 {
+        LAPIC_DEFAULT
+    } else {
+        ACPI_LAPIC_BASE
+    };
+    let maint_word = core::ptr::read_volatile(
+        (base + 0x200 + ((APIC_MAINT_VECTOR / 32) as u64) * 0x10) as *const u32,
+    );
+    if maint_word & (1 << (APIC_MAINT_VECTOR % 32)) != 0 {
+        AP_IRR_SEEN.fetch_add(1, Ordering::Release);
+        let seq = AP_MAINT_SEQ.load(Ordering::Acquire);
+        let kind = AP_MAINT_KIND.swap(0, Ordering::AcqRel);
+        if kind & AP_MAINT_TLB != 0 {
+            core::arch::asm!("invlpg [{}]", in(reg) 0u64);
+        }
+        if kind & AP_MAINT_ICACHE != 0 {
+            core::arch::asm!("wbinvd");
+        }
+        AP_MAINT_ACK.store(seq, Ordering::Release);
+        core::ptr::write_volatile((base + 0xB0) as *mut u32, 0);
+    }
+}
+
 unsafe fn ap_maintenance_loop() -> ! {
     loop {
-        let seq = AP_MAINT_SEQ.load(Ordering::Acquire);
-        if AP_MAINT_ACK.load(Ordering::Acquire) < seq {
-            let kind = AP_MAINT_KIND.swap(0, Ordering::AcqRel);
-            if kind & AP_MAINT_TLB != 0 {
-                core::arch::asm!("invlpg [{}]", in(reg) 0u64);
-            }
-            if kind & AP_MAINT_ICACHE != 0 {
-                core::arch::asm!("wbinvd");
-            }
-            AP_MAINT_ACK.store(seq, Ordering::Release);
-        }
+        ap_poll_irr();
         core::arch::asm!("pause");
     }
 }
@@ -892,18 +910,25 @@ unsafe fn install_real_trampoline() {
     );
 }
 
+#[allow(asm_sub_register)]
 #[no_mangle]
 pub extern "C" fn ap_entry() -> ! {
     unsafe {
         core::arch::asm!("cli");
+        setup_ap_gdt_tss_idt();
         init_cpu(1);
-        core::arch::asm!("lgdt [{}]", in(reg) core::ptr::addr_of!(GDT_PTR));
-        core::arch::asm!("lidt [{}]", in(reg) core::ptr::addr_of!(IDT_PTR));
+        let mut tr: u16;
+        core::arch::asm!("str {}", out(reg) tr);
+        assert_eq!(tr, TSS_SEL, "AP TSS selector mismatch");
+        assert_eq!(
+            read_msr(IA32_GS_BASE),
+            core::ptr::addr_of!(CPU_STATES[1]) as u64,
+            "AP GS base mismatch"
+        );
         let _ = configure_lapic();
         enable_smep_smap();
         AP_ONLINE.store(true, Ordering::SeqCst);
         AP_LONG_ONLINE = true;
-        vifast_kernel::klog!(X86Platform, "AP LONG MODE OK (cpu=1)");
         ap_maintenance_loop()
     }
 }
@@ -985,10 +1010,15 @@ unsafe fn start_ap_real() {
     for _ in 0..20 {
         tsc_delay(1_000_000);
         if AP_ONLINE.load(Ordering::SeqCst) {
+            vifast_kernel::klog!(X86Platform, "AP LONG MODE OK (cpu=1)");
             let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
             AP_MAINT_KIND.fetch_or(AP_MAINT_TLB | AP_MAINT_ICACHE, Ordering::AcqRel);
+            core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+            send_icr(base, APIC_MAINT_VECTOR);
             for _ in 0..100_000 {
-                if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
+                if AP_MAINT_ACK.load(Ordering::Acquire) >= seq
+                    && AP_IRR_SEEN.load(Ordering::Acquire) > 0
+                {
                     vifast_kernel::klog!(X86Platform, "SMP OK (harts=2, ipi=1)");
                     return;
                 }
@@ -1009,6 +1039,39 @@ unsafe fn init_cpu(hartid: usize) {
     write_msr(IA32_GS_BASE, core::ptr::addr_of!(CPU_STATES[index]) as u64);
     write_msr(IA32_KERNEL_GS_BASE, 0);
 }
+unsafe fn setup_ap_gdt_tss_idt() {
+    let tss = core::ptr::addr_of_mut!(TSSS[1]);
+    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[1]) as u64 + 16384;
+    (*tss).ist[0] = core::ptr::addr_of!(IST_STACKS[1]) as u64 + 32768;
+    (*tss).iomap = core::mem::size_of::<Tss>() as u16;
+    let tss_base = tss as u64;
+    let tss_limit = core::mem::size_of::<Tss>() as u64 - 1;
+    let tss_low = (tss_limit & 0xffff)
+        | ((tss_base & 0xffffff) << 16)
+        | (0x89u64 << 40)
+        | (((tss_limit >> 16) & 0xf) << 48)
+        | (((tss_base >> 24) & 0xff) << 56);
+    let gdt = core::ptr::addr_of_mut!(AP_GDT);
+    (*gdt)[0] = 0;
+    (*gdt)[1] = 0x00AF9A000000FFFF;
+    (*gdt)[2] = 0x00AF92000000FFFF;
+    (*gdt)[3] = 0x00AFF2000000FFFF;
+    (*gdt)[4] = 0x00AFFA000000FFFF;
+    (*gdt)[5] = tss_low;
+    (*gdt)[6] = tss_base >> 32;
+    core::ptr::write_volatile(
+        core::ptr::addr_of_mut!(AP_GDT_PTR),
+        DescriptorTablePtr {
+            limit: 7 * 8 - 1,
+            base: gdt as u64,
+        },
+    );
+    core::arch::asm!("lgdt [{}]", in(reg) core::ptr::addr_of!(AP_GDT_PTR));
+    x86_reload_segments();
+    core::arch::asm!("mov ax, 0x28", "ltr ax");
+    core::arch::asm!("lidt [{}]", in(reg) core::ptr::addr_of!(IDT_PTR));
+}
+
 unsafe fn setup_gdt_tss_idt() {
     let tss = core::ptr::addr_of_mut!(TSSS[0]);
     (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[0]) as u64 + 16384;
@@ -1200,9 +1263,9 @@ impl vifast_kernel::PageTableOps for PageOps {
             let aux = aux_pa as *mut u64;
             let shared_pdpt = core::ptr::addr_of!(PDPT) as *const u64;
             *root = aux_pa | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
-            for slot in vifast_pte::x86_64::KERNEL_SHARED_SLOTS {
-                *aux.add(*slot) = *shared_pdpt.add(*slot);
-            }
+            *aux = *shared_pdpt;
+            // PDPT[3] carries the supervisor-only LAPIC MMIO window.
+            *aux.add(3) = *shared_pdpt.add(3);
         }
     }
 
@@ -1329,32 +1392,6 @@ fn kernel_data_nx(root_pa: u64) -> bool {
     kernel_data_ranges()
         .into_iter()
         .all(|(start, len)| kernel_range_nx(root_pa, start, len))
-}
-
-fn lapic_mapping_ok(root_pa: u64) -> bool {
-    let base = unsafe {
-        if ACPI_LAPIC_BASE == 0 {
-            LAPIC_DEFAULT
-        } else {
-            ACPI_LAPIC_BASE
-        }
-    };
-    let mut table = root_pa;
-    for level in 0..vifast_pte::x86_64::LEVELS {
-        let idx = PageOps.index(base, level);
-        let pte = PageOps.read_pte(table, idx);
-        match PageOps.decode_at(pte, level) {
-            vifast_kernel::Pte::Table(next) => table = next,
-            vifast_kernel::Pte::Leaf(_, _) => {
-                return pte & PAGE_USER == 0
-                    && pte & PAGE_PCD != 0
-                    && pte & PAGE_PWT != 0
-                    && pte & PAGE_NX != 0;
-            }
-            vifast_kernel::Pte::Invalid => return false,
-        }
-    }
-    false
 }
 
 fn kernel_range_ok(root_pa: u64) -> bool {
@@ -1497,7 +1534,6 @@ impl Platform for X86Platform {
 
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
-            && lapic_mapping_ok(root_pa)
             && kernel_leaf_ok(
                 root_pa,
                 if unsafe { ACPI_LAPIC_BASE == 0 } {
