@@ -50,6 +50,7 @@ FORBIDDEN = [
     "ROOT PANIC",
     "STALL",
     "BOOT HANDOFF FAIL",
+    "KERNEL IRQ OUTSIDE IDLE",
 ]
 
 FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000]
@@ -89,6 +90,19 @@ ARCH = {
         ("ipi=1", "AP maintenance IPI acknowledged"),
         ("SMP TIMER OK (hart1_ticks=T)", "AP LAPIC timer ran, exactly once"),
         ("SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)", "AP idle accounting, exactly once"),
+        ("SMP TIMER RATE (ap=T, bsp=B)", "AP and BSP timer rates agree, exactly once"),
+        ("SMP IPI COUNT (sent=X, seen=Y)", "AP maintenance IPI accounting, exactly once"),
+        ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "AP scheduling, exactly once"),
+        ("SMP WORKERS OK (a=50, b=50)", "both AP workers completed"),
+        ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker AP idle proof"),
+    ],
+}
+
+# Required textual ordering (earlier marker must precede later marker).
+ORDER = {
+    "x86_64": [
+        ("AP REAL MODE OK", "AP LONG MODE OK"),
+        ("AP LONG MODE OK", "SMP OK"),
     ],
 }
 
@@ -109,7 +123,7 @@ ARCH_EXACT_ONE = {
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK", "SMP TIMER RATE", "SMP IPI COUNT", "SMP SCHED OK", "SMP WORKERS OK", "SMP POST IDLE OK"],
 }
 
 NUMERIC = {
@@ -131,6 +145,10 @@ NUMERIC = {
         "ROOT SWITCH n > 1",
         "ACPI MADT cpus == 2",
         "T > 0, I >= 1",
+        "B/2 <= T <= 2B, B >= 5",
+        "1 <= Y <= X, Wt <= T, Ws <= Y",
+        "N > 1, M >= 100, W > 0, S <= I",
+        "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
 }
 
@@ -148,6 +166,8 @@ ACPI_RE = re.compile(r"ACPI MADT OK \(cpus=(\d+), bsp=\d+, lapic=0x[0-9a-fA-F]+\
 POST_RE = re.compile(
     r"SMP POST IDLE OK \(ticks=(\d+), idle_entries=(\d+), wake_timer=(\d+)\)"
 )
+RATE_RE = re.compile(r"SMP TIMER RATE \(ap=(\d+), bsp=(\d+)\)")
+IPI_RE = re.compile(r"SMP IPI COUNT \(sent=(\d+), seen=(\d+)\)")
 ROOT_SWITCH_RE = re.compile(r"ROOT SWITCH\s+(\d+)")
 FAULT_RE = re.compile(r"USER FAULT.*?addr=(0x[0-9a-fA-F]+)")
 
@@ -235,6 +255,38 @@ def accept(
             return False
         page = int(trampoline.group(1), 16)
         if page >= 0xA0000 or page & 0xfff != 0:
+            return False
+        for before, after in ORDER["x86_64"]:
+            if output.find(before) < 0 or output.find(after) <= output.find(before):
+                return False
+        rate = RATE_RE.search(output)
+        if not rate:
+            return False
+        ap_ticks, bsp_ticks = (int(rate.group(i)) for i in (1, 2))
+        if bsp_ticks < 5 or ap_ticks < bsp_ticks // 2 or ap_ticks > bsp_ticks * 2:
+            return False
+        ipi = IPI_RE.search(output)
+        if not ipi:
+            return False
+        sent, seen = (int(ipi.group(i)) for i in (1, 2))
+        if seen < 1 or seen > sent:
+            return False
+        timer = TIMER_RE.search(output)
+        idle = smp_idle(output)
+        if not timer or int(timer.group(1)) <= 0 or min(idle) < 0 or idle[1] < 1:
+            return False
+        if idle[2] > int(timer.group(1)) or idle[3] > seen:
+            return False
+        sched = smp_sched(output)
+        if sched[0] <= 1 or sched[1] < 100 or sched[3] <= 0 or sched[2] > sched[4]:
+            return False
+        if output.count("SMP WORKERS OK (a=50, b=50)") != 1:
+            return False
+        post = POST_RE.search(output)
+        if not post:
+            return False
+        pt, pi, pw = (int(post.group(i)) for i in range(1, 4))
+        if pt < 5 or pi < pt - 2 or pw < pt - 2:
             return False
     if name == "aarch64":
         timer = TIMER_RE.search(output)

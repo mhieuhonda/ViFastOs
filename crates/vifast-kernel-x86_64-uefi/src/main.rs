@@ -208,7 +208,16 @@ pub extern "efiapi" fn efi_main(image_handle: *mut c_void, system_table: *mut c_
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
     X86Platform::write_str("\r\nPANIC\r\n");
+    if let Some(location) = info.location() {
+        vifast_kernel::klog!(
+            X86Platform,
+            "PANIC LOC {}:{}:{}",
+            location.file(),
+            location.line(),
+            location.column()
+        );
+    }
     X86Platform::exit(1)
 }

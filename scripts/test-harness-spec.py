@@ -43,6 +43,11 @@ def fixture(arch: str) -> str:
             "SMP OK (harts=2, ipi=1)",
             "SMP TIMER OK (hart1_ticks=20)",
             "SMP IDLE OK (hart1_wakeups=3, idle_entries=4, wake_timer=2, wake_sgi=1)",
+            "SMP TIMER RATE (ap=20, bsp=20)",
+            "SMP IPI COUNT (sent=2, seen=2)",
+            "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=5)",
+            "SMP WORKERS OK (a=50, b=50)",
+            "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
         ]
     for address in [0] + spec.FAULT_ADDRESSES:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")
@@ -125,6 +130,31 @@ def main() -> int:
                 base.replace("FS DISK OK", ""),
                 rc,
             )
+            variants = {
+                "rate-high": base.replace("ap=20, bsp=20", "ap=1000, bsp=20"),
+                "rate-low-b": base.replace("ap=20, bsp=20", "ap=20, bsp=4"),
+                "ipi-zero": base.replace("seen=2", "seen=0"),
+                "ipi-over": base.replace("seen=2", "seen=3"),
+                "timer-wake": base.replace("wake_timer=2", "wake_timer=21"),
+                "ipi-wake": base.replace("wake_sgi=1", "wake_sgi=3"),
+                "sched-hart0": base.replace("hart0=100", "hart0=1"),
+                "sched-hart1": base.replace("hart1=200", "hart1=99"),
+                "sched-wake": base.replace("resched_wake=1", "resched_wake=0"),
+                "sched-sent": base.replace("resched_sent=1", "resched_sent=6"),
+                "post-ticks": base.replace("ticks=6", "ticks=4"),
+                "post-entries": base.replace("idle_entries=6", "idle_entries=1"),
+                "post-wake": base.replace("wake_timer=5", "wake_timer=0"),
+                "order-real-long": base.replace(
+                    "AP REAL MODE OK (apic=1)\nAP LONG MODE OK (cpu=1)",
+                    "AP LONG MODE OK (cpu=1)\nAP REAL MODE OK (apic=1)",
+                ),
+                "order-long-smp": base.replace(
+                    "AP LONG MODE OK (cpu=1)\nSMP OK (harts=2, ipi=1)",
+                    "SMP OK (harts=2, ipi=1)\nAP LONG MODE OK (cpu=1)",
+                ),
+            }
+            for label, output in variants.items():
+                expect_fail(f"x86_64: numeric {label}", arch, output, rc)
 
     feature_base = fixture("riscv64") + "BOOT HANDOFF OK (from=1)\n"
     cases += 1

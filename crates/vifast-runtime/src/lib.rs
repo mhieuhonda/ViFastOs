@@ -152,6 +152,16 @@ pub trait Platform: Arch + Console {
         0
     }
 
+    /// Optional x86 D4 cross-check: (AP timer ticks, BSP PIT ticks).
+    fn timer_rate() -> Option<(usize, usize)> {
+        None
+    }
+
+    /// Optional x86 D4 maintenance IPI accounting: (sent, seen).
+    fn ipi_count() -> Option<(usize, usize)> {
+        None
+    }
+
     fn secondary_none_wakes() -> usize {
         0
     }
@@ -1122,6 +1132,12 @@ pub mod timer {
                     timer_wakes,
                     ipi_wakes
                 );
+            }
+            if let Some((ap, bsp)) = A::timer_rate() {
+                vifast_kernel::klog!(A, "SMP TIMER RATE (ap={}, bsp={})", ap, bsp);
+            }
+            if let Some((sent, seen)) = A::ipi_count() {
+                vifast_kernel::klog!(A, "SMP IPI COUNT (sent={}, seen={})", sent, seen);
             }
             let hart1_ticks = A::secondary_timer_ticks();
             if hart1_ticks > 0 {

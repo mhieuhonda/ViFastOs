@@ -120,6 +120,11 @@ def pass_conditions() -> str:
             lines.append(f"  - `{value}` — {description}")
         for rule in harness_spec.NUMERIC[arch]:
             lines.append(f"  - {rule}")
+    lines.append("")
+    lines.append("Thứ tự bắt buộc:")
+    for arch, pairs in harness_spec.ORDER.items():
+        for before, after in pairs:
+            lines.append(f"- {arch}: `{before}` trước `{after}`")
     return "\n".join(lines)
 
 

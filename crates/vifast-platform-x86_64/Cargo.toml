@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+test-ap-stall = []
+
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
 vifast-pte = { path = "../vifast-pte" }

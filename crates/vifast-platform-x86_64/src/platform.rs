@@ -1,6 +1,6 @@
 //! x86_64 UEFI platform: GDT/TSS/IDT, ring3, legacy PIC/PIT and user paging.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::bkl::BigKernelLock;
@@ -87,16 +87,31 @@ static AP_ONLINE: AtomicBool = AtomicBool::new(false);
 static AP_MAINT_SEQ: AtomicUsize = AtomicUsize::new(0);
 static AP_MAINT_ACK: AtomicUsize = AtomicUsize::new(0);
 static AP_MAINT_KIND: AtomicU32 = AtomicU32::new(0);
-static AP_IRR_SEEN: AtomicUsize = AtomicUsize::new(0);
 const APIC_MAINT_VECTOR: u32 = 0x30;
 const APIC_TIMER_VECTOR: u32 = 0x31;
 static AP_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static AP_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
+static AP_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
+static AP_IPI_SEEN: AtomicUsize = AtomicUsize::new(0);
+static AP_IPI_SENT: AtomicUsize = AtomicUsize::new(0);
 static AP_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+static AP_IDLE_WINDOW: AtomicBool = AtomicBool::new(false);
+static USER_ENTRIES: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+static RESCHED_SENT: AtomicUsize = AtomicUsize::new(0);
+static RESCHED_WAKE: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_WAIT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+static POST_STARTED: AtomicBool = AtomicBool::new(false);
+static POST_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+static POST_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
+static POST_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+static WAKE_SENT_THIS_WINDOW: AtomicBool = AtomicBool::new(false);
+static TSC_HZ: AtomicU64 = AtomicU64::new(0);
+static LAPIC_TIMER_HZ: AtomicU64 = AtomicU64::new(0);
+static BSP_PIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+static BSP_RATE_BASE: AtomicUsize = AtomicUsize::new(0);
 const AP_MAINT_TLB: u32 = 1;
 const AP_MAINT_ICACHE: u32 = 2;
-const TRAMPOLINE_MAGIC: u16 = 0xA55A;
-const TRAMPOLINE_MAGIC_OFFSET: u64 = 0x800;
+const TRAMPOLINE_STAGE_OFFSET: u64 = 0x802;
 
 unsafe fn identity_u32(address: u64) -> Option<u32> {
     if address.saturating_add(4) > 0x4000_0000 {
@@ -203,7 +218,12 @@ unsafe fn init_acpi(rsdp: u64) {
 }
 
 fn poll_maintenance() {
-    // No AP bootstrap yet; x86 has no maintenance IPI to service.
+    unsafe {
+        if read_msr(IA32_GS_BASE) != core::ptr::addr_of!(CPU_STATES[1]) as u64 {
+            return;
+        }
+        process_maintenance();
+    }
 }
 
 fn assert_irqs_disabled() {
@@ -732,20 +752,28 @@ fn set_active_root(root: u64, asid: u16) {
     }
 }
 
-fn assert_current_tcb() {
+fn assert_current_tcb(where_: &str) {
     let state = cpu_state();
     if state.is_null() {
         return;
     }
+    let hart = unsafe { (*state).hart_id };
     let expected = X86Platform::kernel()
-        .current()
+        .current_on(hart)
         .map(|tcb| tcb.index as usize)
         .unwrap_or(usize::MAX);
-    assert_eq!(
-        unsafe { (*state).current_tcb },
-        expected,
-        "per-CPU current_tcb mismatch"
-    );
+    let actual = unsafe { (*state).current_tcb };
+    if actual != expected {
+        vifast_kernel::klog!(
+            X86Platform,
+            "CURRENT MISMATCH where={} hart={} actual={} expected={}",
+            where_,
+            unsafe { (*state).hart_id },
+            actual,
+            expected
+        );
+        X86Platform::exit(1);
+    }
 }
 
 static mut LAPIC_READY: bool = false;
@@ -773,55 +801,141 @@ unsafe fn init_lapic() {
     vifast_kernel::klog!(X86Platform, "LAPIC OK (id={})", id);
 }
 
-unsafe fn ap_poll_irr() {
-    let base = if ACPI_LAPIC_BASE == 0 {
+unsafe fn lapic_base() -> u64 {
+    if ACPI_LAPIC_BASE == 0 {
         LAPIC_DEFAULT
     } else {
         ACPI_LAPIC_BASE
-    };
-    let maint_word = core::ptr::read_volatile(
-        (base + 0x200 + ((APIC_MAINT_VECTOR / 32) as u64) * 0x10) as *const u32,
-    );
-    if maint_word & (1 << (APIC_MAINT_VECTOR % 32)) != 0 {
-        AP_IRR_SEEN.fetch_add(1, Ordering::Release);
-        let seq = AP_MAINT_SEQ.load(Ordering::Acquire);
-        let kind = AP_MAINT_KIND.swap(0, Ordering::AcqRel);
-        if kind & AP_MAINT_TLB != 0 {
-            core::arch::asm!("invlpg [{}]", in(reg) 0u64);
-        }
-        if kind & AP_MAINT_ICACHE != 0 {
-            core::arch::asm!("wbinvd");
-        }
-        AP_MAINT_ACK.store(seq, Ordering::Release);
-        core::ptr::write_volatile((base + 0xB0) as *mut u32, 0);
-    }
-    let timer_word = core::ptr::read_volatile(
-        (base + 0x200 + ((APIC_TIMER_VECTOR / 32) as u64) * 0x10) as *const u32,
-    );
-    if timer_word & (1 << (APIC_TIMER_VECTOR % 32)) != 0 {
-        AP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
-        AP_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
-        core::ptr::write_volatile((base + 0xB0) as *mut u32, 0);
     }
 }
 
-unsafe fn ap_configure_timer() {
-    let base = if ACPI_LAPIC_BASE == 0 {
-        LAPIC_DEFAULT
-    } else {
-        ACPI_LAPIC_BASE
-    };
-    core::ptr::write_volatile((base + 0x3E0) as *mut u32, 0x3);
-    core::ptr::write_volatile((base + 0x320) as *mut u32, (1 << 17) | APIC_TIMER_VECTOR);
-    core::ptr::write_volatile((base + 0x380) as *mut u32, 1_000_000);
+fn count_user_entry() {
+    let hart = X86Platform::hart_id();
+    if let Some(counter) = USER_ENTRIES.get(hart) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
-unsafe fn ap_scheduler_loop() -> ! {
-    ap_configure_timer();
-    loop {
-        AP_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
-        ap_poll_irr();
+unsafe fn lapic_eoi() {
+    core::ptr::write_volatile((lapic_base() + 0xB0) as *mut u32, 0);
+}
+
+unsafe fn process_maintenance() {
+    let seq = AP_MAINT_SEQ.load(Ordering::Acquire);
+    if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
+        return;
+    }
+    let kind = AP_MAINT_KIND.swap(0, Ordering::AcqRel);
+    if kind & AP_MAINT_TLB != 0 {
+        core::arch::asm!("invlpg [{}]", in(reg) 0u64);
+    }
+    if kind & AP_MAINT_ICACHE != 0 {
+        core::arch::asm!("wbinvd");
+    }
+    AP_MAINT_ACK.store(seq, Ordering::Release);
+}
+
+unsafe fn rdtsc() -> u64 {
+    let low: u32;
+    let high: u32;
+    core::arch::asm!("rdtsc", out("eax") low, out("edx") high);
+    ((high as u64) << 32) | low as u64
+}
+
+unsafe fn calibrate_tsc_pit() {
+    // PIT channel 2, mode 0, 10 ms one-shot; gate enabled through port 0x61.
+    let divisor: u16 = 11932;
+    let control = (inb(0x61) & !0x02) | 0x01;
+    outb(0x61, control);
+    outb(0x43, 0xB0);
+    outb(0x42, divisor as u8);
+    outb(0x42, (divisor >> 8) as u8);
+    let start = rdtsc();
+    let mut spins = 0u64;
+    while inb(0x61) & 0x20 == 0 && spins < 100_000_000 {
         core::arch::asm!("pause");
+        spins += 1;
+    }
+    let end = rdtsc();
+    let elapsed = end.wrapping_sub(start);
+    let hz = if spins >= 100_000_000 || elapsed == 0 {
+        2_500_000_000
+    } else {
+        ((elapsed as u128 * 1_193_182u128) / divisor as u128) as u64
+    };
+    TSC_HZ.store(hz, Ordering::Release);
+    vifast_kernel::klog!(X86Platform, "TSC HZ={}", hz);
+}
+
+unsafe fn tsc_delay_us(micros: u64) {
+    let hz = TSC_HZ.load(Ordering::Acquire);
+    let cycles = if hz == 0 {
+        micros.saturating_mul(2_500)
+    } else {
+        (hz as u128 * micros as u128 / 1_000_000) as u64
+    };
+    tsc_delay(cycles);
+}
+
+unsafe fn calibrate_lapic_timer() {
+    let base = lapic_base();
+    let tsc = TSC_HZ.load(Ordering::Acquire).max(1);
+    // Mask the timer and run a one-shot with the largest count for 10 ms.
+    core::ptr::write_volatile((base + 0x320) as *mut u32, 1 << 16);
+    core::ptr::write_volatile((base + 0x3E0) as *mut u32, 0xB);
+    core::ptr::write_volatile((base + 0x380) as *mut u32, 0xFFFF_FFFF);
+    let start = rdtsc();
+    let target = tsc / 100;
+    while rdtsc().wrapping_sub(start) < target {
+        core::arch::asm!("pause");
+    }
+    let elapsed = rdtsc().wrapping_sub(start).max(1);
+    let current = core::ptr::read_volatile((base + 0x390) as *const u32);
+    let delta = 0xFFFF_FFFFu64.saturating_sub(current as u64);
+    let hz = if delta == 0 {
+        100_000_000
+    } else {
+        ((delta as u128 * tsc as u128) / elapsed as u128) as u64
+    };
+    let hz = hz.max(1_000);
+    LAPIC_TIMER_HZ.store(hz, Ordering::Release);
+    vifast_kernel::klog!(X86Platform, "LAPIC TIMER HZ={}", hz);
+    let initial = (hz / 100).max(1_000) as u32;
+    core::ptr::write_volatile((base + 0x3E0) as *mut u32, 0xB);
+    core::ptr::write_volatile((base + 0x380) as *mut u32, 0);
+    core::ptr::write_volatile((base + 0x320) as *mut u32, (1 << 17) | APIC_TIMER_VECTOR);
+    core::ptr::write_volatile((base + 0x380) as *mut u32, initial);
+}
+
+unsafe fn ap_idle_loop() -> ! {
+    calibrate_lapic_timer();
+    loop {
+        let (picked, ready) = {
+            let bkl = BKL.lock_with(poll_maintenance);
+            let picked = X86Platform::kernel().pick_on(1);
+            let ready = X86Platform::kernel().has_ready_on(1);
+            drop(bkl);
+            (picked, ready)
+        };
+        if let Some(tcb) = picked {
+            publish_current_tcb(Some(tcb.index as usize));
+            if vifast_runtime::ensure_current_root::<X86Platform>().is_err() {
+                X86Platform::exit(1);
+            }
+            let context = X86Platform::contexts()[tcb.index as usize];
+            <X86Platform as Platform>::enter_user(&context);
+        }
+        if ready {
+            continue;
+        }
+        AP_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        WAKE_SENT_THIS_WINDOW.store(false, Ordering::SeqCst);
+        if POST_STARTED.load(Ordering::Relaxed) {
+            POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        }
+        AP_IDLE_WINDOW.store(true, Ordering::SeqCst);
+        core::arch::asm!("sti", "hlt", "cli", options(nomem, nostack));
+        AP_IDLE_WINDOW.store(false, Ordering::SeqCst);
     }
 }
 
@@ -869,8 +983,19 @@ unsafe fn install_real_trampoline() {
         0x08,
         0x00, // ljmp 08:page+0x30
     ];
-    core::ptr::copy_nonoverlapping(real.as_ptr(), page, real.len());
-    core::ptr::write_unaligned(page.add(0x1b) as *mut u32, (base as u32).wrapping_add(0x30));
+    let far_start = real.len() - 8;
+    core::ptr::copy_nonoverlapping(real.as_ptr(), page, far_start);
+    let real_stage = [0xC6, 0x06, 0x02, 0x08, 0x01]; // mov byte [0802], 1
+    core::ptr::copy_nonoverlapping(real_stage.as_ptr(), page.add(far_start), real_stage.len());
+    core::ptr::copy_nonoverlapping(
+        real[far_start..].as_ptr(),
+        page.add(far_start + real_stage.len()),
+        8,
+    );
+    core::ptr::write_unaligned(
+        page.add(far_start + real_stage.len() + 2) as *mut u32,
+        (base as u32).wrapping_add(0x30),
+    );
     // 32-bit protected mode: flat segments, CR3, PAE, EFER.LME|NXE, paging.
     let pm = [
         0x66, 0xB8, 0x10, 0x00, // mov ax, 0x10
@@ -890,14 +1015,38 @@ unsafe fn install_real_trampoline() {
         0xEA, 0, 0, 0, 0, 0x18, 0x00, // ljmp 18:page+0x80
     ];
     let pm_offset = 0x30;
-    core::ptr::copy_nonoverlapping(pm.as_ptr(), page.add(pm_offset), pm.len());
+    let pm_far = pm.len() - 7;
+    core::ptr::copy_nonoverlapping(pm.as_ptr(), page.add(pm_offset), pm_far);
+    let mut pm_stage = [
+        0xC6, 0x05, 0, 0, 0, 0, 0x02, // mov byte [abs], 2
+    ];
+    core::ptr::write_unaligned(
+        pm_stage.as_mut_ptr().add(2) as *mut u32,
+        (base as u32).wrapping_add(0x802),
+    );
+    core::ptr::copy_nonoverlapping(
+        pm_stage.as_ptr(),
+        page.add(pm_offset + pm_far),
+        pm_stage.len(),
+    );
+    core::ptr::copy_nonoverlapping(
+        pm[pm_far..].as_ptr(),
+        page.add(pm_offset + pm_far + pm_stage.len()),
+        7,
+    );
     core::ptr::write_unaligned(
         page.add(pm_offset + 0x10) as *mut u32,
         (base as u32).wrapping_add(0x200),
     );
     core::ptr::write_unaligned(
-        page.add(pm_offset + 0x3c) as *mut u32,
+        page.add(pm_offset + pm_far + pm_stage.len() + 1) as *mut u32,
         (base as u32).wrapping_add(0x80),
+    );
+    #[cfg(feature = "test-ap-stall")]
+    core::ptr::copy_nonoverlapping(
+        [0xEB, 0xFE].as_ptr(),
+        page.add(pm_offset + pm_far + pm_stage.len()),
+        2,
     );
     // 64-bit entry: load stack and AP entry address.
     let mut lm = [
@@ -908,7 +1057,7 @@ unsafe fn install_real_trampoline() {
     ];
     let lm_offset = 0x80;
     core::ptr::copy_nonoverlapping(lm.as_mut_ptr(), page.add(lm_offset), lm.len());
-    let stack = core::ptr::addr_of!(TRAP_STACKS) as u64 + 0x4000;
+    let stack = core::ptr::addr_of!(TRAP_STACKS[1]) as u64 + 0x4000;
     let entry = ap_entry as *const () as u64;
     core::ptr::write_unaligned(page.add(lm_offset + 16) as *mut u64, stack);
     core::ptr::write_unaligned(page.add(lm_offset + 26) as *mut u64, entry);
@@ -940,6 +1089,8 @@ unsafe fn install_real_trampoline() {
 pub extern "C" fn ap_entry() -> ! {
     unsafe {
         core::arch::asm!("cli");
+        let stage_ptr = (AP_TRAMPOLINE + TRAMPOLINE_STAGE_OFFSET) as *mut u8;
+        core::ptr::write_volatile(stage_ptr, 3);
         setup_ap_gdt_tss_idt();
         init_cpu(1);
         let mut tr: u16;
@@ -951,11 +1102,35 @@ pub extern "C" fn ap_entry() -> ! {
             "AP GS base mismatch"
         );
         let _ = configure_lapic();
+        let base = lapic_base();
+        core::ptr::write_volatile((base + 0x350) as *mut u32, 1 << 16);
+        core::ptr::write_volatile((base + 0x360) as *mut u32, 1 << 16);
         enable_smep_smap();
+        core::ptr::write_volatile(stage_ptr, 4);
         AP_ONLINE.store(true, Ordering::SeqCst);
         AP_LONG_ONLINE = true;
-        ap_scheduler_loop()
+        ap_idle_loop()
     }
+}
+
+unsafe fn trampoline_stage() -> u8 {
+    if AP_TRAMPOLINE == 0 {
+        0
+    } else {
+        core::ptr::read_volatile((AP_TRAMPOLINE + TRAMPOLINE_STAGE_OFFSET) as *const u8)
+    }
+}
+
+unsafe fn wait_stage(target: u8) -> u8 {
+    let mut stage = trampoline_stage();
+    for _ in 0..40 {
+        if stage >= target {
+            return stage;
+        }
+        tsc_delay_us(500);
+        stage = trampoline_stage();
+    }
+    stage
 }
 
 unsafe fn wait_icr_idle(base: u64) -> bool {
@@ -1005,55 +1180,54 @@ unsafe fn start_ap_real() {
         X86_64::write_str("SMP FAIL (ap timeout stage=real)\r\n");
         return;
     }
-    tsc_delay(30_000_000); // approximately 10 ms at QEMU TSC
+    tsc_delay_us(10_000);
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, 0x000C_4600 | vector);
     if !wait_icr_idle(base) {
         X86_64::write_str("SMP FAIL (ap timeout stage=real)\r\n");
         return;
     }
-    tsc_delay(1_000_000); // approximately 200 us
+    tsc_delay_us(200);
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, 0x000C_4600 | vector);
     let _ = wait_icr_idle(base);
-    let mut real_seen = false;
-    for _ in 0..20 {
-        tsc_delay(1_000_000);
-        if core::ptr::read_volatile((AP_TRAMPOLINE + TRAMPOLINE_MAGIC_OFFSET) as *const u16)
-            == TRAMPOLINE_MAGIC
-        {
-            let apic = AP_APIC_ID;
-            vifast_kernel::klog!(X86Platform, "AP REAL MODE OK (apic={})", apic);
-            real_seen = true;
-            break;
-        }
-    }
-    if !real_seen {
-        X86_64::write_str("SMP FAIL (ap timeout stage=real)\r\n");
+    let stage = wait_stage(1);
+    if stage < 1 {
+        vifast_kernel::klog!(X86Platform, "SMP FAIL (ap timeout stage={})", stage);
+        #[cfg(feature = "test-ap-stall")]
+        X86Platform::exit(1);
+        #[cfg(not(feature = "test-ap-stall"))]
         return;
     }
-    for _ in 0..20 {
-        tsc_delay(1_000_000);
-        if AP_ONLINE.load(Ordering::SeqCst) {
-            vifast_kernel::klog!(X86Platform, "AP LONG MODE OK (cpu=1)");
-            let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-            AP_MAINT_KIND.fetch_or(AP_MAINT_TLB | AP_MAINT_ICACHE, Ordering::AcqRel);
-            core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
-            send_icr(base, APIC_MAINT_VECTOR);
-            for _ in 0..100_000 {
-                if AP_MAINT_ACK.load(Ordering::Acquire) >= seq
-                    && AP_IRR_SEEN.load(Ordering::Acquire) > 0
-                {
-                    vifast_kernel::klog!(X86Platform, "SMP OK (harts=2, ipi=1)");
-                    return;
-                }
-                core::arch::asm!("pause");
-            }
-            X86_64::write_str("SMP FAIL (ap maintenance timeout)\r\n");
+    let apic = AP_APIC_ID;
+    vifast_kernel::klog!(X86Platform, "AP REAL MODE OK (apic={})", apic);
+    let stage = wait_stage(3);
+    if stage < 3 {
+        vifast_kernel::klog!(X86Platform, "SMP FAIL (ap timeout stage={})", stage);
+        #[cfg(feature = "test-ap-stall")]
+        X86Platform::exit(1);
+        #[cfg(not(feature = "test-ap-stall"))]
+        return;
+    }
+    vifast_kernel::klog!(X86Platform, "AP LONG MODE OK (cpu=1)");
+    let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    AP_MAINT_KIND.fetch_or(AP_MAINT_TLB | AP_MAINT_ICACHE, Ordering::AcqRel);
+    AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
+    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+    send_icr(base, APIC_MAINT_VECTOR);
+    for _ in 0..100_000 {
+        if AP_MAINT_ACK.load(Ordering::Acquire) >= seq && AP_IPI_SEEN.load(Ordering::Acquire) > 0 {
+            BSP_RATE_BASE.store(BSP_PIT_TICKS.load(Ordering::Acquire), Ordering::Release);
+            vifast_kernel::klog!(X86Platform, "SMP OK (harts=2, ipi=1)");
             return;
         }
+        core::arch::asm!("pause");
     }
-    X86_64::write_str("SMP FAIL (ap timeout stage=long)\r\n");
+    vifast_kernel::klog!(
+        X86Platform,
+        "SMP FAIL (ap timeout stage={})",
+        trampoline_stage()
+    );
 }
 
 unsafe fn init_cpu(hartid: usize) {
@@ -1178,6 +1352,20 @@ unsafe fn setup_gdt_tss_idt() {
         offset_high: (timer >> 32) as u32,
         zero: 0,
     };
+    for (vector, handler) in [
+        (APIC_MAINT_VECTOR, ap_ipi_entry as *const () as u64),
+        (APIC_TIMER_VECTOR, ap_timer_entry as *const () as u64),
+    ] {
+        (*idt)[vector as usize] = IdtEntry {
+            offset_low: handler as u16,
+            selector: 0x08,
+            ist: 0,
+            type_attr: 0x8E,
+            offset_mid: (handler >> 16) as u16,
+            offset_high: (handler >> 32) as u32,
+            zero: 0,
+        };
+    }
     core::ptr::write_volatile(
         core::ptr::addr_of_mut!(IDT_PTR),
         DescriptorTablePtr {
@@ -1452,6 +1640,10 @@ impl Platform for X86Platform {
             build_kernel_page_tables();
             install_real_trampoline();
             init_cpu(info.hartid);
+            calibrate_tsc_pit();
+            // APs start before prepare_user(); install the shared IDT first so
+            // their D4 idle window never runs with an empty IDT.
+            setup_gdt_tss_idt();
             let trampoline = AP_TRAMPOLINE;
             if trampoline != 0 {
                 vifast_kernel::klog!(X86Platform, "AP TRAMPOLINE OK (page={:#x})", trampoline);
@@ -1483,9 +1675,8 @@ impl Platform for X86Platform {
 
     fn prepare_user() {
         unsafe {
-            setup_gdt_tss_idt();
-            // x86_reload_segments loads GS with a null-base selector, which
-            // clobbers IA32_GS_BASE.  Re-publish the per-CPU pointer after it.
+            // The GDT/TSS/IDT was installed in init_platform before the AP
+            // started; do not rebuild it while the AP may be idle with IF=1.
             init_cpu(0);
             enable_smep_smap();
             enable_pcid();
@@ -1696,15 +1887,15 @@ impl Platform for X86Platform {
     }
 
     fn enter_user(context: &TrapFrame) -> ! {
-        assert!(!BKL.is_held(), "BKL held before user return");
         let hart: usize;
         let trap_top: u64;
         unsafe {
             core::arch::asm!("mov {}, gs:[0]", out(reg) hart);
             core::arch::asm!("mov {}, gs:[16]", out(reg) trap_top);
         }
-        assert_eq!(hart, 0, "unexpected x86 per-CPU hart");
+        assert!(hart < 2, "unexpected x86 per-CPU hart");
         assert!(trap_top != 0, "x86 per-CPU trap stack missing");
+        count_user_entry();
         // Entering ring 3: restore the user GS base and keep CpuState in
         // IA32_KERNEL_GS_BASE (standard swapgs convention).
         unsafe {
@@ -1796,7 +1987,7 @@ impl Platform for X86Platform {
     fn secondary_wakeups() -> (usize, usize) {
         (
             AP_TIMER_WAKES.load(Ordering::Relaxed),
-            AP_IRR_SEEN.load(Ordering::Relaxed),
+            AP_IPI_WAKES.load(Ordering::Relaxed),
         )
     }
 
@@ -1806,6 +1997,119 @@ impl Platform for X86Platform {
 
     fn secondary_idle_entries() -> usize {
         AP_IDLE_ENTRIES.load(Ordering::Relaxed)
+    }
+
+    fn secondary_wait_blocked() {
+        let count = SECONDARY_WAIT_BLOCKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if count == 2 {
+            POST_TIMER_TICKS.store(0, Ordering::Relaxed);
+            POST_TIMER_WAKES.store(0, Ordering::Relaxed);
+            POST_IDLE_ENTRIES.store(0, Ordering::Relaxed);
+            POST_STARTED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn post_idle_stats() -> Option<(usize, usize, usize)> {
+        if !POST_STARTED.load(Ordering::SeqCst) {
+            return None;
+        }
+        Some((
+            POST_TIMER_TICKS.load(Ordering::Relaxed),
+            POST_IDLE_ENTRIES.load(Ordering::Relaxed),
+            POST_TIMER_WAKES.load(Ordering::Relaxed),
+        ))
+    }
+
+    fn post_idle_ready() -> bool {
+        if !POST_STARTED.load(Ordering::SeqCst) {
+            return false;
+        }
+        let ticks = POST_TIMER_TICKS.load(Ordering::Relaxed);
+        ticks >= 5
+            && POST_IDLE_ENTRIES.load(Ordering::Relaxed) >= ticks.saturating_sub(2)
+            && POST_TIMER_WAKES.load(Ordering::Relaxed) >= ticks.saturating_sub(2)
+    }
+
+    fn wake_hart(hart: usize) {
+        if hart == 1 && AP_ONLINE.load(Ordering::SeqCst) && AP_IDLE_WINDOW.load(Ordering::SeqCst) {
+            unsafe {
+                let base = lapic_base();
+                AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
+                RESCHED_SENT.fetch_add(1, Ordering::Relaxed);
+                core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+                send_icr(base, APIC_MAINT_VECTOR);
+            }
+        }
+    }
+
+    fn sched_harts() -> u32 {
+        0b11
+    }
+
+    fn can_wait_for_work() -> bool {
+        true
+    }
+
+    fn wait_for_work(hart: usize) {
+        loop {
+            let ready = {
+                let bkl = BKL.lock_with(poll_maintenance);
+                let ready = X86Platform::kernel().has_ready_on(hart);
+                drop(bkl);
+                ready
+            };
+            if ready {
+                return;
+            }
+            if hart == 1 {
+                AP_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+                WAKE_SENT_THIS_WINDOW.store(false, Ordering::SeqCst);
+                if POST_STARTED.load(Ordering::Relaxed) {
+                    POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+                }
+                AP_IDLE_WINDOW.store(true, Ordering::SeqCst);
+                unsafe {
+                    core::arch::asm!("sti", "hlt", "cli", options(nomem, nostack));
+                }
+                AP_IDLE_WINDOW.store(false, Ordering::SeqCst);
+            } else {
+                core::hint::spin_loop();
+            }
+        }
+    }
+
+    fn user_entries(hart: usize) -> usize {
+        USER_ENTRIES
+            .get(hart)
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    fn resched_sent() -> usize {
+        RESCHED_SENT.load(Ordering::Relaxed)
+    }
+
+    fn resched_wake() -> usize {
+        RESCHED_WAKE.load(Ordering::Relaxed)
+    }
+
+    fn idle_entries() -> usize {
+        AP_IDLE_ENTRIES.load(Ordering::Relaxed)
+    }
+
+    fn timer_rate() -> Option<(usize, usize)> {
+        let base = BSP_RATE_BASE.load(Ordering::Acquire);
+        Some((
+            AP_TIMER_TICKS.load(Ordering::Relaxed),
+            BSP_PIT_TICKS.load(Ordering::Relaxed).saturating_sub(base),
+        ))
+    }
+
+    fn ipi_count() -> Option<(usize, usize)> {
+        Some((
+            AP_IPI_SENT.load(Ordering::Relaxed),
+            AP_IPI_SEEN.load(Ordering::Relaxed),
+        ))
     }
 
     fn start_smp() {
@@ -1819,6 +2123,8 @@ impl Platform for X86Platform {
 extern "efiapi" {
     fn int80_entry();
     fn irq0_entry();
+    fn ap_ipi_entry();
+    fn ap_timer_entry();
     fn pf_entry();
     static x86_exception_table: [u64; 32];
     fn x86_reload_segments();
@@ -1826,9 +2132,21 @@ extern "efiapi" {
 
 #[no_mangle]
 extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: u64) -> ! {
+    if X86Platform::hart_id() != 0 {
+        vifast_kernel::klog!(
+            X86Platform,
+            "AP EXCEPTION vector={} err={:#x} rip={:#x} cs={:#x} rsp={:#x}",
+            vector,
+            error,
+            unsafe { *frame.add(17) },
+            unsafe { *frame.add(18) },
+            unsafe { *frame.add(20) }
+        );
+        X86Platform::exit(1);
+    }
     assert_irqs_disabled();
     let bkl = BKL.lock_with(poll_maintenance);
-    assert_current_tcb();
+    assert_current_tcb("exception");
     if matches!(vector, 2 | 8 | 18) {
         vifast_kernel::klog!(
             X86Platform,
@@ -1852,7 +2170,6 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
     let mut context = TrapFrame::empty();
     vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, error);
     drop(bkl);
-    assert!(!BKL.is_held(), "BKL held before user fault return");
     <X86Platform as Platform>::enter_user(&context);
 }
 
@@ -1860,7 +2177,7 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
 extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
     assert_irqs_disabled();
     let bkl = BKL.lock_with(poll_maintenance);
-    assert_current_tcb();
+    assert_current_tcb("pagefault");
     let cr2: u64;
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
@@ -1878,7 +2195,6 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
     let mut context = TrapFrame::empty();
     vifast_runtime::fault::suspend::<X86Platform>(&mut context, error, cr2);
     drop(bkl);
-    assert!(!BKL.is_held(), "BKL held before user page-fault return");
     <X86Platform as Platform>::enter_user(&context);
 }
 
@@ -1886,24 +2202,88 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
 extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
     assert_irqs_disabled();
     let bkl = BKL.lock_with(poll_maintenance);
-    assert_current_tcb();
+    assert_current_tcb("trap");
     let frame = unsafe { &mut *frame };
     let number = frame.rax;
     let args = [
         frame.rdi, frame.rsi, frame.rdx, frame.rcx, frame.r8, frame.r9,
     ];
-    let _ = vifast_runtime::syscall::dispatch::<X86Platform>(frame, number, args);
+    let waiting = vifast_runtime::syscall::dispatch::<X86Platform>(frame, number, args);
     drop(bkl);
-    assert!(!BKL.is_held(), "BKL held on x86 syscall return");
+    if waiting && X86Platform::hart_id() == 1 {
+        loop {
+            <X86Platform as Platform>::wait_for_work(1);
+            let bkl = BKL.lock_with(poll_maintenance);
+            if vifast_runtime::syscall::resume_blocked::<X86Platform>(frame) {
+                drop(bkl);
+                count_user_entry();
+                return;
+            }
+            drop(bkl);
+        }
+    }
+    count_user_entry();
 }
 
 #[no_mangle]
 extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
+    if X86Platform::hart_id() != 0 {
+        // Some QEMU/PIC routings broadcast the legacy IRQ0 to every CPU.
+        // The AP owns only LAPIC timer/IPI vectors; acknowledge and ignore.
+        unsafe { outb(0x20, 0x20) };
+        return;
+    }
     assert_irqs_disabled();
     let bkl = BKL.lock_with(poll_maintenance);
-    assert_current_tcb();
+    assert_current_tcb("irq0");
+    if cpu_state() == unsafe { core::ptr::addr_of!(CPU_STATES[0]) as *mut _ } {
+        BSP_PIT_TICKS.fetch_add(1, Ordering::Relaxed);
+    }
     let frame = unsafe { &mut *frame };
     vifast_runtime::timer::on_timer::<X86Platform>(frame);
     drop(bkl);
-    assert!(!BKL.is_held(), "BKL held on x86 IRQ return");
+}
+
+#[no_mangle]
+extern "efiapi" fn x86_ap_irq_handler(frame: *mut TrapFrame, vector: u64) {
+    assert_irqs_disabled();
+    let cs = unsafe { (*frame).cs };
+    if cs & 3 == 0 {
+        // D4: the only legal ring-0 interrupt path is the idle window.
+        if !AP_IDLE_WINDOW.load(Ordering::SeqCst) {
+            vifast_kernel::klog!(X86Platform, "KERNEL IRQ OUTSIDE IDLE");
+            X86Platform::exit(1);
+        }
+        if vector == APIC_TIMER_VECTOR as u64 {
+            AP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+            AP_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+            if POST_STARTED.load(Ordering::Relaxed) {
+                POST_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+                POST_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+            }
+        } else if vector == APIC_MAINT_VECTOR as u64 {
+            AP_IPI_SEEN.fetch_add(1, Ordering::Relaxed);
+            AP_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+            RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
+            unsafe { process_maintenance() };
+        }
+        unsafe { lapic_eoi() };
+        return;
+    }
+    // Ring-3 path keeps the existing preemption contract.
+    let bkl = BKL.lock_with(poll_maintenance);
+    assert_current_tcb("ap-user-irq");
+    if vector == APIC_TIMER_VECTOR as u64 {
+        unsafe { lapic_eoi() };
+        vifast_runtime::timer::on_timer::<X86Platform>(unsafe { &mut *frame });
+    } else if vector == APIC_MAINT_VECTOR as u64 {
+        AP_IPI_SEEN.fetch_add(1, Ordering::Relaxed);
+        RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            process_maintenance();
+            lapic_eoi();
+        }
+    }
+    count_user_entry();
+    drop(bkl);
 }

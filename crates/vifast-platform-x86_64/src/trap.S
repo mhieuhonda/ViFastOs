@@ -246,6 +246,31 @@ irq0_entry:
     RESTORE_REGS
     iretq
 
+    .globl ap_ipi_entry
+ap_ipi_entry:
+    mov rdx, 0x30
+    jmp ap_irq_common
+
+    .globl ap_timer_entry
+ap_timer_entry:
+    mov rdx, 0x31
+    jmp ap_irq_common
+
+ap_irq_common:
+    SAVE_REGS
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
+    mov rcx, rsp          # efiapi arg1: *mut TrapFrame
+    call x86_ap_irq_handler
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
+    RESTORE_REGS
+    iretq
+
     .globl x86_reload_segments
 x86_reload_segments:
     lea rax, [rip + 1f]

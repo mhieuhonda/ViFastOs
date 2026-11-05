@@ -110,12 +110,17 @@ def main() -> int:
         + len(harness_spec.FORBIDDEN)
         + sum(len(values) for values in harness_spec.ARCH.values())
         + sum(len(values) for values in harness_spec.NUMERIC.values())
+        + sum(len(values) for values in harness_spec.ORDER.values())
         + len(harness_spec.EXIT_CODES)
     )
     if generated_count != expected_count:
         fail(
             f"generated pass condition count {generated_count} != spec {expected_count}"
         )
+
+    for stale in ("AP mới maintenance", "chỉ maintenance", "x86 hart phụ chưa có scheduler"):
+        if stale in summary:
+            fail(f"stale x86 prose: {stale}")
 
     # Every host-tested workspace crate must be listed and have a test command.
     for package in gen_docs.PACKAGES:
