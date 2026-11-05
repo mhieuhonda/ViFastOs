@@ -213,7 +213,9 @@ fn panic(_info: &PanicInfo) -> ! {
         X86Platform::halt();
     }
     let hart = <X86Platform as vifast_runtime::Platform>::hart_id();
+    vifast_arch::panic::lock_console();
     vifast_kernel::klog!(X86Platform, "PANIC (hart={})", hart);
+    vifast_arch::panic::unlock_console();
     vifast_platform_x86_64::platform::panic_halt_others();
     for _ in 0..10_000_000 {
         core::hint::spin_loop();

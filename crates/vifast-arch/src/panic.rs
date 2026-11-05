@@ -7,6 +7,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 static PANICKING: AtomicBool = AtomicBool::new(false);
+static CONSOLE_LOCK: AtomicBool = AtomicBool::new(false);
 
 /// Returns true for exactly one hart: the first one to panic.
 pub fn begin() -> bool {
@@ -18,4 +19,19 @@ pub fn begin() -> bool {
 /// True once any hart has entered the panic path.
 pub fn is_panicking() -> bool {
     PANICKING.load(Ordering::Acquire)
+}
+
+/// Serialize the one panic record with other panic writers.  This lock is
+/// independent of the BKL and must only be used by the panic path.
+pub fn lock_console() {
+    while CONSOLE_LOCK
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+pub fn unlock_console() {
+    CONSOLE_LOCK.store(false, Ordering::Release);
 }
