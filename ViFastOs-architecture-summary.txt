@@ -146,6 +146,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 814e28f feat: add irq objects and timer irq delivery
 - c521528 feat: route uart irq and make shell interrupt-driven
 - 6d3129f feat: add flat cnode cspace and cnode install
+- b014c8b feat: add end-to-end cnode demo task
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
