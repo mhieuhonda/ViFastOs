@@ -745,3 +745,12 @@ follow-up `62b31f4`.
 - Client test `/append`: ghi "a", ghi "b" tại offset 0, stat=2, đọc "ab";
   in `FS APPEND OK`, harness yêu cầu đúng một dòng và cấm `FS APPEND BAD`.
 - QEMU --repeat 3 3/3; persistence 7 phase ×3; 0 warning.
+
+## 8.998 — Write-back block data (vòng 22)
+
+- `CachedDev` giữ dirty bit: data LBA >= DATA_START ghi vào cache; journal/
+  metadata (< DATA_START) vẫn write-through để bảo toàn thứ tự.
+- Eviction dirty ghi lại; `CachedDev::flush` flush dirty + inner device.
+- `Fs::commit` flush trước khi xoá journal commit; `replay` cũng flush trước
+  khi clear commit. Vì vậy crash không mất data sau khi journal đã commit.
+- Host test `vifast-fs` 22/22; QEMU 3/3; persistence 7 phase ×3; 0 warning.

@@ -10,7 +10,8 @@ queue theo hart + work stealing, BKL ticket, maintenance IPI và **per-VA TLB
 shootdown**. User mode có **root/server/client/fault TCB từ ELF Rust**, VSpace
 riêng, IPC + chuyển capability, W^X, ASID/PCID, Untyped/retype có accounting,
 software IOMMU, **VFS server user-space** với FS v3 journal, **hard link,
-symlink, double-indirect, O_APPEND, block cache, fsync/flush thật**, persistence 7 phase,
+symlink, double-indirect, O_APPEND, block cache write-back data,
+fsync/flush thật**, persistence 7 phase,
 **Sleep deadline + BSP idle TCB**, **SchedContext budget/period**, `TcbRestart`,
 `TcbBindNotification`, và **console input + shell nhỏ** (`ls`, `cat`, `stat`,
 `sync`...). Có 49 syscall number (49 implemented, 0 placeholder). CNode phẳng
@@ -212,8 +213,8 @@ cargo test -p vifast-elf
 - Chưa có hardware IOMMU (VT-d/SMMU); `IoMap`/`IoUnmap` chỉ là mô hình phần mềm.
 - Chưa có network, GPU/framebuffer, compositor hay ViFastKey. Shell đã
   IRQ-driven cho input nhưng chưa có job control.
-- FS còn giới hạn: ảnh 4 MiB, 64 inode, tên 28 byte, chưa có block cache
-  write-back, mount/pager hay barrier phần cứng thật; driver disk là
+- FS còn giới hạn: ảnh 4 MiB, 64 inode, tên 28 byte, chưa có mount/pager
+  hay barrier phần cứng thật; driver disk là
   VirtIO-MMIO/ATA PIO QEMU-specific.
 - SMP mới test 2 hart (`MAX_HARTS = 4`); BSP có idle TCB, hart phụ vẫn dùng
   platform idle loop; chưa có khóa mịn/x2APIC.

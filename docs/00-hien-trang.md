@@ -22,7 +22,7 @@ chưa được port sang bản bare-metal này.
 | Untyped con + BootInfo + TCB idle/restart/bind | có | có | có |
 | VFS v3 journal + directory + permission | có | có | có |
 | Hard link / symlink / double-indirect / O_APPEND | có | có | có |
-| Block cache + fsync/BlockFlush | có | có | có |
+| Block cache write-back data + fsync/BlockFlush | có | có | có |
 | Persistence 7 phase | có | có | có |
 | Software IOMMU + DMA map | có | có | có |
 | Sleep deadline (BlockedSleep) | có | có | có |
@@ -49,7 +49,8 @@ Kernel portable hiện có:
   SchedContext/Iommu;
 - VSpace riêng, ASID/PCID, first-fit VA allocator, per-VA TLB shootdown;
 - user-space VFS server, FS v3 journal, hard link/symlink, double-indirect,
-  write-through block cache, `fsync` → `BlockFlush`;
+  block cache write-back cho data, write-through journal/metadata,
+  `fsync` → `BlockFlush`;
 - software IOMMU domain + `IoMap`/`IoUnmap`;
 - 49 syscall number: 49 implemented, 0 placeholder; CNode phẳng, SchedContext
   budget/period, timer IRQ và UART IRQ delivery đã chạy;
@@ -61,7 +62,7 @@ Kernel portable hiện có:
 - Hardware IOMMU (VT-d/SMMU); chỉ có mô hình software.
 - CNode nhiều cấp; UART IRQ hiện chỉ route BSP/hart 0.
 - Network, GPU/framebuffer, compositor, ViFastKey; shell chưa có job control.
-- Block cache write-back, mount/pager, barrier phần cứng thật, driver disk
+- Mount/pager, barrier phần cứng thật, driver disk
   ngoài QEMU.
 - Khóa mịn/x2APIC; scheduler mới test 2 hart.
 - Allocator vật lý tổng quát/free object ngoài revoke.

@@ -200,13 +200,13 @@ Test hiện tại:
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
-- `cargo test -p vifast-fs`: 21/21 PASS
+- `cargo test -p vifast-fs`: 22/22 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
 - RISC-V headroom: 249168 byte (`kernel_end=0x803c32b0`)
 - `Kernel = 694744`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
+- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -783,15 +783,17 @@ User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
   vào root slot từ BootInfo v3, root chỉ copy cho server. Client thử
   BlockWrite không cap và in `BLOCK DENIED OK`. `BlockFlush` (45) cần quyền
   WRITE và gọi `Platform::block_flush`.
-- Server bọc block device trong `CachedDev<ServerDev>`: cache write-through
-  8 slot x 512 byte (khoảng 4 KiB). Đọc hit không xuống thiết bị; ghi xuống
-  thiết bị trước rồi cập nhật cache nên không có dirty block và thứ tự journal
-  không đổi. Thống kê `hits/misses/writes` có test host; cache được clear sau
-  format để không giữ superblock cũ.
+- Server bọc block device trong `CachedDev<ServerDev>`: cache 8 slot x 512
+  byte (khoảng 4 KiB). Đọc hit không xuống thiết bị. Data block (LBA >= 30)
+  ghi vào cache dirty; journal/metadata (< 30) write-through để giữ thứ tự.
+  Eviction/commit/fync ghi lại dirty; `commit()` flush trước khi clear journal
+  commit. Thống kê `hits/misses/writes` có test host; cache clear sau format.
 - Server tự format đĩa trắng (`FS FORMAT OK`), mount đĩa hợp lệ
   (`FS PERSIST OK`), migrate `VF01` sang `/scratch` (`FS MIGRATE OK`), và
   replay/torn journal (`FS RECOVER OK (replayed=1|0)`). FSCK sau demo in
   `FS FSCK OK`; `FS V2 OK`, `FS PERM OK` là điều kiện harness.
+- Block cache 8 slot: data block dirty, metadata/journal write-through; commit
+  flush trước khi xoá journal commit; `Fs::fsync` flush dirty + device.
 - `vifast-fsutil` (host) có mkfs/put/put-file/mkdir/rm/mv/stat/truncate/link/
   symlink/readlink/get/ls/fsck/inject-journal --valid|--torn;
   `scripts/test-persist.py` chạy 7 phase cho cả 3 kiến trúc, phase 7 kiểm cả

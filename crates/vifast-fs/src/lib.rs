@@ -138,6 +138,7 @@ pub const CACHE_SLOTS: usize = 8;
 struct CacheSlot {
     lba: u32,
     data: [u8; BLOCK_SIZE],
+    dirty: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -147,12 +148,13 @@ pub struct CacheStats {
     pub writes: u64,
 }
 
-/// A small write-through block cache.
+/// A small block cache with write-back for file data and write-through for
+/// metadata/journal blocks.
 ///
-/// Reads are cached, writes go to the underlying device first and then update
-/// the cache.  There are no dirty blocks, so journal ordering is unchanged.
-/// This is deliberately simpler than a write-back cache; the next step can add
-/// dirty tracking and explicit flushes once the block layer has a real barrier.
+/// Journal data, journal headers and commit records live below `DATA_START`
+/// and are written through immediately, preserving write-ahead ordering.
+/// File data blocks are cached dirty; `commit()` flushes them before clearing
+/// the journal commit record, and `Fs::fsync()` flushes them explicitly.
 pub struct CachedDev<D> {
     inner: D,
     slots: [Option<CacheSlot>; CACHE_SLOTS],
@@ -162,7 +164,7 @@ pub struct CachedDev<D> {
     writes: u64,
 }
 
-impl<D> CachedDev<D> {
+impl<D: BlockDev> CachedDev<D> {
     pub const fn new(inner: D) -> Self {
         Self {
             inner,
@@ -197,11 +199,12 @@ impl<D> CachedDev<D> {
         self.next = 0;
     }
 
-    fn insert(&mut self, lba: u32, data: &[u8; BLOCK_SIZE]) {
+    fn insert(&mut self, lba: u32, data: &[u8; BLOCK_SIZE], dirty: bool) -> Result<(), FsError> {
         for slot in self.slots.iter_mut().flatten() {
             if slot.lba == lba {
                 slot.data.copy_from_slice(data);
-                return;
+                slot.dirty = dirty;
+                return Ok(());
             }
         }
         let index = self
@@ -213,7 +216,17 @@ impl<D> CachedDev<D> {
                 self.next = (self.next + 1) % CACHE_SLOTS;
                 index
             });
-        self.slots[index] = Some(CacheSlot { lba, data: *data });
+        if let Some(old) = self.slots[index] {
+            if old.dirty {
+                self.inner.write(old.lba, &old.data)?;
+            }
+        }
+        self.slots[index] = Some(CacheSlot {
+            lba,
+            data: *data,
+            dirty,
+        });
+        Ok(())
     }
 }
 
@@ -229,14 +242,18 @@ impl<D: BlockDev> BlockDev for CachedDev<D> {
         let mut data = [0u8; BLOCK_SIZE];
         self.inner.read(lba, &mut data)?;
         out.copy_from_slice(&data);
-        self.insert(lba, &data);
+        self.insert(lba, &data, false)?;
         self.misses = self.misses.wrapping_add(1);
         Ok(())
     }
 
     fn write(&mut self, lba: u32, data: &[u8; BLOCK_SIZE]) -> Result<(), FsError> {
-        self.inner.write(lba, data)?;
-        self.insert(lba, data);
+        if lba < DATA_START {
+            self.inner.write(lba, data)?;
+            self.insert(lba, data, false)?;
+        } else {
+            self.insert(lba, data, true)?;
+        }
         self.writes = self.writes.wrapping_add(1);
         Ok(())
     }
@@ -246,6 +263,12 @@ impl<D: BlockDev> BlockDev for CachedDev<D> {
     }
 
     fn flush(&mut self) -> Result<(), FsError> {
+        for slot in self.slots.iter_mut().flatten() {
+            if slot.dirty {
+                self.inner.write(slot.lba, &slot.data)?;
+                slot.dirty = false;
+            }
+        }
         self.inner.flush()
     }
 }
@@ -923,6 +946,7 @@ impl<D: BlockDev> Fs<D> {
             }
         }
         self.replay_status = 1;
+        self.dev.flush()?;
         let zero = zero_block();
         let _ = self.dev.write(JOURNAL_COMMIT_LBA, &zero);
         Ok(())
@@ -1000,6 +1024,9 @@ impl<D: BlockDev> Fs<D> {
             data.copy_from_slice(&self.journal[start..start + BLOCK_SIZE]);
             self.dev.write(self.targets[index], &data)?;
         }
+        // Never clear the journal commit until dirty data blocks and their
+        // write-back cache have reached the device.
+        self.dev.flush()?;
         self.dev.write(JOURNAL_COMMIT_LBA, &zero_block())?;
         self.seq = self.seq.wrapping_add(1);
         self.tx_count = 0;
@@ -2197,6 +2224,24 @@ mod tests {
     }
 
     #[test]
+    fn cached_device_write_backs_file_data_only() {
+        let mut cache = CachedDev::new(CountingDev::new());
+        let data = [0x5a; BLOCK_SIZE];
+        cache.write(DATA_START, &data).unwrap();
+        assert_eq!(cache.inner().writes, 0);
+        let mut out = [0u8; BLOCK_SIZE];
+        cache.read(DATA_START, &mut out).unwrap();
+        assert_eq!(out, data);
+        cache.flush().unwrap();
+        assert_eq!(cache.inner().writes, 1);
+        assert_eq!(cache.inner().flushes, 1);
+
+        // Journal/metadata blocks stay write-through even with caching.
+        cache.write(JOURNAL_START, &data).unwrap();
+        assert_eq!(cache.inner().writes, 2);
+    }
+
+    #[test]
     fn cached_device_evicts_round_robin() {
         let mut cache = CachedDev::new(CountingDev::new());
         let mut out = [0u8; BLOCK_SIZE];
@@ -2227,7 +2272,7 @@ mod tests {
         assert!(fs.dev().stats().hits > 0);
         assert!(fs.dev().stats().writes > 0);
         fs.fsync().unwrap();
-        assert_eq!(fs.dev().inner().flushes, 1);
+        assert!(fs.dev().inner().flushes >= 1);
         fs.fsck().unwrap();
     }
 
