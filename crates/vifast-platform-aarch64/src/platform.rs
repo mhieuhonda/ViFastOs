@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::bkl::BigKernelLock;
-use vifast_arch::Arch;
+use vifast_arch::{Arch, CpuState, MAX_HARTS};
 use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
 
@@ -36,6 +36,7 @@ core::arch::global_asm!(include_str!("smp.S"));
 #[repr(align(4096))]
 struct Table([u64; 512]);
 
+#[derive(Clone, Copy)]
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct UserStack([u8; 32768]);
@@ -54,7 +55,8 @@ struct Metadata([u8; 65536]);
 static mut METADATA: Metadata = Metadata([0; 65536]);
 static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
 static mut TIMER_INTERVAL: u64 = 0;
-static mut TRAP_STACK: UserStack = UserStack([0; 32768]);
+static mut TRAP_STACKS: [UserStack; MAX_HARTS] = [UserStack([0; 32768]); MAX_HARTS];
+static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct BootPool([u8; 131072]);
@@ -132,6 +134,16 @@ fn init_gic() {
     write32(GICC + 0x000, 1);
 }
 
+unsafe fn init_cpu(hartid: usize) {
+    let index = core::cmp::min(hartid, MAX_HARTS - 1);
+    CPU_STATES[index].hart_id = hartid;
+    CPU_STATES[index].current_tcb = 0;
+    let stack = core::ptr::addr_of!(TRAP_STACKS[index]) as u64;
+    CPU_STATES[index].trap_stack_top = stack + 16384;
+    let state = core::ptr::addr_of!(CPU_STATES[index]) as u64;
+    core::arch::asm!("msr tpidr_el1, {}", in(reg) state);
+}
+
 fn init_timer() {
     let freq: u64;
     unsafe {
@@ -156,8 +168,9 @@ fn pan_supported() -> bool {
 
 #[no_mangle]
 pub extern "C" fn rust_secondary(_context: u64) -> ! {
-    // Maintenance-only hart: do NOT take BKL here. Hart 0 holds BKL while
+    // Maintenance-only hart: do NOT take BKL here.  Hart 0 holds BKL while
     // waiting for the TLB-shootdown ACK from this loop.
+    unsafe { init_cpu(1) };
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
         if IPI_PENDING.swap(false, Ordering::SeqCst) {
@@ -434,9 +447,10 @@ impl Platform for Aarch64Platform {
     const USER_DATA_VA: usize = USER_DATA_VA;
     const ELF_MACHINE: u16 = vifast_pte::aarch64::ELF_MACHINE;
 
-    fn init_platform(_info: PlatformInfo) {
+    fn init_platform(info: PlatformInfo) {
         unsafe {
             build_kernel_page_tables();
+            init_cpu(info.hartid);
         }
     }
 
@@ -514,7 +528,12 @@ impl Platform for Aarch64Platform {
                 false,
                 true,
             )
-            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(TRAP_STACK) as u64, true, false)
+            && kernel_leaf_ok(
+                root_pa,
+                core::ptr::addr_of!(TRAP_STACKS) as u64,
+                true,
+                false,
+            )
             && kernel_leaf_ok(
                 root_pa,
                 core::ptr::addr_of!(KERNEL_STORAGE) as u64,
@@ -652,7 +671,10 @@ impl Platform for Aarch64Platform {
             core::arch::asm!("dsb sy; isb");
             core::arch::asm!("msr sctlr_el1, {}", in(reg) sctlr);
             core::arch::asm!("isb");
-            let trap_top = core::ptr::addr_of!(TRAP_STACK) as u64 + 16384;
+            let cpu: *const CpuState;
+            core::arch::asm!("mrs {}, tpidr_el1", out(reg) cpu);
+            assert!(!cpu.is_null(), "AArch64 per-CPU pointer is null");
+            let trap_top = (*cpu).trap_stack_top;
             core::arch::asm!("msr spsel, #1");
             core::arch::asm!("mov sp, {}", in(reg) trap_top);
             core::arch::asm!("msr sp_el0, {}", in(reg) context.sp);

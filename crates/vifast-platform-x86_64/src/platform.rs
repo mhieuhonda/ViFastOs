@@ -2,7 +2,7 @@
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::bkl::BigKernelLock;
-use vifast_arch::Arch;
+use vifast_arch::{Arch, CpuState, MAX_HARTS};
 use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
 
@@ -26,10 +26,12 @@ const PAGE_USER: u64 = 4;
 const PAGE_LARGE: u64 = 0x80;
 const PAGE_NX: u64 = 1 << 63;
 const IA32_EFER: u32 = 0xC000_0080;
+const IA32_GS_BASE: u32 = 0xC000_0101;
 const EFER_NXE: u64 = 1 << 11;
 
 core::arch::global_asm!(include_str!("trap.S"));
 
+#[derive(Clone, Copy)]
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct Stack([u8; 32768]);
@@ -56,8 +58,9 @@ static mut USER_FRAME: DataPool = DataPool([0; 262144]);
 struct Metadata([u8; 65536]);
 static mut METADATA: Metadata = Metadata([0; 65536]);
 static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
-static mut TRAP_STACK: Stack = Stack([0; 32768]);
-static mut IST_STACK: Stack = Stack([0; 32768]);
+static mut TRAP_STACKS: [Stack; MAX_HARTS] = [Stack([0; 32768]); MAX_HARTS];
+static mut IST_STACKS: [Stack; MAX_HARTS] = [Stack([0; 32768]); MAX_HARTS];
+static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct BootPool([u8; 131072]);
@@ -111,6 +114,7 @@ impl IdtEntry {
 }
 
 #[repr(C, packed)]
+#[derive(Clone, Copy)]
 struct Tss {
     reserved0: u32,
     rsp0: u64,
@@ -143,7 +147,7 @@ static mut GDT: [u64; 7] = [0; 7];
 static mut GDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
 static mut IDT: [IdtEntry; 256] = [IdtEntry::zero(); 256];
 static mut IDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
-static mut TSS: Tss = Tss::zero();
+static mut TSSS: [Tss; MAX_HARTS] = [Tss::zero(); MAX_HARTS];
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -411,12 +415,12 @@ unsafe fn mark_nx_range(start: u64, len: usize) -> bool {
 fn kernel_data_ranges() -> [(u64, usize); 14] {
     [
         (
-            core::ptr::addr_of!(TRAP_STACK) as u64,
-            core::mem::size_of::<Stack>(),
+            core::ptr::addr_of!(TRAP_STACKS) as u64,
+            core::mem::size_of::<[Stack; MAX_HARTS]>(),
         ),
         (
-            core::ptr::addr_of!(IST_STACK) as u64,
-            core::mem::size_of::<Stack>(),
+            core::ptr::addr_of!(IST_STACKS) as u64,
+            core::mem::size_of::<[Stack; MAX_HARTS]>(),
         ),
         (
             core::ptr::addr_of!(CONTEXTS) as u64,
@@ -426,7 +430,10 @@ fn kernel_data_ranges() -> [(u64, usize); 14] {
             core::ptr::addr_of!(GDT) as u64,
             core::mem::size_of::<[u64; 7]>(),
         ),
-        (core::ptr::addr_of!(TSS) as u64, core::mem::size_of::<Tss>()),
+        (
+            core::ptr::addr_of!(TSSS) as u64,
+            core::mem::size_of::<[Tss; MAX_HARTS]>(),
+        ),
         (
             core::ptr::addr_of!(IDT) as u64,
             core::mem::size_of::<[IdtEntry; 256]>(),
@@ -510,10 +517,28 @@ fn active_root_matches_current() -> bool {
     }
 }
 
+unsafe fn write_msr(msr: u32, value: u64) {
+    core::arch::asm!(
+        "wrmsr",
+        in("ecx") msr,
+        in("eax") value as u32,
+        in("edx") (value >> 32) as u32,
+    );
+}
+
+unsafe fn init_cpu(hartid: usize) {
+    let index = core::cmp::min(hartid, MAX_HARTS - 1);
+    CPU_STATES[index].hart_id = hartid;
+    CPU_STATES[index].current_tcb = 0;
+    CPU_STATES[index].trap_stack_top = core::ptr::addr_of!(TRAP_STACKS[index]) as u64 + 16384;
+    if index == 0 {
+        write_msr(IA32_GS_BASE, core::ptr::addr_of!(CPU_STATES[0]) as u64);
+    }
+}
 unsafe fn setup_gdt_tss_idt() {
-    let tss = core::ptr::addr_of_mut!(TSS);
-    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACK) as u64 + 16384;
-    (*tss).ist[0] = core::ptr::addr_of!(IST_STACK) as u64 + 32768;
+    let tss = core::ptr::addr_of_mut!(TSSS[0]);
+    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[0]) as u64 + 16384;
+    (*tss).ist[0] = core::ptr::addr_of!(IST_STACKS[0]) as u64 + 32768;
     (*tss).iomap = core::mem::size_of::<Tss>() as u16;
     let tss_base = tss as u64;
     let tss_limit = core::mem::size_of::<Tss>() as u64 - 1;
@@ -856,12 +881,12 @@ impl Platform for X86Platform {
     const USER_DATA_VA: usize = USER_DATA_VA;
     const ELF_MACHINE: u16 = vifast_pte::x86_64::ELF_MACHINE;
 
-    fn init_platform(_info: PlatformInfo) {
+    fn init_platform(info: PlatformInfo) {
         unsafe {
             build_kernel_page_tables();
+            init_cpu(info.hartid);
         }
     }
-
     fn init_kernel() -> &'static mut Kernel {
         unsafe {
             let kernel = &mut *core::ptr::addr_of_mut!(KERNEL_STORAGE);
@@ -873,6 +898,9 @@ impl Platform for X86Platform {
     fn prepare_user() {
         unsafe {
             setup_gdt_tss_idt();
+            // x86_reload_segments loads GS with a null-base selector, which
+            // clobbers IA32_GS_BASE.  Re-publish the per-CPU pointer after it.
+            init_cpu(0);
             enable_smep_smap();
             enable_pcid();
             if NX_ENABLED {
@@ -946,10 +974,15 @@ impl Platform for X86Platform {
         kernel_range_ok(root_pa)
             && kernel_leaf_ok(root_pa, unsafe { x86_exception_table[0] }, false, true)
             && kernel_data_nx(root_pa)
-            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(TRAP_STACK) as u64, true, false)
-            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(IST_STACK) as u64, true, false)
+            && kernel_leaf_ok(
+                root_pa,
+                core::ptr::addr_of!(TRAP_STACKS) as u64,
+                true,
+                false,
+            )
+            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(IST_STACKS) as u64, true, false)
             && kernel_leaf_ok(root_pa, core::ptr::addr_of!(GDT) as u64, true, false)
-            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(TSS) as u64, true, false)
+            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(TSSS) as u64, true, false)
             && kernel_leaf_ok(root_pa, core::ptr::addr_of!(IDT) as u64, true, false)
             && kernel_leaf_ok(
                 root_pa,
@@ -1067,6 +1100,14 @@ impl Platform for X86Platform {
 
     fn enter_user(context: &TrapFrame) -> ! {
         assert!(!BKL.is_held(), "BKL held before user return");
+        let hart: usize;
+        let trap_top: u64;
+        unsafe {
+            core::arch::asm!("mov {}, gs:[0]", out(reg) hart);
+            core::arch::asm!("mov {}, gs:[16]", out(reg) trap_top);
+        }
+        assert_eq!(hart, 0, "unexpected x86 per-CPU hart");
+        assert!(trap_top != 0, "x86 per-CPU trap stack missing");
         let base = context as *const TrapFrame as usize;
         unsafe {
             core::arch::asm!(

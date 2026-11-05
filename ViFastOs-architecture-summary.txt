@@ -115,7 +115,7 @@ Test hiện tại:
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
-  headroom 561.072 B dưới 0x80400000
+  headroom 462.672 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -839,10 +839,14 @@ Cap transfer:
   Trước khi về user đều assert BKL đã nhả; trap entry assert IRQ đã tắt.
   Hart phụ IPI maintenance không lấy BKL (tránh deadlock TLB shootdown).
   BKL chưa phải ticket/fair lock.
+- Per-CPU groundwork: `MAX_HARTS=4`, `CpuState { hart_id, current_tcb,
+  trap_stack_top }`; TRAP_STACKS/IST_STACKS/TSSS là mảng theo hart. Hart 0 đọc
+  state qua `tp` (RISC-V), `TPIDR_EL1` (AArch64), `GS_BASE` (x86). Hart phụ vẫn
+  maintenance; chưa có scheduler đa hart.
 - `static mut` toàn cục vẫn còn: page table, pool, CONTEXTS, KERNEL_PTR,
-  ACTIVE_ROOT/ASID, trap/IST stacks, KERNEL_STORAGE, FILES/FILE_COUNT,
-  VirtIO QUEUE/BASE/READY. Chúng được bảo vệ bởi BKL khi đi qua trap, nhưng
-  chưa phải per-CPU; server/virtio cần khóa riêng khi SMP.
+  ACTIVE_ROOT/ASID, KERNEL_STORAGE, FILES/FILE_COUNT, VirtIO QUEUE/BASE/READY.
+  Chúng được bảo vệ bởi BKL khi đi qua trap, nhưng chưa phải per-CPU;
+  server/virtio cần khóa riêng khi SMP.
 - Chưa có per-hart runqueue, timer đa hart, per-VA TLB shootdown,
   remote I-cache shootdown.
 

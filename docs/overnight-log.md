@@ -65,7 +65,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `75f420ae5cb729a146487e1d9789cd6a69c24d92930b98c18ae022bc63bee342`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `dd5033446ee480959ea49e3d7709a98b8ae2bffa985af84984b3e6893245ef39`.
 
 ---
 
@@ -221,7 +221,8 @@ follow-up `62b31f4`.
 - Task 4: tách trap stack/IST/TSS thành mảng `MAX_HARTS=4`; CPU state có
   `hart_id`, `current_tcb`, `trap_stack_top`; hart 0 đọc qua tp/TPIDR_EL1/GS.
 - Host test `vifast-arch` 2/2; QEMU 3/3 PASS ×3; persist 3/3 PASS.
-- RISC-V kernel end `0x803?` / headroom `462672` byte (per-CPU stacks làm giảm).
+- `git show --stat` của Task 4 chỉ còn `vifast-arch` + 3 platform + docs.
+- RISC-V kernel end `0x80377050` / headroom `462672` byte (per-CPU stacks làm giảm).
 
 ## 8.14 — RISC-V VirtIO-MMIO block + docs sync (vòng 02)
 

@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::bkl::BigKernelLock;
-use vifast_arch::Arch;
+use vifast_arch::{Arch, CpuState, MAX_HARTS};
 use vifast_kernel::{Kernel, PageTableOps};
 use vifast_runtime::{Platform, PlatformInfo};
 
@@ -50,8 +50,10 @@ static mut ACTIVE_ROOT: u64 = 0;
 static mut ACTIVE_ASID: u16 = 0;
 #[allow(dead_code)]
 #[repr(align(16))]
+#[derive(Clone, Copy)]
 struct TrapStack([u8; 32768]);
-static mut TRAP_STACK: TrapStack = TrapStack([0; 32768]);
+static mut TRAP_STACKS: [TrapStack; MAX_HARTS] = [TrapStack([0; 32768]); MAX_HARTS];
+static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static IPI_PENDING: AtomicBool = AtomicBool::new(false);
 static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
@@ -115,9 +117,10 @@ unsafe fn set_timer(at: u64) {
 }
 
 #[no_mangle]
-pub extern "C" fn rust_secondary(_hartid: usize) -> ! {
-    // Maintenance-only hart: do NOT take BKL here. Hart 0 holds BKL while
+pub extern "C" fn rust_secondary(hartid: usize) -> ! {
+    // Maintenance-only hart: do NOT take BKL here.  Hart 0 holds BKL while
     // waiting for the TLB-shootdown ACK from this loop.
+    unsafe { init_cpu(hartid) };
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
         if IPI_PENDING.swap(false, Ordering::SeqCst) {
@@ -155,6 +158,16 @@ unsafe fn build_kernel_page_tables() {
     (*kernel_l1).0[0] = pte(0x8000_0000, PTE_V | PTE_R | PTE_W | PTE_X);
     (*kernel_l1).0[1] = pte(0x8020_0000, PTE_V | PTE_R | PTE_W | PTE_X);
     (*device_l1).0[128] = pte(0x1000_0000, PTE_V | PTE_R | PTE_W);
+}
+
+unsafe fn init_cpu(hartid: usize) {
+    let index = core::cmp::min(hartid, MAX_HARTS - 1);
+    CPU_STATES[index].hart_id = hartid;
+    CPU_STATES[index].current_tcb = 0;
+    let stack = core::ptr::addr_of!(TRAP_STACKS[index]) as u64;
+    CPU_STATES[index].trap_stack_top = stack + 32768;
+    let state = core::ptr::addr_of!(CPU_STATES[index]) as usize;
+    core::arch::asm!("mv tp, {}", in(reg) state);
 }
 
 fn active_root_matches_current() -> bool {
@@ -363,9 +376,10 @@ impl Platform for RiscvPlatform {
     const USER_DATA_VA: usize = USER_DATA_VA;
     const ELF_MACHINE: u16 = vifast_pte::riscv::ELF_MACHINE;
 
-    fn init_platform(_info: PlatformInfo) {
+    fn init_platform(info: PlatformInfo) {
         unsafe {
             build_kernel_page_tables();
+            init_cpu(info.hartid);
         }
     }
 
@@ -474,7 +488,12 @@ impl Platform for RiscvPlatform {
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
             && kernel_leaf_ok(root_pa, trap_entry as *const () as u64, false, true)
-            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(TRAP_STACK) as u64, true, false)
+            && kernel_leaf_ok(
+                root_pa,
+                core::ptr::addr_of!(TRAP_STACKS) as u64,
+                true,
+                false,
+            )
             && kernel_leaf_ok(
                 root_pa,
                 core::ptr::addr_of!(KERNEL_STORAGE) as u64,
@@ -593,7 +612,10 @@ impl Platform for RiscvPlatform {
             core::arch::asm!("csrw sstatus, {}", in(reg) context.sstatus);
             core::arch::asm!("csrw sepc, {}", in(reg) context.sepc);
             core::arch::asm!("csrw stvec, {}", in(reg) trap_entry as *const () as usize);
-            let trap_top = core::ptr::addr_of!(TRAP_STACK) as u64 + 32768;
+            let cpu: *const CpuState;
+            core::arch::asm!("mv {}, tp", out(reg) cpu);
+            assert!(!cpu.is_null(), "RISC-V per-CPU pointer is null");
+            let trap_top = (*cpu).trap_stack_top;
             core::arch::asm!("csrw sscratch, {}", in(reg) trap_top);
             core::arch::asm!("csrs sie, {}", in(reg) 1u64 << 5);
             core::arch::asm!("mv sp, {}", in(reg) context.regs[2]);

@@ -22,6 +22,30 @@
 
 pub mod bkl;
 
+/// Small per-CPU array bound used by the platform ports.  The secondary harts
+/// are still maintenance-only, but trap stacks and CPU state are already
+/// indexed by hart so a later scheduler can adopt them without another layout
+/// change.
+pub const MAX_HARTS: usize = 4;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CpuState {
+    pub hart_id: usize,
+    pub current_tcb: usize,
+    pub trap_stack_top: u64,
+}
+
+impl CpuState {
+    pub const fn empty() -> Self {
+        Self {
+            hart_id: 0,
+            current_tcb: 0,
+            trap_stack_top: 0,
+        }
+    }
+}
+
 /// Information passed from the early boot code to the portable kernel.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BootInfo {
