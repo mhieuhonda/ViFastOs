@@ -54,7 +54,7 @@ impl BlockDev for FileDev {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: vifast-fsutil mkfs <disk> | fsck <disk> | put <disk> <path> <text> | put-file <disk> <path> <host-file> | link <disk> <old> <new> | symlink <disk> <target> <path> | readlink <disk> <path> | get <disk> <path> | ls <disk> <path> | inject-journal <disk> --valid|--torn");
+    eprintln!("usage: vifast-fsutil mkfs <disk> | fsck <disk> | put <disk> <path> <text> | put-file <disk> <path> <host-file> | mkdir <disk> <path> | rm <disk> <path> | mv <disk> <old> <new> | stat <disk> <path> | truncate <disk> <path> <size> | link <disk> <old> <new> | symlink <disk> <target> <path> | readlink <disk> <path> | get <disk> <path> | ls <disk> <path> | inject-journal <disk> --valid|--torn");
     std::process::exit(2)
 }
 
@@ -128,6 +128,67 @@ fn main() -> ExitCode {
                 fs.write(ino, 0, data, 0)
                     .map(|_| ())
                     .map_err(|e| format!("write: {e:?}"))
+            }
+            "mkdir" => {
+                if args.len() != 4 {
+                    usage();
+                }
+                let path = args[3].as_str();
+                let dev = FileDev::open(disk, true)?;
+                let mut fs = Fs::mount(dev).map_err(|e| format!("mount: {e:?}"))?;
+                ensure_parent(&mut fs, path)?;
+                fs.mkdir(path.as_bytes(), 0)
+                    .map(|_| ())
+                    .map_err(|e| format!("mkdir: {e:?}"))
+            }
+            "rm" => {
+                if args.len() != 4 {
+                    usage();
+                }
+                let dev = FileDev::open(disk, true)?;
+                let mut fs = Fs::mount(dev).map_err(|e| format!("mount: {e:?}"))?;
+                fs.unlink(args[3].as_bytes(), 0)
+                    .map_err(|e| format!("rm: {e:?}"))
+            }
+            "mv" => {
+                if args.len() != 5 {
+                    usage();
+                }
+                let dev = FileDev::open(disk, true)?;
+                let mut fs = Fs::mount(dev).map_err(|e| format!("mount: {e:?}"))?;
+                fs.rename(args[3].as_bytes(), args[4].as_bytes(), 0)
+                    .map_err(|e| format!("mv: {e:?}"))
+            }
+            "stat" => {
+                if args.len() != 4 {
+                    usage();
+                }
+                let dev = FileDev::open(disk, true)?;
+                let mut fs = Fs::mount(dev).map_err(|e| format!("mount: {e:?}"))?;
+                let ino = fs
+                    .lookup(args[3].as_bytes(), 0)
+                    .map_err(|e| format!("lookup: {e:?}"))?;
+                let info = fs.info(ino).map_err(|e| format!("{e:?}"))?;
+                println!(
+                    "ino={} kind={} size={} mode={} uid={} nlink={}",
+                    ino, info.kind, info.size, info.mode, info.uid, info.nlink
+                );
+                Ok(())
+            }
+            "truncate" => {
+                if args.len() != 5 {
+                    usage();
+                }
+                let size = args[4]
+                    .parse::<usize>()
+                    .map_err(|_| "truncate: invalid size".to_string())?;
+                let dev = FileDev::open(disk, true)?;
+                let mut fs = Fs::mount(dev).map_err(|e| format!("mount: {e:?}"))?;
+                let ino = fs
+                    .lookup(args[3].as_bytes(), 0)
+                    .map_err(|e| format!("lookup: {e:?}"))?;
+                fs.truncate(ino, size, 0)
+                    .map_err(|e| format!("truncate: {e:?}"))
             }
             "link" => {
                 if args.len() != 5 {

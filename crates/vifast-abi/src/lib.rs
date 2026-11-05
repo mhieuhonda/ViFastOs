@@ -179,6 +179,7 @@ pub const O_RDONLY: u64 = 0;
 pub const O_WRONLY: u64 = 1;
 pub const O_RDWR: u64 = 2;
 pub const O_CREATE: u64 = 4;
+pub const O_TRUNC: u64 = 8;
 
 /// Minimal user-space VFS request/reply protocol carried by the ordinary IPC
 /// message label and three data words.  Reads and writes are deliberately

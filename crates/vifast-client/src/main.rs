@@ -582,7 +582,11 @@ pub extern "C" fn client_main() -> ! {
         b"CAP DELETE BAD\n"
     });
     let mut large_ok = true;
-    if let Some((fd, _)) = vfs_open_via(1, b"/large", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
+    if let Some((fd, _)) = vfs_open_via(
+        1,
+        b"/large",
+        vifast_abi::O_CREATE | vifast_abi::O_RDWR | vifast_abi::O_TRUNC,
+    ) {
         const LARGE_BYTES: usize = 20 * 1024;
         const CHUNKS: usize = LARGE_BYTES / vfs::MAX_IO;
         let mut chunk = [0u8; vfs::MAX_IO];
@@ -627,7 +631,11 @@ pub extern "C" fn client_main() -> ! {
     let _ = vfs_unlink(b"/hard_a");
     let _ = vfs_unlink(b"/hard_b");
     let mut hard_ok = true;
-    if let Some((fd, _)) = vfs_open_via(1, b"/hard_a", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
+    if let Some((fd, _)) = vfs_open_via(
+        1,
+        b"/hard_a",
+        vifast_abi::O_CREATE | vifast_abi::O_RDWR | vifast_abi::O_TRUNC,
+    ) {
         let mut chunk = [0u8; vfs::MAX_IO];
         for block in 0..4usize {
             for (index, byte) in chunk.iter_mut().enumerate() {
@@ -678,9 +686,11 @@ pub extern "C" fn client_main() -> ! {
     let _ = vfs_unlink(b"/sym_link");
     let _ = vfs_unlink(b"/sym_target");
     let mut sym_ok = true;
-    if let Some((fd, _)) =
-        vfs_open_via(1, b"/sym_target", vifast_abi::O_CREATE | vifast_abi::O_RDWR)
-    {
+    if let Some((fd, _)) = vfs_open_via(
+        1,
+        b"/sym_target",
+        vifast_abi::O_CREATE | vifast_abi::O_RDWR | vifast_abi::O_TRUNC,
+    ) {
         let mut chunk = [0u8; vfs::MAX_IO];
         for block in 0..2usize {
             for (index, byte) in chunk.iter_mut().enumerate() {

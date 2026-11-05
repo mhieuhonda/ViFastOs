@@ -196,7 +196,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 335264 byte (`kernel_end=0x803ae260`)
 - `Kernel = 653528`, `Object = 4720`, `Tcb = 4672`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
+- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -752,6 +752,7 @@ User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
   128 byte, `MAX_IO=128` byte. Path, WRITE và READ đều đi qua IPC buffer
   (READ copy server→client trong reply), giảm mạnh số round-trip. Server trả
   fd/size cho OPEN, read/write theo byte, READDIR trả tên qua IPC buffer.
+  `O_TRUNC` (0x8) cắt file về 0 khi mở; thư mục bị từ chối.
 - Quyền: uid lấy từ **badge register** của message, không lấy `value`; badge 0
   không có danh tính và bị từ chối, badge `0xFFFF` là superuser duy nhất.
   File/thư mục mới có uid người tạo, mode owner rw + other r. Đọc cần r,
@@ -770,9 +771,10 @@ User-space VFS server: `crates/vifast-server/src/main.rs`; filesystem core:
   (`FS PERSIST OK`), migrate `VF01` sang `/scratch` (`FS MIGRATE OK`), và
   replay/torn journal (`FS RECOVER OK (replayed=1|0)`). FSCK sau demo in
   `FS FSCK OK`; `FS V2 OK`, `FS PERM OK` là điều kiện harness.
-- `vifast-fsutil` (host) có mkfs/put/put-file/link/get/ls/fsck/
-  inject-journal --valid|--torn; `scripts/test-persist.py` chạy 7 phase cho cả
-  3 kiến trúc, phase 7 kiểm cả hard-link `/p/large2`.
+- `vifast-fsutil` (host) có mkfs/put/put-file/mkdir/rm/mv/stat/truncate/link/
+  symlink/readlink/get/ls/fsck/inject-journal --valid|--torn;
+  `scripts/test-persist.py` chạy 7 phase cho cả 3 kiến trúc, phase 7 kiểm cả
+  hard-link `/p/large2` và file double-indirect 80 KiB.
 - Kernel ramfs `crates/vifast-kernel/src/fs.rs` vẫn chỉ là fallback/selftest,
   không chứa logic FS v2.
 

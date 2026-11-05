@@ -269,7 +269,7 @@ fn open_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
         }
         Err(error) => return err(error),
     };
-    let info = match fs.info(ino) {
+    let mut info = match fs.info(ino) {
         Ok(info) => info,
         Err(error) => return err(error),
     };
@@ -279,6 +279,18 @@ fn open_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
         if !fs_can_write(&fs, ino, uid) {
             return err(FsError::NoAccess);
         }
+    }
+    if flags & vifast_abi::O_TRUNC != 0 {
+        if info.kind != INODE_FILE {
+            return err(FsError::IsDir);
+        }
+        if let Err(error) = fs.truncate(ino, 0, uid) {
+            return err(error);
+        }
+        info = match fs.info(ino) {
+            Ok(info) => info,
+            Err(error) => return err(error),
+        };
     }
     if let Some(fd) = alloc_fd(ino, uid, info.kind == INODE_DIR) {
         (vfs::OK, fd, info.size as u64, info.kind as u64)

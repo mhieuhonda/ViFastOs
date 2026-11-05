@@ -656,3 +656,12 @@ follow-up `62b31f4`.
   wrapper gọi syscall Sleep và chỉ fallback polling khi `WouldBlock`.
 - Root tạo idle sau fault4; TCB/object quota vẫn đủ (DATA UNTYPED 63/64).
 - QEMU `--repeat 3` 3/3 mỗi kiến trúc; persist 7 phase ×3; 0 warning.
+
+## 8.85 — O_TRUNC + fsutil utilities (vòng 21)
+
+- ABI thêm `O_TRUNC = 8`; VFS server cắt file về 0 khi mở, từ chối thư mục.
+- Client dùng O_TRUNC cho file lớn/hard link/symlink để demo không phụ thuộc
+  dữ liệu cũ trên ảnh đĩa.
+- `vifast-fsutil` thêm `mkdir`, `rm`, `mv`, `stat`, `truncate`; test tay
+  mkfs → mkdir → put → stat → mv → truncate → get → rm → fsck PASS.
+- QEMU 3/3; 0 warning.
