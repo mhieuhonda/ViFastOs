@@ -773,3 +773,14 @@ follow-up `62b31f4`.
 - Root pre-map/unmap page để tạo page table trước; server không cần
   PageTable mới khi xử lý fault.
 - QEMU 3/3; persistence 7 phase ×3; harness 387 case; 0 warning.
+
+## 9.01 — TCB reap, O_EXCL/O_DIRECTORY, pager hai client (vòng 22.1)
+
+- Thêm `TcbDestroy` (#49), fault message mang fault endpoint slot + TCB index;
+  root reap 4 fault TCB + CNode demo, in `TCB REAP OK`.
+- `O_EXCL` và `O_DIRECTORY` đầy đủ ở VFS server; test `FS OPEN FLAGS OK`.
+- User-space pager server phục vụ hai client (`PAGER OK`, `PAGER2 OK`);
+  harness nâng lên 6 fault record.
+- Nới metadata lên 80 KiB, object table 147, TCB 18, data 76 page; vẫn còn
+  headroom 200.016 byte.
+- Host kernel 112/112; QEMU repeat 3/3; persistence 7×3; harness 417 case.

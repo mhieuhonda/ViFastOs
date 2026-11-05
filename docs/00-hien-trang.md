@@ -21,14 +21,15 @@ chưa được port sang bản bare-metal này.
 | IPC Call/Reply, notification, cap transfer | có | có | có |
 | Untyped con + BootInfo + TCB idle/restart/bind | có | có | có |
 | VFS v3 journal + directory + permission | có | có | có |
-| Hard link / symlink / double-indirect / O_APPEND | có | có | có |
+| Hard link / symlink / double-indirect / O_APPEND / O_EXCL / O_DIRECTORY | có | có | có |
 | Block cache write-back data + fsync/BlockFlush | có | có | có |
 | Persistence 7 phase | có | có | có |
 | Software IOMMU + DMA map | có | có | có |
 | Sleep deadline (BlockedSleep) | có | có | có |
 | Console input IRQ + shell | có | có | có |
 | CNode phẳng + CNodeInstall demo | có | có | có |
-| Demand paging + user-space pager server | có | có | có |
+| Demand paging + user-space pager server (2 client) | có | có | có |
+| TCB destroy/reap + fault-slot identity | có | có | có |
 | User fault suspend (không panic) | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
@@ -37,8 +38,9 @@ Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
 
 Kernel portable hiện có:
 
-- object table cố định **148 object**, 16 TCB, 96 cap root / 64 cap task,
-  CNode phẳng 64 slot, 64 mapping/VSpace, queue 8; `Kernel` nằm trong static storage của platform;
+- object table cố định **147 object**, 18 TCB, 96 cap root / 64 cap task,
+  CNode phẳng 64 slot, 64 mapping/VSpace, metadata 80 KiB / data 304 KiB,
+  queue 8; `Kernel` nằm trong static storage của platform;
 - capability install/copy/derive/revoke, badge, chuyển cap qua IPC với `GRANT`;
 - endpoint Send/Recv, Call/Reply/ReplyRecv, notification signal/wait/poll;
 - scheduler ưu tiên + round-robin, ready queue theo hart, work stealing;
@@ -53,20 +55,21 @@ Kernel portable hiện có:
   block cache write-back cho data, write-through journal/metadata,
   `fsync` → `BlockFlush`;
 - software IOMMU domain + `IoMap`/`IoUnmap`;
-- 49 syscall number: 49 implemented, 0 placeholder; CNode phẳng, SchedContext
-  budget/period, timer IRQ và UART IRQ delivery đã chạy;
+- 50 syscall number: 50 implemented, 0 placeholder; CNode phẳng, SchedContext
+  budget/period, timer IRQ/UART IRQ, TCB destroy/reap đã chạy;
 - console input IRQ qua UART 16550/PL011/COM1, RxQueue lock-free và shell
   block trên notification UART thay vì polling.
-- fault endpoint → user-space pager server map Frame → TcbResume; pager TCB
-  retry và in `PAGER OK`.
+- fault endpoint → user-space pager server map Frame → TcbResume cho hai
+  pager TCB; in `PAGER OK`/`PAGER2 OK`. Fault message mang fault-slot + TCB index;
+  root reap fault TCB và CNode demo bằng `TcbDestroy`.
 
 ## Chưa có
 
 - Hardware IOMMU (VT-d/SMMU); chỉ có mô hình software.
 - CNode nhiều cấp; UART IRQ hiện chỉ route BSP/hart 0.
 - Network, GPU/framebuffer, compositor, ViFastKey; shell chưa có job control.
-- Mount/pager tổng quát, barrier phần cứng thật, driver disk
-  ngoài QEMU.
+- Mount/pager tổng quát (demo pager mới xử lý hai client), barrier phần cứng
+  thật, driver disk ngoài QEMU.
 - Khóa mịn/x2APIC; scheduler mới test 2 hart.
 - Allocator vật lý tổng quát/free object ngoài revoke.
 - CI (GitHub không dùng), formal verification/Kani/Verus.

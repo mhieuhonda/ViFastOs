@@ -152,6 +152,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 801fb13 test: cover cnode delete and revoke integration
 - ca4d2f4 feat: add demand paging fault-resume demo
 - 79005ce feat: move pager handling into user-space server
+- 46e8ad6 feat: reap TCBs and serve two pager clients
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -197,7 +198,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 111/111 PASS
+- `cargo test -p vifast-kernel`: 112/112 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -208,8 +209,8 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 212304 byte (`kernel_end=0x803cc2b0`)
-- `Kernel = 713720`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
+- RISC-V headroom: 200016 byte (`kernel_end=0x803cf2b0`)
+- `Kernel = 709072`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
@@ -515,8 +516,8 @@ Root task sau đó tự:
 7. OBJECT MODEL VÀ CAPABILITY
 -----------------------------
 Giới hạn cố định:
-- MAX_OBJECTS = 148
-- MAX_TCBS = 16
+- MAX_OBJECTS = 147
+- MAX_TCBS = 18
 - MAX_CAPS_ROOT = 96
 - MAX_CAPS_TASK = 64
 - MAX_QUEUE = 8
@@ -858,6 +859,7 @@ Số syscall chính:
 46 Sleep — implemented
 47 ConsoleRead — implemented
 48 CNodeInstall — implemented
+49 TcbDestroy — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,
@@ -1233,11 +1235,14 @@ Mỗi dòng sau đúng một lần:
 - `TCB SUSPEND OK` — exactly once
 - `FS LARGE OK` — exactly once
 - `FS APPEND OK` — exactly once
+- `FS OPEN FLAGS OK` — exactly once
 - `HARD LINK OK` — exactly once
 - `SYMLINK OK` — exactly once
 - `IRQ OK` — exactly once
 - `CNODE OK` — exactly once
+- `TCB REAP OK` — exactly once
 - `PAGER OK` — exactly once
+- `PAGER2 OK` — exactly once
 
 Cấm xuất hiện:
 - `PERCPU CLOBBER BAD` — forbidden
@@ -1258,6 +1263,9 @@ Cấm xuất hiện:
 - `TCB SUSPEND BAD` — forbidden
 - `FS LARGE BAD` — forbidden
 - `FS APPEND BAD` — forbidden
+- `FS OPEN FLAGS BAD` — forbidden
+- `TCB REAP BAD` — forbidden
+- `PAGER2 BAD` — forbidden
 - `HARD LINK BAD` — forbidden
 - `SYMLINK BAD` — forbidden
 - `IRQ BAD` — forbidden
@@ -1457,9 +1465,9 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - Boot-time check walk leaf thật từ root: trap entry có X, stack/IST/GDT/TSS/IDT/
   KERNEL_STORAGE có W, tất cả non-user; kiểm tra toàn bộ kernel_accessible_range.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
-- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (148);
+- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (147);
   data Untyped 76 object.
-- Data Untyped 304 KiB/max76; metadata Untyped 64 KiB/max32; boot Untyped 128 KiB/max32.
+- Data Untyped 304 KiB/max76; metadata Untyped 80 KiB/max34; boot Untyped 128 KiB/max32.
 - vifast-kernel bỏ dependency vifast-arch; dùng Console trait.
 - x86 page-fault/exception entry dùng efiapi rcx/rdx/r8; vector 0..31 có handler.
 - #DF/NMI/#MC dùng IST1 và luôn panic, kể cả khi CS là user.

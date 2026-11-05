@@ -2,7 +2,7 @@
 
 **Ngày:** 2026-11-06  
 **Baseline:** sau `b72183c` (vòng 21 + CI gate cục bộ)  
-**Trạng thái:** 49/49 syscall implemented; 3/3 kiến trúc QEMU PASS.
+**Trạng thái:** 50/50 syscall implemented; 3/3 kiến trúc QEMU PASS.
 
 ## 1. Tóm tắt
 
@@ -15,6 +15,9 @@ Vòng 22 hoàn tất các mảnh còn thiếu của ABI và mở driver input th
 5. VFS `O_APPEND`.
 6. Block cache write-back cho data, write-through journal/metadata.
 7. Demand paging/fault-resume demo (`PAGER OK`).
+8. `TcbDestroy` + fault-slot identity + reap fault/demo TCB.
+9. `O_EXCL`/`O_DIRECTORY` và test mở file.
+10. Pager server phục vụ hai client, in `PAGER2 OK`.
 
 Không còn syscall placeholder; các phần lớn còn lại là hardware IOMMU,
 network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
@@ -31,7 +34,7 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
 | `e9b8286` | VFS O_APPEND |
 | `363574a` | Write-back data block cache |
 | `801fb13` | Test CNode delete/revoke |
-| pending | User-space pager server (`PAGER OK`) |
+| `46e8ad6` | TcbDestroy/reap, fault-slot identity, O_EXCL/O_DIRECTORY, pager hai client |
 | docs | Các commit `docs: sync ...` sau mỗi mốc |
 
 ## 3. Chi tiết
@@ -86,6 +89,9 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
 - Eviction/commit/fsync ghi dirty; `commit()` flush trước khi clear journal
   commit; replay cũng flush trước khi clear.
 - `O_TRUNC` vẫn hoạt động; test `/append` kiểm "a"+"b" → "ab", size 2.
+- `O_EXCL=0x20`: `O_CREATE|O_EXCL` trả `EEXIST` nếu file đã có;
+  `O_DIRECTORY=0x40`: chỉ mở directory, file trả `ENOTDIR`, kết hợp create
+  trả `EINVAL`. Test `FS OPEN FLAGS OK`.
 
 ### 3.6 Pager/fault resume
 
@@ -95,13 +101,19 @@ network/GPU/compositor, CNode guard/nhiều cấp, pager/mount và formal.
   server in `PAGER OK`.
 - Root cấp cho server endpoint/TCB/VSpace/Frame caps; page table được tạo
   trước bằng map/unmap để FrameMap của server không cần PageTable mới.
-- Harness yêu cầu 5 USER FAULT (4 cũ + pager), `PAGER OK` đúng một lần.
+- Server giữ cap cho hai cặp TCB/frame; chọn cặp theo fault address.
+- Fault message có `data[2] = fault endpoint slot`, `data[3] = TCB index`;
+  root dùng slot để reap đúng TCB.
+- `TcbDestroy` giải phóng object TCB sau khi reparent cspace; root reap 4
+  fault TCB + CNode demo, in `TCB REAP OK`.
+- Harness yêu cầu 6 USER FAULT (4 cũ + 2 pager), `PAGER OK` và `PAGER2 OK`
+  đúng một lần.
 - Chưa có pager server tổng quát cho mọi VSpace/fault.
 
 ## 4. Kiểm tra
 
 ```text
-vifast-kernel   111/111
+vifast-kernel   112/112
 vifast-fs        22/22
 vifast-arch       7/7
 vifast-pte       11/11
@@ -109,12 +121,12 @@ vifast-elf       17/17
 vifast-acpi       8/8
 QEMU --repeat 3  3/3 cả 3 kiến trúc
 persistence      7 phase ×3 PASS
-harness âm       387 case PASS
+harness âm       417 case PASS
 cargo fmt/check  PASS, 0 warning
 ```
 
-RISC-V headroom khoảng 249 KiB sau CNode/IRQ; `Kernel ≈ 694.7 KiB`.
-Root data untyped 72/76 page, 68/76 object.
+RISC-V headroom 200.016 byte; object table 147, TCB tối đa 18, metadata
+80 KiB / data 304 KiB. Root data untyped 74/76 page, 70/76 object (RISC-V).
 
 ## 5. Còn lại
 

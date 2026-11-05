@@ -10,12 +10,12 @@ queue theo hart + work stealing, BKL ticket, maintenance IPI và **per-VA TLB
 shootdown**. User mode có **root/server/client/fault TCB từ ELF Rust**, VSpace
 riêng, IPC + chuyển capability, W^X, ASID/PCID, Untyped/retype có accounting,
 software IOMMU, **VFS server user-space** với FS v3 journal, **hard link,
-symlink, double-indirect, O_APPEND, block cache write-back data,
-fsync/flush thật**, persistence 7 phase,
+symlink, double-indirect, O_APPEND/O_EXCL/O_DIRECTORY, block cache
+write-back data, fsync/flush thật**, persistence 7 phase,
 **Sleep deadline + BSP idle TCB**, **SchedContext budget/period**, `TcbRestart`,
 `TcbBindNotification`, và **console input + shell nhỏ** (`ls`, `cat`, `stat`,
-`sync`...). Có 49 syscall number (49 implemented, 0 placeholder). CNode phẳng
-+ CNodeInstall, user-space pager/fault-resume, Timer IRQ
+`sync`...). Có 50 syscall number (50 implemented, 0 placeholder). CNode phẳng
++ CNodeInstall, user-space pager server hai client, TCB destroy/reap, Timer IRQ
 và UART IRQ dùng object IRQ + notification; shell block trên UART IRQ.
 
 Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: chưa có driver
@@ -218,7 +218,7 @@ cargo test -p vifast-elf
   VirtIO-MMIO/ATA PIO QEMU-specific.
 - SMP mới test 2 hart (`MAX_HARTS = 4`); BSP có idle TCB, hart phụ vẫn dùng
   platform idle loop; chưa có khóa mịn/x2APIC.
-- Object table cố định (148 object), chưa có allocator vật lý tổng quát hay
+- Object table cố định (147 object, 18 TCB), chưa có allocator vật lý tổng quát hay
   free object ngoài đường revoke.
 - x86_64 vẫn identity map 0..1 GiB; chưa có memory map đầy đủ.
 - Chưa có CI (GitHub không dùng), formal verification/Kani/Verus; mới có
@@ -255,7 +255,7 @@ bare-metal này.
   binary duy nhất chạy x86_64 + ARM + RISC-V.
 - `vifast-kernel` là `#![forbid(unsafe_code)]` và không còn dependency
   `vifast-arch`; `unsafe` chỉ nằm trong arch/boot.
-- Fixed-capacity object table (128 object, 16 TCB, 64 cap/TCB, 32 mapping/VSpace)
+- Fixed-capacity object table (147 object, 18 TCB, 96 cap root / 64 cap task, 64 mapping/VSpace)
   để chứng minh lõi không cần heap; `Kernel` đặt trong static storage per port
   (khoảng 397 KiB), không đặt trên boot stack. Đây là reference implementation, chưa phải allocator cuối.
 - Stack kernel hiện đặt 256 KiB trong linker script cho RISC-V/AArch64 vì
