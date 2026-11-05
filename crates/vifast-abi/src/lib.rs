@@ -239,6 +239,8 @@ pub mod vfs {
     pub const SYMLINK: u64 = 0x200F;
     /// Read symlink target through the IPC buffer.
     pub const READLINK: u64 = 0x2010;
+    /// Stat by path: data[0] = path length in the IPC buffer.
+    pub const STAT_PATH: u64 = 0x2011;
 
     pub const ENOENT: u64 = 1;
     pub const EEXIST: u64 = 2;

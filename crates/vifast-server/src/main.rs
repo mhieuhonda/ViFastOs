@@ -376,6 +376,23 @@ fn stat_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
     }
 }
 
+fn stat_path_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
+    let len = data[0] as usize;
+    let path = match read_path(data, 0) {
+        Ok(path) => path,
+        Err(error) => return error,
+    };
+    let fs = fs();
+    let ino = match fs.lookup(path_slice(&path, len), uid) {
+        Ok(ino) => ino,
+        Err(error) => return err(error),
+    };
+    match fs.info(ino) {
+        Ok(info) => (vfs::OK, info.size as u64, ino as u64, info.kind as u64),
+        Err(error) => err(error),
+    }
+}
+
 fn mkdir_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
     let len = data[0] as usize;
     let path = match read_path(data, 0) {
@@ -560,6 +577,7 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             }
         }
         vfs::STAT => stat_request(request.data, uid),
+        vfs::STAT_PATH => stat_path_request(request.data, uid),
         vfs::MKDIR => mkdir_request(request.data, uid),
         vfs::READDIR => readdir_request(request.data, uid),
         vfs::UNLINK => unlink_request(request.data, uid),

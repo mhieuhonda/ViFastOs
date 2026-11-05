@@ -168,6 +168,17 @@ fn vfs_write(fd: u64, offset: u64, bytes: &[u8]) -> Option<usize> {
     vfs_write_via(1, fd, offset, bytes)
 }
 
+fn vfs_stat_path(name: &[u8]) -> Option<(u64, u64, u64)> {
+    let len = copy_path(name);
+    let reply = unsafe { vifast_user::call_message(1, vfs::STAT_PATH, len as u64, 0, 0) };
+    let reply = vfs_reply(reply).ok()?;
+    if reply.label == vfs::OK {
+        Some((reply.data[0], reply.data[1], reply.data[2]))
+    } else {
+        None
+    }
+}
+
 fn vfs_stat(fd: u64) -> Option<u64> {
     let reply = unsafe { vifast_user::call_message(1, vfs::STAT, fd, 0, 0) };
     let reply = vfs_reply(reply).ok()?;
@@ -885,6 +896,16 @@ pub extern "C" fn client_main() -> ! {
         b"FS OPEN FLAGS OK\n"
     } else {
         b"FS OPEN FLAGS BAD\n"
+    });
+
+    let mut stat_path_ok =
+        vfs_stat_path(b"/motd").is_some_and(|(size, _, kind)| size > 0 && kind == 1);
+    stat_path_ok &= vfs_stat_path(b"/").is_some_and(|(_, _, kind)| kind == 2);
+    stat_path_ok &= vfs_stat_path(b"/no-such-stat").is_none();
+    write(if stat_path_ok {
+        b"FS STAT PATH OK\n"
+    } else {
+        b"FS STAT PATH BAD\n"
     });
 
     let _ = vfs_unlink(b"/hard_a");
