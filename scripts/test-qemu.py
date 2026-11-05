@@ -118,9 +118,34 @@ def dump_timeout_artifacts(
     print(f"artifacts: {directory}")
 
 
+def smp_idle(output: str) -> tuple[int, int, int, int]:
+    match = re.search(
+        r"SMP IDLE OK \(hart1_wakeups=(\d+), idle_entries=(\d+), "
+        r"wake_timer=(\d+), wake_sgi=(\d+)\)",
+        output,
+    )
+    if not match:
+        return (-1, -1, -1, -1)
+    return tuple(int(match.group(i)) for i in range(1, 5))
+
+
 def hart1_wakeups(output: str) -> int:
-    match = re.search(r"SMP IDLE OK \(hart1_wakeups=(\d+)\)", output)
-    return int(match.group(1)) if match else -1
+    return smp_idle(output)[0]
+
+
+def aarch64_idle_ok(output: str) -> bool:
+    idle = smp_idle(output)
+    timer = re.search(r"SMP TIMER OK \(hart1_ticks=(\d+)\)", output)
+    if not timer or min(idle) < 0:
+        return False
+    ticks = int(timer.group(1))
+    wakeups, entries, timer_wakes, sgi_wakes = idle
+    return (
+        ticks > 0
+        and wakeups >= timer_wakes + sgi_wakes
+        and entries >= ticks - 2
+        and timer_wakes >= ticks - 2
+    )
 
 
 def smp_sched(output: str) -> tuple[int, int, int, int, int]:
@@ -227,9 +252,8 @@ def run_qemu(
             name != "aarch64"
             or (
                 output.count("SMP TIMER OK") == 1
-                and re.search(r"SMP TIMER OK \(hart1_ticks=[1-9][0-9]*\)", output)
                 and output.count("SMP IDLE OK") == 1
-                and re.search(r"SMP IDLE OK \(hart1_wakeups=[1-9][0-9]*\)", output)
+                and aarch64_idle_ok(output)
             )
         )
         and (

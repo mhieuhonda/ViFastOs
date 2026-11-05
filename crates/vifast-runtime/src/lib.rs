@@ -145,6 +145,14 @@ pub trait Platform: Arch + Console {
         0
     }
 
+    fn secondary_idle_entries() -> usize {
+        0
+    }
+
+    fn secondary_none_wakes() -> usize {
+        0
+    }
+
     /// Nudge an idle hart when a TCB with matching affinity becomes ready.
     fn wake_hart(_hart: usize) {}
 
@@ -1077,8 +1085,17 @@ pub mod timer {
                 switches
             );
             let (timer_wakes, ipi_wakes) = A::secondary_wakeups();
-            if timer_wakes + ipi_wakes > 0 {
-                vifast_kernel::klog!(A, "SMP IDLE OK (hart1_wakeups={})", timer_wakes + ipi_wakes);
+            let none_wakes = A::secondary_none_wakes();
+            let wakeups = timer_wakes + ipi_wakes + none_wakes;
+            if wakeups > 0 {
+                vifast_kernel::klog!(
+                    A,
+                    "SMP IDLE OK (hart1_wakeups={}, idle_entries={}, wake_timer={}, wake_sgi={})",
+                    wakeups,
+                    A::secondary_idle_entries(),
+                    timer_wakes,
+                    ipi_wakes
+                );
             }
             let hart1_ticks = A::secondary_timer_ticks();
             if hart1_ticks > 0 {

@@ -55,6 +55,7 @@ static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_NONE_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SCHED_READY: AtomicBool = AtomicBool::new(false);
 static RESCHED_SENT: AtomicUsize = AtomicUsize::new(0);
 static RESCHED_WAKE: AtomicUsize = AtomicUsize::new(0);
@@ -297,6 +298,27 @@ unsafe fn set_timer(at: u64) {
     );
 }
 
+/// Account one WFI wake.  If several sources are pending, prefer the IPI
+/// reason so that one sleep contributes exactly one wakeup.
+fn record_secondary_wake(sip: u64) {
+    if sip & (1u64 << 1) != 0 {
+        SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
+        }
+        poll_maintenance();
+    } else if sip & (1u64 << 5) != 0 {
+        SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+    } else {
+        SECONDARY_NONE_WAKES.fetch_add(1, Ordering::Relaxed);
+    }
+    if sip & (1u64 << 5) != 0 {
+        unsafe {
+            set_timer(Riscv64::now() + TIMER_INTERVAL);
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn rust_secondary(hartid: usize) -> ! {
     unsafe {
@@ -350,22 +372,10 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
         unsafe {
             core::arch::asm!("csrr {}, sip", out(reg) sip);
         }
-        if sip & (1u64 << 5) != 0 {
-            SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
-            unsafe {
-                set_timer(Riscv64::now() + TIMER_INTERVAL);
-            }
-        }
-        if sip & (1u64 << 1) != 0 {
-            SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
-            let resched_wake = MAINT_KIND[1].load(Ordering::Acquire) & MAINT_RESCHEDULE != 0;
-            unsafe {
-                core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
-            }
-            poll_maintenance();
-            if resched_wake {
-                RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
-            }
+        let resched_wake = MAINT_KIND[1].load(Ordering::Acquire) & MAINT_RESCHEDULE != 0;
+        record_secondary_wake(sip);
+        if resched_wake {
+            RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -676,6 +686,14 @@ impl Platform for RiscvPlatform {
         )
     }
 
+    fn secondary_idle_entries() -> usize {
+        IDLE_ENTRIES.load(Ordering::Relaxed)
+    }
+
+    fn secondary_none_wakes() -> usize {
+        SECONDARY_NONE_WAKES.load(Ordering::Relaxed)
+    }
+
     fn wake_hart(hart: usize) {
         assert!(
             SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
@@ -714,19 +732,7 @@ impl Platform for RiscvPlatform {
             unsafe {
                 core::arch::asm!("csrr {}, sip", out(reg) sip);
             }
-            if sip & (1u64 << 5) != 0 {
-                SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
-                unsafe {
-                    set_timer(Riscv64::now() + TIMER_INTERVAL);
-                }
-            }
-            if sip & (1u64 << 1) != 0 {
-                SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
-                unsafe {
-                    core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
-                }
-                poll_maintenance();
-            }
+            record_secondary_wake(sip);
         }
     }
 

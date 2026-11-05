@@ -67,6 +67,7 @@ static SECONDARY_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+static SECONDARY_NONE_WAKES: AtomicUsize = AtomicUsize::new(0);
 const MAINT_TLB: u32 = 1;
 const MAINT_ICACHE: u32 = 2;
 static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
@@ -250,19 +251,23 @@ fn daif_i_set() -> bool {
     daif & (1 << 7) != 0
 }
 
-fn service_gic() {
+/// Drain the GIC.  Returns (saw_timer, saw_sgi) for one WFI wake.
+fn service_gic() -> (bool, bool) {
+    let mut saw_timer = false;
+    let mut saw_sgi = false;
     loop {
         let iar = read32(GICC + 0x00C);
         let irq = iar & 0x3FF;
         if irq == 1023 {
-            return;
+            return (saw_timer, saw_sgi);
         }
         write32(GICC + 0x010, irq);
         if irq == TIMER_IRQ {
+            saw_timer = true;
             SECONDARY_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
             init_timer();
         } else {
-            SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+            saw_sgi = true;
             poll_maintenance();
         }
     }
@@ -306,7 +311,14 @@ pub extern "C" fn rust_secondary(_context: u64) -> ! {
         unsafe {
             core::arch::asm!("wfi");
         }
-        service_gic();
+        let (saw_timer, saw_sgi) = service_gic();
+        if saw_sgi {
+            SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+        } else if saw_timer {
+            SECONDARY_TIMER_WAKES.fetch_add(1, Ordering::Relaxed);
+        } else {
+            SECONDARY_NONE_WAKES.fetch_add(1, Ordering::Relaxed);
+        }
         assert!(daif_i_set(), "AArch64 CPU1 lost DAIF.I after WFI");
         core::hint::spin_loop();
     }
@@ -892,6 +904,14 @@ impl Platform for Aarch64Platform {
 
     fn secondary_timer_ticks() -> usize {
         SECONDARY_TIMER_TICKS.load(Ordering::Relaxed)
+    }
+
+    fn secondary_idle_entries() -> usize {
+        SECONDARY_IDLE_ENTRIES.load(Ordering::Relaxed)
+    }
+
+    fn secondary_none_wakes() -> usize {
+        SECONDARY_NONE_WAKES.load(Ordering::Relaxed)
     }
 
     fn init_block() {
