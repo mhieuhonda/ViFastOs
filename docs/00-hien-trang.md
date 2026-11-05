@@ -1,8 +1,8 @@
-# 00. Hiện trạng triển khai (2026-11)
+# 00. Hiện trạng triển khai (2026-11-06)
 
-Tài liệu này là nguồn trạng thái hiện tại. Các tài liệu `01`–`07` là thiết kế
-tham chiếu từ mô hình Python ban đầu; một số chi tiết trong đó chưa được port
-sang bản bare-metal.
+Tài liệu này là nguồn trạng thái hiện tại. Các tài liệu `01`–`07`, `legacy/`
+và `python-model/` là thiết kế tham chiếu lịch sử; một số chi tiết trong đó
+chưa được port sang bản bare-metal này.
 
 ## Đã chạy được
 
@@ -13,22 +13,21 @@ sang bản bare-metal.
 | Self-test portable | PASS | PASS | PASS |
 | User mode | U-mode `sret` | EL0 `eret` | ring3 `iretq` |
 | Syscall vào kernel | `ecall` | `svc #0` | `int 0x80` |
-| User chạy `DebugWrite` | có | có | có |
-| Timer interrupt | SBI timer | GICv2 + generic timer | PIC + PIT |
-| Preemptive root + server/client + fault | có | có | có |
-| User IPC Call/Reply | có | có | có |
-| User `Retype` + `FrameMap/Unmap` | có | có | có |
-| ramfs VFS + file syscall | có | có | có |
-| SMP bootstrap | HSM, hart phụ idle | PSCI, hart phụ idle | chưa AP; hướng ACPI MADT + LAPIC/SIPI |
-| W^X user code/data | có (RX + NX stack) | có (RO+X, NX data) | có (RX + NX data) |
-| Chuyển capability + notification qua IPC | có | có | có |
-| User fault suspend (không panic) | có | có | có |
+| Timer interrupt + preempt | SBI timer | GICv2 + generic timer | PIC/PIT + LAPIC |
+| SMP 2 hart + scheduler | có (HSM) | có (PSCI) | có (ACPI MADT + LAPIC) |
+| Per-hart ready queue + work stealing | có | có | có |
+| BKL ticket + maintenance IPI + per-VA TLB | có | broadcast | có |
 | Root/server/client VSpace riêng | có | có | có |
-| Untyped con + BootInfo | có | có | có |
-| Frame retype zero page | có | có | có |
-| PageTable retype zero page | có | có | có |
-| x86 vector 0..31 / IST #DF,NMI,#MC | có | — | có |
-| User gọi `Exit` | có | có | có |
+| IPC Call/Reply, notification, cap transfer | có | có | có |
+| Untyped con + BootInfo + TCB idle/restart/bind | có | có | có |
+| VFS v3 journal + directory + permission | có | có | có |
+| Hard link / symlink / double-indirect | có | có | có |
+| Block cache + fsync/BlockFlush | có | có | có |
+| Persistence 7 phase | có | có | có |
+| Software IOMMU + DMA map | có | có | có |
+| Sleep deadline (BlockedSleep) | có | có | có |
+| Console input polling + shell | có | có | có |
+| User fault suspend (không panic) | có | có | có |
 
 Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
 `vifast-platform-*` BSP + `vifast-arch-*` hardware primitive + binary
@@ -36,77 +35,65 @@ Kiến trúc hiện tại: `vifast-kernel` portable + `vifast-runtime` generic +
 
 Kernel portable hiện có:
 
-- object table cố định 128 object, 16 TCB, 64 cap/TCB, 32 mapping/VSpace; `Kernel`
-  khoảng 397 KiB đặt trong static storage của platform;
-- capability install/copy/derive/revoke, chuyển cap qua IPC với quyền `GRANT`;
-- endpoint Send/Recv, Call/Reply một caller;
-- notification wait/signal/poll;
-- scheduler ưu tiên + round-robin;
-- invariant checker cho object/capability/runqueue/VSpace/fd, W^X theo Frame và
-  PA uniqueness (Frame/PageTable/VSpace/Untyped);
-- `Frame`, `VSpace`, `PageTable` object; map/unmap, overlap check, W^X theo
-  Frame (`mapped_w`/`mapped_x`), shadow mapping table;
-- chuyển capability qua `Send`/`Call`, cài vào slot receiver, kiểm tra `GRANT`
-  và không chuyển tiếp quyền `GRANT`;
-- `Untyped`/`retype` cho Frame/PageTable và metadata object, có tính phí
-  Endpoint/Notification/Tcb; hết Untyped trả `OutOfMemory`;
-- root task nhận VSpace/Untyped và tự tạo server/client bằng Retype/CapCopy/
-  TcbConfigure/TcbResume;
-- `validate_user_range()` cho mọi syscall có buffer user;
-- ramfs phẳng trong kernel, fd table theo TCB, syscall `Open`/`Read`/`Write`/
-  `Close`/`Seek`/`Stat`, tạo file bằng `O_CREATE`;
-- SMP bootstrap: RISC-V SBI HSM, AArch64 PSCI; hart phụ hiện idle;
-- syscall user: IPC, `Retype`, `CapCopy`, `TcbConfigure`, `TcbResume`,
-  `FrameMap`, `FrameUnmap`, `Open`, `Read`, `Write`, `Close`, `Seek`, `Stat`,
-  `DebugWrite`, `GetTime`, `Exit`;
-- timer interrupt + preemptive scheduler một hart; root task tạo server/client
-  và bốn fault thread;
-- IPC user subset `Send/Call/Recv/Reply/Signal/Wait/Poll`.
+- object table cố định **144 object**, 16 TCB, 96 cap root / 64 cap task,
+  64 mapping/VSpace, queue 8; `Kernel` nằm trong static storage của platform;
+- capability install/copy/derive/revoke, badge, chuyển cap qua IPC với `GRANT`;
+- endpoint Send/Recv, Call/Reply/ReplyRecv, notification signal/wait/poll;
+- scheduler ưu tiên + round-robin, ready queue theo hart, work stealing;
+- `Sleep` với `BlockedSleep`/`wake_at`; `TcbRestart`, `TcbBindNotification`;
+- invariant checker cho object/capability/runqueue/VSpace/fd, W^X theo Frame,
+  PA uniqueness;
+- Frame/VSpace/PageTable, generic page-table walk, map/unmap, W^X, sync icache;
+- Untyped/retype Frame/PageTable/VSpace/Endpoint/Notification/Tcb/Iommu;
+- VSpace riêng, ASID/PCID, first-fit VA allocator, per-VA TLB shootdown;
+- user-space VFS server, FS v3 journal, hard link/symlink, double-indirect,
+  write-through block cache, `fsync` → `BlockFlush`;
+- software IOMMU domain + `IoMap`/`IoUnmap`;
+- 47 syscall number: 41 implemented, 6 placeholder (`CNodeMint`,
+  `SchedContextConfigure`, `SchedContextBind`, `IrqGet`,
+  `IrqSetNotification`, `IrqAck`);
+- console input polling qua UART/PL011/COM1 và shell nhỏ trong client.
 
 ## Chưa có
 
-- TLB shootdown đa hart, page-table page allocator tổng quát, range VA allocator.
-- SMP scheduler: x86_64 AP bring-up, BKL, per-hart runqueue, IPI, timer đa hart.
-- Revoke Untyped đã destroy object con; còn allocator vật lý đầy đủ, free toàn
-  bộ object ngoài revoke và IOMMU.
-- `vifast-user` mới có syscall wrapper, chưa thay chương trình assembly;
-  root Rust đã nạp từ ELF; chưa có boot info page,
-  ABI encode/decode đầy đủ, shared memory.
-- VFS đầy đủ (block device, cây thư mục, quyền, mount, pager, FS bền vững).
-- Driver, mạng, GPU, compositor, ViFastKey.
-- Kiểm chứng hình thức, fuzz, invariant checker mở rộng/định kỳ.
+- Hardware IOMMU (VT-d/SMMU); chỉ có mô hình software.
+- CNode nhiều cấp, SchedContext đầy đủ, IRQ external delivery.
+- Network, input IRQ, GPU/framebuffer, compositor, ViFastKey.
+- Block cache write-back, mount/pager, barrier phần cứng thật, driver disk
+  ngoài QEMU.
+- Khóa mịn/x2APIC; scheduler mới test 2 hart.
+- Allocator vật lý tổng quát/free object ngoài revoke.
+- CI (GitHub không dùng), formal verification/Kani/Verus.
+- Userland đầy đủ: libc, shell hệ thống, dynamic linking, ứng dụng thật.
 
 ## Hạn chế bring-up cần nhớ
 
-- RISC-V trap đã dùng kernel trap stack qua `sscratch`; AArch64 dùng `SP_EL1`,
+- RISC-V trap dùng kernel trap stack qua `sscratch`; AArch64 dùng `SP_EL1`,
   x86_64 dùng `TSS.RSP0`.
-- x86_64 tự dựng PML4 + page table 4 KiB; code RX, data/stack NX, unmap thật.
-  Kernel chạy identity map 0..1 GiB; AP/SMP scheduler chưa có.
-- AArch64 dùng page table tĩnh 4 cấp; user code read-only+executable, stack
-  read-write + NX; PAN nếu CPU hỗ trợ.
-- RISC-V và AArch64 flush TLB một hart (`sfence.vma`/`tlbi`); chưa có IPI
-  shootdown. Page-table root vẫn là bảng tĩnh của port.
-- Hart phụ RISC-V/AArch64 mới chạy vòng idle, không vào scheduler; x86_64 chưa
-  khởi động AP; hướng là ACPI MADT + LAPIC/SIPI.
-- Chương trình user là mã nhúng; `vifast-user` mới là syscall wrapper.
-- Server/client/root dùng chung một VSpace và stack window; chưa cách ly bộ nhớ
-  giữa các task.
-- User layout chung 64 GiB trong `vifast-abi`; x86 identity map 0..1 GiB.
-- DebugWrite/Open/Read/Write kiểm tra buffer user; kernel address bị từ chối.
+- x86_64 identity map 0..1 GiB; code RX, data/stack NX; AP đã online.
+- Hart 0 có idle TCB; hart phụ dùng platform idle loop nên `Sleep` trên hart
+  phụ có thể fallback poll `GetTime`.
+- FS giới hạn ảnh 4 MiB, 64 inode, tên 28 byte, file logic tối đa 8,4 MiB
+  nhưng thực tế bị chặn bởi dung lượng ảnh.
+- Driver block là VirtIO-MMIO (RISC-V/AArch64) và ATA PIO (x86), polling.
+- QEMU-specific; chưa kiểm chứng máy thật.
+- `docs/01`–`07`, `legacy/`, `python-model/` có thể lỗi thời.
 
 ## Lệnh kiểm tra
 
 ```bash
 ./scripts/build.sh
-python3 scripts/test-qemu.py
+python3 scripts/test-qemu.py --repeat 3
+python3 scripts/test-persist.py
+python3 scripts/test-harness-spec.py
+python3 scripts/check-docs.py
 ```
 
-Kỳ vọng: cả 3 dòng `riscv64`, `aarch64`, `x86_64` đều `PASS`, mỗi log có
-`SELFTEST PASS`, `Server`, `Mapped`, `ViFastOs ramfs`, `ViFastOs write`,
-`Client`, `Fault`, `USER FAULT`, `Zero OK`, `Cap OK`, `Reply OK` và `PREEMPT OK`.
+Kỳ vọng: 3/3 kiến trúc PASS, persistence 7 phase × 3 PASS, host test PASS,
+0 warning. Client in `SLEEP OK` và `shell> ` sau demo; QEMU test-exit tự thoát.
 
 ## Tài liệu thành phần
 
-Chi tiết từng crate, API, luồng syscall, MMU, VFS và kiểm thử:
-
 - [`docs/11-hien-tai/00-index.md`](11-hien-tai/00-index.md)
+- [`ViFastOs-architecture-summary.txt`](../ViFastOs-architecture-summary.txt)
+- [`docs/agent2-report-21.md`](agent2-report-21.md)

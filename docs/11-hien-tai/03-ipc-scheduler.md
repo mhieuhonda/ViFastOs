@@ -97,12 +97,18 @@ Nếu chuyển cap thất bại, sender được đưa lại queue để không 
 
 Scheduler hiện tại:
 
-- một runqueue cố định;
-- ưu tiên số lớn hơn chạy trước;
-- cùng ưu tiên dùng `queue_seq` FIFO;
-- `pick()` lấy TCB tốt nhất, đặt `Running`, tăng `context_switches`;
-- `yield_current()` đặt current về `Ready` và enqueue lại;
-- block state không nằm trong runqueue.
+- ready queue cố định **theo từng hart** (`runq[hart]`);
+- enqueue chọn hart thấp nhất trong affinity mask còn chỗ;
+- `pick_on(hart)` lấy local queue trước, sau đó work-steal TCB có affinity
+  chứa hart đích;
+- ưu tiên số lớn hơn chạy trước; cùng ưu tiên dùng `queue_seq` FIFO;
+- `pick_on()` đặt `Running`, tăng `context_switches`;
+- `yield_current_on()` đặt current về `Ready` và enqueue lại;
+- block state không nằm trong runqueue;
+- `BlockedSleep` dùng `wake_at`; `tick()` gọi `wake_sleepers()` để đưa task
+  hết hạn vào ready queue;
+- hart 0 có idle TCB priority 0 để scheduler không hết task khi mọi task khác
+  block.
 
 ### Chuyển context
 
@@ -124,13 +130,16 @@ Runtime `syscall::switch_blocked`:
 5. `yield_current` + `pick`;
 6. nạp context mới + resume.
 
-Timer hiện chỉ chạy trên một hart. Hai hart phụ RISC-V/AArch64 mới idle,
-chưa nhận runqueue.
+Timer chạy trên cả 3 kiến trúc; RISC-V/AArch64/x86_64 có 2 hart, per-hart
+ready queue, BKL ticket và maintenance IPI. Hart phụ dùng platform idle loop;
+hart 0 có idle TCB.
 
 ## 8. Trạng thái và lỗi cần nhớ
 
 - Server giữ caller slot chỉ một.
 - Reply hai lần trả `NoCaller`.
 - Send vào endpoint đầy trả `OutOfMemory`.
-- `Yield` syscall chưa thực sự chuyển context.
-- Chưa có priority donation, MCS, sleep, suspend/resume.
+- `Yield` thực sự chuyển context qua `switch_blocked`.
+- Chưa có priority donation, MCS; sleep đã có nhưng hart phụ có thể fallback
+  poll khi không có idle TCB.
+- Suspend/resume/restart/bind notification đã có.

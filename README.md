@@ -4,19 +4,21 @@ ViFastOs là một microkernel kiểu seL4, viết bằng Rust, với **lõi por
 chung cho nhiều kiến trúc và **lớp arch riêng** cho từng nền tảng.
 
 Trạng thái hiện tại: **kernel core + 3 port QEMU đã boot được**, chạy self-test
-capability/IPC/notification/scheduler, **timer interrupt + preemptive scheduler**
-với **root task tự tạo server/client bằng Retype/CapCopy/TcbConfigure/TcbResume**,
-**IPC từ user space**, **Frame/VSpace map–unmap có W^X**, **untyped/retype có
-accounting**, chuyển capability + notification qua IPC, **ramfs VFS** với syscall
-`Open`/`Read`/`Write`/`Close`/`Seek`/`Stat`, **kiểm tra con trỏ user** trong lõi
-portable, và **SMP bootstrap** (RISC-V HSM / AArch64 PSCI; x86_64 AP còn chờ)
-cùng `DebugWrite` / `GetTime` / `Exit`.
+capability/IPC/notification/scheduler, **timer interrupt + preemptive scheduler
+SMP 2 hart** (RISC-V HSM, AArch64 PSCI, x86_64 AP qua ACPI MADT/LAPIC), ready
+queue theo hart + work stealing, BKL ticket, maintenance IPI và **per-VA TLB
+shootdown**. User mode có **root/server/client/fault TCB từ ELF Rust**, VSpace
+riêng, IPC + chuyển capability, W^X, ASID/PCID, Untyped/retype có accounting,
+software IOMMU, **VFS server user-space** với FS v3 journal, **hard link,
+symlink, double-indirect, block cache, fsync/flush thật**, persistence 7 phase,
+**Sleep deadline + BSP idle TCB**, `TcbRestart`, `TcbBindNotification`, và
+**console input + shell nhỏ** (`ls`, `cat`, `stat`, `sync`...). Có 47 syscall
+(41 implemented, 6 placeholder).
 
-Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: scheduler vẫn một
-hart, chưa có TLB shootdown đa hart, x86_64 chưa khởi động AP, chưa có driver,
-mạng, compositor hay ứng dụng. Chương trình user
-hiện vẫn là assembly nhúng; crate `vifast-user` đã có syscall wrapper nhưng
-chưa thay thế chương trình mẫu.
+Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: chưa có driver
+network/input IRQ/GPU, compositor, hardware IOMMU, CNode/SchedContext/IRQ
+delivery đầy đủ, ứng dụng desktop hay formal verification. Phần lớn driver
+hiện tại là QEMU-specific và userland vẫn là chương trình demo.
 
 ## Kiến trúc
 
@@ -192,36 +194,26 @@ cargo test -p vifast-elf
 
 Đây là danh sách trung thực để tránh hiểu nhầm “boot được” = “OS hoàn chỉnh”:
 
-- User mode vẫn là **bring-up tối giản**, chưa phải userland đầy đủ; đã có
-  crate `vifast-user` với syscall wrapper 3 kiến trúc, nhưng chương trình mẫu
-  vẫn là assembly; root task đã được nạp từ ELF Rust ở 6.4.
-- IPC user có subset `Send/Call/Recv/Reply/Signal/Wait/Poll`; chuyển cap đã có
-  end-to-end cho `Send`/`Call` (không cho `Reply`), chưa có shared memory,
-  reply object/ReplyRecv, IPC buffer hay fault endpoint.
-- VSpace/PageTable object, generic map/unmap, PageTableMap và retype VSpace
-  đã có; root và server có VSpace riêng, stack server cách ly. Client vẫn dùng
-  root VSpace nên root/fault stack chưa cách ly hoàn toàn; chưa có page-table
-  allocator tổng quát,
-  TLB shootdown đa hart, hay cấp phát địa chỉ ảo tự động theo range lớn.
-- Untyped/retype đã tính phí Endpoint/Notification/Tcb và reset bump khi revoke
-  Untyped; chưa có allocator vật lý đầy đủ, IOMMU hay thu hồi object.
-- RISC-V dùng kernel trap stack qua `sscratch` và `sscratch=0` ở kernel;
-  AArch64 dùng `SP_EL1` + PAN nếu CPU hỗ trợ; x86_64 dùng `TSS.RSP0` +
-  SMEP/SMAP nếu CPUID hỗ trợ. Copy user bật SUM/AC/PAN tạm thời.
-- SMP mới ở mức bootstrap: RISC-V/AArch64 có hart thứ hai idle; x86_64 chưa
-  khởi động AP. Hướng x86 là ACPI MADT + LAPIC/SIPI, không dùng UEFI MP
-  Services sau ExitBootServices. Chưa có per-hart runqueue, BKL, IPI scheduler
-  hay TLB shootdown đa hart.
-- Timer/scheduler vẫn chạy một hart qua SBI/GICv2/PIC.
-- x86_64 đã tự dựng PML4/page table riêng: code RX, data/stack NX, unmap thật.
-  User range 64..128 GiB nằm ngoài identity map 0..1 GiB; boot mappings ở 64 GiB
-  chỉ là tạm thời; chưa có AP và data kernel chưa được đặt NX.
-- RISC-V/AArch64/x86_64 đều map code read-only + executable và data/stack NX.
-- VFS mới là ramfs phẳng trong kernel: chưa có block device, cây thư mục,
-  quyền file, mount, pager hay filesystem bền vững.
-- Chưa có driver, network, GPU, compositor, ViFastKey.
-- Đã có invariant checker cơ bản; chưa có kiểm chứng hình thức, fuzz diện rộng
-  hay Kani/Verus.
+- Userland vẫn là chương trình demo (root/server/client/fault/worker/shell),
+  chưa có libc, shell hệ thống đầy đủ, dynamic linking hay ứng dụng thật.
+- 6 syscall còn placeholder: `CNodeMint`, `SchedContextConfigure`,
+  `SchedContextBind`, `IrqGet`, `IrqSetNotification`, `IrqAck`. CNode và
+  SchedContext chưa có object model hoàn chỉnh; IRQ external chưa có delivery.
+- Chưa có hardware IOMMU (VT-d/SMMU); `IoMap`/`IoUnmap` chỉ là mô hình phần mềm.
+- Chưa có network, input IRQ, GPU/framebuffer, compositor hay ViFastKey.
+  Console hiện chỉ polling; shell chưa có job control.
+- FS còn giới hạn: ảnh 4 MiB, 64 inode, tên 28 byte, chưa có block cache
+  write-back, mount/pager hay barrier phần cứng thật; driver disk là
+  VirtIO-MMIO/ATA PIO QEMU-specific.
+- SMP mới test 2 hart (`MAX_HARTS = 4`); BSP có idle TCB, hart phụ vẫn dùng
+  platform idle loop; chưa có khóa mịn/x2APIC.
+- Object table cố định (144 object), chưa có allocator vật lý tổng quát hay
+  free object ngoài đường revoke.
+- x86_64 vẫn identity map 0..1 GiB; chưa có memory map đầy đủ.
+- Chưa có CI (GitHub không dùng), formal verification/Kani/Verus; mới có
+  invariant checker và seeded syscall fuzz.
+- Tài liệu `01`–`07` và `legacy/`, `python-model/` là tham chiếu lịch sử, không
+  phải trạng thái hiện tại.
 
 Trạng thái chi tiết: `docs/00-hien-trang.md`. Tài liệu thành phần hiện tại:
 [`docs/11-hien-tai/00-index.md`](docs/11-hien-tai/00-index.md). Các tài liệu
