@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `38c77fcf62731f22894520cb7a0227b4552a35a17b81c5b581498bae10bf1067`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `df8f8378facb932c46327187ccf8da5792f678d1010a2c0d56dd12ad069d1d28`.
 
 ---
 
@@ -211,6 +211,21 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.18 — Single-file bundle + RISC-V secondary worker (vòng 06)
+
+- `067b0d9`: `scripts/make-bundle.py`; bundle round 05; self-check summary
+  SHA against overnight log.
+- `b76e930`: root tạo `smp-worker` dùng chung root VSpace, stack riêng tại
+  `WORKER_STACK_BASE`; `TcbSetAffinity` (syscall 20) đặt `0b10`; worker
+  `Yield` 50 lần rồi loop; không Exit để tránh tắt máy.
+- `user_syscall_on(tcb, hart, ...)` sửa Yield theo hart; trước đó Yield luôn
+  tác động hart 0 làm pick_on(1) rỗng.
+- `SMP SCHED OK (hart0=1, hart1=1, resched=1)` 10/10; resched IPI thật từ
+  `TcbResume(worker)`.
+- AArch64 secondary thử GIC/timer/worker: `KERNEL EXCEPTION ESR=0x0
+  ELR=0x4008ebb4 FAR=0x0` trong `poll_maintenance`; đã revert, không commit.
+- Kernel 87/87, arch 5/5, headroom 458352; QEMU 10/10; persist 3/3.
 
 ## 8.17 — SMP brownfield: revoke check, symmetric mailbox, RISC-V idle (vòng 05)
 

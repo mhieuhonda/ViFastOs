@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `76f1c41` (`feat: riscv secondary hart idle loop and reschedule ipi`)
+**Mốc code hiện tại:** `b76e930` (`feat: run tasks on riscv secondary hart`)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
@@ -38,7 +38,7 @@
 ### Chưa có / còn yếu
 
 - Full SMP scheduler; x86 AP bootstrap; per-hart runqueue.
-- RISC-V hart 1 mới idle/timer/IPI (`SMP IDLE OK`), chưa chọn task; x86 AP và AArch64 scheduler đa hart chưa có. WFI được thay bằng idle spin vì WFI+SIE=0 mất wake trên QEMU/OpenSBI.
+- RISC-V hart 1 chạy worker thật (`SMP SCHED OK`), affinity qua `TcbSetAffinity`; AArch64 hart phụ dừng sau exception `ELR=0x4008ebb4`; x86 AP vẫn SKIP. WFI vẫn thay bằng idle spin.
 - Per-VA TLB shootdown.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
 - Hệ thống file thật: mới là một sector `/scratch`, chưa có directory/permission/journal.
@@ -192,6 +192,7 @@ Kernel không biết chi tiết phần cứng. Nó gọi các trait/primitive do
 | BKL | ✅ ticket | FIFO + maintenance poll; trap/syscall/IRQ + x86 fault |
 | Per-CPU | ✅ secure | MAX_HARTS=4; sscratch/swapgs/TPIDR; clobber test |
 | SMP idle | ✅ RISC-V | affinity, mailbox, timer/IPI, `SMP IDLE OK` |
+| SMP worker | ✅ RISC-V | worker hart 1, `SMP SCHED OK`, resched IPI |
 | IOMMU phần mềm | ✅ | domain, 32 mapping, `IoMap`/`IoUnmap` |
 | IOMMU phần cứng | ❌ | chưa VT-d/SMMU |
 | VirtIO net | ❌ | chưa có |
@@ -627,6 +628,7 @@ Giữ `/motd`, `/scratch`, các string harness cũ. Thêm test:
 - `ROOT SWITCH n` với `n > 1`
 - `PERCPU CLOBBER OK` đúng 1 lần; không có `PERCPU CLOBBER BAD`
 - RISC-V `SMP IDLE OK (hart1_wakeups=K)` đúng 1 lần, K > 0
+- RISC-V `SMP SCHED OK (hart0=N, hart1=M, resched=R)` đúng 1 lần, M > 0, R > 0
 - `Isolation`
 - `Server`
 - `Client`
