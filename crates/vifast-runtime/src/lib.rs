@@ -1118,6 +1118,13 @@ pub mod syscall {
                     }
                 }
             }
+            UserAction::ConsoleRead => {
+                if let Some(byte) = A::getc() {
+                    A::write_result(context, KError::Ok, byte as u64, 0, [0; 4]);
+                } else {
+                    A::write_result(context, KError::WouldBlock, 0, 0, [0; 4]);
+                }
+            }
             UserAction::Sleep => {
                 if !switch_blocked::<A>(context) {
                     if A::can_wait_for_work() {

@@ -12,6 +12,7 @@ pub struct X86_64;
 
 const COM1: u16 = 0x3F8;
 const COM1_LSR: u16 = 0x3FD;
+const LSR_DR: u8 = 0x01;
 const LSR_THRE: u8 = 0x20;
 /// QEMU `isa-debug-exit` port used by the test harness.
 const DEBUG_EXIT_PORT: u16 = 0x501;
@@ -47,6 +48,15 @@ impl Arch for X86_64 {
                 core::hint::spin_loop();
             }
             outb(COM1, byte);
+        }
+    }
+
+    fn getc() -> Option<u8> {
+        unsafe {
+            if inb(COM1_LSR) & LSR_DR == 0 {
+                return None;
+            }
+            Some(inb(COM1))
         }
     }
 

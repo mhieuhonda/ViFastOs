@@ -665,3 +665,11 @@ follow-up `62b31f4`.
 - `vifast-fsutil` thêm `mkdir`, `rm`, `mv`, `stat`, `truncate`; test tay
   mkfs → mkdir → put → stat → mv → truncate → get → rm → fsck PASS.
 - QEMU 3/3; 0 warning.
+
+## 8.90 — Console input + shell (vòng 21)
+
+- `Arch::getc` cho UART 16550/PL011/COM1; syscall `ConsoleRead = 47` trả byte
+  hoặc `WouldBlock`.
+- Client có shell polling: `help`, `time`, `echo`, `ls`, `cat`, `mkdir`, `rm`.
+- QEMU test-exit vẫn dừng sau demo; shell in `shell> ` nhưng không cần input.
+- Build/QEMU 3/3; persistence 7 phase ×3; 0 warning.

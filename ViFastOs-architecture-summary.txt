@@ -195,7 +195,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 335264 byte (`kernel_end=0x803ae260`)
+- RISC-V headroom: 331168 byte (`kernel_end=0x803af260`)
 - `Kernel = 653528`, `Object = 4720`, `Tcb = 4672`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
@@ -830,6 +830,7 @@ Số syscall chính:
 44 BlockWrite — implemented
 45 BlockFlush — implemented
 46 Sleep — implemented
+47 ConsoleRead — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,
@@ -850,6 +851,9 @@ Số syscall chính:
 - `TcbRestart` (18): reset TCB không chạy về entry/stack đã cấu hình, xoá
   pending/fd/wake, đưa vào ready queue; runtime nhận `RestartTcb` để dựng lại
   context kiến trúc.
+- `ConsoleRead` (47): poll UART 16550 / PL011 / COM1, trả một byte hoặc
+  `WouldBlock`. Client chạy shell nhỏ sau demo (`help`, `time`, `echo`, `ls`,
+  `cat`, `mkdir`, `rm`); QEMU test-exit vẫn thoát sau khi đủ điều kiện.
 - `CapMint` (11): `a0` source slot, `a1` TCB đích, `a2` slot đích,
   `a3` rights (chỉ giảm), `a4` badge; chỉ Endpoint/Notification **và** source
   phải có badge 0. Server nhận uid từ badge register (RISC-V a7, AArch64 x7,

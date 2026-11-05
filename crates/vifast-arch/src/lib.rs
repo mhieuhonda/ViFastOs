@@ -89,6 +89,11 @@ pub trait Arch {
     /// Write one byte to the early debug console.
     fn putc(byte: u8);
 
+    /// Poll one byte from the early debug console without blocking.
+    fn getc() -> Option<u8> {
+        None
+    }
+
     /// Monotonic timestamp.  The unit is architecture specific; the portable
     /// scheduler only needs monotonicity for now.
     fn now() -> u64;

@@ -111,6 +111,8 @@ pub enum UserAction {
     Blocked,
     /// Sleep until the timer deadline installed by the kernel.
     Sleep,
+    /// Poll one console byte; `WouldBlock` means no input is available.
+    ConsoleRead,
     Exit,
 }
 
@@ -3706,6 +3708,9 @@ impl Kernel {
                 value: self.fast_time(),
                 error: KError::Ok,
             };
+        }
+        if number == SyscallId::ConsoleRead as u64 {
+            return UserAction::ConsoleRead;
         }
         if number == SyscallId::Sleep as u64 {
             if a0 == 0 {

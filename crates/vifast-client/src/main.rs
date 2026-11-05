@@ -296,6 +296,112 @@ fn vfs_fsck() -> bool {
     vfs_reply(reply).is_ok()
 }
 
+fn write_u64(mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut at = digits.len();
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    write(&digits[at..]);
+}
+
+fn shell_command(line: &[u8]) {
+    if line.is_empty() {
+        return;
+    }
+    if line == b"help" {
+        write(b"help time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+    } else if line == b"time" {
+        write_u64(vifast_user::get_time().value);
+        write(b"\n");
+    } else if let Some(text) = line.strip_prefix(b"echo ") {
+        write(text);
+        write(b"\n");
+    } else if line == b"ls" || line.starts_with(b"ls ") {
+        let path = if line.len() > 3 { &line[3..] } else { b"/" };
+        if let Some((fd, _)) = vfs_open(path, 0) {
+            let mut index = 0u64;
+            while let Ok(Some((_, name, len))) = vfs_readdir(fd, index) {
+                write(&name[..len]);
+                write(b"\n");
+                index += 1;
+            }
+            let _ = vfs_close(fd);
+        } else {
+            write(b"ls: not found\n");
+        }
+    } else if let Some(path) = line.strip_prefix(b"cat ") {
+        if let Some((fd, _)) = vfs_open(path, 0) {
+            let mut offset = 0u64;
+            loop {
+                let mut buf = [0u8; vfs::MAX_IO];
+                match vfs_read(fd, offset, vfs::MAX_IO, &mut buf) {
+                    Some(count) if count != 0 => {
+                        write(&buf[..count]);
+                        offset += count as u64;
+                    }
+                    _ => break,
+                }
+            }
+            let _ = vfs_close(fd);
+        } else {
+            write(b"cat: not found\n");
+        }
+    } else if let Some(path) = line.strip_prefix(b"mkdir ") {
+        write(if vfs_mkdir(path).is_ok() {
+            b"ok\n"
+        } else {
+            b"mkdir failed\n"
+        });
+    } else if let Some(path) = line.strip_prefix(b"rm ") {
+        write(if vfs_unlink(path).is_ok() {
+            b"ok\n"
+        } else {
+            b"rm failed\n"
+        });
+    } else {
+        write(b"unknown command; try help\n");
+    }
+}
+
+fn shell() -> ! {
+    let mut line = [0u8; 96];
+    let mut len = 0usize;
+    write(b"shell> ");
+    loop {
+        let input = vifast_user::console_read();
+        if input.error == KError::WouldBlock {
+            let _ = vifast_user::yield_now();
+            continue;
+        }
+        if input.error != KError::Ok {
+            let _ = vifast_user::yield_now();
+            continue;
+        }
+        let byte = input.value as u8;
+        if byte == b'\r' || byte == b'\n' {
+            write(b"\n");
+            shell_command(&line[..len]);
+            len = 0;
+            write(b"shell> ");
+        } else if byte == 8 || byte == 127 {
+            if len != 0 {
+                len -= 1;
+                write(b"\x08 \x08");
+            }
+        } else if byte >= 32 && len < line.len() {
+            line[len] = byte;
+            len += 1;
+            write(&[byte]);
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn client_main() -> ! {
     let _ = vifast_user::retype(3, ObjType::Frame as u64, 4);
@@ -750,9 +856,7 @@ pub extern "C" fn client_main() -> ! {
         b"SYMLINK BAD\n"
     });
 
-    loop {
-        vifast_user::yield_now();
-    }
+    shell()
 }
 
 #[panic_handler]

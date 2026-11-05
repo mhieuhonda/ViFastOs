@@ -13,6 +13,7 @@ pub struct Riscv64;
 const UART_BASE: usize = 0x1000_0000;
 const UART_THR: usize = 0;
 const UART_LSR: usize = 5;
+const LSR_DR: u8 = 0x01;
 const LSR_THRE: u8 = 0x20;
 
 impl Arch for Riscv64 {
@@ -34,6 +35,18 @@ impl Arch for Riscv64 {
                 core::hint::spin_loop();
             }
             core::ptr::write_volatile((UART_BASE + UART_THR) as *mut u8, byte);
+        }
+    }
+
+    fn getc() -> Option<u8> {
+        unsafe {
+            let lsr = (UART_BASE + UART_LSR) as *const u8;
+            if core::ptr::read_volatile(lsr) & LSR_DR == 0 {
+                return None;
+            }
+            Some(core::ptr::read_volatile(
+                (UART_BASE + UART_THR) as *const u8,
+            ))
         }
     }
 

@@ -294,6 +294,11 @@ pub fn sleep(ticks: u64) -> SyscallResult {
     }
 }
 
+pub fn console_read() -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::ConsoleRead as u64, [0; 6]) };
+    result(e, v)
+}
+
 pub fn tcb_restart(tcb_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

@@ -13,6 +13,7 @@ pub struct Aarch64;
 const PL011_BASE: usize = 0x0900_0000;
 const PL011_DR: usize = 0x00;
 const PL011_FR: usize = 0x18;
+const FR_RXFE: u32 = 1 << 4;
 const FR_TXFF: u32 = 1 << 5;
 
 impl Arch for Aarch64 {
@@ -43,6 +44,16 @@ impl Arch for Aarch64 {
                 core::hint::spin_loop();
             }
             core::ptr::write_volatile((PL011_BASE + PL011_DR) as *mut u32, byte as u32);
+        }
+    }
+
+    fn getc() -> Option<u8> {
+        unsafe {
+            let fr = (PL011_BASE + PL011_FR) as *const u32;
+            if core::ptr::read_volatile(fr) & FR_RXFE != 0 {
+                return None;
+            }
+            Some(core::ptr::read_volatile((PL011_BASE + PL011_DR) as *const u32) as u8)
         }
     }
 
