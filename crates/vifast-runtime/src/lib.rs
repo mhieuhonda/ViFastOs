@@ -166,6 +166,10 @@ pub trait Platform: Arch + Console {
         true
     }
 
+    fn boot_handoff_from() -> bool {
+        false
+    }
+
     /// Nudge an idle hart when a TCB with matching affinity becomes ready.
     fn wake_hart(_hart: usize) {}
 
@@ -328,6 +332,9 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         info.hartid,
         info.dtb
     );
+    if A::boot_handoff_from() {
+        vifast_kernel::klog!(A, "BOOT HANDOFF OK (from=1)");
+    }
 
     let (selftest_ok, stats) = {
         let selftest_kernel = A::init_kernel();

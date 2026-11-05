@@ -757,6 +757,10 @@ impl Platform for RiscvPlatform {
         true
     }
 
+    fn boot_handoff_from() -> bool {
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(__boot_handoff_from)) != 0 }
+    }
+
     fn wait_for_work(hart: usize) {
         loop {
             poll_maintenance();
@@ -1138,6 +1142,7 @@ extern "C" {
     fn trap_entry();
     fn secondary_entry();
     static __kernel_end: u8;
+    static __boot_handoff_from: u8;
 }
 
 fn count_user_entry() {

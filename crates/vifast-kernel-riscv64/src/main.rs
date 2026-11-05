@@ -10,6 +10,9 @@ static ROOT_ELF: &[u8] = include_bytes!(env!("VIFAST_ROOT_ELF"));
 static SERVER_ELF: &[u8] = include_bytes!(env!("VIFAST_SERVER_ELF"));
 static CLIENT_ELF: &[u8] = include_bytes!(env!("VIFAST_CLIENT_ELF"));
 
+#[cfg(feature = "test-boot-handoff")]
+core::arch::global_asm!(include_str!("boot_handoff.S"));
+#[cfg(not(feature = "test-boot-handoff"))]
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(
     include_str!("user.S"),

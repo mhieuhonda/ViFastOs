@@ -1,3 +1,8 @@
+    .section .bss
+    .globl __boot_handoff_from
+__boot_handoff_from:
+    .byte 0
+
     .section .text.entry, "ax"
     .globl _start
 _start:

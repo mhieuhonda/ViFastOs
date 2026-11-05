@@ -9,6 +9,7 @@ defined by the kernel printing its banner and SELFTEST PASS.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -179,6 +180,7 @@ def run_qemu(
     require_disk: bool = False,
     monitor: str | None = None,
     index: int = 0,
+    feature_mode: str | None = None,
 ) -> bool:
     if os.path.exists(serial):
         os.unlink(serial)
@@ -206,7 +208,7 @@ def run_qemu(
     root_rust_at = output.find("ROOT RUST")
     server_at = output.find("Server")
     client_at = output.find("Client")
-    ok = accept(name, output, rc, require_block, require_disk)
+    ok = accept(name, output, rc, require_block, require_disk, feature_mode)
     if timed_out:
         print("FAIL: timeout")
         return False
@@ -220,10 +222,18 @@ def run_qemu(
     return True
 
 
-def test_riscv(index: int = 0) -> bool:
-    kernel = os.path.join(
-        ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
+def test_riscv(index: int = 0, feature: str | None = None) -> bool:
+    kernel_name = (
+        "vifast-kernel-riscv64-handoff"
+        if feature == "test-boot-handoff"
+        else "vifast-kernel-riscv64"
     )
+    kernel = os.path.join(
+        ROOT, "target", "riscv64gc-unknown-none-elf", "release", kernel_name
+    )
+    if not os.path.exists(kernel):
+        print(f"missing kernel: {kernel}; run ./scripts/build.sh first")
+        return False
     serial = os.path.join(tempfile.gettempdir(), "vifast-riscv64.serial")
     disk = make_disk("riscv64")
     monitor = make_monitor("riscv64", index)
@@ -252,6 +262,7 @@ def test_riscv(index: int = 0) -> bool:
         require_disk=True,
         monitor=monitor,
         index=index,
+        feature_mode=feature,
     )
 
 
@@ -367,14 +378,21 @@ def main() -> int:
         default=1,
         help="run the selected cases N times and print the PASS ratio",
     )
+    parser.add_argument(
+        "--feature",
+        choices=("test-boot-handoff",),
+        help="run the RISC-V test-only boot handoff build",
+    )
     args = parser.parse_args()
     if args.repeat < 1:
         parser.error("--repeat must be at least 1")
+    if args.feature and args.arch not in (None, "riscv64"):
+        parser.error("--feature test-boot-handoff only applies to riscv64")
     if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
         print("missing QEMU binaries")
         return 2
     tests = {
-        "riscv64": test_riscv,
+        "riscv64": lambda index: test_riscv(index, args.feature),
         "aarch64": test_aarch64,
         "x86_64": test_x86_64,
     }
@@ -389,6 +407,16 @@ def main() -> int:
     finally:
         cleanup_disks()
     print("\n=== summary ===")
+    payload = {
+        "repeat": args.repeat,
+        "results": {
+            name: [sum(results[name]), len(results[name])] for name in names
+        },
+    }
+    result_path = os.path.join(ROOT, "target", "vifast-qemu-last.json")
+    os.makedirs(os.path.dirname(result_path), exist_ok=True)
+    with open(result_path, "w") as handle:
+        json.dump(payload, handle, indent=2)
     failed = False
     for name in names:
         runs = results[name]

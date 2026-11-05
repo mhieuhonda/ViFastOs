@@ -8,6 +8,7 @@ license.workspace = true
 [features]
 default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
+test-boot-handoff = []
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }

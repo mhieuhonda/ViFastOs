@@ -163,6 +163,7 @@ def accept(
     rc: int,
     require_block: bool = True,
     require_disk: bool = True,
+    feature_mode: str | None = None,
 ) -> bool:
     if rc not in EXIT_CODES[name]:
         return False
@@ -175,6 +176,11 @@ def accept(
     if not all(output.count(text) == 1 for text in EXACT_ONE):
         return False
     if any(text in output for text in FORBIDDEN):
+        return False
+    if feature_mode == "test-boot-handoff":
+        if output.count("BOOT HANDOFF OK (from=1)") != 1:
+            return False
+    elif "BOOT HANDOFF OK" in output:
         return False
     if not all(value.split(" (")[0] in output for value, _ in ARCH[name]):
         return False
