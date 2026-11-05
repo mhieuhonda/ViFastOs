@@ -62,12 +62,24 @@ static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 struct BootPool([u8; 131072]);
 static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
-static mut ACTIVE_ROOT: u64 = 0;
-static mut ACTIVE_ASID: u16 = 0;
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static IPI_PENDING: AtomicBool = AtomicBool::new(false);
 static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
 static BKL: BigKernelLock = BigKernelLock::new();
+
+fn poll_maintenance() {
+    let state = cpu_state();
+    if state.is_null() || unsafe { (*state).hart_id } == 0 {
+        return;
+    }
+    if IPI_PENDING.swap(false, Ordering::SeqCst) {
+        unsafe {
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+        IPI_ACK.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 fn assert_irqs_disabled() {
     let daif: u64;
@@ -200,16 +212,59 @@ fn request_ipi() -> bool {
     IPI_ACK.load(Ordering::SeqCst) > 0
 }
 
+fn cpu_state() -> *mut CpuState {
+    let state: *mut CpuState;
+    unsafe {
+        core::arch::asm!("mrs {}, tpidr_el1", out(reg) state);
+    }
+    state
+}
+
+fn publish_current_tcb(tcb: Option<usize>) {
+    let state = cpu_state();
+    unsafe {
+        (*state).current_tcb = tcb.unwrap_or(usize::MAX);
+    }
+}
+
+fn active_root() -> u64 {
+    unsafe { (*cpu_state()).active_root }
+}
+
+fn active_asid() -> u16 {
+    unsafe { (*cpu_state()).active_asid }
+}
+
+fn set_active_root(root: u64, asid: u16) {
+    unsafe {
+        (*cpu_state()).active_root = root;
+        (*cpu_state()).active_asid = asid;
+    }
+}
+
+fn assert_current_tcb() {
+    let state = cpu_state();
+    let expected = Aarch64Platform::kernel()
+        .current()
+        .map(|tcb| tcb.index as usize)
+        .unwrap_or(usize::MAX);
+    assert_eq!(
+        unsafe { (*state).current_tcb },
+        expected,
+        "per-CPU current_tcb mismatch"
+    );
+}
+
 fn active_root_matches_current() -> bool {
     unsafe {
-        if KERNEL_PTR.is_null() || ACTIVE_ROOT == 0 {
+        if KERNEL_PTR.is_null() || active_root() == 0 {
             return false;
         }
         let kernel = &*KERNEL_PTR;
         let Some(tcb) = kernel.current() else {
             return false;
         };
-        kernel.current_root(tcb) == Some(ACTIVE_ROOT)
+        kernel.current_root(tcb) == Some(active_root())
     }
 }
 
@@ -495,11 +550,10 @@ impl Platform for Aarch64Platform {
 
     fn switch_root(root_pa: u64, asid: u16) -> bool {
         unsafe {
-            if root_pa == 0 || (root_pa == ACTIVE_ROOT && asid == ACTIVE_ASID) {
+            if root_pa == 0 || (root_pa == active_root() && asid == active_asid()) {
                 return false;
             }
-            ACTIVE_ROOT = root_pa;
-            ACTIVE_ASID = asid;
+            set_active_root(root_pa, asid);
             // TCR_EL1.AS=1 enables 16-bit ASIDs; TTBR0 carries the tag.
             let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36);
             core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);
@@ -717,6 +771,19 @@ impl Platform for Aarch64Platform {
         write32(GICC + 0x010, TIMER_IRQ);
     }
 
+    fn set_current_tcb(tcb: Option<usize>) {
+        publish_current_tcb(tcb);
+    }
+
+    fn hart_id() -> usize {
+        let state = cpu_state();
+        if state.is_null() {
+            0
+        } else {
+            unsafe { (*state).hart_id }
+        }
+    }
+
     fn init_block() {
         if vifast_virtio::init() {
             let (base, magic, version, device) = vifast_virtio::probe_info();
@@ -815,8 +882,9 @@ extern "C" {
 
 #[no_mangle]
 extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
-    let bkl = BKL.lock();
     assert_irqs_disabled();
+    let bkl = BKL.lock_with(poll_maintenance);
+    assert_current_tcb();
     let frame = unsafe { &mut *frame };
     let ec = (frame.esr >> 26) & 0x3f;
     if ec != 0x15 {
@@ -841,8 +909,9 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
 
 #[no_mangle]
 extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
-    let bkl = BKL.lock();
     assert_irqs_disabled();
+    let bkl = BKL.lock_with(poll_maintenance);
+    assert_current_tcb();
     let frame = unsafe { &mut *frame };
     let iar = read32(GICC + 0x00C);
     let irq = iar & 0x3FF;

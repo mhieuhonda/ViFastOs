@@ -38,8 +38,16 @@
     .globl int80_entry
 int80_entry:
     SAVE_REGS
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
     mov rcx, rsp          # efiapi arg1: *mut TrapFrame
     call x86_trap_handler
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
     RESTORE_REGS
     iretq
 
@@ -197,6 +205,10 @@ exc31:
 
 exc_common:
     SAVE_REGS
+    test byte ptr [rsp + 144], 3
+    jz 1f
+    swapgs
+1:
     mov rcx, rsp          # efiapi arg1: frame
     mov rdx, [rsp + 120]  # efiapi arg2: vector
     mov r8, [rsp + 128]   # efiapi arg3: error
@@ -207,6 +219,10 @@ exc_common:
 
 pf_entry:
     SAVE_REGS
+    test byte ptr [rsp + 136], 3
+    jz 1f
+    swapgs
+1:
     mov rcx, rsp          # efiapi arg1: frame
     mov rdx, [rsp + 120]  # efiapi arg2: CPU error code
     call x86_page_fault
@@ -217,8 +233,16 @@ pf_entry:
     .globl irq0_entry
 irq0_entry:
     SAVE_REGS
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
     mov rcx, rsp          # efiapi arg1: *mut TrapFrame
     call x86_irq_handler
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
     RESTORE_REGS
     iretq
 

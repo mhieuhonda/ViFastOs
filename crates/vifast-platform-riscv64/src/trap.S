@@ -2,15 +2,19 @@
     .balign 4
     .globl trap_entry
 trap_entry:
-    /* User sp is in sscratch and points at the kernel trap-stack top.
-       In kernel mode sscratch is zero, so a kernel trap is caught here. */
-    csrrw sp, sscratch, sp
-    beqz sp, 9f
+    /* User: tp is user-controlled, sscratch points at the kernel CpuState.
+       Kernel: sscratch is zero, tp points at CpuState.  The trap entry swaps
+       the two, so the user can never redirect the kernel state pointer. */
+    csrrw tp, sscratch, tp
+    beqz tp, 9f
+
+    /* Save the user stack in CpuState.user_sp, then switch to the trap stack. */
+    sd sp, 24(tp)
+    ld sp, 16(tp)
     addi sp, sp, -0x120
 
     sd x1, 8(sp)
     sd x3, 24(sp)
-    sd x4, 32(sp)
     sd x5, 40(sp)
     sd x6, 48(sp)
     sd x7, 56(sp)
@@ -39,10 +43,15 @@ trap_entry:
     sd x30, 240(sp)
     sd x31, 248(sp)
 
-    /* Original user stack pointer saved by csrrw. */
+    /* x4 is the user's tp, still in sscratch. */
     csrr t0, sscratch
+    sd t0, 32(sp)
+    /* x2 is the user's sp, saved in CpuState.user_sp. */
+    ld t0, 24(tp)
     sd t0, 16(sp)
-    /* Mark S-mode: any nested/kernel trap must not reuse the user stack. */
+
+    /* Keep the kernel CpuState pointer in s0 across the Rust call. */
+    mv s0, tp
     csrw sscratch, zero
 
     csrr t0, sepc
@@ -60,9 +69,8 @@ trap_entry:
     ld t0, 264(sp)
     csrw sstatus, t0
 
-    /* Restore sscratch to the kernel trap-stack top for the next trap. */
-    addi t0, sp, 0x120
-    csrw sscratch, t0
+    /* Restore the kernel-only CpuState pointer for the next user trap. */
+    csrw sscratch, s0
 
     ld x1, 8(sp)
     ld x3, 24(sp)
@@ -98,7 +106,6 @@ trap_entry:
     sret
 
 9:
-    /* Trap from S-mode.  Restore the interrupted kernel sp and stop. */
-    csrrw sp, sscratch, sp
+    /* Trap from S-mode: sp is still the interrupted kernel stack. */
     call riscv_kernel_trap
     j 9b

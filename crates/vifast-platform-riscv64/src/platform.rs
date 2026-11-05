@@ -46,8 +46,6 @@ static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
 struct BootPool([u8; 131072]);
 static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
-static mut ACTIVE_ROOT: u64 = 0;
-static mut ACTIVE_ASID: u16 = 0;
 #[allow(dead_code)]
 #[repr(align(16))]
 #[derive(Clone, Copy)]
@@ -58,6 +56,20 @@ static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static IPI_PENDING: AtomicBool = AtomicBool::new(false);
 static IPI_ACK: AtomicUsize = AtomicUsize::new(0);
 static BKL: BigKernelLock = BigKernelLock::new();
+
+fn poll_maintenance() {
+    let state = cpu_state();
+    if state.is_null() || unsafe { (*state).hart_id } == 0 {
+        return;
+    }
+    if IPI_PENDING.swap(false, Ordering::SeqCst) {
+        unsafe {
+            core::arch::asm!("sfence.vma zero, zero");
+            core::arch::asm!("fence.i");
+        }
+        IPI_ACK.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 fn assert_irqs_disabled() {
     let sstatus: u64;
@@ -168,18 +180,62 @@ unsafe fn init_cpu(hartid: usize) {
     CPU_STATES[index].trap_stack_top = stack + 32768;
     let state = core::ptr::addr_of!(CPU_STATES[index]) as usize;
     core::arch::asm!("mv tp, {}", in(reg) state);
+    core::arch::asm!("csrw sscratch, zero");
+}
+
+fn cpu_state() -> *mut CpuState {
+    let state: *mut CpuState;
+    unsafe {
+        core::arch::asm!("mv {}, tp", out(reg) state);
+    }
+    state
+}
+
+fn publish_current_tcb(tcb: Option<usize>) {
+    let state = cpu_state();
+    unsafe {
+        (*state).current_tcb = tcb.unwrap_or(usize::MAX);
+    }
+}
+
+fn active_root() -> u64 {
+    unsafe { (*cpu_state()).active_root }
+}
+
+fn active_asid() -> u16 {
+    unsafe { (*cpu_state()).active_asid }
+}
+
+fn set_active_root(root: u64, asid: u16) {
+    unsafe {
+        (*cpu_state()).active_root = root;
+        (*cpu_state()).active_asid = asid;
+    }
+}
+
+fn assert_current_tcb() {
+    let state = cpu_state();
+    let expected = RiscvPlatform::kernel()
+        .current()
+        .map(|tcb| tcb.index as usize)
+        .unwrap_or(usize::MAX);
+    assert_eq!(
+        unsafe { (*state).current_tcb },
+        expected,
+        "per-CPU current_tcb mismatch"
+    );
 }
 
 fn active_root_matches_current() -> bool {
     unsafe {
-        if KERNEL_PTR.is_null() || ACTIVE_ROOT == 0 {
+        if KERNEL_PTR.is_null() || active_root() == 0 {
             return false;
         }
         let kernel = &*KERNEL_PTR;
         let Some(tcb) = kernel.current() else {
             return false;
         };
-        kernel.current_root(tcb) == Some(ACTIVE_ROOT)
+        kernel.current_root(tcb) == Some(active_root())
     }
 }
 
@@ -296,9 +352,17 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn sync_icache(&self, _pa: u64, _size: usize) {
-        // Local hart only until SMP I-cache shootdown is implemented.
         unsafe {
             core::arch::asm!("fence.i");
+        }
+        // RISC-V fence.i is local.  Hart 0 sends the existing maintenance IPI,
+        // whose secondary handler executes fence.i and acknowledges it.
+        let state = cpu_state();
+        if !state.is_null()
+            && unsafe { (*state).hart_id } == 0
+            && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0
+        {
+            let _ = request_ipi();
         }
     }
 
@@ -383,6 +447,19 @@ impl Platform for RiscvPlatform {
         }
     }
 
+    fn set_current_tcb(tcb: Option<usize>) {
+        publish_current_tcb(tcb);
+    }
+
+    fn hart_id() -> usize {
+        let state = cpu_state();
+        if state.is_null() {
+            0
+        } else {
+            unsafe { (*state).hart_id }
+        }
+    }
+
     fn init_block() {
         let (lo, hi) = PageOps.kernel_accessible_range();
         let (dma_lo, dma_hi) = vifast_virtio::dma_range();
@@ -463,11 +540,10 @@ impl Platform for RiscvPlatform {
 
     fn switch_root(root_pa: u64, asid: u16) -> bool {
         unsafe {
-            if root_pa == 0 || (root_pa == ACTIVE_ROOT && asid == ACTIVE_ASID) {
+            if root_pa == 0 || (root_pa == active_root() && asid == active_asid()) {
                 return false;
             }
-            ACTIVE_ROOT = root_pa;
-            ACTIVE_ASID = asid;
+            set_active_root(root_pa, asid);
             let satp = (8u64 << 60) | ((asid as u64) << 44) | (root_pa >> 12);
             core::arch::asm!("csrw satp, {}", in(reg) satp);
             // Invalidate only the new address-space tag.  ASIDs are unique
@@ -615,9 +691,10 @@ impl Platform for RiscvPlatform {
             let cpu: *const CpuState;
             core::arch::asm!("mv {}, tp", out(reg) cpu);
             assert!(!cpu.is_null(), "RISC-V per-CPU pointer is null");
-            let trap_top = (*cpu).trap_stack_top;
-            core::arch::asm!("csrw sscratch, {}", in(reg) trap_top);
+            // Kernel-only register: user code cannot redirect this pointer.
+            core::arch::asm!("csrw sscratch, {}", in(reg) cpu);
             core::arch::asm!("csrs sie, {}", in(reg) 1u64 << 5);
+            core::arch::asm!("mv tp, {}", in(reg) context.regs[4]);
             core::arch::asm!("mv sp, {}", in(reg) context.regs[2]);
             core::arch::asm!("mv a0, {}", in(reg) context.regs[10]);
             core::arch::asm!("sret", options(noreturn));
@@ -712,8 +789,9 @@ extern "C" {
 
 #[no_mangle]
 extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
-    let bkl = BKL.lock();
     assert_irqs_disabled();
+    let bkl = BKL.lock_with(poll_maintenance);
+    assert_current_tcb();
     let frame = unsafe { &mut *frame };
     if frame.scause == 0x8000_0000_0000_0005 {
         vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);

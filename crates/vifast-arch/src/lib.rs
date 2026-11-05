@@ -34,6 +34,11 @@ pub struct CpuState {
     pub hart_id: usize,
     pub current_tcb: usize,
     pub trap_stack_top: u64,
+    /// User stack saved by the RISC-V trap entry before switching to the
+    /// kernel trap stack.  Unused on other architectures.
+    pub user_sp: u64,
+    pub active_root: u64,
+    pub active_asid: u16,
 }
 
 impl CpuState {
@@ -42,6 +47,9 @@ impl CpuState {
             hart_id: 0,
             current_tcb: 0,
             trap_stack_top: 0,
+            user_sp: 0,
+            active_root: 0,
+            active_asid: 0,
         }
     }
 }

@@ -1,18 +1,15 @@
-//! Big kernel lock groundwork.
+//! Fair ticket big kernel lock groundwork.
 //!
-//! This is intentionally a single global lock.  It is safe to use before SMP
-//! scheduling is enabled; the next SMP step must replace it with a fair ticket
-//! lock or a per-CPU design before secondary harts enter the scheduler.
+//! The lock is global; the next SMP step will replace the single global
+//! runqueue, but the lock itself is already FIFO and gives the platform a
+//! maintenance-polling hook so a spinning hart can service TLB-shootdown IPIs.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
-/// A small test-and-set spin lock with an RAII guard.
-///
-/// The lock is released by `Drop`, including on early returns through the
-/// normal trap path.  Paths that never return (shutdown/exit) intentionally
-/// leave it held until the machine stops.
+/// A FIFO ticket lock with an RAII guard.
 pub struct BigKernelLock {
-    held: AtomicBool,
+    next: AtomicUsize,
+    serving: AtomicUsize,
 }
 
 /// Guard returned by [`BigKernelLock::lock`] and [`BigKernelLock::try_lock`].
@@ -24,15 +21,28 @@ pub struct BigKernelGuard {
 impl BigKernelLock {
     pub const fn new() -> Self {
         Self {
-            held: AtomicBool::new(false),
+            next: AtomicUsize::new(0),
+            serving: AtomicUsize::new(0),
         }
     }
 
-    /// Try to acquire without spinning.
+    /// Try to acquire only when no ticket is waiting.
+    ///
+    /// This is a best-effort helper for single-hart/assert use.  Real kernel
+    /// entries use [`BigKernelLock::lock_with`].
     pub fn try_lock(&'static self) -> Option<BigKernelGuard> {
+        let ticket = self.next.load(Ordering::Acquire);
+        if self.serving.load(Ordering::Acquire) != ticket {
+            return None;
+        }
         if self
-            .held
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .next
+            .compare_exchange(
+                ticket,
+                ticket.wrapping_add(1),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
         {
             Some(BigKernelGuard { lock: self })
@@ -41,19 +51,27 @@ impl BigKernelLock {
         }
     }
 
-    /// Acquire the lock, spinning until it becomes available.
-    pub fn lock(&'static self) -> BigKernelGuard {
-        loop {
-            if let Some(guard) = self.try_lock() {
-                return guard;
-            }
+    /// Acquire the lock and call `poll` while waiting.
+    ///
+    /// `poll` must service maintenance work (for example an IPI TLB
+    /// shootdown) without taking this lock again.
+    pub fn lock_with<F: FnMut()>(&'static self, mut poll: F) -> BigKernelGuard {
+        let ticket = self.next.fetch_add(1, Ordering::AcqRel);
+        while self.serving.load(Ordering::Acquire) != ticket {
+            poll();
             core::hint::spin_loop();
         }
+        BigKernelGuard { lock: self }
     }
 
-    /// Whether the lock is currently held.  Intended for assertions/tests.
+    /// Acquire the lock without a maintenance hook.
+    pub fn lock(&'static self) -> BigKernelGuard {
+        self.lock_with(|| {})
+    }
+
+    /// Whether a ticket is outstanding.
     pub fn is_held(&self) -> bool {
-        self.held.load(Ordering::Acquire)
+        self.next.load(Ordering::Acquire) != self.serving.load(Ordering::Acquire)
     }
 }
 
@@ -65,17 +83,26 @@ impl Default for BigKernelLock {
 
 impl Drop for BigKernelGuard {
     fn drop(&mut self) {
-        debug_assert!(self.lock.held.load(Ordering::Relaxed));
-        self.lock.held.store(false, Ordering::Release);
+        self.lock.serving.fetch_add(1, Ordering::Release);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::BigKernelLock;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::thread;
+    use std::time::Duration;
 
     static REENTRY_LOCK: BigKernelLock = BigKernelLock::new();
     static RELEASE_LOCK: BigKernelLock = BigKernelLock::new();
+    static FIFO_LOCK: BigKernelLock = BigKernelLock::new();
+    static DEADLOCK_LOCK: BigKernelLock = BigKernelLock::new();
+    static POLLED: AtomicBool = AtomicBool::new(false);
+    static FIFO_INSIDE: AtomicUsize = AtomicUsize::new(0);
+    static FIFO_MAX_INSIDE: AtomicUsize = AtomicUsize::new(0);
+    static FIFO_DONE: AtomicUsize = AtomicUsize::new(0);
+    static HOLD_READY: AtomicBool = AtomicBool::new(false);
 
     #[test]
     fn rejects_reentry_while_held() {
@@ -95,5 +122,60 @@ mod tests {
         assert!(!RELEASE_LOCK.is_held());
         let guard = RELEASE_LOCK.try_lock().expect("acquire after release");
         drop(guard);
+    }
+
+    #[test]
+    fn ticket_lock_serializes_threads() {
+        FIFO_INSIDE.store(0, Ordering::SeqCst);
+        FIFO_MAX_INSIDE.store(0, Ordering::SeqCst);
+        FIFO_DONE.store(0, Ordering::SeqCst);
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            handles.push(thread::spawn(|| {
+                let guard = FIFO_LOCK.lock();
+                let now = FIFO_INSIDE.fetch_add(1, Ordering::SeqCst) + 1;
+                FIFO_MAX_INSIDE.fetch_max(now, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(2));
+                FIFO_INSIDE.fetch_sub(1, Ordering::SeqCst);
+                FIFO_DONE.fetch_add(1, Ordering::SeqCst);
+                drop(guard);
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(FIFO_DONE.load(Ordering::SeqCst), 4);
+        assert_eq!(FIFO_MAX_INSIDE.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn spinning_hart_can_service_maintenance() {
+        POLLED.store(false, Ordering::SeqCst);
+        HOLD_READY.store(false, Ordering::SeqCst);
+        let holder = thread::spawn(|| {
+            let guard = DEADLOCK_LOCK.lock();
+            HOLD_READY.store(true, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !POLLED.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                core::hint::spin_loop();
+            }
+            if !POLLED.load(Ordering::SeqCst) {
+                drop(guard);
+                panic!("spinning hart did not poll maintenance");
+            }
+            drop(guard);
+        });
+        let spinner = thread::spawn(|| {
+            while !HOLD_READY.load(Ordering::SeqCst) {
+                core::hint::spin_loop();
+            }
+            let guard = DEADLOCK_LOCK.lock_with(|| {
+                POLLED.store(true, Ordering::SeqCst);
+            });
+            drop(guard);
+        });
+        holder.join().unwrap();
+        spinner.join().unwrap();
+        assert!(POLLED.load(Ordering::SeqCst));
     }
 }

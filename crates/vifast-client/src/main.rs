@@ -29,6 +29,8 @@ const IPC_TEXT: &[u8] = b"IPC BUF OK\n";
 const VFS_OK: &[u8] = b"VFS OK\n";
 const VFS_BAD: &[u8] = b"VFS BAD\n";
 const VFS_STAT_OK: &[u8] = b"VFS STAT OK\n";
+const PERCPU_OK: &[u8] = b"PERCPU CLOBBER OK\n";
+const PERCPU_BAD: &[u8] = b"PERCPU CLOBBER BAD\n";
 
 fn write(bytes: &[u8]) {
     let _ = vifast_user::debug_write(bytes.as_ptr() as u64, bytes.len() as u64);
@@ -43,6 +45,54 @@ fn pack_name(name: &[u8]) -> (u64, u64) {
     let mut bytes = [0u8; vfs::MAX_NAME];
     bytes[..len].copy_from_slice(&name[..len]);
     (u64::from_le_bytes(bytes), len as u64)
+}
+
+fn percpu_clobber_ok() -> bool {
+    #[cfg(target_arch = "riscv64")]
+    {
+        let saved: u64;
+        let after: u64;
+        let sentinel = 0xdead_beef_dead_beefu64;
+        unsafe {
+            core::arch::asm!("mv {}, tp", out(reg) saved);
+            core::arch::asm!("mv tp, {}", in(reg) sentinel);
+        }
+        let result = vifast_user::get_time();
+        unsafe {
+            core::arch::asm!("mv {}, tp", out(reg) after);
+            core::arch::asm!("mv tp, {}", in(reg) saved);
+        }
+        result.error == KError::Ok && after == sentinel
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let saved: u64;
+        let after: u64;
+        let sentinel = 0xdead_beef_dead_beefu64;
+        unsafe {
+            core::arch::asm!("mrs {}, tpidr_el0", out(reg) saved);
+            core::arch::asm!("msr tpidr_el0, {}", in(reg) sentinel);
+        }
+        let result = vifast_user::get_time();
+        unsafe {
+            core::arch::asm!("mrs {}, tpidr_el0", out(reg) after);
+            core::arch::asm!("msr tpidr_el0, {}", in(reg) saved);
+        }
+        result.error == KError::Ok && after == sentinel
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        unsafe {
+            core::arch::asm!("mov ax, 0", out("ax") _, options(nostack, preserves_flags));
+            core::arch::asm!("mov gs, ax", in("ax") 0u16, options(nostack, preserves_flags));
+        }
+        let result = vifast_user::get_time();
+        let selector: u16;
+        unsafe {
+            core::arch::asm!("mov {0:x}, gs", out(reg) selector, options(nostack, preserves_flags));
+        }
+        result.error == KError::Ok && selector == 0
+    }
 }
 
 fn vfs_open(name: &[u8], flags: u64) -> Option<(u64, u64)> {
@@ -182,6 +232,11 @@ pub extern "C" fn client_main() -> ! {
     }
     write(if vfs_ok { VFS_OK } else { VFS_BAD });
     write(if vfs_ok { VFS_STAT_OK } else { VFS_BAD });
+    write(if percpu_clobber_ok() {
+        PERCPU_OK
+    } else {
+        PERCPU_BAD
+    });
 
     loop {
         vifast_user::yield_now();

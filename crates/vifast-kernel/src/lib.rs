@@ -22,6 +22,9 @@ use vifast_abi::*;
 
 pub use object::*;
 
+/// Number of hardware threads whose current TCB is tracked by the scheduler.
+pub const MAX_HARTS: usize = 4;
+
 /// Result of a syscall executed on behalf of a user thread.  The architecture
 /// trap handler turns `Debug` into console output and `Exit` into a machine
 /// shutdown; the portable core never touches user memory directly.
@@ -201,7 +204,7 @@ pub struct Kernel {
     pub(crate) objs: [Object; MAX_OBJECTS],
     pub(crate) runq: [Option<ObjRef>; MAX_TCBS],
     pub(crate) runq_len: usize,
-    pub(crate) current: Option<ObjRef>,
+    pub(crate) current: [Option<ObjRef>; MAX_HARTS],
     pub(crate) seq: u64,
     pub(crate) ticks: u64,
     pub(crate) root: Option<ObjRef>,
@@ -224,7 +227,7 @@ impl Kernel {
             objs: [Object::free(); MAX_OBJECTS],
             runq: [None; MAX_TCBS],
             runq_len: 0,
-            current: None,
+            current: [None; MAX_HARTS],
             seq: 0,
             ticks: 0,
             root: None,
@@ -251,7 +254,7 @@ impl Kernel {
         }
         self.runq = [None; MAX_TCBS];
         self.runq_len = 0;
-        self.current = None;
+        self.current = [None; MAX_HARTS];
         self.seq = 0;
         self.ticks = 0;
         self.root = None;
@@ -1904,12 +1907,19 @@ impl Kernel {
                 }
             }
         }
-        if let Some(current) = self.current {
-            let Some(tcb) = self.tcb(current) else {
-                return Err(KError::ObjectDestroyed);
-            };
-            if tcb.state != ThreadState::Running || tcb.queued {
-                return Err(KError::IllegalOperation);
+        for hart in 0..MAX_HARTS {
+            if let Some(current) = self.current[hart] {
+                let Some(tcb) = self.tcb(current) else {
+                    return Err(KError::ObjectDestroyed);
+                };
+                if tcb.state != ThreadState::Running || tcb.queued {
+                    return Err(KError::IllegalOperation);
+                }
+                for other in (hart + 1)..MAX_HARTS {
+                    if self.current[other] == Some(current) {
+                        return Err(KError::IllegalOperation);
+                    }
+                }
             }
         }
         for (i, queued) in self.runq.iter().flatten().enumerate() {
@@ -2578,7 +2588,7 @@ impl Kernel {
         let Some(kind) = self.get(obj).map(|object| object.kind) else {
             return Ok(());
         };
-        if self.current == Some(obj) {
+        if self.current.contains(&Some(obj)) {
             return Err(KError::IllegalOperation);
         }
         if self.root == Some(obj) {
@@ -2587,9 +2597,9 @@ impl Kernel {
         if matches!(kind, Kind::VSpace(_))
             && self
                 .current
-                .and_then(|current| self.tcb(current))
-                .and_then(|tcb| tcb.vspace)
-                == Some(obj)
+                .iter()
+                .flatten()
+                .any(|current| self.tcb(*current).and_then(|tcb| tcb.vspace) == Some(obj))
         {
             return Err(KError::IllegalOperation);
         }
@@ -2725,7 +2735,12 @@ impl Kernel {
                 &mut objects,
                 &mut object_count,
             );
-            if objects[..object_count].contains(&self.current.unwrap_or(ObjRef::invalid())) {
+            if self
+                .current
+                .iter()
+                .flatten()
+                .any(|current| objects[..object_count].contains(current))
+            {
                 return Err(KError::IllegalOperation);
             }
             // Destroy in dependency order: Frame leaves first, then page
@@ -2830,6 +2845,13 @@ impl Kernel {
     }
 
     pub fn pick(&mut self) -> Option<ObjRef> {
+        self.pick_on(0)
+    }
+
+    pub fn pick_on(&mut self, hart: usize) -> Option<ObjRef> {
+        if hart >= MAX_HARTS {
+            return None;
+        }
         let mut best: Option<(usize, u8, u64)> = None;
         for i in 0..self.runq_len {
             let Some(r) = self.runq[i] else { continue };
@@ -2861,15 +2883,20 @@ impl Kernel {
             tcb.queued = false;
             tcb.state = ThreadState::Running;
         }
-        self.current = Some(chosen);
+        self.current[hart] = Some(chosen);
         self.stats.context_switches += 1;
         Some(chosen)
     }
 
     pub fn yield_current(&mut self) -> Option<ObjRef> {
+        self.yield_current_on(0)
+    }
+
+    pub fn yield_current_on(&mut self, hart: usize) -> Option<ObjRef> {
         // Keep `current` set until the architecture has saved the user context.
         // The runtime's switch_blocked() saves it, then pick() replaces it.
-        let current = self.current?;
+        let current = *self.current.get(hart)?;
+        let current = current?;
         if let Some(tcb) = self.tcb_mut(current) {
             if tcb.state == ThreadState::Running {
                 tcb.state = ThreadState::Ready;
@@ -2880,7 +2907,11 @@ impl Kernel {
     }
 
     pub fn current(&self) -> Option<ObjRef> {
-        self.current
+        self.current_on(0)
+    }
+
+    pub fn current_on(&self, hart: usize) -> Option<ObjRef> {
+        self.current.get(hart).copied().flatten()
     }
 
     /// Take a pending syscall result from a woken TCB.  Architecture ports use
@@ -3001,8 +3032,10 @@ impl Kernel {
         table.state = ThreadState::BlockedFault;
         table.queued = false;
         let _ = delivered;
-        if self.current == Some(tcb) {
-            self.current = None;
+        for current in self.current.iter_mut() {
+            if *current == Some(tcb) {
+                *current = None;
+            }
         }
         Ok(())
     }
@@ -3011,12 +3044,17 @@ impl Kernel {
     /// next runnable thread (if any).  The TCB is not destroyed so its fault
     /// can later be reported to a fault endpoint.
     pub fn fault_current(&mut self) -> Option<ObjRef> {
-        let old = self.current.take()?;
+        self.fault_current_on(0)
+    }
+
+    pub fn fault_current_on(&mut self, hart: usize) -> Option<ObjRef> {
+        let slot = self.current.get_mut(hart)?;
+        let old = slot.take()?;
         if let Some(table) = self.tcb_mut(old) {
             table.state = ThreadState::Faulted;
             table.queued = false;
         }
-        self.pick()
+        self.pick_on(hart)
     }
 
     pub fn tick(&mut self) {
@@ -6076,9 +6114,9 @@ mod tests {
         kernel.set_tcb_vspace(root, space).unwrap();
 
         // The loaded VSpace is protected just like the current TCB in revoke.
-        kernel.current = Some(root);
+        kernel.current[0] = Some(root);
         assert_eq!(kernel.revoke_cap(root, 1), Err(KError::IllegalOperation));
-        kernel.current = None;
+        kernel.current[0] = None;
 
         kernel.revoke_cap(root, 1).unwrap();
         assert!(kernel.vspace(space).is_none());
@@ -7202,6 +7240,22 @@ mod tests {
         assert!(kernel.get(child).is_none());
         assert!(kernel.get(frame).is_none());
         assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn current_tcb_is_per_hart_and_running_is_unique() {
+        let mut kernel = Kernel::new();
+        let hart0 = kernel.create_tcb("hart0", 1).unwrap();
+        let hart1 = kernel.create_tcb("hart1", 1).unwrap();
+        kernel.enqueue(hart0);
+        kernel.enqueue(hart1);
+        assert_eq!(kernel.pick_on(0), Some(hart0));
+        assert_eq!(kernel.pick_on(1), Some(hart1));
+        assert_eq!(kernel.current_on(0), Some(hart0));
+        assert_eq!(kernel.current_on(1), Some(hart1));
+        assert_eq!(kernel.pick_on(2), None);
+        assert!(kernel.check_invariants().is_ok());
+        assert_eq!(kernel.destroy_object(hart0), Err(KError::IllegalOperation));
     }
 
     #[test]

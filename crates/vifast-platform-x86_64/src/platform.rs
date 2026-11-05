@@ -27,6 +27,7 @@ const PAGE_LARGE: u64 = 0x80;
 const PAGE_NX: u64 = 1 << 63;
 const IA32_EFER: u32 = 0xC000_0080;
 const IA32_GS_BASE: u32 = 0xC000_0101;
+const IA32_KERNEL_GS_BASE: u32 = 0xC000_0102;
 const EFER_NXE: u64 = 1 << 11;
 
 core::arch::global_asm!(include_str!("trap.S"));
@@ -67,10 +68,12 @@ struct BootPool([u8; 131072]);
 static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
 static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut SMAP_ENABLED: bool = false;
-static mut ACTIVE_ROOT: u64 = 0;
-static mut ACTIVE_ASID: u16 = 0;
 static mut PCID_ENABLED: bool = false;
 static BKL: BigKernelLock = BigKernelLock::new();
+
+fn poll_maintenance() {
+    // No AP bootstrap yet; x86 has no maintenance IPI to service.
+}
 
 fn assert_irqs_disabled() {
     let flags: u64;
@@ -506,14 +509,14 @@ fn user_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
 
 fn active_root_matches_current() -> bool {
     unsafe {
-        if KERNEL_PTR.is_null() || ACTIVE_ROOT == 0 {
+        if KERNEL_PTR.is_null() || active_root() == 0 {
             return false;
         }
         let kernel = &*KERNEL_PTR;
         let Some(tcb) = kernel.current() else {
             return false;
         };
-        kernel.current_root(tcb) == Some(ACTIVE_ROOT)
+        kernel.current_root(tcb) == Some(active_root())
     }
 }
 
@@ -526,6 +529,74 @@ unsafe fn write_msr(msr: u32, value: u64) {
     );
 }
 
+unsafe fn read_msr(msr: u32) -> u64 {
+    let low: u32;
+    let high: u32;
+    core::arch::asm!("rdmsr", in("ecx") msr, out("eax") low, out("edx") high);
+    ((high as u64) << 32) | low as u64
+}
+
+fn cpu_state() -> *mut CpuState {
+    unsafe { read_msr(IA32_GS_BASE) as *mut CpuState }
+}
+
+fn publish_current_tcb(tcb: Option<usize>) {
+    let state = cpu_state();
+    unsafe {
+        if !state.is_null() {
+            (*state).current_tcb = tcb.unwrap_or(usize::MAX);
+        }
+    }
+}
+
+fn active_root() -> u64 {
+    let state = cpu_state();
+    unsafe {
+        if state.is_null() {
+            0
+        } else {
+            (*state).active_root
+        }
+    }
+}
+
+fn active_asid() -> u16 {
+    let state = cpu_state();
+    unsafe {
+        if state.is_null() {
+            0
+        } else {
+            (*state).active_asid
+        }
+    }
+}
+
+fn set_active_root(root: u64, asid: u16) {
+    let state = cpu_state();
+    unsafe {
+        if !state.is_null() {
+            (*state).active_root = root;
+            (*state).active_asid = asid;
+        }
+    }
+}
+
+fn assert_current_tcb() {
+    let state = cpu_state();
+    if state.is_null() {
+        return;
+    }
+    let expected = X86Platform::kernel()
+        .current()
+        .map(|tcb| tcb.index as usize)
+        .unwrap_or(usize::MAX);
+    assert_eq!(
+        unsafe { (*state).current_tcb },
+        expected,
+        "per-CPU current_tcb mismatch"
+    );
+}
+
 unsafe fn init_cpu(hartid: usize) {
     let index = core::cmp::min(hartid, MAX_HARTS - 1);
     CPU_STATES[index].hart_id = hartid;
@@ -533,6 +604,7 @@ unsafe fn init_cpu(hartid: usize) {
     CPU_STATES[index].trap_stack_top = core::ptr::addr_of!(TRAP_STACKS[index]) as u64 + 16384;
     if index == 0 {
         write_msr(IA32_GS_BASE, core::ptr::addr_of!(CPU_STATES[0]) as u64);
+        write_msr(IA32_KERNEL_GS_BASE, 0);
     }
 }
 unsafe fn setup_gdt_tss_idt() {
@@ -887,6 +959,19 @@ impl Platform for X86Platform {
             init_cpu(info.hartid);
         }
     }
+    fn set_current_tcb(tcb: Option<usize>) {
+        publish_current_tcb(tcb);
+    }
+
+    fn hart_id() -> usize {
+        let state = cpu_state();
+        if state.is_null() {
+            0
+        } else {
+            unsafe { (*state).hart_id }
+        }
+    }
+
     fn init_kernel() -> &'static mut Kernel {
         unsafe {
             let kernel = &mut *core::ptr::addr_of_mut!(KERNEL_STORAGE);
@@ -945,11 +1030,10 @@ impl Platform for X86Platform {
 
     fn switch_root(root_pa: u64, asid: u16) -> bool {
         unsafe {
-            if root_pa == 0 || (root_pa == ACTIVE_ROOT && asid == ACTIVE_ASID) {
+            if root_pa == 0 || (root_pa == active_root() && asid == active_asid()) {
                 return false;
             }
-            ACTIVE_ROOT = root_pa;
-            ACTIVE_ASID = asid;
+            set_active_root(root_pa, asid);
             let cr3 = if PCID_ENABLED {
                 root_pa | (((asid as u64) & 0x0fff) << 12)
             } else {
@@ -1108,6 +1192,11 @@ impl Platform for X86Platform {
         }
         assert_eq!(hart, 0, "unexpected x86 per-CPU hart");
         assert!(trap_top != 0, "x86 per-CPU trap stack missing");
+        // Entering ring 3: restore the user GS base and keep CpuState in
+        // IA32_KERNEL_GS_BASE (standard swapgs convention).
+        unsafe {
+            core::arch::asm!("swapgs", options(nostack));
+        }
         let base = context as *const TrapFrame as usize;
         unsafe {
             core::arch::asm!(
@@ -1208,8 +1297,9 @@ extern "efiapi" {
 
 #[no_mangle]
 extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: u64) -> ! {
-    let bkl = BKL.lock();
     assert_irqs_disabled();
+    let bkl = BKL.lock_with(poll_maintenance);
+    assert_current_tcb();
     if matches!(vector, 2 | 8 | 18) {
         vifast_kernel::klog!(
             X86Platform,
@@ -1239,8 +1329,9 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
 
 #[no_mangle]
 extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
-    let bkl = BKL.lock();
     assert_irqs_disabled();
+    let bkl = BKL.lock_with(poll_maintenance);
+    assert_current_tcb();
     let cr2: u64;
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
@@ -1264,8 +1355,9 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
 
 #[no_mangle]
 extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
-    let bkl = BKL.lock();
     assert_irqs_disabled();
+    let bkl = BKL.lock_with(poll_maintenance);
+    assert_current_tcb();
     let frame = unsafe { &mut *frame };
     let number = frame.rax;
     let args = [
@@ -1278,8 +1370,9 @@ extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
 
 #[no_mangle]
 extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
-    let bkl = BKL.lock();
     assert_irqs_disabled();
+    let bkl = BKL.lock_with(poll_maintenance);
+    assert_current_tcb();
     let frame = unsafe { &mut *frame };
     vifast_runtime::timer::on_timer::<X86Platform>(frame);
     drop(bkl);

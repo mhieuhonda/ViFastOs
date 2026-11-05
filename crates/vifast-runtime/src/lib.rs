@@ -120,6 +120,15 @@ pub trait Platform: Arch + Console {
     fn ack_timer();
     fn start_smp();
     fn init_block() {}
+
+    /// Publish the current TCB of this hart to the platform's per-CPU state.
+    fn set_current_tcb(_tcb: Option<usize>) {}
+
+    /// Hart whose kernel entry is currently executing.
+    fn hart_id() -> usize {
+        0
+    }
+
     fn block_read(_lba: u64, _out: &mut [u8; 512]) -> bool {
         false
     }
@@ -212,7 +221,8 @@ fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
 /// and a revoked VSpace must never remain reachable through stale state.
 pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
     let kernel = A::kernel();
-    let tcb = kernel.current().ok_or(KError::IllegalOperation)?;
+    let hart = A::hart_id();
+    let tcb = kernel.current_on(hart).ok_or(KError::IllegalOperation)?;
     let root = kernel.current_root(tcb).ok_or(KError::IllegalOperation)?;
     let asid = kernel.current_asid(tcb).unwrap_or(0);
     if root == 0 {
@@ -222,6 +232,11 @@ pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
         kernel.note_root_switch();
     }
     Ok(())
+}
+
+fn note_current_tcb<A: Platform>(kernel: &Kernel) {
+    let hart = A::hart_id();
+    A::set_current_tcb(kernel.current_on(hart).map(|tcb| tcb.index as usize));
 }
 
 /// Shared boot sequence: kernel self-test, capability setup, user image copy
@@ -683,7 +698,8 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
 
     A::set_kernel(kernel as *mut Kernel);
     kernel.enqueue(root);
-    let _ = kernel.pick();
+    let _ = kernel.pick_on(A::hart_id());
+    note_current_tcb::<A>(kernel);
     if ensure_current_root::<A>().is_err() {
         A::exit(1);
     }
@@ -706,7 +722,8 @@ pub mod syscall {
 
     pub fn dispatch<A: Platform>(context: &mut A::Context, number: u64, args: [u64; 6]) {
         let kernel = A::kernel();
-        let Some(tcb) = kernel.current() else {
+        let hart = A::hart_id();
+        let Some(tcb) = kernel.current_on(hart) else {
             A::exit(1);
         };
         let action = kernel.user_syscall(
@@ -839,12 +856,14 @@ pub mod syscall {
     pub fn switch_blocked<A: Platform>(context: &mut A::Context) {
         let kernel = A::kernel();
         let contexts = A::contexts();
-        if let Some(old) = kernel.current() {
+        let hart = A::hart_id();
+        if let Some(old) = kernel.current_on(hart) {
             contexts[old.index as usize] = *context;
         }
-        let Some(next) = kernel.pick() else {
+        let Some(next) = kernel.pick_on(hart) else {
             A::exit(1);
         };
+        note_current_tcb::<A>(kernel);
         *context = contexts[next.index as usize];
         crate::syscall::apply_resume::<A>(context, next);
         if ensure_current_root::<A>().is_err() {
@@ -860,7 +879,8 @@ pub mod fault {
 
     pub fn suspend<A: Platform>(context: &mut A::Context, cause: u64, addr: u64) {
         let kernel = A::kernel();
-        let old = kernel.current();
+        let hart = A::hart_id();
+        let old = kernel.current_on(hart);
         vifast_kernel::klog!(
             A,
             "USER FAULT tcb={:?} cause={:#x} addr={:#x}",
@@ -873,21 +893,26 @@ pub mod fault {
                 let endpoint = kernel.fault_endpoint(old).unwrap();
                 match Message::new(LABEL_FAULT, &[addr, cause, 0, 0]) {
                     Ok(message) => match kernel.fault_to_endpoint(old, endpoint, message) {
-                        Ok(()) => kernel.pick(),
+                        Ok(()) => {
+                            let next = kernel.pick_on(hart);
+                            note_current_tcb::<A>(kernel);
+                            next
+                        }
                         Err(error) => {
                             vifast_kernel::klog!(A, "FAULT ENDPOINT FAILED: {:?}", error);
-                            kernel.fault_current()
+                            kernel.fault_current_on(hart)
                         }
                     },
-                    Err(_) => kernel.fault_current(),
+                    Err(_) => kernel.fault_current_on(hart),
                 }
             }
-            _ => kernel.fault_current(),
+            _ => kernel.fault_current_on(hart),
         };
         let Some(mut next) = next else {
             vifast_kernel::klog!(A, "no runnable thread after fault");
             A::halt();
         };
+        note_current_tcb::<A>(kernel);
         loop {
             *context = A::contexts()[next.index as usize];
             crate::syscall::apply_resume::<A>(context, next);
@@ -895,10 +920,11 @@ pub mod fault {
                 return;
             }
             vifast_kernel::klog!(A, "FAULT SUSPEND tcb={:?}: no VSpace", next);
-            let Some(candidate) = kernel.fault_current() else {
+            let Some(candidate) = kernel.fault_current_on(hart) else {
                 vifast_kernel::klog!(A, "no runnable thread with VSpace after fault");
                 A::halt();
             };
+            note_current_tcb::<A>(kernel);
             next = candidate;
         }
     }
@@ -911,7 +937,8 @@ pub mod timer {
     pub fn on_timer<A: Platform>(context: &mut A::Context) {
         let kernel = A::kernel();
         let contexts = A::contexts();
-        let old = kernel.current();
+        let hart = A::hart_id();
+        let old = kernel.current_on(hart);
         if let Some(old) = old {
             contexts[old.index as usize] = *context;
         }
@@ -944,11 +971,12 @@ pub mod timer {
         A::reload_timer();
         A::ack_timer();
         if old.is_some() {
-            let _ = kernel.yield_current();
+            let _ = kernel.yield_current_on(hart);
         }
-        let Some(next) = kernel.pick() else {
+        let Some(next) = kernel.pick_on(hart) else {
             A::exit(1);
         };
+        note_current_tcb::<A>(kernel);
         *context = contexts[next.index as usize];
         crate::syscall::apply_resume::<A>(context, next);
         if ensure_current_root::<A>().is_err() {

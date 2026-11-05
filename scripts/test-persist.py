@@ -262,7 +262,7 @@ def run_phases(name: str, tmp: str, boot, expected_code: int) -> None:
     check_phase1_disk(disk)
     print(f"{name}: phase 1 blank disk PASS")
 
-    nonce = secrets.token_hex(8).encode("ascii")
+    nonce = secrets.token_hex(8)[:15].encode("ascii")
     seed_sector(disk, b"VF01", nonce)
     rc, output, timed_out = boot(disk, serial)
     require(not timed_out, f"{name}: phase 2 timed out")
