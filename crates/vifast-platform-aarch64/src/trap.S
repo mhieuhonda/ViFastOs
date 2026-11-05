@@ -59,14 +59,26 @@
     .balign 2048
     .globl vector_table
 vector_table:
-    .rept 8
+    .macro VEC_CURRENT n
+    .org vector_table + 0x80 * \n
+    mov x0, #\n
     b unhandled
-    .space 0x7c
-    .endr
+    .endm
+    VEC_CURRENT 0
+    VEC_CURRENT 1
+    VEC_CURRENT 2
+    VEC_CURRENT 3
+    VEC_CURRENT 4
+    VEC_CURRENT 5
+    VEC_CURRENT 6
+    VEC_CURRENT 7
+    .org vector_table + 0x400
     b sync_lower
     .space 0x7c
+    .org vector_table + 0x480
     b irq_lower
     .space 0x7c
+    .org vector_table + 0x500
     .rept 6
     b unhandled
     .space 0x7c

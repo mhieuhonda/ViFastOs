@@ -907,22 +907,50 @@ impl Platform for Aarch64Platform {
     }
 }
 
+fn vector_name(index: u64) -> &'static str {
+    match index {
+        0 => "cur-sp0-sync",
+        1 => "cur-sp0-irq",
+        2 => "cur-sp0-fiq",
+        3 => "cur-sp0-serror",
+        4 => "cur-spx-sync",
+        5 => "cur-spx-irq",
+        6 => "cur-spx-fiq",
+        7 => "cur-spx-serror",
+        _ => "lower-or-unknown",
+    }
+}
+
 #[no_mangle]
-extern "C" fn aarch64_kernel_fault() -> ! {
+extern "C" fn aarch64_kernel_fault(index: u64) -> ! {
     let esr: u64;
     let elr: u64;
     let far: u64;
+    let mpidr: u64;
+    let spsr: u64;
+    let daif: u64;
+    let isr: u64;
     unsafe {
         core::arch::asm!("mrs {}, esr_el1", out(reg) esr);
         core::arch::asm!("mrs {}, elr_el1", out(reg) elr);
         core::arch::asm!("mrs {}, far_el1", out(reg) far);
+        core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr);
+        core::arch::asm!("mrs {}, spsr_el1", out(reg) spsr);
+        core::arch::asm!("mrs {}, daif", out(reg) daif);
+        core::arch::asm!("mrs {}, isr_el1", out(reg) isr);
     }
     vifast_kernel::klog!(
         Aarch64Platform,
-        "KERNEL EXCEPTION ESR={:#x} ELR={:#x} FAR={:#x}",
+        "KERNEL EXCEPTION vector={}({}) cpu={:#x} ESR={:#x} ELR={:#x} FAR={:#x} SPSR={:#x} DAIF={:#x} ISR={:#x}",
+        index,
+        vector_name(index),
+        mpidr,
         esr,
         elr,
-        far
+        far,
+        spsr,
+        daif,
+        isr
     );
     Aarch64::exit(1)
 }
