@@ -117,6 +117,13 @@ def main() -> int:
             f"generated pass condition count {generated_count} != spec {expected_count}"
         )
 
+    # Every host-tested workspace crate must be listed and have a test command.
+    for package in gen_docs.PACKAGES:
+        if package not in summary:
+            fail(f"section 19 missing crate: {package}")
+        if f"cargo test -p {package}" not in summary:
+            fail(f"section 14 missing cargo test for: {package}")
+
     print("docs check: PASS")
     return 0
 

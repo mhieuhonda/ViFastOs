@@ -110,11 +110,12 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 7dc8a94 feat: x86 ap enters long mode
 - 49c4522 feat: x86 ap online with maintenance ipi
 - 03e8c1d fix: treat x86 lapic pdpt slot as kernel shared
+- 6ed6cde fix: single sipi sequence, per-cpu tss/gs on x86 ap, real lapic ipi
+- 03cb048 feat: x86 ap lapic timer and idle via irr polling
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit 03e8c1d): x86 AP trampoline/INIT-SIPI-SIPI,
-long mode, maintenance online, PDPT[3] kernel slot; QEMU 10/10 cả 3,
-x86 50/50; persistent
+Cập nhật code gần nhất (commit 03cb048): x86 AP TSS/GS riêng, IPI LAPIC
+thật, timer và idle IRR; QEMU 10/10 cả 3, x86 50/50; persistent
 VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
@@ -363,7 +364,6 @@ vifast-platform-aarch64
 - Files: platform.rs, trap.S, smp.S.
 
 vifast-platform-x86_64
-crates/vifast-acpi/src/lib.rs
 - X86Platform newtype.
 - UEFI entry phối hợp qua PlatformInfo.
 - GDT/TSS/IDT.
@@ -908,8 +908,8 @@ Cap transfer:
 - AArch64: PSCI CPU_ON CPU1; GIC banked/timer riêng, DAIF.I=1, WFI polling
   `GICC_IAR`, per-hart BKL/current, TTBR0 theo VSpace; hai worker affinity
   CPU1 và reschedule SGI chỉ khi idle.
-- x86_64: AP online qua trampoline 16→32→64-bit, INIT-SIPI-SIPI; đến
-  long mode rồi maintenance, IF=0, poll mailbox bằng `pause` (D2).
+- x86_64: AP online qua trampoline 16→32→64-bit, INIT-SIPI-SIPI; TSS/GS
+  riêng, IPI LAPIC thật qua IRR, LAPIC timer; IF=0, idle poll `pause` (D2/D3).
   Chưa chạy scheduler/user task trên AP.
 - Scheduler dùng `pick_on(hart)`; RISC-V và AArch64 có scheduler hart phụ,
   x86_64 hiện chỉ hart 0.
@@ -956,6 +956,7 @@ Lệnh:
     cargo test -p vifast-elf
     cargo test -p vifast-runtime
     cargo test -p vifast-user
+    cargo test -p vifast-acpi
     cargo fmt --all -- --check
     python3 scripts/test-qemu.py
     python3 scripts/test-qemu.py --arch riscv64 --feature test-boot-handoff
@@ -1037,8 +1038,8 @@ Boot assert (không tính vào host test):
 - quyền R/W/X, RISC-V W-thiếu-R bị từ chối;
 - AArch64 leaf L3 RO+X, RW+NX, có/không bit EL0 và leaf_is_user;
 - dải user 3 kiến trúc không giao kernel identity;
-- RISC-V < 256 GiB; x86/AArch64 chỉ dùng chung PDPT[0]/L1[0..1], thêm
-  PDPT[3] x86 cho LAPIC;
+- RISC-V < 256 GiB; x86 dùng chung PDPT[0] (identity) và PDPT[3] (LAPIC),
+  AArch64 dùng chung L1[0..1];
 - table_span từng level và biên.
 
 QEMU test:
@@ -1130,10 +1131,13 @@ Theo kiến trúc:
   - `AP REAL MODE OK (apic=...)` — AP executed real-mode trampoline
   - `AP LONG MODE OK (cpu=1)` — AP entered long mode
   - `SMP OK` — both CPUs online
-  - `ipi=1` — AP maintenance mailbox acknowledged
+  - `ipi=1` — AP maintenance IPI acknowledged
+  - `SMP TIMER OK (hart1_ticks=T)` — AP LAPIC timer ran, exactly once
+  - `SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)` — AP idle accounting, exactly once
   - 4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000
   - ROOT SWITCH n > 1
   - ACPI MADT cpus == 2
+  - T > 0, I >= 1
 ### END GENERATED pass
 
 
@@ -1387,8 +1391,8 @@ E. Desktop / Space
    trung gian. vifast-elf đã host-test parser và root ELF đã nạp ở 6.4.
 10. Gom unsafe vào wrapper nhỏ: MMIO, CSR/MSR, PTE.
 11. 3b: RISC-V copy root[KERNEL_SHARED_SLOTS]. x86/AArch64 dùng PML4/L0 và
-    PDPT/L1 riêng cho từng VSpace; chỉ PDPT[0]/L1[0..=1] trỏ PD/L2 kernel
-    dùng chung. User dùng entry riêng 64..127. TTBR1 để sau.
+    PDPT/L1 riêng cho từng VSpace; PDPT[0]/PDPT[3] x86 và L1[0..=1] AArch64
+    trỏ bảng kernel dùng chung. User dùng entry riêng 64..127. TTBR1 để sau.
 12. 3b: Context **không** cache VSpace root. Runtime đọc root từ TCB mỗi lần
     restore; nếu khác root đang nạp thì ghi satp/TTBR0/CR3 và full flush.
     read_user/write_user assert loaded root khớp current. Root switch có counter
@@ -1418,8 +1422,9 @@ E. Desktop / Space
 24. Mỗi PageTable chỉ gắn một vị trí {vspace, va_base, level}; revoke theo thứ
     tự Frame → PageTable sâu nhất → cha → VSpace.
 25. User VA range thật nằm trong vifast-pte: 64..128 GiB, không giao kernel
-    identity; RISC-V nằm trong nửa thấp Sv39. x86/AArch64 chỉ dùng chung các
-    slot kernel trong PDPT/L1; PML4/L0 và PDPT/L1 là riêng mỗi VSpace.
+    identity; RISC-V nằm trong nửa thấp Sv39. Kernel slots dùng chung: x86
+    PDPT[0]/PDPT[3], AArch64 L1[0..1], RISC-V root[0]/root[2]; PML4/L0 và
+    PDPT/L1 là riêng mỗi VSpace.
 26. Object lưu creator = CapRef { addr, id }; revoke chỉ khớp cap id chính xác.
     Khi TCB bị hủy, object creator và cap con được reparent lên cap cha còn
     sống gần nhất; không còn creator treo. delete Untyped cap trả KResult và bị từ chối
@@ -1544,6 +1549,10 @@ E. Desktop / Space
 57. Vòng 13: x86 AP trampoline, INIT-SIPI-SIPI, long mode, maintenance.
 58. D2 (vòng 12): AP x86 IF=0 mọi lúc; idle poll mailbox + `pause`, không
     `hlt`/`sti; hlt`; IPI chỉ nhận qua vector khi AP đang ring 3.
+59. Vòng 14: AP x86 TSS/GS riêng, IPI LAPIC thật qua IRR, LAPIC timer và idle
+    poll; worker/scheduler trên AP chưa làm.
+60. D3: x86 đọc 8 thanh ghi LAPIC IRR khi IF=0; maintenance và timer mỗi loại
+    một vector; AP ở ring 3 mới nhận vector qua IDT.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
@@ -1572,6 +1581,7 @@ crates/vifast-platform-*/src/
 crates/vifast-kernel-*/src/main.rs
 crates/vifast-arch/src/bkl.rs (BKL) + CpuState/MAX_HARTS
 crates/vifast-virtio/src/lib.rs
+crates/vifast-acpi/src/lib.rs
 scripts/build.sh
 scripts/test-qemu.py
 scripts/test-persist.py
