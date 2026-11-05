@@ -81,6 +81,7 @@ ARCH = {
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
         ("ACPI MADT OK (cpus=C, bsp=ID, lapic=0x...)", "ACPI MADT parsed"),
+        ("LAPIC OK", "BSP local APIC enabled"),
         ("SMP SKIP", "x86 AP bring-up is not enabled yet"),
     ],
 }
@@ -102,7 +103,7 @@ ARCH_EXACT_ONE = {
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "SMP SKIP"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "SMP SKIP"],
 }
 
 NUMERIC = {

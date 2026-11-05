@@ -43,6 +43,10 @@ struct Table([u64; 512]);
 static mut PML4: Table = Table([0; 512]);
 static mut PDPT: Table = Table([0; 512]);
 static mut PD_IDENTITY: Table = Table([0; 512]);
+static mut PD_HIGH: Table = Table([0; 512]);
+const LAPIC_DEFAULT: u64 = 0xFEE0_0000;
+const PAGE_PCD: u64 = 1 << 4;
+const PAGE_PWT: u64 = 1 << 3;
 
 #[allow(dead_code)]
 #[repr(align(4096))]
@@ -580,15 +584,33 @@ unsafe fn build_kernel_page_tables() {
     let pml4 = core::ptr::addr_of_mut!(PML4) as *mut Table;
     let pdpt = core::ptr::addr_of_mut!(PDPT) as *mut Table;
     let identity = core::ptr::addr_of_mut!(PD_IDENTITY) as *mut Table;
+    let high = core::ptr::addr_of_mut!(PD_HIGH) as *mut Table;
 
     zero_table(pml4);
     zero_table(pdpt);
     zero_table(identity);
+    zero_table(high);
 
     /* PML4[0] -> PDPT; PDPT[0] covers 0..1 GiB identity for kernel/UEFI
     code, stacks, GDT/TSS/IDT and page tables. */
     (*pml4).0[0] = table_pa(pdpt) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
     (*pdpt).0[0] = table_pa(identity) | PAGE_PRESENT | PAGE_WRITE;
+    // LAPIC lives in 3..4 GiB.  Share this supervisor-only 2 MiB MMIO
+    // mapping through the same PDPT copied into every VSpace.
+    let lapic_base = if ACPI_LAPIC_BASE == 0 {
+        LAPIC_DEFAULT
+    } else {
+        ACPI_LAPIC_BASE
+    };
+    (*pdpt).0[3] = table_pa(high) | PAGE_PRESENT | PAGE_WRITE;
+    let high_index = ((lapic_base >> 21) & 0x1ff) as usize;
+    (*high).0[high_index] = (lapic_base & !0x1f_ffff)
+        | PAGE_PRESENT
+        | PAGE_WRITE
+        | PAGE_LARGE
+        | PAGE_PCD
+        | PAGE_PWT
+        | PAGE_NX;
     for i in 0..512usize {
         (*identity).0[i] = (i as u64 * 0x20_0000) | PAGE_PRESENT | PAGE_WRITE | PAGE_LARGE;
     }
@@ -695,6 +717,27 @@ fn assert_current_tcb() {
         expected,
         "per-CPU current_tcb mismatch"
     );
+}
+
+static mut LAPIC_READY: bool = false;
+
+unsafe fn init_lapic() {
+    if LAPIC_READY {
+        return;
+    }
+    let base = if ACPI_LAPIC_BASE == 0 {
+        LAPIC_DEFAULT
+    } else {
+        ACPI_LAPIC_BASE
+    };
+    // Spurious vector 0xFF, APIC software enable.  TPR=0 accepts all.
+    let svr = (base + 0xF0) as *mut u32;
+    let tpr = (base + 0x80) as *mut u32;
+    let id = core::ptr::read_volatile((base + 0x20) as *const u32) >> 24;
+    core::ptr::write_volatile(tpr, 0);
+    core::ptr::write_volatile(svr, 0x100 | 0xFF);
+    LAPIC_READY = true;
+    vifast_kernel::klog!(X86Platform, "LAPIC OK (id={})", id);
 }
 
 unsafe fn init_cpu(hartid: usize) {
@@ -899,6 +942,8 @@ impl vifast_kernel::PageTableOps for PageOps {
             let shared_pdpt = core::ptr::addr_of!(PDPT) as *const u64;
             *root = aux_pa | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
             *aux = *shared_pdpt;
+            // PDPT[3] carries the supervisor-only LAPIC MMIO window.
+            *aux.add(3) = *shared_pdpt.add(3);
         }
     }
 
@@ -1143,6 +1188,7 @@ impl Platform for X86Platform {
             // A normal CR3 write invalidates the target PCID.  Other address
             // spaces keep their tagged TLB entries.
             core::arch::asm!("mov cr3, {}", in(reg) cr3);
+            init_lapic();
         }
         true
     }
@@ -1157,6 +1203,16 @@ impl Platform for X86Platform {
 
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
+            && kernel_leaf_ok(
+                root_pa,
+                if unsafe { ACPI_LAPIC_BASE == 0 } {
+                    LAPIC_DEFAULT
+                } else {
+                    unsafe { ACPI_LAPIC_BASE }
+                },
+                true,
+                false,
+            )
             && kernel_leaf_ok(root_pa, unsafe { x86_exception_table[0] }, false, true)
             && kernel_data_nx(root_pa)
             && kernel_leaf_ok(
