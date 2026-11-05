@@ -141,7 +141,15 @@ pub trait Platform: Arch + Console {
         0
     }
 
-    fn resched_ipi_wakes() -> usize {
+    fn resched_sent() -> usize {
+        0
+    }
+
+    fn resched_wake() -> usize {
+        0
+    }
+
+    fn idle_entries() -> usize {
         0
     }
 
@@ -979,10 +987,12 @@ pub mod timer {
             if entries1 > 0 {
                 vifast_kernel::klog!(
                     A,
-                    "SMP SCHED OK (hart0={}, hart1={}, resched={})",
+                    "SMP SCHED OK (hart0={}, hart1={}, resched_sent={}, resched_wake={}, idle_entries={})",
                     A::user_entries(0),
                     entries1,
-                    A::resched_ipi_wakes()
+                    A::resched_sent(),
+                    A::resched_wake(),
+                    A::idle_entries()
                 );
             }
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);

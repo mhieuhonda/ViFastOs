@@ -56,7 +56,21 @@ static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SCHED_READY: AtomicBool = AtomicBool::new(false);
-static RESCHED_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
+static RESCHED_SENT: AtomicUsize = AtomicUsize::new(0);
+static RESCHED_WAKE: AtomicUsize = AtomicUsize::new(0);
+static IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+static IDLE_HARTS: [AtomicBool; MAX_HARTS] = [
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+];
+static RESCHED_PENDING: [AtomicBool; MAX_HARTS] = [
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+];
 static USER_ENTRIES: [AtomicUsize; MAX_HARTS] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
@@ -142,9 +156,6 @@ fn poll_maintenance() {
         return;
     }
     let kind = MAINT_KIND[hart].swap(0, Ordering::AcqRel);
-    if kind & MAINT_RESCHEDULE != 0 {
-        RESCHED_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
-    }
     if kind & MAINT_TLB != 0 {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
@@ -192,6 +203,31 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
         spins += 1;
     }
     MAINT_ACK[target].load(Ordering::Acquire) >= seq
+}
+
+fn send_reschedule(target: usize) -> bool {
+    assert!(
+        BKL_OWNER.load(Ordering::Acquire) != usize::MAX,
+        "reschedule sender must hold BKL"
+    );
+    if target >= MAX_HARTS || !maintenance_target_online(target) {
+        return false;
+    }
+    // Fire-and-forget: only the target's idle window needs an IPI.  A task
+    // that is already running will observe the new TCB on its next tick/Yield.
+    if !IDLE_HARTS[target].load(Ordering::SeqCst) {
+        return false;
+    }
+    // At most one reschedule IPI per idle interval; this keeps S <= I.
+    if RESCHED_PENDING[target].swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
+    MAINT_KIND[target].fetch_or(MAINT_RESCHEDULE, Ordering::AcqRel);
+    let _ = seq;
+    <Riscv64 as Arch>::send_ipi(target);
+    RESCHED_SENT.fetch_add(1, Ordering::Relaxed);
+    true
 }
 
 fn request_ipi() -> bool {
@@ -278,11 +314,18 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
             core::hint::spin_loop();
             continue;
         }
-        // Take BKL, pick a hart-1 task, publish current state and switch the
-        // root while still protected.  Enter user only after dropping BKL.
+        // Set the idle flag while still holding BKL.  A sender can only
+        // observe idle after enqueueing under BKL, so the recheck below closes
+        // the enqueue-vs-WFI race.
         let picked = {
             let bkl = bkl_lock();
             let picked = RiscvPlatform::kernel().pick_on(1);
+            if picked.is_none() {
+                IDLE_HARTS[1].store(true, Ordering::SeqCst);
+                if RiscvPlatform::kernel().has_ready_on(1) {
+                    IDLE_HARTS[1].store(false, Ordering::SeqCst);
+                }
+            }
             if let Some(tcb) = picked {
                 publish_current_tcb(Some(tcb.index as usize));
                 if vifast_runtime::ensure_current_root::<RiscvPlatform>().is_err() {
@@ -296,12 +339,13 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
             let context = RiscvPlatform::contexts()[tcb.index as usize];
             <RiscvPlatform as Platform>::enter_user(&context);
         }
-        // BKL is released before WFI.  Pending SSIP/STIP are deliberately
-        // left set while sleeping; SIE stays zero, so WFI only wakes without
-        // entering a trap.  They are consumed by polling after it returns.
+        // No task and no newly-ready task: enter the masked-WFI idle window.
+        IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
         unsafe {
             core::arch::asm!("wfi");
         }
+        IDLE_HARTS[1].store(false, Ordering::SeqCst);
+        RESCHED_PENDING[1].store(false, Ordering::SeqCst);
         let sip: u64;
         unsafe {
             core::arch::asm!("csrr {}, sip", out(reg) sip);
@@ -314,10 +358,14 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
         }
         if sip & (1u64 << 1) != 0 {
             SECONDARY_IPI_WAKES.fetch_add(1, Ordering::Relaxed);
+            let resched_wake = MAINT_KIND[1].load(Ordering::Acquire) & MAINT_RESCHEDULE != 0;
             unsafe {
                 core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
             }
             poll_maintenance();
+            if resched_wake {
+                RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -634,7 +682,7 @@ impl Platform for RiscvPlatform {
             "reschedule mailbox supports at most 2 online harts"
         );
         if hart == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            let _ = send_maintenance(1, MAINT_RESCHEDULE);
+            let _ = send_reschedule(1);
         }
     }
 
@@ -645,8 +693,16 @@ impl Platform for RiscvPlatform {
             .unwrap_or(0)
     }
 
-    fn resched_ipi_wakes() -> usize {
-        RESCHED_IPI_WAKES.load(Ordering::Relaxed)
+    fn resched_sent() -> usize {
+        RESCHED_SENT.load(Ordering::Relaxed)
+    }
+
+    fn resched_wake() -> usize {
+        RESCHED_WAKE.load(Ordering::Relaxed)
+    }
+
+    fn idle_entries() -> usize {
+        IDLE_ENTRIES.load(Ordering::Relaxed)
     }
 
     fn init_block() {

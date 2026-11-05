@@ -62,13 +62,15 @@ def hart1_wakeups(output: str) -> int:
     return int(match.group(1)) if match else -1
 
 
-def smp_sched(output: str) -> tuple[int, int, int]:
+def smp_sched(output: str) -> tuple[int, int, int, int, int]:
     match = re.search(
-        r"SMP SCHED OK \(hart0=(\d+), hart1=(\d+), resched=(\d+)\)", output
+        r"SMP SCHED OK \(hart0=(\d+), hart1=(\d+), resched_sent=(\d+), "
+        r"resched_wake=(\d+), idle_entries=(\d+)\)",
+        output,
     )
     if not match:
-        return (-1, -1, -1)
-    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        return (-1, -1, -1, -1, -1)
+    return tuple(int(match.group(i)) for i in range(1, 6))
 
 
 def root_switch_count(output: str) -> int:
@@ -160,7 +162,8 @@ def run_qemu(
                 and output.count("SMP SCHED OK") == 1
                 and smp_sched(output)[0] > 1
                 and smp_sched(output)[1] >= 100
-                and smp_sched(output)[2] > 0
+                and smp_sched(output)[3] > 0
+                and smp_sched(output)[2] <= smp_sched(output)[4]
                 and output.count("SMP WORKERS OK (a=50, b=50)") == 1
             )
         )
