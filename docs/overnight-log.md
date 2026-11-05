@@ -694,3 +694,15 @@ follow-up `62b31f4`.
 - Root retype context 1000/1000, bind worker C, in `SCHED CTX OK`; harness
   yêu cầu dòng này.
 - Host test 106/106; QEMU --repeat 3 3/3; persistence 7 phase ×3; 0 warning.
+
+## 8.97 — IRQ objects + timer IRQ delivery (vòng 22)
+
+- ABI thêm `ObjType::Irq`, logical `IRQ_TIMER=0`/`IRQ_UART=1`; status 3 syscall
+  IRQ chuyển sang implemented.
+- Kernel object IRQ có number, notification, pending; `irq_raise` coalesce
+  edge, `IrqSetNotification` signal ngay nếu đang pending, `IrqAck` xoá pending.
+- `IrqGet` chỉ root được gọi; root copy cap IRQ + notification cho client.
+- Runtime raise `IRQ_TIMER` mỗi tick; client Wait/Ack và in `IRQ OK`; harness
+  yêu cầu `IRQ OK`, cấm `IRQ BAD`.
+- Host test 108/108; QEMU 3/3 (một lần), persistence giữ 7 phase ×3 dự kiến.
+- UART external IRQ mới có API/logical number, chưa route PLIC/GIC/PIC.

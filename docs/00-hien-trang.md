@@ -50,8 +50,8 @@ Kernel portable hiện có:
 - user-space VFS server, FS v3 journal, hard link/symlink, double-indirect,
   write-through block cache, `fsync` → `BlockFlush`;
 - software IOMMU domain + `IoMap`/`IoUnmap`;
-- 47 syscall number: 43 implemented, 4 placeholder (`CNodeMint`, `IrqGet`,
-  `IrqSetNotification`, `IrqAck`); SchedContext budget/period đã chạy;
+- 48 syscall number: 47 implemented, 1 placeholder (`CNodeMint`); SchedContext
+  budget/period và timer IRQ delivery đã chạy;
 - console input polling qua UART/PL011/COM1 và shell nhỏ trong client.
 
 ## Chưa có

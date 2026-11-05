@@ -107,6 +107,9 @@ pub mod user_layout {
     pub const FAULT1_TCB_SLOT: usize = 9;
     pub const FAULT2_TCB_SLOT: usize = 10;
     pub const FAULT3_TCB_SLOT: usize = 11;
+    /// Client cspace slots used for the timer IRQ demo/notification.
+    pub const CLIENT_IRQ_SLOT: u8 = 8;
+    pub const CLIENT_IRQ_NOTIFICATION_SLOT: u8 = 9;
     /// Maximum user virtual window reserved for code/data/stack/IPC buffers.
     pub const WINDOW_BASE: usize = CODE_VA;
     pub const WINDOW_SIZE: usize = 0x20_0000;
@@ -163,6 +166,11 @@ pub const OBJ_SCHED_CONTEXT_BYTES: usize = 64;
 pub const OBJ_METADATA_ALIGN: usize = 16;
 pub const OBJ_IOMMU_BYTES: usize = 1024;
 pub const OBJ_BLOCK_DEVICE_BYTES: usize = 64;
+pub const OBJ_IRQ_BYTES: usize = 64;
+/// Logical IRQ numbers visible to user space.  Ports map these to their
+/// interrupt-controller lines and keep the controller details private.
+pub const IRQ_TIMER: u32 = 0;
+pub const IRQ_UART: u32 = 1;
 /// Base of the software IOMMU IOVA window used by the portable model.
 pub const IOMMU_IOVA_BASE: u64 = 0x1_0000_0000;
 pub const LABEL_FAULT: u64 = 0xFFFF_0001;
@@ -381,6 +389,7 @@ pub enum ObjType {
     SchedContext = 8,
     Iommu = 9,
     BlockDevice = 10,
+    Irq = 11,
 }
 
 /// Thread states are exposed to the ABI for introspection and fault reports.
@@ -599,9 +608,9 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::FrameUnmap, true),
     (SyscallId::IoMap, true),
     (SyscallId::IoUnmap, true),
-    (SyscallId::IrqGet, false),
-    (SyscallId::IrqSetNotification, false),
-    (SyscallId::IrqAck, false),
+    (SyscallId::IrqGet, true),
+    (SyscallId::IrqSetNotification, true),
+    (SyscallId::IrqAck, true),
     (SyscallId::DebugWrite, true),
     (SyscallId::GetTime, true),
     (SyscallId::Exit, true),

@@ -507,6 +507,23 @@ impl Kernel {
         self.alloc(Kind::Notification(Notification::default()))
     }
 
+    /// Allocate one IRQ object.  Only one live object may represent a given
+    /// logical IRQ at a time, so notification routing is unambiguous.
+    pub fn create_irq(&mut self, number: u32) -> Option<ObjRef> {
+        if self
+            .objs
+            .iter()
+            .any(|object| matches!(object.kind, Kind::Irq(irq) if irq.number == number))
+        {
+            return None;
+        }
+        self.alloc(Kind::Irq(Irq {
+            number,
+            notification: None,
+            pending: false,
+        }))
+    }
+
     fn tcb_count(&self) -> usize {
         self.objs
             .iter()
@@ -687,6 +704,70 @@ impl Kernel {
         let table = self.tcb_mut(tcb).ok_or(KError::ObjectDestroyed)?;
         table.sched_context = Some(context_ref);
         Ok(())
+    }
+
+    /// Bind a notification to an IRQ object.  If the source is already
+    /// pending (for example the timer fired before user space configured it),
+    /// signal immediately so a waiter cannot miss the edge.
+    pub fn set_irq_notification(&mut self, irq_ref: ObjRef, notification: ObjRef) -> KResult<()> {
+        let irq = *self.irq(irq_ref).ok_or(KError::WrongType)?;
+        if self.notification(notification).is_none() {
+            return Err(KError::WrongType);
+        }
+        if let Some(existing) = irq.notification {
+            if existing == notification {
+                return Ok(());
+            }
+            return Err(KError::AlreadyMapped);
+        }
+        self.irq_mut(irq_ref)
+            .ok_or(KError::ObjectDestroyed)?
+            .notification = Some(notification);
+        if irq.pending {
+            self.signal(notification, 1u64 << (irq.number & 63))?;
+        }
+        Ok(())
+    }
+
+    pub fn irq_ack(&mut self, irq_ref: ObjRef) -> KResult<()> {
+        let irq = self.irq_mut(irq_ref).ok_or(KError::WrongType)?;
+        irq.pending = false;
+        Ok(())
+    }
+
+    /// Raise a logical IRQ from a platform interrupt handler.  Edges are
+    /// coalesced until user space acknowledges the object.  Returns true when
+    /// a new pending edge was recorded.
+    pub fn irq_raise(&mut self, number: u32) -> bool {
+        let mut target = None;
+        for (index, object) in self.objs.iter().enumerate() {
+            if let Kind::Irq(irq) = object.kind {
+                if irq.number == number {
+                    target = Some((
+                        ObjRef {
+                            index: index as u8,
+                            gen: object.gen,
+                        },
+                        irq.notification,
+                        irq.pending,
+                    ));
+                    break;
+                }
+            }
+        }
+        let Some((irq_ref, notification, pending)) = target else {
+            return false;
+        };
+        if pending {
+            return false;
+        }
+        if let Some(irq) = self.irq_mut(irq_ref) {
+            irq.pending = true;
+        }
+        if let Some(notification) = notification {
+            let _ = self.signal(notification, 1u64 << (number & 63));
+        }
+        true
     }
 
     /// Replenish expired budget blocks.  These TCBs were preempted asynchronously
@@ -1140,6 +1221,20 @@ impl Kernel {
     pub fn sched_context_mut(&mut self, r: ObjRef) -> Option<&mut SchedContext> {
         match self.get_mut(r)?.kind {
             Kind::SchedContext(ref mut context) => Some(context),
+            _ => None,
+        }
+    }
+
+    pub fn irq(&self, r: ObjRef) -> Option<&Irq> {
+        match self.get(r)?.kind {
+            Kind::Irq(ref irq) => Some(irq),
+            _ => None,
+        }
+    }
+
+    pub fn irq_mut(&mut self, r: ObjRef) -> Option<&mut Irq> {
+        match self.get_mut(r)?.kind {
+            Kind::Irq(ref mut irq) => Some(irq),
             _ => None,
         }
     }
@@ -2365,6 +2460,13 @@ impl Kernel {
                         }
                     }
                 }
+                Kind::Irq(ref irq) => {
+                    if let Some(notification) = irq.notification {
+                        if self.notification(notification).is_none() {
+                            return Err(KError::ObjectDestroyed);
+                        }
+                    }
+                }
                 Kind::SchedContext(ref context) => {
                     let configured = context.budget != 0 || context.period != 0;
                     if configured
@@ -3335,7 +3437,11 @@ impl Kernel {
                     }
                 }
             }
-            Kind::Iommu(_) | Kind::BlockDevice(_) | Kind::Untyped(_) | Kind::Free => {}
+            Kind::Irq(_)
+            | Kind::Iommu(_)
+            | Kind::BlockDevice(_)
+            | Kind::Untyped(_)
+            | Kind::Free => {}
         }
         self.remove_caps_to(obj);
         let (owner, reserved) = match self.get(obj).map(|object| object.kind) {
@@ -4273,6 +4379,122 @@ impl Kernel {
                 match self.iommu_unmap(domain.obj, a1) {
                     Ok(mapping) => UserAction::Return {
                         value: mapping.iova,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::IrqGet as u64 => {
+                // Until an IRQControl object exists, only the bootstrap root
+                // may turn a logical IRQ into a capability.  Root can copy the
+                // resulting cap to the driver/client that needs it.
+                if self.root != Some(tcb) {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::NoRights,
+                    };
+                }
+                let dest = match slot_arg(a1) {
+                    Ok(dest) if dest != 0 && (dest as usize) < self.cspace_capacity(tcb) => dest,
+                    _ => {
+                        return UserAction::Return {
+                            value: 0,
+                            error: KError::InvalidArg,
+                        }
+                    }
+                };
+                if self
+                    .cspace(tcb)
+                    .and_then(|slots| slots.get(dest as usize))
+                    .is_some_and(Option::is_some)
+                {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::SlotOccupied,
+                    };
+                }
+                let number = match u32::try_from(a0) {
+                    Ok(number) => number,
+                    Err(_) => {
+                        return UserAction::Return {
+                            value: 0,
+                            error: KError::InvalidArg,
+                        }
+                    }
+                };
+                let duplicate = self
+                    .objs
+                    .iter()
+                    .any(|object| matches!(object.kind, Kind::Irq(irq) if irq.number == number));
+                if duplicate {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::IrqInUse,
+                    };
+                }
+                let object = match self.create_irq(number) {
+                    Some(object) => object,
+                    None => {
+                        return UserAction::Return {
+                            value: 0,
+                            error: KError::OutOfMemory,
+                        }
+                    }
+                };
+                let mut cap = Cap::new(
+                    object,
+                    ObjType::Irq,
+                    Rights::READ | Rights::WRITE | Rights::GRANT,
+                );
+                cap.parent = None;
+                match self.install_cap(tcb, dest, cap) {
+                    Ok(()) => UserAction::Return {
+                        value: dest as u64,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::IrqSetNotification as u64 => {
+                let irq = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Irq),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let notification = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a1).unwrap_or(0),
+                    Some(ObjType::Notification),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.set_irq_notification(irq.obj, notification.obj) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::IrqAck as u64 => {
+                let irq = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Irq),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.irq_ack(irq.obj) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
                         error: KError::Ok,
                     },
                     Err(error) => UserAction::Return { value: 0, error },
@@ -9554,6 +9776,128 @@ mod tests {
         assert_eq!(kernel.pick_on(0), Some(sleeper));
         assert!(kernel.take_resume(sleeper).is_some());
         assert_eq!(kernel.tick(0), 0);
+    }
+
+    #[test]
+    fn irq_get_delivers_timer_edge_and_ack_rearms_it() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let notification = kernel.create_notification().unwrap();
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(notification, ObjType::Notification, Rights::ALL),
+            )
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::IrqGet as u64,
+                IRQ_TIMER as u64,
+                1,
+                0,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 1,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::IrqSetNotification as u64, 1, 2, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::IrqGet as u64,
+                IRQ_TIMER as u64,
+                3,
+                0,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::IrqInUse
+            }
+        );
+        let waiter = kernel.create_tcb("irq-waiter", 5).unwrap();
+        assert_eq!(kernel.wait_as(waiter, notification), Ok(None));
+        assert!(kernel.irq_raise(IRQ_TIMER));
+        assert_eq!(kernel.tcb(waiter).unwrap().state, ThreadState::Ready);
+        let message = kernel.take_resume(waiter).unwrap();
+        assert_eq!(message.label, LABEL_NOTIFICATION);
+        assert_eq!(message.words()[0], 1);
+        assert!(!kernel.irq_raise(IRQ_TIMER));
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::IrqAck as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert!(kernel.irq_raise(IRQ_TIMER));
+    }
+
+    #[test]
+    fn irq_get_rejects_non_root_and_bad_slots() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let other = kernel.create_tcb("other", 5).unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                other,
+                SyscallId::IrqGet as u64,
+                IRQ_TIMER as u64,
+                1,
+                0,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::NoRights
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::IrqGet as u64,
+                IRQ_TIMER as u64,
+                0,
+                0,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::IrqAck as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidCap
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::IrqSetNotification as u64, 1, 2, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidCap
+            }
+        );
     }
 
     #[test]

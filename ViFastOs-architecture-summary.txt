@@ -142,6 +142,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 5bd47c8 feat: add console input and shell commands
 - af197ea feat: expand shell and raise object capacity
 - 72301ff chore: add local regression gate
+- aaafbe0 feat: implement sched context budget scheduler
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -198,9 +199,9 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 257440 byte (`kernel_end=0x803c1260`)
+- RISC-V headroom: 253344 byte (`kernel_end=0x803c2260`)
 - `Kernel = 693592`, `Object = 4736`, `Tcb = 4688`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
+- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -818,9 +819,9 @@ Số syscall chính:
 26 FrameUnmap — implemented
 27 IoMap — implemented
 28 IoUnmap — implemented
-29 IrqGet — placeholder (NotImplemented)
-30 IrqSetNotification — placeholder (NotImplemented)
-31 IrqAck — placeholder (NotImplemented)
+29 IrqGet — implemented
+30 IrqSetNotification — implemented
+31 IrqAck — implemented
 32 DebugWrite — implemented
 33 GetTime — implemented
 34 Exit — implemented
@@ -865,6 +866,16 @@ Số syscall chính:
   chạy, khi hết budget đặt `wake_at = hết period`; `wake_budgeters()` nạp lại
   budget và đưa TCB về ready queue (không ghi resume register vì đây là
   preemption bất đồng bộ).
+- `IrqGet` (29): root-only, `a0` = logical IRQ (`IRQ_TIMER=0`, `IRQ_UART=1`),
+  `a1` = slot đích; tạo object IRQ duy nhất cho mỗi số và cài cap
+  `READ|WRITE|GRANT`. Task khác nhận cap qua CapCopy.
+- `IrqSetNotification` (30): gắn notification; nếu IRQ đang pending thì signal
+  ngay bit `1 << (irq & 63)`, tránh mất edge trước khi user bind.
+- `IrqAck` (31): xoá pending; timer tick raise logical IRQ 0 mỗi lần, pending
+  được coalesce đến khi ack.
+- Root tạo timer IRQ + notification trước khi resume client; client Wait, Ack,
+  in `IRQ OK`. External UART IRQ mới có logical number/API, platform routing
+  thật sẽ làm ở bước driver input.
 - `ConsoleRead` (47): poll UART 16550 / PL011 / COM1, trả một byte hoặc
   `WouldBlock`. Client chạy shell nhỏ sau demo (`help`, `time`, `echo`, `ls`,
   `cat`, `mkdir`, `rm`, `mv`, `ln`, `stat`, `sync`, `truncate`, `fsck`);
@@ -1185,6 +1196,7 @@ Mỗi dòng sau đúng một lần:
 - `FS LARGE OK` — exactly once
 - `HARD LINK OK` — exactly once
 - `SYMLINK OK` — exactly once
+- `IRQ OK` — exactly once
 
 Cấm xuất hiện:
 - `PERCPU CLOBBER BAD` — forbidden
@@ -1206,6 +1218,7 @@ Cấm xuất hiện:
 - `FS LARGE BAD` — forbidden
 - `HARD LINK BAD` — forbidden
 - `SYMLINK BAD` — forbidden
+- `IRQ BAD` — forbidden
 
 Exit code:
 - riscv64: 0

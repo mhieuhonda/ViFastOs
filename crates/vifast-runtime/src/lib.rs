@@ -1268,7 +1268,8 @@ pub mod timer {
             contexts[old.index as usize] = *context;
         }
         let woke = kernel.tick(hart);
-        if hart == 0 && woke != 0 && kernel.has_ready_on(1) {
+        let irq_woke = kernel.irq_raise(vifast_abi::IRQ_TIMER);
+        if hart == 0 && (woke != 0 || irq_woke) && kernel.has_ready_on(1) {
             A::wake_hart(1);
         }
         #[cfg(feature = "test-skip-tlb-ipi")]

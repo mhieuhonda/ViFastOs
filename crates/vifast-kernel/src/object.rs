@@ -264,6 +264,15 @@ pub struct SchedContext {
     pub bound: Option<ObjRef>,
 }
 
+/// A user-visible interrupt source.  The object stores a logical IRQ number;
+/// the platform maps it to a controller line and calls `Kernel::irq_raise`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Irq {
+    pub number: u32,
+    pub notification: Option<ObjRef>,
+    pub pending: bool,
+}
+
 /// A software IOMMU domain.  It is deliberately independent of a VSpace:
 /// device-visible IOVAs are not user VAs and are validated separately.
 #[derive(Clone, Copy, Debug)]
@@ -561,6 +570,7 @@ pub enum Kind {
     VSpace(VSpace),
     PageTable(PageTable),
     SchedContext(SchedContext),
+    Irq(Irq),
     Iommu(IommuDomain),
     BlockDevice(BlockDevice),
 }
@@ -580,6 +590,7 @@ impl Kind {
             Kind::VSpace(_) => Some(ObjType::VSpace),
             Kind::PageTable(_) => Some(ObjType::PageTable),
             Kind::SchedContext(_) => Some(ObjType::SchedContext),
+            Kind::Irq(_) => Some(ObjType::Irq),
             Kind::Iommu(_) => Some(ObjType::Iommu),
             Kind::BlockDevice(_) => Some(ObjType::BlockDevice),
         }

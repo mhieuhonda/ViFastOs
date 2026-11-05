@@ -3,7 +3,9 @@
 #![no_main]
 
 use core::panic::PanicInfo;
-use vifast_abi::user_layout::{DATA_VA, IPC_BUF_CLIENT_VA};
+use vifast_abi::user_layout::{
+    CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, DATA_VA, IPC_BUF_CLIENT_VA,
+};
 use vifast_abi::vfs;
 use vifast_abi::{KError, ObjType, Rights};
 
@@ -943,6 +945,12 @@ pub extern "C" fn client_main() -> ! {
     } else {
         b"SYMLINK BAD\n"
     });
+
+    let irq = vifast_user::wait(CLIENT_IRQ_NOTIFICATION_SLOT);
+    let irq_ok = irq.error == KError::Ok
+        && irq.value & 1 != 0
+        && vifast_user::irq_ack(CLIENT_IRQ_SLOT).error == KError::Ok;
+    write(if irq_ok { b"IRQ OK\n" } else { b"IRQ BAD\n" });
 
     shell()
 }

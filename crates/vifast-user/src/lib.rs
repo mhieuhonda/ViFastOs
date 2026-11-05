@@ -299,6 +299,31 @@ pub fn console_read() -> SyscallResult {
     result(e, v)
 }
 
+pub fn irq_get(number: u32, dest_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::IrqGet as u64,
+            [number as u64, dest_slot as u64, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn irq_set_notification(irq_slot: u8, notification_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::IrqSetNotification as u64,
+            [irq_slot as u64, notification_slot as u64, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn irq_ack(irq_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::IrqAck as u64, [irq_slot as u64, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn sched_context_configure(context_slot: u8, budget: u64, period: u64) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(
