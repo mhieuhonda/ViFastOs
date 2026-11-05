@@ -76,6 +76,9 @@ def main() -> int:
         "x86 AP scheduler/user",
         "ba worker",
         "597624",
+        "runqueue vẫn global",
+        "hard link protocol",
+        "Task 10 (per-hart runqueue) là stretch",
     ]
     for value in forbidden:
         needle = value.casefold()

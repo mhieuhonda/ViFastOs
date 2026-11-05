@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `8342553` (TLB mutation, CapDelete, cross-hart suspend, FS v3 indirect, GetTime lock-free)
+**Mốc code hiện tại:** `925f633` (per-hart runqueue, VFS bulk IO, FS hard link)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** vòng 19
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
@@ -37,19 +37,19 @@
 
 ### Chưa có / còn yếu
 
-- Per-hart runqueue, khóa mịn/x2APIC, hardware IOMMU.
+- Khóa mịn/x2APIC, hardware IOMMU.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
 - Block cache/double indirect/hard link/symlink; flush barrier cho đĩa thật.
 - VirtIO network/input.
 - Compositor/ViFastKey/GUI.
 - ABI placeholder CNode/SchedContext/Irq.
 - RISC-V panic QEMU rc=1 đã đạt; giữ test 5/5.
-- FS v3 single-indirect, persistence 7 phase, badge D6, tick lock-free, CapDelete và suspend/priority đã xong.
+- FS v3 single-indirect + hard link, persistence 7 phase, per-hart ready queue, badge D6, tick lock-free, CapDelete/suspend/priority đã xong.
 
 ### Việc nên làm ngay, theo thứ tự
 
 1. **Hardware IOMMU** (VT-d/SMMU) sau mô hình phần mềm.
-2. **Per-hart runqueue + khóa mịn/x2APIC**.
+2. **Khóa mịn/x2APIC** (per-hart runqueue đã xong).
 3. **Block cache/double indirect/hard link/symlink + barrier**.
 4. **VirtIO net/input**.
 5. **Compositor/ViFastKey**.
@@ -61,8 +61,8 @@
 | Mục | Giá trị |
 |---|---|
 | Repo | `/Users/mps/dvchd/ViFastOs` |
-| Git baseline | `b029aac` |
-| Feature commit gần nhất | `b029aac` — TLB mutation/capdelete/suspend |
+| Git baseline | `c37982e` |
+| Feature commit gần nhất | `925f633` — per-hart scheduler, VFS bulk IO, hard link |
 | Working tree lúc lập báo cáo | sạch |
 | Ngôn ngữ | Rust |
 | Kernel/runtime | `no_std`, `forbid(unsafe_code)` |

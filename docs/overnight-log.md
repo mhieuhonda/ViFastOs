@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `055b60cc0d736f5f7ee4e6b91f7956269c62d1b655c47c1e5a7cbb9bdb60cb66`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `6603365d8ecd728b7c65e3c6097124443f01543f7097f3ab07d40ce86d0f6d93`.
 
 ---
 
@@ -590,3 +590,13 @@ follow-up `62b31f4`.
 - `8342553`: test-exit chờ FS LARGE để tránh race.
 - Final: QEMU 10/10, 50/50 cả 3; mutation 5/5; panic 5/5; handoff 10/10;
   persist 7 phase ×3; harness 327 case; 0 warning; headroom 392.624 B.
+
+## 8.45 — Per-hart scheduler, VFS bulk, hard link (vòng 20)
+
+- `c37982e`: ready queue theo hart + work stealing; invariant chống trùng queue;
+  host test home/steal/affinity move; worker E priority 5 để preempt ổn định.
+- `925f633`: VFS READ qua IPC buffer, `MAX_IO` 24→128; client ghi/đọc 20 KiB thật;
+  FS hard link + fsutil link + persist phase 7 đọc lại `/p/large2`.
+- Final: QEMU 10/10, 50/50 cả 3; mutation 5/5 RISC/x86; panic 5/5;
+  handoff 10/10; persist 7 phase ×3; harness 336 case; 0 warning;
+  headroom 392.624 B; Kernel 613.720 B.
