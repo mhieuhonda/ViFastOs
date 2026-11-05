@@ -563,7 +563,7 @@ Scheduler:
 - Block state không nằm trong runqueue.
 - Runtime lưu/nạp Platform::Context.
 - Timer 100 Hz; binary test bật feature test-exit để sau 20 tick in PREEMPT OK và exit QEMU.
-- SMP scheduler chưa có: hart phụ chỉ idle.
+- RISC-V hart 1 chạy hai worker; AArch64/x86 hart phụ chưa có scheduler.
 
 9. MEMORY / MMU
 ---------------
@@ -657,7 +657,7 @@ x86_64:
   cho identity 0..1 GiB; user 64..128 GiB dùng PDPT[64..127] trỏ bảng riêng.
 - SMEP/SMAP bật nếu CPUID hỗ trợ; EFER.NXE + tách 2 MiB để đánh dấu NX cho static data kernel (S2).
 - I-cache và D-cache coherent; sync_icache là no-op.
-- Chưa có AP/SMP scheduler.
+- x86 AP/SMP scheduler chưa có; AArch64 hart phụ chưa chạy task.
 
 10. VFS / RAMFS
 ---------------
@@ -843,7 +843,7 @@ Cap transfer:
 - Scheduler hart 0; RISC-V hart 1 có timer SBI + worker riêng; AArch64/x86
   hart phụ vẫn maintenance/idle.
 - Đã có IPI maintenance và full TLB shootdown user trên RISC-V/AArch64;
-  secondary hart vẫn chỉ xử lý maintenance, chưa vào scheduler.
+  RISC-V secondary hart chạy hai worker; AArch64 secondary vẫn maintenance.
 - BigKernelLock đã là ticket lock FIFO (`next`/`serving`) + RAII guard, bọc
   trap/syscall/IRQ + x86 exception/page-fault. Spin chờ khóa gọi
   `poll_maintenance()` để hart phụ xử lý IPI TLB/fence và ACK; assert IRQ tắt
@@ -859,16 +859,18 @@ Cap transfer:
 - Mailbox maintenance đối xứng theo hart đích: `MAINT_SEQ/ACK/KIND`, TLB,
   I-cache, reschedule; sender giữ BKL và bỏ qua hart chưa online.
 - Hart 1 RISC-V có `SCHED_READY`, timer SBI, vòng idle lấy BKL → `pick_on(1)`
-  → nhả BKL → chờ; timer/IPI wakeups in `SMP IDLE OK`. Có worker affinity
-  hart 1, in `SMP SCHED OK (hart0, hart1, resched)`; affinity qua
-  `TcbSetAffinity`.
-- WFI với SIE=0 không ổn định trên QEMU/OpenSBI (mất wake/ACK); idle dùng
-  vòng spin ngắn thay WFI, đã chạy 10/10.
+  → nhả BKL → WFI khi SIE=0 → đọc `sip`; timer/IPI wakeups in `SMP IDLE OK`.
+- Hai worker affinity hart 1, stack riêng, nhận diện qua endpoint label;
+  in `SMP WORKERS OK (a=50, b=50)` và `SMP SCHED OK (hart0, hart1, resched)`;
+  affinity qua syscall 20 `TcbSetAffinity`.
+- WFI với SIE=0 (sie.SSIE|STIE bật) đã ổn định 10/10 trong vòng 07; không mở
+  interrupt trong kernel (D1).
 - `static mut` toàn cục vẫn còn: page table, pool, CONTEXTS, KERNEL_PTR,
   KERNEL_STORAGE, FILES/FILE_COUNT, VirtIO QUEUE/BASE/READY.
   Chúng được bảo vệ bởi BKL khi đi qua trap, nhưng chưa phải per-CPU;
   server/virtio cần khóa riêng khi SMP.
-- Chưa có per-hart runqueue, timer đa hart, per-VA TLB shootdown.
+- Chưa có per-hart runqueue, timer đa hart, per-VA TLB shootdown;
+  panic không dừng hart khác (R5).
 
 14. TEST VÀ TIÊU CHÍ PASS
 -------------------------
@@ -884,7 +886,7 @@ Lệnh:
     python3 scripts/test-qemu.py
     python3 scripts/test-persist.py
 
-Host test hiện có 86 test `vifast-kernel` + 5 test `vifast-arch` +
+Host test hiện có 87 test `vifast-kernel` + 5 test `vifast-arch` +
 11 test `vifast-pte` + 17 test `vifast-elf`:
 - kernel/object sizes
 - self-test
@@ -998,7 +1000,8 @@ QEMU test:
 - Zero OK
 - PERCPU CLOBBER OK đúng 1 lần; không có PERCPU CLOBBER BAD
 - RISC-V: `SMP IDLE OK (hart1_wakeups=K)` đúng 1 lần, K > 0;
-  `SMP SCHED OK (hart0=N, hart1=M, resched=R)` đúng 1 lần, M > 0, R > 0
+  `SMP SCHED OK (hart0=N, hart1=M, resched=R)` đúng 1 lần, N > 1, M >= 100, R > 0;
+  `SMP WORKERS OK (a=50, b=50)` đúng 1 lần
 - ROOT SWITCH n > 1
 - x86_64 phải có KERNEL DATA NX OK
 - RISC-V/AArch64 phải có SMP OK và ipi=1
@@ -1136,16 +1139,16 @@ Exit code:
   Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
 - Kernel object limits tăng 128/64/32; Kernel 597624 bytes dùng static storage;
   test harness cần stack 8 MiB (`.cargo/config.toml`).
-- Host test hiện có 86 test `vifast-kernel` + 5 test `vifast-arch` +
+- Host test hiện có 87 test `vifast-kernel` + 5 test `vifast-arch` +
   11 test `vifast-pte` + 17 test `vifast-elf`.
 
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
-- Hart 0 scheduler; RISC-V hart 1 chạy worker; AArch64/x86 hart phụ chưa có
-  scheduler user task.
+- Hart 0 scheduler; RISC-V hart 1 chạy hai worker; AArch64/x86 hart phụ
+  chưa có scheduler user task.
 - BKL ticket + RAII đã bọc trap/syscall/IRQ + x86 fault/page-fault;
-  đã assert nhả trước user và IRQ tắt khi giữ. Hart phụ RISC-V mới idle/
-  timer/IPI, chưa chọn task; x86/AArch64 chưa có scheduler đa hart.
+  đã assert nhả trước user và IRQ tắt khi giữ. RISC-V hart 1 đã chọn task;
+  AArch64/x86 chưa có scheduler đa hart.
 - SMP full TLB shootdown đã có qua SBI IPI/GICv2 SGI; remote I-cache fence
   RISC-V đã có qua maintenance IPI, AArch64 broadcast; còn per-VA TLB shootdown.
 - x86_64 chưa boot AP.
@@ -1223,7 +1226,7 @@ C. SMP
 1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI.
 2. Per-hart context/runqueue.
 3. BKL trước, lock mịn sau.
-4. IPI wakeup/reschedule — IPI maintenance đã có; wakeup/reschedule chưa.
+4. IPI wakeup/reschedule — RISC-V reschedule IPI đã chạy; AArch64 chưa.
 5. TLB shootdown đa hart — full shootdown đã có; per-VA chưa.
 6. Timer đa hart.
 
@@ -1394,6 +1397,10 @@ E. Desktop / Space
 50. Vòng 06: bundle một file; RISC-V hart 1 chạy worker thật với affinity
     `TcbSetAffinity`; `SMP SCHED OK`; AArch64 hart phụ dừng do exception
     `ELR=0x4008ebb4`, ESR=0; WFI chưa điều tra tiếp.
+
+51. Vòng 07: hai worker RISC-V hart 1, đếm user entry mỗi lần về user;
+    `SMP WORKERS OK`; WFI+SIE=0 ổn định. D1: không nhận interrupt khi ở kernel;
+    AArch64 secondary diagnostics thử nhưng phải revert vì làm hỏng boot.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

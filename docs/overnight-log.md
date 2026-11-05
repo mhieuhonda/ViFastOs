@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `df8f8378facb932c46327187ccf8da5792f678d1010a2c0d56dd12ad069d1d28`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `fc9910f3090379fc6bcc99a8eb50e910290bd75f99cdbea188cb3d60e7201094`.
 
 ---
 
@@ -211,6 +211,15 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.19 — Two workers, real counters, WFI idle (vòng 07)
+
+- `e05775a`: hai worker affinity hart 1, stack A/B trong ABI, nhận diện label
+  endpoint; `user_entries` tăng mỗi trap từ user; `SMP WORKERS OK`.
+- `b7f26ef`: idle WFI với SIE=0, sie.SSIE|STIE; WFI 10/10, bỏ spin.
+- `ce7dbc9`: giới hạn worker về RISC-V.
+- AArch64 3a vector diagnostics thử nhưng boot hỏng; revert, không commit.
+- Kernel 87/87, arch 5/5, headroom 458352; QEMU Task1/Task2 10/10.
 
 ## 8.18 — Single-file bundle + RISC-V secondary worker (vòng 06)
 
