@@ -78,8 +78,19 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 76f1c41 feat: riscv secondary hart idle loop and reschedule ipi
 - 067b0d9 chore: single-file round bundle
 - b76e930 feat: run tasks on riscv secondary hart
+- e05775a feat: two workers on riscv hart 1 with real per-hart counters
+- b7f26ef fix: riscv idle uses wfi with interrupts masked
+- ce7dbc9 fix: restrict smp workers to riscv
+- e895bda fix: send reschedule ipi only to idle harts
+- dbe7675 refactor: bootinfo advertises scheduling harts
+- e3c4280 chore: aarch64 kernel exception reports vector and cpu
+- b9bfad9 chore: automated docs consistency check
+- ed40921 test: fuzz syscalls across pte formats
+- 82c9c11 feat: mark x86 kernel data non-executable
+- 49e7b1f feat: demo ipc buffer transfer across tasks
+- 43d5200 test: rename reparented object case
 
-Cập nhật code gần nhất (commit b76e930): persistent VFS scratch trên cả 3 kiến trúc,
+Cập nhật code gần nhất (commit e3c4280): persistent VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
@@ -139,8 +150,11 @@ Output tiêu biểu:
   "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
   "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "IOMMU OK",
-  "SMP OK (... ipi=1)", "BLOCK OK"/"FS DISK OK", "PREEMPT OK",
-  "ROOT SWITCH n>1"; persistence do `scripts/test-persist.py` kiểm tra.
+  "SMP OK (... ipi=1)", "SMP IDLE OK (hart1_wakeups=K)",
+  "SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)",
+  "SMP WORKERS OK (a=50, b=50)", "PERCPU CLOBBER OK",
+  "BLOCK OK"/"FS DISK OK", "PREEMPT OK", "ROOT SWITCH n>1";
+  persistence do `scripts/test-persist.py` kiểm tra.
 - user layout chung: boot mappings tại 0x0000_0010_0000_0000 (64 GiB);
   full user range hiện tại 64..128 GiB
 
@@ -564,6 +578,9 @@ Scheduler:
 - Runtime lưu/nạp Platform::Context.
 - Timer 100 Hz; binary test bật feature test-exit để sau 20 tick in PREEMPT OK và exit QEMU.
 - RISC-V hart 1 chạy hai worker; AArch64/x86 hart phụ chưa có scheduler.
+- Worker stack A/B: `CODE_VA+0xd000` / `+0xe000`, mỗi stack 1 page; ABI
+  const assert không chồng nhau và trên `DATA_VA`. Root tạo worker, cấp TCB,
+  frame, endpoint cap slot 1, affinity `0b10`.
 
 9. MEMORY / MMU
 ---------------
@@ -721,6 +738,7 @@ Số syscall chính:
 14 CapRevoke
 15 TcbConfigure
 16 TcbResume
+20 TcbSetAffinity
 24 PageTableMap(pt_cap, vspace_cap, va) — trả level kernel chọn
 25 FrameMap
 26 FrameUnmap
@@ -836,8 +854,8 @@ Cap transfer:
 
 13. SMP HIỆN TẠI
 ---------------
-- RISC-V: SBI HSM start hart 1; hart phụ idle.
-- AArch64: PSCI CPU_ON CPU1; hart phụ idle.
+- RISC-V: SBI HSM start hart 1; hart này chạy worker khi được giao.
+- AArch64: PSCI CPU_ON CPU1; hart này hiện maintenance-only.
 - x86_64: chưa boot AP; SMP SKIP. Hướng tiếp theo là ACPI MADT +
   LAPIC/SIPI, không dùng UEFI MP Services sau ExitBootServices.
 - Scheduler hart 0; RISC-V hart 1 có timer SBI + worker riêng; AArch64/x86
@@ -854,6 +872,9 @@ Cap transfer:
   `PERCPU CLOBBER OK`.
 - `current[hart]`, `ACTIVE_ROOT`, `ACTIVE_ASID` nằm trong CpuState; kernel có
   `MAX_HARTS=4`, `pick_on(hart)`/`current_on(hart)`; runqueue vẫn global.
+- BootInfo v2 có `sched_harts: u32`; RISC-V 0b11, AArch64/x86 0b01. Root chỉ
+  tạo worker khi bit 1 bật; D1: kernel không nhận interrupt, idle WFI với
+  SIE/DAIF.I che; idle flag + reschedule IPI fire-and-forget khi đích idle.
 - RISC-V map EXEC gọi `fence.i` local + IPI maintenance remote fence; AArch64
   `ic ivau` + `dsb ish` đã broadcast.
 - Mailbox maintenance đối xứng theo hart đích: `MAINT_SEQ/ACK/KIND`, TLB,
@@ -1448,5 +1469,5 @@ task có VSpace riêng; client dùng Untyped con. 8.4/8.4b đã xong: runtime c�
 Rust ELF qua BootInfo staging, root loader nạp vào VSpace riêng; 8.5 đã có VFS
 IPC server bước đầu. Đã có block cả 3 kiến trúc, persistence test hermetic, BKL ticket + per-CPU
 an toàn, current theo hart, ASID/PCID, IPI/TLB full shootdown và remote fence.i.
-Khoảng trống lớn tiếp theo là hart phụ chạy scheduler, x86 AP, FS v2, per-VA
-TLB, hardware IOMMU, network/input và compositor/ViFastKey.
+Khoảng trống lớn tiếp theo là AArch64 hart phụ scheduler, x86 AP, FS v2,
+per-VA TLB, hardware IOMMU, network/input và compositor/ViFastKey.
