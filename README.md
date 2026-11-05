@@ -92,6 +92,13 @@ Chạy self-test trên cả 3 kiến trúc:
 ./scripts/test-qemu.sh
 ```
 
+Chạy toàn bộ gate cục bộ (format, host test, QEMU 3 lần/arch, persistence,
+harness, docs):
+
+```bash
+./scripts/check-all.sh
+```
+
 Hoặc chạy riêng từng arch:
 
 ```bash

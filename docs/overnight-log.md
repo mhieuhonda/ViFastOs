@@ -676,3 +676,9 @@ follow-up `62b31f4`.
 - Shell mới làm client ELF lớn hơn; tăng Data Untyped 256→288 KiB,
   `DATA_MAX_OBJECTS` 64→72, `MAX_OBJECTS` 136→144. RISC headroom còn 261.536 B.
 - Build/QEMU `--repeat 3` 3/3 cả 3; persistence 7 phase ×3; 0 warning.
+
+## 8.95 — Local regression gate (vòng 21)
+
+- Thêm `scripts/check-all.sh` thay CI hosted: format, build/host test,
+  QEMU 3 lần mỗi kiến trúc, persistence, harness âm, docs.
+- README hướng dẫn chạy gate; không phụ thuộc GitHub Actions.
