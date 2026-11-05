@@ -39,6 +39,7 @@ def fixture(arch: str) -> str:
             "LAPIC OK (id=0)",
             "AP TRAMPOLINE OK (page=0x90000)",
             "AP REAL MODE OK (apic=1)",
+            "AP LONG MODE OK (cpu=1)",
             "SMP SKIP (x86 AP bootstrap pending)",
         ]
     for address in [0] + spec.FAULT_ADDRESSES:

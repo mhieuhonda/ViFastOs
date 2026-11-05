@@ -80,11 +80,12 @@ ARCH = {
     ],
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
-        ("AP TRAMPOLINE OK (page=0x...)", "AP trampoline allocated below 1 MiB"),
-        ("AP REAL MODE OK (apic=...)", "AP executed real-mode trampoline"),
         ("ACPI MADT OK (cpus=C, bsp=ID, lapic=0x...)", "ACPI MADT parsed"),
         ("LAPIC OK", "BSP local APIC enabled"),
-        ("SMP SKIP", "x86 AP bring-up is not enabled yet"),
+        ("AP TRAMPOLINE OK (page=0x...)", "AP trampoline allocated below 1 MiB"),
+        ("AP REAL MODE OK (apic=...)", "AP executed real-mode trampoline"),
+        ("AP LONG MODE OK (cpu=1)", "AP entered long mode"),
+        ("SMP SKIP", "x86 AP bootstrap pending"),
     ],
 }
 
@@ -105,7 +106,7 @@ ARCH_EXACT_ONE = {
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "SMP SKIP"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP SKIP"],
 }
 
 NUMERIC = {

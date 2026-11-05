@@ -80,6 +80,7 @@ static mut ACPI_LAPIC_BASE: u64 = 0;
 static mut AP_TRAMPOLINE: u64 = 0;
 static mut AP_APIC_ID: u32 = 0;
 static mut AP_STARTED: bool = false;
+static mut AP_LONG_ONLINE: bool = false;
 const TRAMPOLINE_MAGIC: u16 = 0xA55A;
 const TRAMPOLINE_MAGIC_OFFSET: u64 = 0x800;
 
@@ -733,21 +734,25 @@ fn assert_current_tcb() {
 
 static mut LAPIC_READY: bool = false;
 
-unsafe fn init_lapic() {
-    if LAPIC_READY {
-        return;
-    }
+unsafe fn configure_lapic() -> u32 {
     let base = if ACPI_LAPIC_BASE == 0 {
         LAPIC_DEFAULT
     } else {
         ACPI_LAPIC_BASE
     };
-    // Spurious vector 0xFF, APIC software enable.  TPR=0 accepts all.
     let svr = (base + 0xF0) as *mut u32;
     let tpr = (base + 0x80) as *mut u32;
     let id = core::ptr::read_volatile((base + 0x20) as *const u32) >> 24;
     core::ptr::write_volatile(tpr, 0);
     core::ptr::write_volatile(svr, 0x100 | 0xFF);
+    id
+}
+
+unsafe fn init_lapic() {
+    if LAPIC_READY {
+        return;
+    }
+    let id = configure_lapic();
     LAPIC_READY = true;
     vifast_kernel::klog!(X86Platform, "LAPIC OK (id={})", id);
 }
@@ -759,25 +764,120 @@ unsafe fn install_real_trampoline() {
     }
     let page = base as *mut u8;
     core::ptr::write_bytes(page, 0, 4096);
-    let vector = (base >> 12) as u16;
-    let code = [
+    // 16-bit real mode: magic, GDT, protected mode, then far jump to 32-bit.
+    let vector_byte = (base >> 12) as u8;
+    let real = [
         0xFA, // cli
         0xB8,
         0x00,
-        vector as u8, // mov ax, vector << 8
+        vector_byte, // mov ax, vector << 8
         0x8E,
         0xD8, // mov ds, ax
         0xC7,
         0x06,
         0x00,
-        0x08, // mov word [0x0800], imm16
-        (TRAMPOLINE_MAGIC & 0xff) as u8,
-        (TRAMPOLINE_MAGIC >> 8) as u8,
-        0xF4, // hlt
-        0xEB,
-        0xFD, // jmp back to hlt
+        0x08,
+        0x5A,
+        0xA5, // mov word [0800], A55A
+        0x0F,
+        0x01,
+        0x16,
+        0x40,
+        0x03, // lgdt [0340]
+        0x0F,
+        0x20,
+        0xC0, // mov eax, cr0
+        0x0C,
+        0x01, // or al, 1
+        0x0F,
+        0x22,
+        0xC0, // mov cr0, eax
+        0x66,
+        0xEA,
+        0,
+        0,
+        0,
+        0,
+        0x08,
+        0x00, // ljmp 08:page+0x30
     ];
-    core::ptr::copy_nonoverlapping(code.as_ptr(), page, code.len());
+    core::ptr::copy_nonoverlapping(real.as_ptr(), page, real.len());
+    core::ptr::write_unaligned(page.add(0x1b) as *mut u32, (base as u32).wrapping_add(0x30));
+    // 32-bit protected mode: flat segments, CR3, PAE, EFER.LME|NXE, paging.
+    let pm = [
+        0x66, 0xB8, 0x10, 0x00, // mov ax, 0x10
+        0x8E, 0xD8, 0x8E, 0xC0, 0x8E, 0xE0, 0x8E, 0xE8, 0x8E, 0xD0, 0x8B, 0x1D, 0, 0, 0,
+        0, // mov ebx, [page+0x200]
+        0x0F, 0x22, 0xDB, // mov cr3, ebx
+        0x0F, 0x20, 0xE0, // mov eax, cr4
+        0x0D, 0x20, 0x00, 0x00, 0x00, // or eax, 0x20
+        0x0F, 0x22, 0xE0, // mov cr4, eax
+        0xB9, 0x80, 0x00, 0x00, 0xC0, // mov ecx, 0xC0000080
+        0x0F, 0x32, // rdmsr
+        0x0D, 0x00, 0x09, 0x00, 0x00, // or eax, 0x900
+        0x0F, 0x30, // wrmsr
+        0x0F, 0x20, 0xC0, // mov eax, cr0
+        0x0D, 0x01, 0x00, 0x00, 0x80, // or eax, 0x80000001
+        0x0F, 0x22, 0xC0, // mov cr0, eax
+        0xEA, 0, 0, 0, 0, 0x18, 0x00, // ljmp 18:page+0x80
+    ];
+    let pm_offset = 0x30;
+    core::ptr::copy_nonoverlapping(pm.as_ptr(), page.add(pm_offset), pm.len());
+    core::ptr::write_unaligned(
+        page.add(pm_offset + 0x10) as *mut u32,
+        (base as u32).wrapping_add(0x200),
+    );
+    core::ptr::write_unaligned(
+        page.add(pm_offset + 0x3c) as *mut u32,
+        (base as u32).wrapping_add(0x80),
+    );
+    // 64-bit entry: load stack and AP entry address.
+    let mut lm = [
+        0x66, 0xB8, 0x10, 0x00, 0x8E, 0xD8, 0x8E, 0xC0, 0x8E, 0xE0, 0x8E, 0xE8, 0x8E, 0xD0, 0x48,
+        0xBC, 0, 0, 0, 0, 0, 0, 0, 0, // mov rsp, imm64
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, // mov rax, imm64
+        0xFF, 0xE0,
+    ];
+    let lm_offset = 0x80;
+    core::ptr::copy_nonoverlapping(lm.as_mut_ptr(), page.add(lm_offset), lm.len());
+    let stack = core::ptr::addr_of!(TRAP_STACKS) as u64 + 0x4000;
+    let entry = ap_entry as *const () as u64;
+    core::ptr::write_unaligned(page.add(lm_offset + 16) as *mut u64, stack);
+    core::ptr::write_unaligned(page.add(lm_offset + 26) as *mut u64, entry);
+    // Data: CR3 at 0x200, GDT at 0x300/0x340, stack/entry patched in code.
+    let pml4 = core::ptr::addr_of!(PML4) as u32;
+    core::ptr::write_unaligned(page.add(0x200) as *mut u32, pml4);
+    let gdt = [
+        0u64,
+        0x00CF_9A00_0000_FFFFu64,
+        0x00CF_9200_0000_FFFFu64,
+        0x00AF_9A00_0000_FFFFu64,
+        0x00AF_9200_0000_FFFFu64,
+    ];
+    core::ptr::copy_nonoverlapping(
+        gdt.as_ptr() as *const u8,
+        page.add(0x300),
+        core::mem::size_of_val(&gdt),
+    );
+    let gdt_desc = [0x27u8, 0, 0, 0, 0, 0, 0, 0];
+    core::ptr::copy_nonoverlapping(gdt_desc.as_ptr(), page.add(0x340), 8);
+    core::ptr::write_unaligned(
+        page.add(0x342) as *mut u32,
+        (base as u32).wrapping_add(0x300),
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn ap_entry() -> ! {
+    unsafe {
+        core::arch::asm!("cli");
+        init_cpu(1);
+        AP_LONG_ONLINE = true;
+        vifast_kernel::klog!(X86Platform, "AP LONG MODE OK (cpu=1)");
+        loop {
+            core::arch::asm!("pause");
+        }
+    }
 }
 
 unsafe fn wait_icr_idle(base: u64) -> bool {
@@ -838,6 +938,7 @@ unsafe fn start_ap_real() {
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, 0x000C_4600 | vector);
     let _ = wait_icr_idle(base);
+    let mut real_seen = false;
     for _ in 0..20 {
         tsc_delay(1_000_000);
         if core::ptr::read_volatile((AP_TRAMPOLINE + TRAMPOLINE_MAGIC_OFFSET) as *const u16)
@@ -845,10 +946,21 @@ unsafe fn start_ap_real() {
         {
             let apic = AP_APIC_ID;
             vifast_kernel::klog!(X86Platform, "AP REAL MODE OK (apic={})", apic);
+            real_seen = true;
+            break;
+        }
+    }
+    if !real_seen {
+        X86_64::write_str("SMP FAIL (ap timeout stage=real)\r\n");
+        return;
+    }
+    for _ in 0..20 {
+        tsc_delay(1_000_000);
+        if AP_LONG_ONLINE {
             return;
         }
     }
-    X86_64::write_str("SMP FAIL (ap timeout stage=real)\r\n");
+    X86_64::write_str("SMP FAIL (ap timeout stage=long)\r\n");
 }
 
 unsafe fn init_cpu(hartid: usize) {
@@ -856,10 +968,8 @@ unsafe fn init_cpu(hartid: usize) {
     CPU_STATES[index].hart_id = hartid;
     CPU_STATES[index].current_tcb = 0;
     CPU_STATES[index].trap_stack_top = core::ptr::addr_of!(TRAP_STACKS[index]) as u64 + 16384;
-    if index == 0 {
-        write_msr(IA32_GS_BASE, core::ptr::addr_of!(CPU_STATES[0]) as u64);
-        write_msr(IA32_KERNEL_GS_BASE, 0);
-    }
+    write_msr(IA32_GS_BASE, core::ptr::addr_of!(CPU_STATES[index]) as u64);
+    write_msr(IA32_KERNEL_GS_BASE, 0);
 }
 unsafe fn setup_gdt_tss_idt() {
     let tss = core::ptr::addr_of_mut!(TSSS[0]);
