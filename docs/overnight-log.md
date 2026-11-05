@@ -638,3 +638,12 @@ follow-up `62b31f4`.
   BSP để tránh runtime không có idle TCB; client in `SLEEP OK`.
 - Host test mới: block, chưa hết hạn, wake đúng tick, resume message.
 - QEMU 3/3 lặp 3 lần; harness thêm `SLEEP OK`; 0 warning.
+
+## 8.75 — TCB restart + bind notification (vòng 21)
+
+- `TcbBindNotification` (21): dùng `bind_notification`, kiểm tra cap TCB và
+  Notification; test host.
+- `TcbRestart` (18): reset entry/stack, clear pending/fd/wake, trả
+  `UserAction::RestartTcb` để runtime dựng lại context; reject self/running.
+- `cargo test -p vifast-kernel`: 104/104; ABI còn 6 placeholder (CNode,
+  SchedContext, IRQ).

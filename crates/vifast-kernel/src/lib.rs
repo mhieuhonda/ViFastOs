@@ -52,6 +52,12 @@ pub enum UserAction {
         entry: u64,
         stack: u64,
     },
+    /// Rebuild a TCB context at its configured entry/stack.
+    RestartTcb {
+        tcb: ObjRef,
+        entry: u64,
+        stack: u64,
+    },
     /// Copy a user path into the ramfs VFS and return an fd.
     Open {
         ptr: u64,
@@ -749,6 +755,34 @@ impl Kernel {
         table.state = ThreadState::Ready;
         self.enqueue(tcb);
         Ok(())
+    }
+
+    /// Reset a non-running TCB to its configured entry/stack and make it
+    /// runnable again.  The caller must rebuild the architecture context.
+    pub fn restart_tcb(&mut self, target: ObjRef, caller: ObjRef) -> KResult<(u64, u64)> {
+        if target == caller {
+            return Err(KError::IllegalOperation);
+        }
+        let table = self.tcb(target).ok_or(KError::WrongType)?;
+        if table.state == ThreadState::Running || table.caller.is_some() {
+            return Err(KError::IllegalOperation);
+        }
+        if table.entry == 0 || table.vspace.is_none() {
+            return Err(KError::IllegalOperation);
+        }
+        let entry = table.entry;
+        let stack = table.stack;
+        self.remove_from_runq(target);
+        let table = self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?;
+        table.state = ThreadState::Ready;
+        table.pending = None;
+        table.resume = None;
+        table.resume_error = None;
+        table.recv_slot = 0;
+        table.wake_at = None;
+        table.fds = [None; MAX_FDS];
+        self.enqueue(target);
+        Ok((entry, stack))
     }
 
     fn user_leaf_ok(ops: &dyn PageTableOps, root: u64, va: u64, need_write: bool) -> bool {
@@ -4169,6 +4203,52 @@ impl Kernel {
                             stack: a2,
                         }
                     }
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbRestart as u64 => {
+                let cap = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.restart_tcb(cap.obj, tcb) {
+                    Ok((entry, stack)) => UserAction::RestartTcb {
+                        tcb: cap.obj,
+                        entry,
+                        stack,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbBindNotification as u64 => {
+                let target = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a0).unwrap_or(0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let notification = match self.lookup_cap(
+                    tcb,
+                    slot_arg(a1).unwrap_or(0),
+                    Some(ObjType::Notification),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.bind_notification(target.obj, notification.obj) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
@@ -9061,6 +9141,60 @@ mod tests {
         assert_eq!(kernel.take_resume_error(target), Some(KError::WouldBlock));
         kernel.resume_tcb(target).unwrap();
         assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Ready);
+    }
+
+    #[test]
+    fn tcb_bind_notification_and_restart() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("target", 5).unwrap();
+        let notification = kernel.create_notification().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(
+                root,
+                2,
+                Cap::new(notification, ObjType::Notification, Rights::ALL),
+            )
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::TcbBindNotification as u64,
+                1,
+                2,
+                0,
+                0,
+                0,
+                0,
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(kernel.tcb(target).unwrap().bound_ntfn, Some(notification));
+
+        let space = kernel
+            .create_vspace(0x8000, 0x10_0000_0000, 0x10_0000)
+            .unwrap();
+        kernel
+            .configure_tcb(target, 0x1234, 0x9000, space, 5)
+            .unwrap();
+        kernel.tcb_mut(target).unwrap().state = ThreadState::Suspended;
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbRestart as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::RestartTcb {
+                tcb: target,
+                entry: 0x1234,
+                stack: 0x9000
+            }
+        );
+        let restarted = kernel.tcb(target).unwrap();
+        assert_eq!(restarted.state, ThreadState::Ready);
+        assert!(restarted.queued);
     }
 
     #[test]

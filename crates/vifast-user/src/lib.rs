@@ -290,6 +290,26 @@ pub fn sleep(ticks: u64) -> SyscallResult {
     }
 }
 
+pub fn tcb_restart(tcb_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::TcbRestart as u64,
+            [tcb_slot as u64, 0, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
+pub fn tcb_bind_notification(tcb_slot: u8, notification_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::TcbBindNotification as u64,
+            [tcb_slot as u64, notification_slot as u64, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn yield_now() -> SyscallResult {
     let (e, v) = unsafe { syscall(SyscallId::Yield as u64, [0; 6]) };
     result(e, v)

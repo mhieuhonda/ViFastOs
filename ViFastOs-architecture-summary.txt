@@ -181,7 +181,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 103/103 PASS
+- `cargo test -p vifast-kernel`: 104/104 PASS
 - `cargo test -p vifast-arch`: 6/6 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -194,7 +194,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 335264 byte (`kernel_end=0x803ae260`)
 - `Kernel = 653528`, `Object = 4720`, `Tcb = 4672`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
+- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -796,10 +796,10 @@ Số syscall chính:
 15 TcbConfigure — implemented
 16 TcbResume — implemented
 17 TcbSuspend — implemented
-18 TcbRestart — placeholder (NotImplemented)
+18 TcbRestart — implemented
 19 TcbSetPriority — implemented
 20 TcbSetAffinity — implemented
-21 TcbBindNotification — placeholder (NotImplemented)
+21 TcbBindNotification — implemented
 22 SchedContextConfigure — placeholder (NotImplemented)
 23 SchedContextBind — placeholder (NotImplemented)
 24 PageTableMap — implemented
@@ -838,6 +838,12 @@ Số syscall chính:
   queue. User wrapper `vifast_user::sleep` hiện poll `GetTime` + `spin_loop`
   thay vì block khi không còn task khác chạy trên BSP (chưa có idle TCB);
   syscall kernel vẫn có host test riêng.
+- `TcbBindNotification` (21): `a0` = cap TCB `WRITE`, `a1` = cap Notification
+  `WRITE`; gắn tối đa một notification cho TCB, từ chối nếu đã gắn hoặc
+  notification đang có waiter.
+- `TcbRestart` (18): reset TCB không chạy về entry/stack đã cấu hình, xoá
+  pending/fd/wake, đưa vào ready queue; runtime nhận `RestartTcb` để dựng lại
+  context kiến trúc.
 - `CapMint` (11): `a0` source slot, `a1` TCB đích, `a2` slot đích,
   `a3` rights (chỉ giảm), `a4` badge; chỉ Endpoint/Notification **và** source
   phải có badge 0. Server nhận uid từ badge register (RISC-V a7, AArch64 x7,

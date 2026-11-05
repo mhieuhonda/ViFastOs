@@ -936,6 +936,15 @@ pub mod syscall {
                     A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
                 }
             }
+            UserAction::RestartTcb { tcb, entry, stack } => {
+                let contexts = A::contexts();
+                if let Some(slot) = contexts.get_mut(tcb.index as usize) {
+                    *slot = A::context_for_user(entry as usize, stack as usize);
+                    A::write_result(context, KError::Ok, 0, 0, [0; 4]);
+                } else {
+                    A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
+                }
+            }
             UserAction::Open { ptr, len, flags } => {
                 let len = (len as usize).min(MAX_PATH);
                 let mut path = [0u8; MAX_PATH];
