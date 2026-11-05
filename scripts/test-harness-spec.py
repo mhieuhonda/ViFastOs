@@ -33,7 +33,11 @@ def fixture(arch: str) -> str:
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
         ]
     else:
-        lines += ["KERNEL DATA NX OK", "SMP SKIP (x86 AP bootstrap pending)"]
+        lines += [
+            "KERNEL DATA NX OK",
+            "ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000)",
+            "SMP SKIP (x86 AP bootstrap pending)",
+        ]
     for address in [0] + spec.FAULT_ADDRESSES:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")
     lines.append("ROOT SWITCH 2")
@@ -97,6 +101,12 @@ def main() -> int:
                 rc,
             )
         if arch == "x86_64":
+            expect_fail(
+                "x86_64: acpi count",
+                arch,
+                base.replace("cpus=2", "cpus=1"),
+                rc,
+            )
             expect_fail(
                 "x86_64: block",
                 arch,

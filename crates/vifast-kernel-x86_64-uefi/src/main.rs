@@ -30,6 +30,19 @@ struct LoadedImage {
     image_size: u64,
 }
 
+#[repr(C)]
+struct ConfigEntry {
+    vendor_guid: Guid,
+    vendor_table: *mut c_void,
+}
+
+const ACPI_20_GUID: Guid = Guid {
+    data1: 0x8868_e871,
+    data2: 0xe4f1,
+    data3: 0x11d3,
+    data4: [0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81],
+};
+
 const LOADED_IMAGE_GUID: Guid = Guid {
     data1: 0x5b1b31a1,
     data2: 0x9562,
@@ -132,6 +145,29 @@ fn user_image() -> UserImage {
     }
 }
 
+unsafe fn find_acpi_rsdp(system_table: *mut c_void) -> u64 {
+    if system_table.is_null() {
+        return 0;
+    }
+    let count = *((system_table as *const u8).add(104) as *const usize);
+    let entries = *((system_table as *const u8).add(112) as *const *const ConfigEntry);
+    if entries.is_null() || count > 1024 {
+        return 0;
+    }
+    for index in 0..count {
+        let entry = &*entries.add(index);
+        let guid = &entry.vendor_guid;
+        if guid.data1 == ACPI_20_GUID.data1
+            && guid.data2 == ACPI_20_GUID.data2
+            && guid.data3 == ACPI_20_GUID.data3
+            && guid.data4 == ACPI_20_GUID.data4
+        {
+            return entry.vendor_table as u64;
+        }
+    }
+    0
+}
+
 #[no_mangle]
 pub extern "efiapi" fn efi_main(image_handle: *mut c_void, system_table: *mut c_void) -> usize {
     if !unsafe { check_loaded_image(image_handle, system_table) } {
@@ -141,6 +177,7 @@ pub extern "efiapi" fn efi_main(image_handle: *mut c_void, system_table: *mut c_
     boot::<X86Platform>(
         PlatformInfo {
             system_table: system_table as usize,
+            acpi_rsdp: unsafe { find_acpi_rsdp(system_table) },
             memory_base: 0,
             memory_size: 0,
             ..PlatformInfo::default()

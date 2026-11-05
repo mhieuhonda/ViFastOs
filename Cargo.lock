@@ -7,6 +7,10 @@ name = "vifast-abi"
 version = "0.1.0"
 
 [[package]]
+name = "vifast-acpi"
+version = "0.1.0"
+
+[[package]]
 name = "vifast-arch"
 version = "0.1.0"
 dependencies = [
@@ -116,6 +120,7 @@ name = "vifast-platform-x86_64"
 version = "0.1.0"
 dependencies = [
  "vifast-abi",
+ "vifast-acpi",
  "vifast-arch",
  "vifast-arch-x86_64",
  "vifast-kernel",

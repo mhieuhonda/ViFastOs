@@ -70,6 +70,106 @@ static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
 static mut SMAP_ENABLED: bool = false;
 static mut PCID_ENABLED: bool = false;
 static BKL: BigKernelLock = BigKernelLock::new();
+static mut ACPI_CPUS: usize = 0;
+static mut ACPI_BSP: u32 = 0;
+static mut ACPI_LAPIC_BASE: u64 = 0;
+
+unsafe fn identity_u32(address: u64) -> Option<u32> {
+    if address.saturating_add(4) > 0x4000_0000 {
+        return None;
+    }
+    Some(core::ptr::read_unaligned(address as *const u32))
+}
+
+unsafe fn identity_u64(address: u64) -> Option<u64> {
+    if address.saturating_add(8) > 0x4000_0000 {
+        return None;
+    }
+    Some(core::ptr::read_unaligned(address as *const u64))
+}
+
+unsafe fn identity_table(address: u64, max: usize) -> Option<&'static [u8]> {
+    if address < 0x1000 || address.saturating_add(8) > 0x4000_0000 {
+        return None;
+    }
+    let length = identity_u32(address + 4)? as usize;
+    if length < 36 || length > max || address.saturating_add(length as u64) > 0x4000_0000 {
+        return None;
+    }
+    Some(core::slice::from_raw_parts(address as *const u8, length))
+}
+
+unsafe fn init_acpi(rsdp: u64) {
+    if rsdp == 0 {
+        X86_64::write_str("ACPI SKIP (no RSDP)\r\n");
+        return;
+    }
+    if rsdp >= 0x4000_0000 {
+        X86_64::write_str("ACPI SKIP (above identity map)\r\n");
+        return;
+    }
+    let Some(revision) = (|| {
+        let length = identity_u32(rsdp + 20)? as usize;
+        if length < 36 || length > 4096 || rsdp.saturating_add(length as u64) > 0x4000_0000 {
+            return None;
+        }
+        Some(core::slice::from_raw_parts(rsdp as *const u8, length)[15])
+    })() else {
+        X86_64::write_str("ACPI SKIP (bad RSDP length)\r\n");
+        return;
+    };
+    if revision < 2 {
+        X86_64::write_str("ACPI SKIP (RSDP v1)\r\n");
+        return;
+    }
+    let Some(xsdt_address) = identity_u64(rsdp + 24) else {
+        X86_64::write_str("ACPI SKIP (above identity map)\r\n");
+        return;
+    };
+    let Some(rsdp_len) = identity_u32(rsdp + 20) else {
+        return;
+    };
+    let rsdp_table = core::slice::from_raw_parts(rsdp as *const u8, rsdp_len as usize);
+    let Some(xsdt) = identity_table(xsdt_address, 4096) else {
+        X86_64::write_str("ACPI SKIP (bad XSDT)\r\n");
+        return;
+    };
+    let mut madt_address = 0;
+    let mut offset = 36;
+    while offset + 8 <= xsdt.len() {
+        let address = core::ptr::read_unaligned(xsdt.as_ptr().add(offset) as *const u64);
+        if identity_u32(address).map(|value| value == u32::from_le_bytes(*b"APIC")) == Some(true) {
+            madt_address = address;
+            break;
+        }
+        offset += 8;
+    }
+    if madt_address == 0 {
+        X86_64::write_str("ACPI SKIP (no MADT)\r\n");
+        return;
+    }
+    let Some(madt) = identity_table(madt_address, 8192) else {
+        X86_64::write_str("ACPI SKIP (bad MADT)\r\n");
+        return;
+    };
+    match vifast_acpi::parse(rsdp_table, xsdt, madt, madt_address) {
+        Ok(parsed) => {
+            ACPI_CPUS = parsed.cpu_count;
+            ACPI_BSP = parsed.bsp;
+            ACPI_LAPIC_BASE = parsed.lapic_base;
+            vifast_kernel::klog!(
+                X86Platform,
+                "ACPI MADT OK (cpus={}, bsp={}, lapic={:#x})",
+                parsed.cpu_count,
+                parsed.bsp,
+                parsed.lapic_base
+            );
+        }
+        Err(error) => {
+            vifast_kernel::klog!(X86Platform, "ACPI SKIP ({:?})", error);
+        }
+    }
+}
 
 fn poll_maintenance() {
     // No AP bootstrap yet; x86 has no maintenance IPI to service.
@@ -957,6 +1057,7 @@ impl Platform for X86Platform {
         unsafe {
             build_kernel_page_tables();
             init_cpu(info.hartid);
+            init_acpi(info.acpi_rsdp);
         }
     }
     fn set_current_tcb(tcb: Option<usize>) {

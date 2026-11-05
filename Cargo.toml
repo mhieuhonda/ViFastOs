@@ -9,6 +9,7 @@ default-members = [
     "crates/vifast-kernel",
     "crates/vifast-runtime",
     "crates/vifast-user",
+    "crates/vifast-acpi",
 ]
 
 members = [
@@ -20,6 +21,7 @@ members = [
     "crates/vifast-kernel",
     "crates/vifast-runtime",
     "crates/vifast-user",
+    "crates/vifast-acpi",
     "crates/vifast-arch-x86_64",
     "crates/vifast-arch-aarch64",
     "crates/vifast-arch-riscv64",

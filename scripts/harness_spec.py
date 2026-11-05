@@ -80,6 +80,7 @@ ARCH = {
     ],
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
+        ("ACPI MADT OK (cpus=C, bsp=ID, lapic=0x...)", "ACPI MADT parsed"),
         ("SMP SKIP", "x86 AP bring-up is not enabled yet"),
     ],
 }
@@ -101,7 +102,7 @@ ARCH_EXACT_ONE = {
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "SMP SKIP"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "SMP SKIP"],
 }
 
 NUMERIC = {
@@ -121,6 +122,7 @@ NUMERIC = {
     "x86_64": [
         "4 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000",
         "ROOT SWITCH n > 1",
+        "ACPI MADT cpus == 2",
     ],
 }
 
@@ -133,6 +135,7 @@ IDLE_RE = re.compile(
     r"wake_timer=(\d+), wake_sgi=(\d+)\)"
 )
 TIMER_RE = re.compile(r"SMP TIMER OK \(hart1_ticks=(\d+)\)")
+ACPI_RE = re.compile(r"ACPI MADT OK \(cpus=(\d+), bsp=\d+, lapic=0x[0-9a-fA-F]+\)")
 POST_RE = re.compile(
     r"SMP POST IDLE OK \(ticks=(\d+), idle_entries=(\d+), wake_timer=(\d+)\)"
 )
@@ -213,6 +216,10 @@ def accept(
             return False
         pt, pi, pw = (int(post.group(i)) for i in range(1, 4))
         if pt < 5 or pi < pt - 2 or pw < pt - 2:
+            return False
+    if name == "x86_64":
+        acpi = ACPI_RE.search(output)
+        if not acpi or int(acpi.group(1)) != 2:
             return False
     if name == "aarch64":
         timer = TIMER_RE.search(output)

@@ -20,6 +20,7 @@ PACKAGES = [
     "vifast-elf",
     "vifast-runtime",
     "vifast-user",
+    "vifast-acpi",
 ]
 
 MARKERS = {

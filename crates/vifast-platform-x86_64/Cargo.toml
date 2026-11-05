@@ -12,3 +12,4 @@ vifast-arch = { path = "../vifast-arch" }
 vifast-arch-x86_64 = { path = "../vifast-arch-x86_64" }
 vifast-kernel = { path = "../vifast-kernel" }
 vifast-runtime = { path = "../vifast-runtime" }
+vifast-acpi = { path = "../vifast-acpi" }
