@@ -1715,6 +1715,18 @@ impl Kernel {
                             if object.kind.obj_type() != Some(cap.ty) {
                                 return Err(KError::WrongType);
                             }
+                            if cap.badge != 0 {
+                                if let Some(parent) = cap.parent {
+                                    if let Some(source) = self.cap_at(parent.addr) {
+                                        if source.id == parent.id
+                                            && source.badge != 0
+                                            && source.badge != cap.badge
+                                        {
+                                            return Err(KError::NoRights);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     for fd in tcb.fds.iter().flatten() {
@@ -1765,6 +1777,9 @@ impl Kernel {
                     physical_count += 1;
                 }
                 Kind::VSpace(ref space) => {
+                    if space.harts_loaded & !((1u32 << MAX_HARTS) - 1) != 0 {
+                        return Err(KError::IllegalOperation);
+                    }
                     let page = space.page_size;
                     for (i, mapping) in space.mappings.iter().enumerate() {
                         let Some(mapping) = mapping else { continue };
@@ -7877,17 +7892,16 @@ mod tests {
         assert!(kernel.check_invariants().is_ok());
     }
 
-    #[test]
-    fn syscall_fuzz_three_pte_formats_keeps_invariants() {
+    fn syscall_fuzz_case(steps: usize) {
         let _guard = WALK_LOCK.lock().unwrap();
-        let mut seed = 0x5eed_1234_abcd_9876u64;
-        let mut next = || {
-            seed = seed
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            seed
-        };
         for format in [PteFormat::Riscv, PteFormat::X86, PteFormat::AArch] {
+            let mut seed = 0x5eed_1234_abcd_9876u64;
+            let mut next = || {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                seed
+            };
             reset_pte_fake();
             let ops = pte_ops(format);
             let mut kernel = Kernel::new();
@@ -7901,16 +7915,30 @@ mod tests {
                 .unwrap();
             let frame = kernel.create_frame(0x2000, 4096).unwrap();
             let table = kernel.create_page_table(0x3000, 0).unwrap();
+            let child = kernel.create_tcb("fuzz", 5).unwrap();
+            let endpoint = kernel.retype(untyped, ObjType::Endpoint).unwrap();
+            let block = kernel.retype(untyped, ObjType::BlockDevice).unwrap();
             for (slot, object, ty, rights) in [
                 (1, untyped, ObjType::Untyped, Rights::ALL),
+                (2, child, ObjType::Tcb, Rights::ALL),
+                (3, endpoint, ObjType::Endpoint, Rights::ALL),
                 (4, space, ObjType::VSpace, Rights::ALL),
                 (5, frame, ObjType::Frame, Rights::ALL),
                 (6, table, ObjType::PageTable, Rights::ALL),
+                (
+                    32,
+                    block,
+                    ObjType::BlockDevice,
+                    Rights::READ | Rights::WRITE,
+                ),
             ] {
                 kernel
                     .install_cap(root, slot, Cap::new(object, ty, rights))
                     .unwrap();
             }
+            kernel.set_tcb_vspace(root, space).unwrap();
+            kernel.note_vspace_hart_loaded(root, 0);
+            kernel.note_vspace_hart_loaded(root, 1);
             let types = [
                 ObjType::Frame,
                 ObjType::PageTable,
@@ -7919,14 +7947,16 @@ mod tests {
                 ObjType::Endpoint,
                 ObjType::Notification,
                 ObjType::Untyped,
+                ObjType::BlockDevice,
             ];
             let mut successes = 0usize;
-            for step in 0..10_000usize {
-                let choice = next() % 7;
+            for step in 0..steps {
+                let choice = next() % 12;
                 let slot = 7 + (next() as usize % 25);
                 let other = 7 + (next() as usize % 25);
                 let va = 0x10_0000_0000u64 + (next() & 0x3f) * 0x1000;
                 let rights = Rights((next() as u8) & Rights::ALL.0);
+                let user_ptr = 0x10_0000_0000u64 + (next() & 0x3) * 0x1000;
                 let (number, a0, a1, a2, a3, a4, a5) = match choice {
                     0 => (
                         SyscallId::Retype as u64,
@@ -7939,7 +7969,7 @@ mod tests {
                     ),
                     1 => (
                         SyscallId::CapCopy as u64,
-                        1 + (next() % 31) as u64,
+                        1 + (next() % 6) as u64,
                         other as u64,
                         slot as u64,
                         rights.0 as u64,
@@ -7947,7 +7977,15 @@ mod tests {
                         0,
                     ),
                     2 => (SyscallId::CapDelete as u64, slot as u64, 0, 0, 0, 0, 0),
-                    3 => (SyscallId::CapRevoke as u64, slot as u64, 0, 0, 0, 0, 0),
+                    3 => (
+                        SyscallId::CapRevoke as u64,
+                        1 + (next() % 6) as u64,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                    ),
                     4 => (
                         SyscallId::FrameMap as u64,
                         4,
@@ -7958,12 +7996,57 @@ mod tests {
                         0,
                     ),
                     5 => (SyscallId::FrameUnmap as u64, 4, va, 0, 0, 0, 0),
-                    _ => (
+                    6 => (
                         SyscallId::PageTableMap as u64,
                         if next() & 1 == 0 { 6 } else { other as u64 },
                         4,
                         va,
                         0,
+                        0,
+                        0,
+                    ),
+                    7 => (
+                        SyscallId::CapMint as u64,
+                        3,
+                        2,
+                        slot as u64,
+                        rights.0 as u64,
+                        (next() & 1) * 0xffff,
+                        0,
+                    ),
+                    8 => (
+                        SyscallId::TcbSetAffinity as u64,
+                        2,
+                        [0u64, 1, 2, 3, 0x80][(next() as usize) % 5],
+                        0,
+                        0,
+                        0,
+                        0,
+                    ),
+                    9 => (
+                        SyscallId::BlockRead as u64,
+                        if next() & 1 == 0 { 32 } else { other as u64 },
+                        next() & 7,
+                        user_ptr,
+                        0,
+                        0,
+                        0,
+                    ),
+                    10 => (
+                        SyscallId::BlockWrite as u64,
+                        if next() & 1 == 0 { 32 } else { other as u64 },
+                        next() & 7,
+                        user_ptr,
+                        0,
+                        0,
+                        0,
+                    ),
+                    _ => (
+                        SyscallId::CapCopy as u64,
+                        3,
+                        2,
+                        slot as u64,
+                        Rights::READ.0 as u64,
                         0,
                         0,
                     ),
@@ -7974,14 +8057,17 @@ mod tests {
                 {
                     successes += 1;
                 }
-                assert_eq!(
-                    kernel.check_invariants(),
-                    Ok(()),
-                    "format {:?} failed at step {}",
-                    format,
-                    step
-                );
+                if step % 1000 == 0 || steps <= 10_000 {
+                    assert_eq!(
+                        kernel.check_invariants(),
+                        Ok(()),
+                        "format {:?} failed at step {}",
+                        format,
+                        step
+                    );
+                }
             }
+            assert_eq!(kernel.check_invariants(), Ok(()));
             assert!(
                 successes > 100,
                 "format {:?} only produced {} successful syscalls",
@@ -7989,6 +8075,17 @@ mod tests {
                 successes
             );
         }
+    }
+
+    #[test]
+    fn syscall_fuzz_three_pte_formats_keeps_invariants() {
+        syscall_fuzz_case(10_000);
+    }
+
+    #[test]
+    #[ignore = "long seeded syscall fuzz; run with --ignored"]
+    fn syscall_fuzz_long_100k_keeps_invariants() {
+        syscall_fuzz_case(100_000);
     }
 
     #[test]
