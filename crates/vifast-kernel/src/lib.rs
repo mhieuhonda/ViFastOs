@@ -4697,6 +4697,44 @@ mod tests {
     }
 
     #[test]
+    fn revoke_untyped_rejects_child_current_on_other_hart_before_mutating() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x520_0000, 4096, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Tcb as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok
+            }
+        );
+        let child = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().obj;
+        kernel.enqueue(child);
+        assert_eq!(kernel.pick_on(1), Some(child));
+        let usage_before = kernel.untyped_usage(untyped).unwrap();
+        let cap_before = kernel.cap_at(SlotAddr { tcb: root, slot: 1 });
+        assert_eq!(kernel.revoke_cap(root, 1), Err(KError::IllegalOperation));
+        assert_eq!(kernel.untyped_usage(untyped).unwrap(), usage_before);
+        assert!(kernel.get(child).is_some());
+        assert_eq!(kernel.cap_at(SlotAddr { tcb: root, slot: 1 }), cap_before);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn cap_copy_preserves_untyped_parent_chain() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
