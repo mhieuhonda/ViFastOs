@@ -49,23 +49,28 @@ def main() -> int:
 
     # Every non-docs commit since the multi-arch checkpoint must be listed.
     log = subprocess.check_output(
-        ["git", "log", "--format=%h %s", "456d5ef..HEAD"], cwd=ROOT, text=True
+        ["git", "log", "--reverse", "--format=%h %s", "456d5ef..HEAD"], cwd=ROOT, text=True
     )
-    missing: list[str] = []
-    for line in log.splitlines():
-        commit, _, subject = line.partition(" ")
-        if subject.startswith("docs:"):
-            continue
-        if commit not in summary:
-            missing.append(line)
-    if missing:
-        fail("summary commit list missing: " + ", ".join(missing))
+    expected = ["- 456d5ef checkpoint: multi-arch microkernel before hardening"]
+    expected += [
+        f"- {line}"
+        for line in log.splitlines()
+        if not line.split(" ", 1)[1].startswith("docs:")
+    ]
+    start = summary.index("Các mốc hiện tại:")
+    start = summary.index("\n", start) + 1
+    end = summary.index("\nCập nhật code gần nhất", start)
+    actual = [line for line in summary[start:end].splitlines() if line.startswith("- ")]
+    if actual != expected:
+        fail("summary commit list is not the exact non-docs git log order")
 
     # Counts are checked as positive anchors; build.sh prints the authoritative
     # live test result and is run before make-bundle.
     for count in ("87/87", "5/5", "11/11", "17/17"):
         if count not in summary:
             fail(f"missing host-test count: {count}")
+    if "headroom 458.336 B" not in summary:
+        fail("summary headroom is stale")
 
     # The harness strings are deliberately duplicated here: if an assertion is
     # added to test-qemu.py without documenting it, this check must be updated.

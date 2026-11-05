@@ -33,6 +33,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 0eb3d67 fix: use exact cap ids and walk kernel mappings
 - d1c42b0 fix: reclaim orphaned objects and assert kernel image range
 - c9c4591 fix: reparent dying capability subtrees
+- 43d5200 test: rename reparented object case
 - df9e1c1 feat: add boot untyped and task-space builder
 - eae0741 test: cover builder and shared frame unmapping
 - 24c668d feat: validate user pointers through page tables
@@ -53,20 +54,22 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - aeea6bc feat: isolate client vspace and add fault4
 - c5119e7 feat: add reply-recvsyscall and server loop
 - a18663f feat: deliver user faults to endpoint
-- 854744a feat: add ipc buffer binding and copy.
+- 854744a feat: add ipc buffer binding and copy
+- 49e7b1f feat: demo ipc buffer transfer across tasks
+- 82c9c11 feat: mark x86 kernel data non-executable
+- ed40921 test: fuzz syscalls across pte formats
 - ea3793b feat: load rust server and client elf modules
 - 6963f58 refactor: supply rust modules through bootinfo
 - 562727d feat: add first-fit vspace range allocator
 - 395a589 feat: demo notification capability transfer over call
 - 85fe2cf feat: add user-space vfs server over ipc
+- 826efed feat: tag vspaces with asid and pcid
+- fffa7d6 feat: add vfs stat request
 - 687962c feat: add software iommu domains and dma maps
+- ed06f82 feat: add smp maintenance ipi and tlb shootdown
 - f216966 feat: add aarch64 virtio block backend
 - 1d4f0ea feat: persist vfs scratch on block storage
 - fe569c1 feat: add x86 ata block backend for persistent vfs
-- ed06f82 feat: add smp maintenance ipi and tlb shootdown
-- fffa7d6 feat: add vfs stat request
-- 826efed feat: tag vspaces with asid and pcid
-- 1e5d113 docs: sync architecture summary with current code
 - 096faf8 test: hermetic two-boot persistence check
 - 4293406 refactor: add big kernel lock and per-cpu state groundwork
 - 23d8dfb feat: riscv virtio-mmio block backend
@@ -85,12 +88,9 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - dbe7675 refactor: bootinfo advertises scheduling harts
 - e3c4280 chore: aarch64 kernel exception reports vector and cpu
 - b9bfad9 chore: automated docs consistency check
-- ed40921 test: fuzz syscalls across pte formats
-- 82c9c11 feat: mark x86 kernel data non-executable
-- 49e7b1f feat: demo ipc buffer transfer across tasks
-- 43d5200 test: rename reparented object case
+- c7c45ed feat: aarch64 secondary cpu idle with masked wfi
 
-Cập nhật code gần nhất (commit e3c4280): persistent VFS scratch trên cả 3 kiến trúc,
+Cập nhật code gần nhất (commit c7c45ed): persistent VFS scratch trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
@@ -135,7 +135,7 @@ Test hiện tại:
 - cargo test -p vifast-user: compile
 - root ELF link: 3/3 target PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.704 B, x86 16.744 B; RISC-V
-  headroom 458.352 B dưới 0x80400000
+  headroom 458.336 B dưới 0x80400000
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -151,6 +151,7 @@ Output tiêu biểu:
   "Zero OK", "Server", "Mapped", "ViFastOS ramfs", "ViFastOS write",
   "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "IOMMU OK",
   "SMP OK (... ipi=1)", "SMP IDLE OK (hart1_wakeups=K)",
+  "SMP TIMER OK (hart1_ticks=T)" trên AArch64,
   "SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)",
   "SMP WORKERS OK (a=50, b=50)", "PERCPU CLOBBER OK",
   "BLOCK OK"/"FS DISK OK", "PREEMPT OK", "ROOT SWITCH n>1";
@@ -879,6 +880,8 @@ Cap transfer:
   `ic ivau` + `dsb ish` đã broadcast.
 - Mailbox maintenance đối xứng theo hart đích: `MAINT_SEQ/ACK/KIND`, TLB,
   I-cache, reschedule; sender giữ BKL và bỏ qua hart chưa online.
+- AArch64 CPU1 giữ DAIF.I=1, khởi tạo GIC banked/timer riêng, idle WFI và
+  polling GICC_IAR; in `SMP TIMER OK`/`SMP IDLE OK`, chưa chạy task.
 - Hart 1 RISC-V có `SCHED_READY`, timer SBI, vòng idle lấy BKL → `pick_on(1)`
   → nhả BKL → WFI khi SIE=0 → đọc `sip`; timer/IPI wakeups in `SMP IDLE OK`.
 - Hai worker affinity hart 1, stack riêng, nhận diện qua endpoint label;
@@ -1422,6 +1425,11 @@ E. Desktop / Space
 51. Vòng 07: hai worker RISC-V hart 1, đếm user entry mỗi lần về user;
     `SMP WORKERS OK`; WFI+SIE=0 ổn định. D1: không nhận interrupt khi ở kernel;
     AArch64 secondary diagnostics thử nhưng phải revert vì làm hỏng boot.
+
+52. Vòng 08: hết bão IPI reschedule (`resched_sent=1`, `resched_wake=1`),
+    BootInfo v2 `sched_harts`, checker docs anchor; AArch64 3a vector an toàn.
+53. Vòng 09: AArch64 CPU1 GIC banked/timer + WFI polling, `SMP TIMER OK` và
+    `SMP IDLE OK`, chưa chạy task; docs checker còn anchor.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
