@@ -68,7 +68,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `1f01502cbd99179c95ee9bbd7e8bc49620d48b0df80eaf6bb1bf411ed3ad2d9d`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `835db39ac041f2d01e3ee26f9bf62fe6232749360d0a15593963aaf4293ac894`.
 
 ---
 
@@ -211,6 +211,20 @@ follow-up `62b31f4`.
 - RISC-V vẫn fallback RAM vì virtio-mmio ở 0x10001000 nằm ngoài PMP/OpenSBI
   mặc định; hướng còn lại là PCI virtio hoặc custom OpenSBI.
 - `vifast-kernel` 83/83; QEMU 3/3 PASS.
+
+## 8.21 — RISC-V flake, AArch64 worker, generated docs (vòng 10)
+
+- `060fb67` + `010cccd`: `--arch/--repeat`, QEMU monitor register dump and
+  timeout artifacts.
+- `386a2ad`: arbitrary OpenSBI boot hart promotes hart 0; secondary empty
+  runqueue parks with BKL released instead of shutting down; test-exit waits
+  for root/worker completion.
+- `dbe3a39`: separate idle wake counters (`wake_timer`, `wake_sgi`, K).
+- `cce094a`: AArch64 CPU1 per-hart BKL/current, GIC SGIs, scheduler and two
+  workers; AArch64 50/50.
+- `ec090c9`: summary commits/syscalls/tests/pass generated from git, ABI,
+  build log and shared `harness_spec.py`.
+- RISC-V 50/50 after fix; all-arch QEMU 10/10; persistence 3/3.
 
 ## 8.20 — AArch64 CPU1 timer/idle + docs checks (vòng 08/09)
 

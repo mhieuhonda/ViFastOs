@@ -96,6 +96,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 386a2ad fix: handle arbitrary boot hart and empty secondary runqueue
 - dbe3a39 fix: accurate idle wake accounting on secondary harts
 - cce094a feat: run tasks on aarch64 secondary cpu
+- ec090c9 chore: generate summary sections from abi, harness and git
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit cce094a): RISC-V 50/50 sau khi xử lý boot hart
