@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-11-05  
 **Repo:** `/Users/mps/dvchd/ViFastOs`  
-**Mốc code hiện tại:** `23d8dfb` (`feat: riscv virtio-mmio block backend`)
+**Mốc code hiện tại:** `4d44b60` (`refactor: per-cpu trap stacks and current tcb`)
 **Handoff gốc:** `1b3dc12`; **vòng Agent 2 gần nhất:** `ed0fe08`
 **Trạng thái:** baseline xanh — 3/3 kiến trúc QEMU PASS, host test PASS, không warning.  
 **Mức trưởng thành:** nguyên mẫu microkernel nghiên cứu/giáo dục, **không phải** hệ điều hành production.
@@ -38,7 +38,7 @@
 ### Chưa có / còn yếu
 
 - Full SMP scheduler; x86 AP bootstrap; per-hart runqueue.
-- BKL chưa phải ticket/fair lock; x86 fault path/BKL đang được audit.
+- BKL chưa phải ticket/fair lock; per-CPU `current_tcb` chưa được cập nhật theo scheduler.
 - Per-VA TLB shootdown; cross-hart I-cache shootdown.
 - Hardware IOMMU/VT-d/SMMU; hiện chỉ là mô hình phần mềm.
 - Hệ thống file thật: mới là một sector `/scratch`, chưa có directory/permission/journal.
@@ -189,7 +189,8 @@ Kernel không biết chi tiết phần cứng. Nó gọi các trait/primitive do
 | Block x86_64 | ✅ | ATA PIO, polling |
 | Block RISC-V | ✅ | VirtIO-MMIO slot `0x10008000` |
 | FS bền vững 3 kiến trúc | ✅ | sector 0, magic `VF01`, test-persist |
-| BKL | ✅ groundwork | test-and-set + RAII; trap/syscall/IRQ |
+| BKL | ✅ groundwork | test-and-set + RAII; trap/syscall/IRQ + x86 fault |
+| Per-CPU | ✅ groundwork | MAX_HARTS=4; trap stacks/state; tp/TPIDR/GS |
 | IOMMU phần mềm | ✅ | domain, 32 mapping, `IoMap`/`IoUnmap` |
 | IOMMU phần cứng | ❌ | chưa VT-d/SMMU |
 | VirtIO net | ❌ | chưa có |
@@ -333,7 +334,7 @@ Chưa có:
 - x86 AP bootstrap.
 - Per-hart runqueue.
 - Hart phụ chạy task người dùng.
-- BKL fair/ticket; audit mọi đường ra và x86 fault path.
+- BKL fair/ticket; per-CPU scheduler.
 - Timer đa hart.
 - Per-VA TLB shootdown.
 - Remote I-cache shootdown.
@@ -734,7 +735,7 @@ refactor: ...
 | `crates/vifast-user` | Syscall wrappers cho user programs |
 | `crates/vifast-elf` | ELF64 parser |
 | `crates/vifast-pte` | PTE formats, generic page-table walk, user VA range |
-| `crates/vifast-arch` | Trait/primitive chung + `bkl.rs` |
+| `crates/vifast-arch` | Trait/primitive chung + `bkl.rs`, `CpuState` |
 | `crates/vifast-arch-riscv64` | RISC-V trap/MMU/timer/SMP |
 | `crates/vifast-arch-aarch64` | AArch64 trap/MMU/timer/SMP |
 | `crates/vifast-arch-x86_64` | x86_64 trap/MMU/timer/SMP |

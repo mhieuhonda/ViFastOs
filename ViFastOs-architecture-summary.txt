@@ -67,12 +67,14 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 096faf8 test: hermetic two-boot persistence check
 - 4293406 refactor: add big kernel lock and per-cpu state groundwork
 - 23d8dfb feat: riscv virtio-mmio block backend
+- b51782b fix: make bkl cover all kernel entries and assert release on user return
+- 4d44b60 refactor: per-cpu trap stacks and current tcb
 - ed06f82 feat: add smp maintenance ipi and tlb shootdown
 - fffa7d6 feat: add vfs stat request
 - 826efed feat: tag vspaces with asid and pcid
 
-Cập nhật code gần nhất (commit 23d8dfb): persistent VFS scratch trên cả 3 kiến trúc,
-VirtIO-MMIO/ATA block, BKL groundwork, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
+Cập nhật code gần nhất (commit 4d44b60): persistent VFS scratch trên cả 3 kiến trúc,
+VirtIO-MMIO/ATA block, BKL audit + per-CPU groundwork, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
 vifast-elf parser machine/window + 17 test, build_task_space_elf + 5 test,
 root Rust ELF + server/client Rust ELF nạp vào boot, RUST MODULES OK/ROOT READY, jump table, FrameMap cap bound,
@@ -1384,7 +1386,7 @@ crates/vifast-runtime/src/lib.rs
 crates/vifast-arch-*/src/lib.rs
 crates/vifast-platform-*/src/
 crates/vifast-kernel-*/src/main.rs
-crates/vifast-arch/src/bkl.rs
+crates/vifast-arch/src/bkl.rs (BKL) + CpuState/MAX_HARTS
 crates/vifast-virtio/src/lib.rs
 scripts/build.sh
 scripts/test-qemu.py

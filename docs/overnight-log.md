@@ -26,6 +26,8 @@
 - `test: hermetic two-boot persistence check` — Task 2 (Agent 2).
 - `refactor: add big kernel lock and per-cpu state groundwork` — Task 4 (Agent 2).
 - `23d8dfb` — RISC-V VirtIO-MMIO block backend (vòng 02).
+- `b51782b` — BKL audit + x86 fault path (vòng 02).
+- `4d44b60` — per-CPU trap stacks/state (vòng 02).
 - `ed40921` — S1 syscall fuzz 3 PTE formats.
 - Các commit docs: `24d94fa`, `1473e65`, `32784d6`, `bde2254`, `2b57994`, `55c425b`.
 
@@ -65,7 +67,7 @@ Không có nhánh `wip/*`. Repo sạch tại thời điểm tổng kết.
 - ROOT SWITCH lần chạy cuối: 35 / 35 / 35 (timer test-exit).
 - Root ELF: RISC-V 12880 B, AArch64 12704 B, x86 16744 B; headroom RISC-V
   565200 B.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `dd5033446ee480959ea49e3d7709a98b8ae2bffa985af84984b3e6893245ef39`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `69ffa2fc99d70c44730d7be98bd3ed5a69d239bf32a2a287a7379a5d2f1e3268`.
 
 ---
 
@@ -222,7 +224,7 @@ follow-up `62b31f4`.
   `hart_id`, `current_tcb`, `trap_stack_top`; hart 0 đọc qua tp/TPIDR_EL1/GS.
 - Host test `vifast-arch` 2/2; QEMU 3/3 PASS ×3; persist 3/3 PASS.
 - `git show --stat` của Task 4 chỉ còn `vifast-arch` + 3 platform + docs.
-- RISC-V kernel end `0x80377050` / headroom `462672` byte (per-CPU stacks làm giảm).
+- RISC-V kernel end `0x8038f0b0` / headroom `462672` byte (per-CPU stacks làm giảm).
 
 ## 8.14 — RISC-V VirtIO-MMIO block + docs sync (vòng 02)
 
