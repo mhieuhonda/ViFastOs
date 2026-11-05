@@ -149,6 +149,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - b014c8b feat: add end-to-end cnode demo task
 - e9b8286 feat: implement o_append for vfs
 - 363574a feat: add write-back block cache for file data
+- 801fb13 test: cover cnode delete and revoke integration
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
@@ -194,7 +195,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 110/110 PASS
+- `cargo test -p vifast-kernel`: 111/111 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
