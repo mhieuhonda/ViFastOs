@@ -91,6 +91,28 @@ static USER_ENTRIES: [AtomicUsize; MAX_HARTS] = [
 const MAINT_TLB: u32 = 1;
 const MAINT_ICACHE: u32 = 2;
 const MAINT_RESCHEDULE: u32 = 4;
+const MAINT_TLB_VA: u32 = 8;
+static TLB_VA_FLUSH: AtomicUsize = AtomicUsize::new(0);
+static TLB_IPI_SENT: AtomicUsize = AtomicUsize::new(0);
+static TLB_IPI_SKIPPED: AtomicUsize = AtomicUsize::new(0);
+static MAINT_TLB_ADDR: [AtomicUsize; MAX_HARTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+static MAINT_TLB_PAGES: [AtomicUsize; MAX_HARTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+static MAINT_TLB_ASID: [AtomicU32; MAX_HARTS] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
 static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
@@ -180,6 +202,18 @@ fn poll_maintenance() {
             core::arch::asm!("sfence.vma zero, zero");
         }
     }
+    if kind & MAINT_TLB_VA != 0 {
+        let va = MAINT_TLB_ADDR[hart].load(Ordering::Acquire) as u64;
+        let pages = MAINT_TLB_PAGES[hart].load(Ordering::Acquire);
+        let asid = MAINT_TLB_ASID[hart].load(Ordering::Acquire);
+        let mut page = 0;
+        while page < pages {
+            unsafe {
+                core::arch::asm!("sfence.vma {}, {}", in(reg) va + (page as u64) * 4096, in(reg) asid as u64);
+            }
+            page += 1;
+        }
+    }
     if kind & MAINT_ICACHE != 0 {
         unsafe {
             core::arch::asm!("fence.i");
@@ -222,6 +256,23 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
         spins += 1;
     }
     MAINT_ACK[target].load(Ordering::Acquire) >= seq
+}
+
+fn send_tlb_va(target: usize, asid: u16, va: u64, pages: usize) -> bool {
+    if target >= MAX_HARTS || !maintenance_target_online(target) {
+        return false;
+    }
+    let state = cpu_state();
+    if state.is_null() || unsafe { (*state).hart_id } == target {
+        return false;
+    }
+    if !BKL.is_held() {
+        return false;
+    }
+    MAINT_TLB_ADDR[target].store(va as usize, Ordering::Release);
+    MAINT_TLB_PAGES[target].store(pages, Ordering::Release);
+    MAINT_TLB_ASID[target].store(asid as u32, Ordering::Release);
+    send_maintenance(target, MAINT_TLB_VA)
 }
 
 fn send_reschedule(target: usize) -> bool {
@@ -617,6 +668,55 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn flush_va_asid(&self, asid: u16, va: u64, pages: usize, targets: u32) {
+        TLB_VA_FLUSH.fetch_add(1, Ordering::Relaxed);
+        let mut page = 0;
+        while page < pages {
+            unsafe {
+                core::arch::asm!("sfence.vma {}, {}", in(reg) va + (page as u64) * 4096, in(reg) asid as u64);
+            }
+            page += 1;
+        }
+        if !BKL.is_held() {
+            return;
+        }
+        let me = current_hart();
+        for target in 0..MAX_HARTS {
+            if target == me || !maintenance_target_online(target) {
+                continue;
+            }
+            if targets & (1 << target) == 0 {
+                TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            if send_tlb_va(target, asid, va, pages) {
+                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn flush_all_asid(&self, asid: u16, targets: u32) {
+        TLB_VA_FLUSH.fetch_add(1, Ordering::Relaxed);
+        let _ = asid;
+        unsafe {
+            core::arch::asm!("sfence.vma zero, zero");
+        }
+        if !BKL.is_held() {
+            return;
+        }
+        let me = current_hart();
+        for target in 0..MAX_HARTS {
+            if target == me || !maintenance_target_online(target) {
+                continue;
+            }
+            if targets & (1 << target) == 0 {
+                TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            } else if send_maintenance(target, MAINT_TLB) {
+                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
     fn sync_icache(&self, _pa: u64, _size: usize) {
         unsafe {
             core::arch::asm!("fence.i");
@@ -739,6 +839,14 @@ impl Platform for RiscvPlatform {
         Some((
             SECONDARY_TIMER_TICKS.load(Ordering::Relaxed),
             BSP_TIMER_TICKS.load(Ordering::Relaxed).saturating_sub(base),
+        ))
+    }
+
+    fn tlb_stats() -> Option<(usize, usize, usize)> {
+        Some((
+            TLB_VA_FLUSH.load(Ordering::Relaxed),
+            TLB_IPI_SENT.load(Ordering::Relaxed),
+            TLB_IPI_SKIPPED.load(Ordering::Relaxed),
         ))
     }
 

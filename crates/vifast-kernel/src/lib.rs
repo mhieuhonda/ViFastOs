@@ -8229,4 +8229,29 @@ mod tests {
         };
         assert_eq!(bv2, 2, "AP ticks must not leak into system time");
     }
+
+    #[test]
+    fn vspace_hart_mask_tracks_loaded_harts_and_full_flush_clear() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_vspace(0x1000, 0x10_0000_0000, 0x10_0000)
+            .unwrap();
+        kernel.set_tcb_vspace(root, space).unwrap();
+        kernel.note_vspace_hart_loaded(root, 0);
+        kernel.note_vspace_hart_loaded(root, 1);
+        assert_eq!(kernel.vspace_harts_loaded(space), 0b11);
+        // Switching another VSpace into hart 1 must not clear hart 1's stale
+        // V entries; only a full-ASID flush may do that.
+        let other = kernel
+            .create_vspace(0x2000, 0x10_0000_0000, 0x10_0000)
+            .unwrap();
+        kernel.set_tcb_vspace(root, other).unwrap();
+        kernel.note_vspace_hart_loaded(root, 1);
+        assert_eq!(kernel.vspace_harts_loaded(space), 0b11);
+        assert_eq!(kernel.vspace_harts_loaded(other), 0b10);
+        // Full ASID flush of the first space clears only the flushed hart.
+        assert_eq!(kernel.clear_vspace_harts(space, 1 << 0), 0b10);
+        assert_eq!(kernel.vspace_harts_loaded(space), 0b10);
+    }
 }

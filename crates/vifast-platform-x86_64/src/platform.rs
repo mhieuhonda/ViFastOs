@@ -129,6 +129,13 @@ static BSP_PIT_TICKS: AtomicUsize = AtomicUsize::new(0);
 static BSP_RATE_BASE: AtomicUsize = AtomicUsize::new(0);
 const AP_MAINT_TLB: u32 = 1;
 const AP_MAINT_ICACHE: u32 = 2;
+const AP_MAINT_TLB_VA: u32 = 4;
+static TLB_VA_FLUSH: AtomicUsize = AtomicUsize::new(0);
+static TLB_IPI_SENT: AtomicUsize = AtomicUsize::new(0);
+static TLB_IPI_SKIPPED: AtomicUsize = AtomicUsize::new(0);
+static AP_MAINT_TLB_ADDR: AtomicU64 = AtomicU64::new(0);
+static AP_MAINT_TLB_PAGES: AtomicUsize = AtomicUsize::new(0);
+static AP_MAINT_TLB_ASID: AtomicU32 = AtomicU32::new(0);
 const TRAMPOLINE_STAGE_OFFSET: u64 = 0x802;
 
 unsafe fn identity_u32(address: u64) -> Option<u32> {
@@ -843,19 +850,85 @@ unsafe fn lapic_eoi() {
     core::ptr::write_volatile((lapic_base() + 0xB0) as *mut u32, 0);
 }
 
+unsafe fn reload_cr3() {
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3);
+    core::arch::asm!("mov cr3, {}", in(reg) cr3);
+}
+
+unsafe fn flush_tagged_va(asid: u16, va: u64, pages: usize) {
+    if active_asid() == asid {
+        for page in 0..pages {
+            core::arch::asm!("invlpg [{}]", in(reg) va + (page as u64) * 4096);
+        }
+    } else {
+        // The CPU may keep tagged entries for a non-active PCID.  A CR3
+        // reload is the portable fallback when INVPCID is unavailable.
+        reload_cr3();
+    }
+}
+
 unsafe fn process_maintenance() {
     let seq = AP_MAINT_SEQ.load(Ordering::Acquire);
     if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
         return;
     }
     let kind = AP_MAINT_KIND.swap(0, Ordering::AcqRel);
+    if kind & AP_MAINT_TLB_VA != 0 {
+        flush_tagged_va(
+            AP_MAINT_TLB_ASID.load(Ordering::Acquire) as u16,
+            AP_MAINT_TLB_ADDR.load(Ordering::Acquire),
+            AP_MAINT_TLB_PAGES.load(Ordering::Acquire),
+        );
+    }
     if kind & AP_MAINT_TLB != 0 {
-        core::arch::asm!("invlpg [{}]", in(reg) 0u64);
+        reload_cr3();
     }
     if kind & AP_MAINT_ICACHE != 0 {
         core::arch::asm!("wbinvd");
     }
     AP_MAINT_ACK.store(seq, Ordering::Release);
+}
+
+unsafe fn send_tlb_va_ap(asid: u16, va: u64, pages: usize) -> bool {
+    if !unsafe { AP_STARTED } || AP_APIC_ID == 0 {
+        return false;
+    }
+    let base = lapic_base();
+    AP_MAINT_TLB_ASID.store(asid as u32, Ordering::Release);
+    AP_MAINT_TLB_ADDR.store(va, Ordering::Release);
+    AP_MAINT_TLB_PAGES.store(pages, Ordering::Release);
+    let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    AP_MAINT_KIND.fetch_or(AP_MAINT_TLB_VA, Ordering::AcqRel);
+    AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
+    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+    send_icr(base, APIC_MAINT_VECTOR);
+    for _ in 0..100_000 {
+        if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
+            return true;
+        }
+        core::arch::asm!("pause");
+    }
+    false
+}
+
+unsafe fn send_full_tlb_ap() -> bool {
+    if !unsafe { AP_STARTED } || AP_APIC_ID == 0 {
+        return false;
+    }
+    let base = lapic_base();
+    let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    AP_MAINT_KIND.fetch_or(AP_MAINT_TLB, Ordering::AcqRel);
+    AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
+    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+    send_icr(base, APIC_MAINT_VECTOR);
+    for _ in 0..100_000 {
+        if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
+            return true;
+        }
+        core::arch::asm!("pause");
+    }
+    false
 }
 
 unsafe fn rdtsc() -> u64 {
@@ -1543,9 +1616,49 @@ impl vifast_kernel::PageTableOps for PageOps {
 
     fn flush_all_user(&self) {
         unsafe {
-            let cr3: u64;
-            core::arch::asm!("mov {}, cr3", out(reg) cr3);
-            core::arch::asm!("mov cr3, {}", in(reg) cr3);
+            reload_cr3();
+        }
+    }
+
+    fn flush_va_asid(&self, asid: u16, va: u64, pages: usize, targets: u32) {
+        TLB_VA_FLUSH.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            flush_tagged_va(asid, va, pages);
+        }
+        if !BKL.is_held() {
+            return;
+        }
+        let me = X86Platform::hart_id();
+        for target in 0..MAX_HARTS {
+            if target == me {
+                continue;
+            }
+            if target != 1 || !unsafe { AP_STARTED } {
+                continue;
+            }
+            if targets & (1 << target) == 0 {
+                TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            } else if unsafe { send_tlb_va_ap(asid, va, pages) } {
+                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn flush_all_asid(&self, _asid: u16, targets: u32) {
+        TLB_VA_FLUSH.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            reload_cr3();
+        }
+        if !BKL.is_held() {
+            return;
+        }
+        let me = X86Platform::hart_id();
+        if me == 0 && unsafe { AP_STARTED } {
+            if targets & 0b10 == 0 {
+                TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            } else if unsafe { send_full_tlb_ap() } {
+                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -2174,6 +2287,14 @@ impl Platform for X86Platform {
         Some((
             AP_IPI_SENT.load(Ordering::Relaxed),
             AP_IPI_SEEN.load(Ordering::Relaxed),
+        ))
+    }
+
+    fn tlb_stats() -> Option<(usize, usize, usize)> {
+        Some((
+            TLB_VA_FLUSH.load(Ordering::Relaxed),
+            TLB_IPI_SENT.load(Ordering::Relaxed),
+            TLB_IPI_SKIPPED.load(Ordering::Relaxed),
         ))
     }
 

@@ -25,6 +25,7 @@ def fixture(arch: str) -> str:
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=5)",
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
+            "TLB STATS (va_flush=2, ipi=1, skipped=1)",
         ]
     elif arch == "aarch64":
         lines += [
@@ -36,6 +37,7 @@ def fixture(arch: str) -> str:
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=2)",
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
+            "TLB STATS (va_flush=2, ipi=0, skipped=0)",
         ]
     else:
         lines += [
@@ -54,6 +56,7 @@ def fixture(arch: str) -> str:
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=5)",
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
+            "TLB STATS (va_flush=2, ipi=1, skipped=1)",
         ]
     for address in [0] + spec.FAULT_ADDRESSES:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")
@@ -115,7 +118,17 @@ def main() -> int:
             }
             for label, output in variants.items():
                 expect_fail(f"{arch}: numeric {label}", arch, output, rc)
+            if arch != "aarch64":
+                expect_fail("tlb-v", arch, base.replace("TLB STATS (va_flush=2", "TLB STATS (va_flush=0"), rc)
+                expect_fail("tlb-ipi", arch, base.replace("TLB STATS (va_flush=2, ipi=1", "TLB STATS (va_flush=2, ipi=0"), rc)
+                expect_fail("tlb-skip", arch, base.replace("skipped=1)", "skipped=0)"), rc)
         if arch == "aarch64":
+            expect_fail(
+                "aarch64: tlb-ipi",
+                arch,
+                base.replace("TLB STATS (va_flush=2, ipi=0", "TLB STATS (va_flush=2, ipi=1"),
+                rc,
+            )
             expect_fail(
                 "aarch64: timer zero",
                 arch,
@@ -171,6 +184,9 @@ def main() -> int:
             }
             for label, output in variants.items():
                 expect_fail(f"x86_64: numeric {label}", arch, output, rc)
+            expect_fail("x86_64: tlb-v", arch, base.replace("TLB STATS (va_flush=2", "TLB STATS (va_flush=0"), rc)
+            expect_fail("x86_64: tlb-ipi", arch, base.replace("TLB STATS (va_flush=2, ipi=1", "TLB STATS (va_flush=2, ipi=0"), rc)
+            expect_fail("x86_64: tlb-skip", arch, base.replace("skipped=1)", "skipped=0)"), rc)
 
     panic_base = "booting on x86_64\nPANIC (hart=1)\n"
     for arch in ("riscv64", "aarch64", "x86_64"):

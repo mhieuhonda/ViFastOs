@@ -48,6 +48,7 @@ EXACT_ONE = [
     "IOMMU OK",
     "PERCPU CLOBBER OK",
     "TIME MONOTONIC OK",
+    "TLB REMAP OK",
 ]
 
 FORBIDDEN = [
@@ -64,6 +65,7 @@ FORBIDDEN = [
     "FS PERM BAD",
     "BADGE SPOOF BAD",
     "TIME MONOTONIC BAD",
+    "TLB REMAP BAD",
 ]
 
 FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000]
@@ -85,6 +87,7 @@ ARCH = {
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "secondary scheduling, exactly once"),
         ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
+        ("TLB STATS (va_flush=2, ipi=1, skipped=1)", "per-VA TLB accounting"),
     ],
     "aarch64": [
         ("SMP OK", "both CPUs online"),
@@ -96,6 +99,7 @@ ARCH = {
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "secondary scheduling, exactly once"),
         ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
+        ("TLB STATS (va_flush=2, ipi=0, skipped=0)", "per-VA TLB accounting"),
     ],
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
@@ -113,6 +117,7 @@ ARCH = {
         ("SMP SCHED OK (hart0=N, hart1=M, resched_sent=S, resched_wake=W, idle_entries=I)", "AP scheduling, exactly once"),
         ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker AP idle proof"),
+        ("TLB STATS (va_flush=2, ipi=1, skipped=1)", "per-VA TLB accounting"),
     ],
 }
 
@@ -197,6 +202,7 @@ POST_RE = re.compile(
     r"SMP POST IDLE OK \(ticks=(\d+), idle_entries=(\d+), wake_timer=(\d+)\)"
 )
 RATE_RE = re.compile(r"SMP TIMER RATE \(ap=(\d+), bsp=(\d+)\)")
+TLB_RE = re.compile(r"TLB STATS \(va_flush=(\d+), ipi=(\d+), skipped=(\d+)\)")
 IPI_RE = re.compile(r"SMP IPI COUNT \(sent=(\d+), seen=(\d+)\)")
 ROOT_SWITCH_RE = re.compile(r"ROOT SWITCH\s+(\d+)")
 FAULT_RE = re.compile(r"USER FAULT.*?addr=(0x[0-9a-fA-F]+)")
@@ -271,6 +277,19 @@ def accept(
     ap_rate = int(rate.group(1))
     bsp_rate = int(rate.group(2))
     if bsp_rate < 5 or ap_rate * 2 < bsp_rate or ap_rate > bsp_rate * 2:
+        return False
+    tlb = TLB_RE.search(output)
+    if not tlb or output.count("TLB STATS") != 1:
+        return False
+    va_flush = int(tlb.group(1))
+    tlb_ipi = int(tlb.group(2))
+    tlb_skipped = int(tlb.group(3))
+    if va_flush < 1:
+        return False
+    if name == "aarch64":
+        if tlb_ipi != 0:
+            return False
+    elif tlb_ipi < 1 or tlb_skipped < 1:
         return False
     match = ROOT_SWITCH_RE.search(output)
     if not match or int(match.group(1)) <= 1:

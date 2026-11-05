@@ -13,7 +13,7 @@ use vifast_abi::user_layout::{
     FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
     SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
     WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
-    WORKER_C_STACK_BASE, WORKER_C_STACK_TOP,
+    WORKER_C_STACK_BASE, WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP,
 };
 use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_user::SyscallResult;
@@ -39,6 +39,12 @@ const MODULE_WINDOW: u64 = 0x10_0000;
 const WORKER_LABEL_A: u64 = 0x5750_0001;
 const WORKER_LABEL_B: u64 = 0x5750_0002;
 const WORKER_LABEL_C: u64 = 0x5750_0003;
+const WORKER_LABEL_D_READY: u64 = 0x5750_0004;
+const WORKER_LABEL_D_DONE: u64 = 0x5750_0005;
+const TLB_TEST_VA: u64 = CODE_VA as u64 + 0x40_0000;
+const TLB_A: u64 = 0xAAAA_AAAA_AAAA_AAAA;
+const TLB_B: u64 = 0xBBBB_BBBB_BBBB_BBBB;
+const TLB_REMAP_OK: &[u8] = b"TLB REMAP OK (seen_new=1)\n";
 const SMP_WORKERS_OK: &[u8] = b"SMP WORKERS OK (a=50, b=50, c=1)\n";
 const TIME_MONOTONIC_OK: &[u8] = b"TIME MONOTONIC OK\n";
 const TIME_MONOTONIC_BAD: &[u8] = b"TIME MONOTONIC BAD\n";
@@ -98,6 +104,33 @@ pub extern "C" fn smp_worker_c() -> ! {
     }
     let _ = vifast_user::signal_bits(3, 2);
     let _ = vifast_user::send(1, WORKER_LABEL_C, 1, 0, 0);
+    let _ = vifast_user::wait(2);
+    loop {
+        let _ = vifast_user::yield_now();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn smp_worker_d() -> ! {
+    let start = vifast_user::get_time().value;
+    // Wait until the root task has mapped A and this hart has actually
+    // executed in the shared root VSpace.
+    let value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
+    if value != TLB_A {
+        let _ = vifast_user::send(1, WORKER_LABEL_D_DONE, 0, 0, 0);
+        let _ = vifast_user::wait(2);
+        loop {
+            let _ = vifast_user::yield_now();
+        }
+    }
+    let _ = vifast_user::send(1, WORKER_LABEL_D_READY, 1, 0, 0);
+    // The dedicated notification is signalled only after root unmaps A and
+    // maps B, so this worker cannot spin on the AP and starve worker c.
+    let _ = vifast_user::wait(2);
+    let new_value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
+    let seen_new = (new_value == TLB_B) as u64;
+    let elapsed = vifast_user::get_time().value.saturating_sub(start);
+    let _ = vifast_user::send(1, WORKER_LABEL_D_DONE, seen_new, elapsed, 0);
     let _ = vifast_user::wait(2);
     loop {
         let _ = vifast_user::yield_now();
@@ -279,6 +312,7 @@ fn spawn_worker(
     idle_notification: u8,
     notification_rights: Rights,
     completion_notification: Option<u8>,
+    priority: u8,
     entry: usize,
     stack_base: usize,
     stack_top: usize,
@@ -301,7 +335,7 @@ fn spawn_worker(
         entry as u64,
         stack_top as u64,
         root_vspace,
-        5,
+        priority,
     ));
     copy(fault_endpoint, tcb, 1, Rights::WRITE);
     copy(idle_notification, tcb, 2, notification_rights);
@@ -359,6 +393,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let notification_slot = slots.alloc();
     let root_notification_slot = slots.alloc();
     let completion_notification_slot = slots.alloc();
+    let tlb_notification_slot = slots.alloc();
     let fault1_tcb = slots.alloc();
     let fault2_tcb = slots.alloc();
     let fault3_tcb = slots.alloc();
@@ -375,6 +410,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         ObjType::Notification,
         completion_notification_slot,
     );
+    retype(meta_untyped, ObjType::Notification, tlb_notification_slot);
     retype(meta_untyped, ObjType::Tcb, fault1_tcb);
     retype(meta_untyped, ObjType::Tcb, fault2_tcb);
     retype(meta_untyped, ObjType::Tcb, fault3_tcb);
@@ -577,7 +613,64 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     ));
     check(vifast_user::tcb_resume(fault4_tcb));
 
+    // Per-VA TLB demo: map A, perform a local-only unmap (hart 1 has not
+    // loaded the root VSpace yet), then map A again and let worker d establish
+    // the hart-1 TLB entry.
+    let tlb_frame_a = slots.alloc();
+    retype(data_untyped, ObjType::Frame, tlb_frame_a);
+    let tlb_frame_b = slots.alloc();
+    retype(data_untyped, ObjType::Frame, tlb_frame_b);
+    let a_value = TLB_A;
+    let b_value = TLB_B;
+    check(vifast_user::frame_write(
+        tlb_frame_a,
+        0,
+        &a_value as *const u64 as u64,
+        8,
+    ));
+    check(vifast_user::frame_write(
+        tlb_frame_b,
+        0,
+        &b_value as *const u64 as u64,
+        8,
+    ));
+    map_with_tables(
+        data_untyped,
+        root_vspace,
+        tlb_frame_a,
+        TLB_TEST_VA,
+        Rights::READ,
+        &mut slots,
+    );
+    check(vifast_user::frame_unmap(
+        root_vspace,
+        TLB_TEST_VA,
+        tlb_frame_a,
+    ));
+    map_with_tables(
+        data_untyped,
+        root_vspace,
+        tlb_frame_a,
+        TLB_TEST_VA,
+        Rights::READ,
+        &mut slots,
+    );
+
     if info.sched_harts & 0b10 != 0 {
+        spawn_worker(
+            meta_untyped,
+            data_untyped,
+            root_vspace,
+            fault_endpoint_slot,
+            tlb_notification_slot,
+            Rights::READ,
+            None,
+            8,
+            smp_worker_d as *const () as usize,
+            WORKER_D_STACK_BASE,
+            WORKER_D_STACK_TOP,
+            &mut slots,
+        );
         spawn_worker(
             meta_untyped,
             data_untyped,
@@ -586,6 +679,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             root_notification_slot,
             Rights::READ,
             None,
+            5,
             smp_worker_a as *const () as usize,
             WORKER_A_STACK_BASE,
             WORKER_A_STACK_TOP,
@@ -599,6 +693,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             root_notification_slot,
             Rights::READ,
             None,
+            5,
             smp_worker_b as *const () as usize,
             WORKER_B_STACK_BASE,
             WORKER_B_STACK_TOP,
@@ -612,6 +707,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             root_notification_slot,
             Rights::READ,
             Some(completion_notification_slot),
+            5,
             smp_worker_c as *const () as usize,
             WORKER_C_STACK_BASE,
             WORKER_C_STACK_TOP,
@@ -622,10 +718,74 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
 
     let mut worker_bits = 0u8;
     let mut workers_ok = false;
+    let mut tlb_remapped = false;
+    let mut tlb_done = false;
     loop {
         let message = unsafe { vifast_user::recv_message(fault_endpoint_slot, 0) };
         if message.error == KError::Ok {
-            if message.label == WORKER_LABEL_A {
+            if message.label == WORKER_LABEL_D_READY {
+                if !tlb_remapped {
+                    check(vifast_user::frame_unmap(
+                        root_vspace,
+                        TLB_TEST_VA,
+                        tlb_frame_a,
+                    ));
+                    map_with_tables(
+                        data_untyped,
+                        root_vspace,
+                        tlb_frame_b,
+                        TLB_TEST_VA,
+                        Rights::READ,
+                        &mut slots,
+                    );
+                    tlb_remapped = true;
+                    check(vifast_user::signal_bits(tlb_notification_slot, 1));
+                }
+            } else if message.label == WORKER_LABEL_D_DONE {
+                if !tlb_done {
+                    if message.data[0] == 1 {
+                        tlb_done = true;
+                        write(TLB_REMAP_OK);
+                        let mut digits = [0u8; 20];
+                        let mut value = message.data[1];
+                        let mut at = digits.len();
+                        loop {
+                            at -= 1;
+                            digits[at] = b'0' + (value % 10) as u8;
+                            value /= 10;
+                            if value == 0 {
+                                break;
+                            }
+                        }
+                        let _ =
+                            vifast_user::debug_write(b"TLB LATENCY (ticks=".as_ptr() as u64, 19);
+                        let _ = vifast_user::debug_write(
+                            digits[at..].as_ptr() as u64,
+                            (digits.len() - at) as u64,
+                        );
+                        let _ = vifast_user::debug_write(b")\n".as_ptr() as u64, 2);
+                    } else if !tlb_remapped {
+                        // A rare lost/queued READY must not strand worker d
+                        // until the test harness timeout.  Remap now; d keeps
+                        // polling and reports the successful transition.
+                        check(vifast_user::frame_unmap(
+                            root_vspace,
+                            TLB_TEST_VA,
+                            tlb_frame_a,
+                        ));
+                        map_with_tables(
+                            data_untyped,
+                            root_vspace,
+                            tlb_frame_b,
+                            TLB_TEST_VA,
+                            Rights::READ,
+                            &mut slots,
+                        );
+                        tlb_remapped = true;
+                        check(vifast_user::signal_bits(tlb_notification_slot, 1));
+                    }
+                }
+            } else if message.label == WORKER_LABEL_A {
                 if message.data[0] == 50 {
                     worker_bits |= 1;
                 }

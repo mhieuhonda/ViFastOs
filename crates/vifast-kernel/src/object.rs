@@ -8,7 +8,7 @@ use vifast_abi::*;
 
 pub const MAX_OBJECTS: usize = 128;
 pub const MAX_TCBS: usize = 16;
-pub const MAX_CAPS: usize = 64;
+pub const MAX_CAPS: usize = 96;
 pub const MAX_QUEUE: usize = 8;
 pub const MAX_MAPPINGS: usize = 64;
 pub const MAX_IOMMU_MAPPINGS: usize = 32;
@@ -324,6 +324,8 @@ pub struct VSpace {
     pub base: u64,
     pub next_va: u64,
     pub end: u64,
+    /// Harts whose TLB may still hold entries tagged with this VSpace ASID.
+    pub harts_loaded: u32,
     pub mappings: [Option<Mapping>; MAX_MAPPINGS],
 }
 
@@ -342,6 +344,7 @@ impl VSpace {
             base,
             next_va: base,
             end,
+            harts_loaded: 0,
             mappings: [None; MAX_MAPPINGS],
         }
     }

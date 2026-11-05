@@ -25,6 +25,8 @@ static TEST_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 #[cfg(feature = "test-exit")]
 static TEST_FS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
+static TEST_TLB_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-exit")]
 static TEST_EXPECT_WORKERS: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 pub const USER_COPY_MAX: usize = 256;
@@ -176,6 +178,11 @@ pub trait Platform: Arch + Console {
 
     /// Optional x86 D4 maintenance IPI accounting: (sent, seen).
     fn ipi_count() -> Option<(usize, usize)> {
+        None
+    }
+
+    /// Optional per-VA TLB accounting: (VA flushes, IPIs, skipped IPIs).
+    fn tlb_stats() -> Option<(usize, usize, usize)> {
         None
     }
 
@@ -350,6 +357,7 @@ pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
     if A::switch_root(root, asid) {
         kernel.note_root_switch();
     }
+    kernel.note_vspace_hart_loaded(tcb, hart);
     Ok(())
 }
 
@@ -405,7 +413,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
     const RUNTIME_OBJECTS: usize = 5;
     const META_MAX_OBJECTS: usize = 32;
-    const DATA_MAX_OBJECTS: usize = 48;
+    const DATA_MAX_OBJECTS: usize = 56;
     const BOOT_MAX_OBJECTS: usize = 32;
     if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS + BOOT_MAX_OBJECTS
         > vifast_kernel::MAX_OBJECTS
@@ -1016,6 +1024,12 @@ pub mod syscall {
                         if fs_done {
                             TEST_FS_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
                         }
+                        let tlb_done = buf[..len]
+                            .windows(b"TLB REMAP OK".len())
+                            .any(|window| window == b"TLB REMAP OK");
+                        if tlb_done {
+                            TEST_TLB_DONE.store(true, core::sync::atomic::Ordering::SeqCst);
+                        }
                     }
                     for byte in &buf[..len] {
                         A::putc(*byte);
@@ -1171,6 +1185,7 @@ pub mod timer {
         if hart == 0
             && TEST_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && TEST_FS_DONE.load(core::sync::atomic::Ordering::SeqCst)
+            && TEST_TLB_DONE.load(core::sync::atomic::Ordering::SeqCst)
             && A::post_idle_ready()
             && kernel.ticks_on(0) >= TIMER_TICKS
         {
@@ -1242,6 +1257,15 @@ pub mod timer {
                 bkl[1].0,
                 bkl[1].1
             );
+            if let Some((va_flush, ipi, skipped)) = A::tlb_stats() {
+                vifast_kernel::klog!(
+                    A,
+                    "TLB STATS (va_flush={}, ipi={}, skipped={})",
+                    va_flush,
+                    ipi,
+                    skipped
+                );
+            }
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
             if let Some((size, bump, objects, max_objects)) =
                 kernel.untyped_usage_by_base(A::data_page().as_ptr() as usize)

@@ -79,6 +79,7 @@ static POST_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static POST_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 const MAINT_TLB: u32 = 1;
 const MAINT_ICACHE: u32 = 2;
+static TLB_VA_FLUSH: AtomicUsize = AtomicUsize::new(0);
 static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
@@ -684,6 +685,30 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
+    fn flush_va_asid(&self, _asid: u16, va: u64, pages: usize, _targets: u32) {
+        TLB_VA_FLUSH.fetch_add(1, Ordering::Relaxed);
+        let mut page = 0;
+        while page < pages {
+            unsafe {
+                core::arch::asm!("tlbi vae1is, {}", in(reg) va + (page as u64) * 4096);
+            }
+            page += 1;
+        }
+        unsafe {
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+    }
+
+    fn flush_all_asid(&self, asid: u16, _targets: u32) {
+        TLB_VA_FLUSH.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            core::arch::asm!("tlbi aside1is, {}", in(reg) asid as u64);
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+    }
+
     fn sync_icache(&self, pa: u64, size: usize) {
         if size == 0 {
             return;
@@ -1151,6 +1176,10 @@ impl Platform for Aarch64Platform {
             SECONDARY_TIMER_TICKS.load(Ordering::Relaxed),
             BSP_TIMER_TICKS.load(Ordering::Relaxed).saturating_sub(base),
         ))
+    }
+
+    fn tlb_stats() -> Option<(usize, usize, usize)> {
+        Some((TLB_VA_FLUSH.load(Ordering::Relaxed), 0, 0))
     }
 
     fn secondary_user_ticks() -> usize {
