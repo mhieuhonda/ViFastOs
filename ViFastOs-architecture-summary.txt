@@ -144,6 +144,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 72301ff chore: add local regression gate
 - aaafbe0 feat: implement sched context budget scheduler
 - 814e28f feat: add irq objects and timer irq delivery
+- c521528 feat: route uart irq and make shell interrupt-driven
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
