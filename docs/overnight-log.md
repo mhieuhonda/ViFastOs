@@ -647,3 +647,12 @@ follow-up `62b31f4`.
   `UserAction::RestartTcb` để runtime dựng lại context; reject self/running.
 - `cargo test -p vifast-kernel`: 104/104; ABI còn 6 placeholder (CNode,
   SchedContext, IRQ).
+
+## 8.80 — BSP idle TCB + blocking Sleep (vòng 21)
+
+- Root tạo một idle TCB hart 0 (`idle_main`, priority 0, stack
+  `IDLE_STACK_BASE..TOP`); root VSpace map thêm một frame.
+- Nhờ idle TCB, `BlockedSleep` không còn làm scheduler hết task chạy; user
+  wrapper gọi syscall Sleep và chỉ fallback polling khi `WouldBlock`.
+- Root tạo idle sau fault4; TCB/object quota vẫn đủ (DATA UNTYPED 63/64).
+- QEMU `--repeat 3` 3/3 mỗi kiến trúc; persist 7 phase ×3; 0 warning.

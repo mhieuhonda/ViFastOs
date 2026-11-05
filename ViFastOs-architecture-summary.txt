@@ -195,7 +195,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 335264 byte (`kernel_end=0x803ae260`)
 - `Kernel = 653528`, `Object = 4720`, `Tcb = 4672`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
+- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -836,9 +836,10 @@ Số syscall chính:
   `BlockFlush`; client demo gọi FSYNC trên file lớn/hard link/symlink.
 - `Sleep` (46): `a0` = số tick 10 ms. Kernel đặt TCB `BlockedSleep` +
   `wake_at`; `tick()` gọi `wake_sleepers()` để đưa task hết hạn vào ready
-  queue. User wrapper `vifast_user::sleep` hiện poll `GetTime` + `spin_loop`
-  thay vì block khi không còn task khác chạy trên BSP (chưa có idle TCB);
-  syscall kernel vẫn có host test riêng.
+  queue. User wrapper `vifast_user::sleep` block qua syscall; nếu hart không
+  có task khác (ví dụ hart phụ chưa có idle TCB) wrapper fallback poll
+  `GetTime`. Root tạo một idle TCB hart 0 (`idle_main`, stack `IDLE_STACK`) để
+  BSP luôn có task chạy khi mọi task khác block.
 - `TcbBindNotification` (21): `a0` = cap TCB `WRITE`, `a1` = cap Notification
   `WRITE`; gắn tối đa một notification cho TCB, từ chối nếu đã gắn hoặc
   notification đang có waiter.
@@ -899,6 +900,8 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
 - Retype thêm 4 fault TCB (priority 6) và notification root
 - TcbConfigure(client, entry, stack 0x1000009000, VSpace client, priority 5)
 - TcbResume(server/client), fault1/2/3 root VSpace, fault4 client VSpace
+- Tạo idle TCB hart 0 (`idle_main`, priority 0, stack `IDLE_STACK_BASE..TOP`)
+  để scheduler BSP luôn có task chạy khi mọi task khác block.
 - Wait trên notification root.
 - Retype(data Untyped) → VSpace client; lặp PageTableMap + FrameMap cho code
   BootInfo RX; retype Frame client stack +0x8000 và fault4 stack +0x9000, map

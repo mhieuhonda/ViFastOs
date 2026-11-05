@@ -10,11 +10,11 @@
 use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
     CLIENT_STACK_BASE, CLIENT_STACK_TOP, CODE_VA, FAULT1_STACK_TOP, FAULT2_STACK_TOP,
-    FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
-    SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
-    WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
-    WORKER_C_STACK_BASE, WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP,
-    WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
+    FAULT3_STACK_TOP, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IDLE_STACK_BASE, IDLE_STACK_TOP,
+    IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2,
+    USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE, WORKER_A_STACK_TOP,
+    WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE, WORKER_C_STACK_TOP,
+    WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
 };
 use vifast_abi::{BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION};
 use vifast_user::SyscallResult;
@@ -62,6 +62,13 @@ const USER_ELF_MACHINE: u16 = 183;
 const USER_ELF_MACHINE: u16 = 62;
 const CLIENT_UNTYPED_SIZE: usize = 0x4000;
 const CLIENT_UNTYPED_OBJECTS: usize = 4;
+
+#[no_mangle]
+pub extern "C" fn idle_main() -> ! {
+    loop {
+        let _ = vifast_user::yield_now();
+    }
+}
 
 fn worker_loop(label: u64) -> ! {
     let mut i = 0;
@@ -337,6 +344,29 @@ fn load_module(
         }
     }
     image.entry
+}
+
+fn spawn_idle(meta_untyped: u8, data_untyped: u8, root_vspace: u8, slots: &mut SlotAllocator) {
+    let tcb = slots.alloc();
+    retype(meta_untyped, ObjType::Tcb, tcb);
+    let stack_frame = slots.alloc();
+    retype(data_untyped, ObjType::Frame, stack_frame);
+    map_with_tables(
+        data_untyped,
+        root_vspace,
+        stack_frame,
+        IDLE_STACK_BASE as u64,
+        Rights::READ | Rights::WRITE,
+        slots,
+    );
+    check(vifast_user::tcb_configure(
+        tcb,
+        idle_main as *const () as u64,
+        IDLE_STACK_TOP as u64,
+        root_vspace,
+        0,
+    ));
+    check(vifast_user::tcb_resume(tcb));
 }
 
 fn spawn_worker(
@@ -646,6 +676,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         6,
     ));
     check(vifast_user::tcb_resume(fault4_tcb));
+    spawn_idle(meta_untyped, data_untyped, root_vspace, &mut slots);
 
     // Per-VA TLB demo: map A, perform a local-only unmap (hart 1 has not
     // loaded the root VSpace yet), then map A again and let worker d establish
