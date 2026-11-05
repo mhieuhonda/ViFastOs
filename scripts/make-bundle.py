@@ -45,6 +45,9 @@ def main() -> int:
     parser.add_argument("--headroom", default="")
     args = parser.parse_args()
 
+    check = ROOT / "scripts" / "check-docs.py"
+    subprocess.run([sys.executable, str(check)], cwd=ROOT, check=True)
+
     report = REPORT_DIR / f"agent2-report-{args.round}.md"
     if not report.exists():
         print(f"missing report: {report}", file=sys.stderr)
