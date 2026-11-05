@@ -58,8 +58,8 @@ static mut SPLIT_USED: usize = 0;
 static mut NX_ENABLED: bool = false;
 #[allow(dead_code)]
 #[repr(align(4096))]
-struct DataPool([u8; 262144]);
-static mut USER_FRAME: DataPool = DataPool([0; 262144]);
+struct DataPool([u8; 294912]);
+static mut USER_FRAME: DataPool = DataPool([0; 294912]);
 #[allow(dead_code)]
 #[repr(align(16))]
 struct Metadata([u8; 65536]);
@@ -1871,7 +1871,7 @@ impl Platform for X86Platform {
 
     fn data_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_FRAME) as *mut u8, 262144)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_FRAME) as *mut u8, 294912)
         }
     }
 

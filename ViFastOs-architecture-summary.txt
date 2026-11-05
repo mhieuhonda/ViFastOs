@@ -196,9 +196,9 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 331168 byte (`kernel_end=0x803af260`)
-- `Kernel = 653528`, `Object = 4720`, `Tcb = 4672`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
+- RISC-V headroom: 261536 byte (`kernel_end=0x803c0260`)
+- `Kernel = 691288`, `Object = 4720`, `Tcb = 4672`, `Cap = 64` byte
+- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
@@ -503,7 +503,7 @@ Root task sau đó tự:
 7. OBJECT MODEL VÀ CAPABILITY
 -----------------------------
 Giới hạn cố định:
-- MAX_OBJECTS = 136
+- MAX_OBJECTS = 144
 - MAX_TCBS = 16
 - MAX_CAPS_ROOT = 96
 - MAX_CAPS_TASK = 64
@@ -854,7 +854,8 @@ Số syscall chính:
   context kiến trúc.
 - `ConsoleRead` (47): poll UART 16550 / PL011 / COM1, trả một byte hoặc
   `WouldBlock`. Client chạy shell nhỏ sau demo (`help`, `time`, `echo`, `ls`,
-  `cat`, `mkdir`, `rm`); QEMU test-exit vẫn thoát sau khi đủ điều kiện.
+  `cat`, `mkdir`, `rm`, `mv`, `ln`, `stat`, `sync`, `truncate`, `fsck`);
+  QEMU test-exit vẫn thoát sau khi đủ điều kiện.
 - `CapMint` (11): `a0` source slot, `a1` TCB đích, `a2` slot đích,
   `a3` rights (chỉ giảm), `a4` badge; chỉ Endpoint/Notification **và** source
   phải có badge 0. Server nhận uid từ badge register (RISC-V a7, AArch64 x7,
@@ -1386,8 +1387,9 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - Boot-time check walk leaf thật từ root: trap entry có X, stack/IST/GDT/TSS/IDT/
   KERNEL_STORAGE có W, tất cả non-user; kiểm tra toàn bộ kernel_accessible_range.
 - Kernel static storage per platform; runtime không tạo Kernel trên stack.
-- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (136); data Untyped 64 object.
-- Data Untyped 256 KiB/max48; metadata Untyped max32; boot Untyped 128 KiB/max32.
+- Runtime assert tổng max_objects Untyped + object runtime <= MAX_OBJECTS (144);
+  data Untyped 72 object.
+- Data Untyped 288 KiB/max72; metadata Untyped 64 KiB/max32; boot Untyped 128 KiB/max32.
 - vifast-kernel bỏ dependency vifast-arch; dùng Console trait.
 - x86 page-fault/exception entry dùng efiapi rcx/rdx/r8; vector 0..31 có handler.
 - #DF/NMI/#MC dùng IST1 và luôn panic, kể cả khi CS là user.

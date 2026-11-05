@@ -316,6 +316,8 @@ fn shell_command(line: &[u8]) {
     }
     if line == b"help" {
         write(b"help time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+        write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
+        write(b"truncate <path> <size> fsck\n");
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");
@@ -364,9 +366,95 @@ fn shell_command(line: &[u8]) {
         } else {
             b"rm failed\n"
         });
+    } else if let Some(args) = line.strip_prefix(b"mv ") {
+        if let Some((old, new)) = split_two(args) {
+            write(if vfs_rename(old, new).is_ok() {
+                b"ok\n"
+            } else {
+                b"mv failed\n"
+            });
+        } else {
+            write(b"usage: mv <old> <new>\n");
+        }
+    } else if let Some(args) = line.strip_prefix(b"ln ") {
+        if let Some((old, new)) = split_two(args) {
+            write(if vfs_link(old, new).is_ok() {
+                b"ok\n"
+            } else {
+                b"ln failed\n"
+            });
+        } else {
+            write(b"usage: ln <old> <new>\n");
+        }
+    } else if let Some(path) = line.strip_prefix(b"stat ") {
+        if let Some((fd, size)) = vfs_open(path, 0) {
+            let current = vfs_stat(fd).unwrap_or(size);
+            write_u64(current);
+            write(b" bytes\n");
+            let _ = vfs_close(fd);
+        } else {
+            write(b"stat: not found\n");
+        }
+    } else if let Some(path) = line.strip_prefix(b"sync ") {
+        if let Some((fd, _)) = vfs_open(path, 0) {
+            write(if vfs_fsync(fd).is_some() {
+                b"ok\n"
+            } else {
+                b"sync failed\n"
+            });
+            let _ = vfs_close(fd);
+        } else {
+            write(b"sync: not found\n");
+        }
+    } else if let Some(args) = line.strip_prefix(b"truncate ") {
+        if let Some((path, size)) = split_two(args) {
+            if let (Some(size), Some((fd, _))) = (parse_u64(size), vfs_open(path, 2)) {
+                write(if vfs_truncate(fd, size).is_ok() {
+                    b"ok\n"
+                } else {
+                    b"truncate failed\n"
+                });
+                let _ = vfs_close(fd);
+            } else {
+                write(b"truncate failed\n");
+            }
+        } else {
+            write(b"usage: truncate <path> <size>\n");
+        }
+    } else if line == b"fsck" {
+        write(if vfs_fsck() {
+            b"ok\n"
+        } else {
+            b"fsck failed\n"
+        });
     } else {
         write(b"unknown command; try help\n");
     }
+}
+
+fn split_two(args: &[u8]) -> Option<(&[u8], &[u8])> {
+    let split = args.iter().position(|byte| *byte == b' ')?;
+    let left = &args[..split];
+    let right = &args[split + 1..];
+    if left.is_empty() || right.is_empty() {
+        None
+    } else {
+        Some((left, right))
+    }
+}
+
+fn parse_u64(text: &[u8]) -> Option<u64> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut value = 0u64;
+    for byte in text {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((*byte - b'0') as u64)?;
+    }
+    Some(value)
 }
 
 fn shell() -> ! {

@@ -670,6 +670,9 @@ follow-up `62b31f4`.
 
 - `Arch::getc` cho UART 16550/PL011/COM1; syscall `ConsoleRead = 47` trả byte
   hoặc `WouldBlock`.
-- Client có shell polling: `help`, `time`, `echo`, `ls`, `cat`, `mkdir`, `rm`.
+- Client có shell polling: `help`, `time`, `echo`, `ls`, `cat`, `mkdir`, `rm`,
+  `mv`, `ln`, `stat`, `sync`, `truncate`, `fsck`.
 - QEMU test-exit vẫn dừng sau demo; shell in `shell> ` nhưng không cần input.
-- Build/QEMU 3/3; persistence 7 phase ×3; 0 warning.
+- Shell mới làm client ELF lớn hơn; tăng Data Untyped 256→288 KiB,
+  `DATA_MAX_OBJECTS` 64→72, `MAX_OBJECTS` 136→144. RISC headroom còn 261.536 B.
+- Build/QEMU `--repeat 3` 3/3 cả 3; persistence 7 phase ×3; 0 warning.
