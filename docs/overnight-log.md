@@ -921,3 +921,16 @@ follow-up `62b31f4`.
   nhưng AArch64 0/3 (KERNEL EXCEPTION vector=4) và x86 2/3 → revert.
 - Baseline sau revert: QEMU 3/3 ×3; host 203; harness 462; 0 warning.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `5c8acc6a410634a1b2e8bda644b28eb68c8a310d656dc2a13b5d12083c6bce58`.
+
+## 9.08 — Vòng 29: baseline + đo layout, khoanh vùng kẹt AArch64
+
+- Cây dở CNode pool (`Kind::CNode(CNodeId)` + `Kernel.cnodes[8]`, stash riêng):
+  RISC-V 3/3 nhưng AArch64 0/3 `KERNEL EXCEPTION vector=4 ELR=0x4009201c`
+  sau `BOOTINFO OK`; baseline sạch AArch64 PASS → lỗi do layout, không phải logic.
+- Phát hiện: tách CNode riêng không giảm `Object` (CNode 4.096 vẫn nằm trong
+  pool) mà phình `Kernel` 710.248 → 743.016 (+32.768). Hướng đúng là giảm
+  `MAX_CAPS_TASK` hoặc tách Tcb/VSpace.
+- Bước layout probe: host test in thêm `LAYOUT objs=0 root_cspace=698544
+  current=705552 size=710248`; QEMU 3/3 ×3, persist 7×3, harness 462, 0 warning.
+- Xem `docs/agent2-report-29.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `2dd522f6d5579fdd89ac32501928895586dc0ce04fc1b10ee71f33173ed6e2ad`.

@@ -7699,6 +7699,13 @@ mod tests {
             core::mem::size_of::<Cap>(),
             core::mem::size_of::<Kernel>(),
         );
+        eprintln!(
+            "LAYOUT objs={} root_cspace={} current={} size={}",
+            core::mem::offset_of!(Kernel, objs),
+            core::mem::offset_of!(Kernel, root_cspace),
+            core::mem::offset_of!(Kernel, current),
+            core::mem::size_of::<Kernel>(),
+        );
         assert!(core::mem::size_of::<Object>() <= 4752);
     }
 
