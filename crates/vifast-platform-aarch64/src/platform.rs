@@ -67,7 +67,12 @@ static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_TCBS] =
     [TrapFrame::empty(); vifast_kernel::MAX_TCBS];
 static TIMER_INTERVAL: AtomicU64 = AtomicU64::new(0);
 static mut TRAP_STACKS: [UserStack; MAX_HARTS] = [UserStack([0; 32768]); MAX_HARTS];
-static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
+struct CpuStates(core::cell::UnsafeCell<[CpuState; MAX_HARTS]>);
+// Safety: each hart only writes its own entry during boot; runtime access goes
+// through the per-CPU TPIDR pointer installed here.
+unsafe impl Sync for CpuStates {}
+static CPU_STATES: CpuStates =
+    CpuStates(core::cell::UnsafeCell::new([CpuState::empty(); MAX_HARTS]));
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct BootPool([u8; 131072]);
@@ -368,11 +373,14 @@ fn drain_uart_rx() {
 
 unsafe fn init_cpu(hartid: usize) {
     let index = core::cmp::min(hartid, MAX_HARTS - 1);
-    CPU_STATES[index].hart_id = hartid;
-    CPU_STATES[index].current_tcb = 0;
-    let stack = core::ptr::addr_of!(TRAP_STACKS[index]) as u64;
-    CPU_STATES[index].trap_stack_top = stack + 16384;
-    let state = core::ptr::addr_of!(CPU_STATES[index]) as u64;
+    let entries = CPU_STATES.0.get();
+    unsafe {
+        (*entries)[index].hart_id = hartid;
+        (*entries)[index].current_tcb = 0;
+        let stack = core::ptr::addr_of!(TRAP_STACKS[index]) as u64;
+        (*entries)[index].trap_stack_top = stack + 16384;
+    }
+    let state = unsafe { core::ptr::addr_of_mut!((*entries)[index]) } as u64;
     core::arch::asm!("msr tpidr_el1, {}", in(reg) state);
 }
 
