@@ -244,6 +244,10 @@ pub mod user_layout {
     /// VSpace/TCB.
     pub const PAGER2_STACK_BASE: usize = CODE_VA + 0x1c000;
     pub const PAGER2_STACK_TOP: usize = CODE_VA + 0x1d000;
+    /// Third pager client: proves the service scales past two clients on the
+    /// same fault endpoint (vòng 37, cần MAX_CAPS_ROOT=128 ở vòng 36).
+    pub const PAGER3_STACK_BASE: usize = CODE_VA + 0x1e000;
+    pub const PAGER3_STACK_TOP: usize = CODE_VA + 0x1f000;
     const _: () = assert!(WORKER_A_STACK_BASE > DATA_VA);
     const _: () = assert!(WORKER_A_STACK_TOP <= WORKER_B_STACK_BASE);
     const _: () = assert!(WORKER_B_STACK_TOP <= WORKER_C_STACK_BASE);
@@ -254,6 +258,7 @@ pub mod user_layout {
     const _: () = assert!(CNODE_STACK_TOP <= PAGER_STACK_BASE);
     const _: () = assert!(PAGER_STACK_TOP <= PAGER_SERVER_STACK_BASE);
     const _: () = assert!(PAGER_SERVER_STACK_TOP <= PAGER2_STACK_BASE);
+    const _: () = assert!(PAGER2_STACK_TOP <= PAGER3_STACK_BASE);
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one

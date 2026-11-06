@@ -14,6 +14,7 @@ use vifast_abi::user_layout::{
     CODE_VA, FAULT1_STACK_TOP, FAULT1_TCB_SLOT, FAULT2_STACK_TOP, FAULT2_TCB_SLOT,
     FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IDLE_STACK_BASE,
     IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, PAGER2_STACK_BASE, PAGER2_STACK_TOP,
+    PAGER3_STACK_BASE, PAGER3_STACK_TOP,
     PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP,
     SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
     WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
@@ -72,6 +73,11 @@ const PAGER2_VA: u64 = PAGER_VA + 0x1000;
 const PAGER2_VALUE: u64 = 0x5041_4745_5200_0002;
 const PAGER2_OK: &[u8] = b"PAGER2 OK\n";
 const PAGER2_BAD: &[u8] = b"PAGER2 BAD\n";
+const PAGER3_LABEL: u64 = 0x5041_4747;
+const PAGER3_VA: u64 = PAGER_VA + 0x2000;
+const PAGER3_VALUE: u64 = 0x5041_4745_5200_0003;
+const PAGER3_OK: &[u8] = b"PAGER3 OK\n";
+const PAGER3_BAD: &[u8] = b"PAGER3 BAD\n";
 const PAGER_EVICT_OK: &[u8] = b"PAGER EVICT OK\n";
 const PAGER_EVICT_BAD: &[u8] = b"PAGER EVICT BAD\n";
 const PAGER_OK: &[u8] = b"PAGER OK\n";
@@ -83,6 +89,8 @@ const PAGER_SERVER_FRAME: u8 = 4;
 const PAGER_SERVER_TCB2: u8 = 5;
 const PAGER_SERVER_FRAME2: u8 = 6;
 const PAGER_SERVER_UNTYPED: u8 = 7;
+const PAGER_SERVER_TCB3: u8 = 8;
+const PAGER_SERVER_FRAME3: u8 = 9;
 const TLB_A: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 const TLB_B: u64 = 0xBBBB_BBBB_BBBB_BBBB;
 const TLB_REMAP_OK: &[u8] = b"TLB REMAP OK (seen_new=1)\n";
@@ -131,9 +139,18 @@ pub extern "C" fn pager2_client() -> ! {
     let value = unsafe { core::ptr::read_volatile(PAGER2_VA as *const u64) };
     let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER2_LABEL, value, 0, 0);
     // Evict demo: server đã unmap trang sau lần đọc đầu; đọc lại để fault
-    // lần 2 và được map lại cùng frame.
+    // lần 2 và được map lại frame mới (vòng 35: destroy + retype).
     let value2 = unsafe { core::ptr::read_volatile(PAGER2_VA as *const u64) };
     let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER2_LABEL, value2, 0, 0);
+    loop {
+        let _ = vifast_user::yield_now();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn pager3_client() -> ! {
+    let value = unsafe { core::ptr::read_volatile(PAGER3_VA as *const u64) };
+    let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER3_LABEL, value, 0, 0);
     loop {
         let _ = vifast_user::yield_now();
     }
@@ -152,6 +169,8 @@ pub extern "C" fn pager_server() -> ! {
                 (PAGER_SERVER_FRAME, PAGER_SERVER_TCB)
             } else if message.data[0] == PAGER2_VA {
                 (PAGER_SERVER_FRAME2, PAGER_SERVER_TCB2)
+            } else if message.data[0] == PAGER3_VA {
+                (PAGER_SERVER_FRAME3, PAGER_SERVER_TCB3)
             } else {
                 write(PAGER_BAD);
                 continue;
@@ -222,6 +241,12 @@ pub extern "C" fn pager_server() -> ! {
                     );
                 }
             }
+        } else if message.label == PAGER3_LABEL {
+            write(if message.data[0] == PAGER3_VALUE {
+                PAGER3_OK
+            } else {
+                PAGER3_BAD
+            });
         }
     }
 }
@@ -826,6 +851,8 @@ fn spawn_pager_server(
     pager_frame: u8,
     pager2_tcb: u8,
     pager2_frame: u8,
+    pager3_tcb: u8,
+    pager3_frame: u8,
     slots: &mut SlotAllocator,
 ) {
     let server_tcb = slots.alloc();
@@ -851,6 +878,8 @@ fn spawn_pager_server(
     copy(pager_frame, server_tcb, PAGER_SERVER_FRAME, Rights::READ);
     copy(pager2_tcb, server_tcb, PAGER_SERVER_TCB2, Rights::WRITE);
     copy(pager2_frame, server_tcb, PAGER_SERVER_FRAME2, Rights::READ);
+    copy(pager3_tcb, server_tcb, PAGER_SERVER_TCB3, Rights::WRITE);
+    copy(pager3_frame, server_tcb, PAGER_SERVER_FRAME3, Rights::READ);
     // Pager v2 (vòng 35): cấp Untyped con riêng để server tự retype Frame
     // mới sau evict thay vì map lại frame cũ. Dùng meta_untyped vì
     // data_untyped đã chật trên x86 (page table 4-level tốn objects).
@@ -1280,6 +1309,18 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         pager2_client as extern "C" fn() -> ! as usize,
         &mut slots,
     );
+    let (pager3_tcb, pager3_frame) = spawn_pager(
+        meta_untyped,
+        data_untyped,
+        root_vspace,
+        pager_endpoint,
+        PAGER3_STACK_BASE,
+        PAGER3_STACK_TOP,
+        PAGER3_VA,
+        PAGER3_VALUE,
+        pager3_client as extern "C" fn() -> ! as usize,
+        &mut slots,
+    );
     spawn_pager_server(
         meta_untyped,
         data_untyped,
@@ -1289,6 +1330,8 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         pager_frame,
         pager2_tcb,
         pager2_frame,
+        pager3_tcb,
+        pager3_frame,
         &mut slots,
     );
 

@@ -1003,3 +1003,12 @@ follow-up `62b31f4`.
 - Docs: `00-hien-trang`, `11-hien-tai/02`, `README` 96→128.
 - Xem `docs/agent2-report-36.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `e33a9de11077d730c69b410217391d07a22ef8eec7060f90a24166e4c32a055b`.
+
+## 9.16 — Vòng 37: PAGER3 client thứ ba (pha 2 bước 3)
+
+- ABI stack 0x1e000/0x1f000; `pager3_client` fault `0x1001002000`;
+  server slot 8/9, marker `PAGER3 OK/BAD`. Gộp từ stash vòng 34.
+- Harness: fault 7→8, 471→483 cases. Docs `00-hien-trang` 2→3 client.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-37.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `6400792c50b07a3ed35806364d70dd0be08516703009dcd12613fcd0e510cb69`.

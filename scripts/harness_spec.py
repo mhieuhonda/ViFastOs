@@ -65,6 +65,7 @@ EXACT_ONE = [
     "PAGER OK",
     "PAGER2 OK",
     "PAGER EVICT OK",
+    "PAGER3 OK",
     "DESTROY OK",
 ]
 
@@ -92,6 +93,7 @@ FORBIDDEN = [
     "TCB REAP BAD",
     "PAGER2 BAD",
     "PAGER EVICT BAD",
+    "PAGER3 BAD",
     "HARD LINK BAD",
     "SYMLINK BAD",
     "IRQ BAD",
@@ -99,7 +101,7 @@ FORBIDDEN = [
     "DESTROY BAD",
 ]
 
-FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000]
+FAULT_ADDRESSES = [0x8000_0000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000, 0x1001002000]
 
 EXIT_CODES = {
     "riscv64": {0},
@@ -187,7 +189,7 @@ ARCH_EXACT_ONE = {
 
 NUMERIC = {
     "riscv64": [
-        "7 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2",
+        "8 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2, 0x1001002000",
         "ROOT SWITCH n > 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
@@ -196,7 +198,7 @@ NUMERIC = {
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "aarch64": [
-        "7 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2",
+        "8 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2, 0x1001002000",
         "ROOT SWITCH n > 1",
         "T > 0, I >= 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
@@ -206,7 +208,7 @@ NUMERIC = {
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "x86_64": [
-        "7 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2",
+        "8 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2, 0x1001002000",
         "ROOT SWITCH n > 1",
         "ACPI MADT cpus == 2",
         "T > 0, I >= 1",
@@ -318,12 +320,14 @@ def accept(
     if stack_size < 0x20000 or stack_used < 1 or stack_used * 2 > stack_size:
         return False
     faults = fault_addresses(output)
-    # Pager v2 evict demo (vòng 34): PAGER2_VA fault 2 lần (lần đầu + sau evict).
-    if len(faults) != 7:
+    # Pager v2 (vòng 34-37): PAGER2_VA fault 2 lần (evict), PAGER3_VA fault 1.
+    if len(faults) != 8:
         return False
     if not all(address in faults for address in FAULT_ADDRESSES):
         return False
     if faults.count(0x1001001000) != 2:
+        return False
+    if faults.count(0x1001002000) != 1:
         return False
     rate = RATE_RE.search(output)
     if not rate:

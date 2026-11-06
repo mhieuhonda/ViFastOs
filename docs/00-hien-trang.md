@@ -29,7 +29,7 @@ chưa được port sang bản bare-metal này.
 | Sleep deadline (BlockedSleep) | có | có | có |
 | Console input IRQ + shell | có | có | có |
 | CNode phẳng + CNodeInstall demo | có | có | có |
-| Demand paging + user-space pager server (2 client) | có | có | có |
+| Demand paging + user-space pager server (3 client) | có | có | có |
 | TCB destroy/reap + fault-slot identity | có | có | có |
 | User fault suspend (không panic) | có | có | có |
 
@@ -64,8 +64,9 @@ Kernel portable hiện có:
   vùng đã hợp nhất, có bộ đếm `leaked` khi free list đầy;
 - console input IRQ qua UART 16550/PL011/COM1, RxQueue lock-free và shell
   block trên notification UART thay vì polling.
-- fault endpoint → user-space pager server map Frame → TcbResume cho hai
-  pager TCB; in `PAGER OK`/`PAGER2 OK`. Fault message mang fault-slot + TCB index;
+- fault endpoint → user-space pager server map Frame → TcbResume cho ba
+  pager TCB; in `PAGER OK`/`PAGER2 OK`/`PAGER3 OK`; evict unmap + retype
+  (`PAGER EVICT OK`). Fault message mang fault-slot + TCB index;
   root reap fault TCB và CNode demo bằng `TcbDestroy`.
 
 ## Chưa có
@@ -73,7 +74,7 @@ Kernel portable hiện có:
 - Hardware IOMMU (VT-d/SMMU); chỉ có mô hình software.
 - CNode nhiều cấp; UART IRQ hiện chỉ route BSP/hart 0.
 - Network, GPU/framebuffer, compositor, ViFastKey; shell chưa có job control.
-- Mount/pager tổng quát (demo pager mới xử lý hai client), barrier phần cứng
+- Mount/pager tổng quát (demo pager xử lý ba client, chưa nạp file), barrier phần cứng
   thật, driver disk ngoài QEMU.
 - Khóa mịn/x2APIC; scheduler mới test 2 hart.
 - Allocator vật lý tổng quát (reclaim chỉ nằm trong từng Untyped; chưa có
