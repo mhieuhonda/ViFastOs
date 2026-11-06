@@ -218,6 +218,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 694a7b2 feat: demand-load pages from a real VFS file
 - 88a4a29 feat: draw a ViFastOs boot splash with a 5x7 font
 - 6af1885 test: add a single gate script for continuous rounds
+- 5a09244 feat: add a virtio-rng entropy source
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -2132,6 +2133,9 @@ E. Desktop / Space
 122. Vòng 75 (virtio-rng): driver entropy device 4, đọc 8 byte/lần và kiểm
     hai lần đọc khác nhau → `VIRTIO RNG OK`; harness khóa `VIRTIO RNG READY`
     (504 cases). QEMU thêm `-device virtio-rng-device`.
+123. Vòng 76: soak 15 vòng lộ flake aarch64 GPU INIT FAIL (7/15) → `gpu_init`
+    retry 4 lần bound ngắn; 10/10 và soak sạch 8/8 cả 3 arch. Thêm tài liệu
+    `docs/11-hien-tai/13-virtio.md`.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

@@ -1418,13 +1418,27 @@ pub fn gpu_init(base: u64) -> bool {
         GPU_BASE = base;
         GPU_READY = true;
     }
-    // GET_DISPLAY_INFO để xác nhận kênh điều khiển sống.
-    gpu_command(0x0100, &[])
+    // GET_DISPLAY_INFO để xác nhận kênh điều khiển sống. Thiết bị có thể chưa
+    // xử lý ngay sau DRIVER_OK (thấy fail ~100% trên aarch64 khi chạy soak),
+    // nên thử lại vài lần với bound ngắn thay vì một lần bound dài.
+    let mut attempt = 0;
+    while attempt < 4 {
+        let mut spins = 0u64;
+        while spins < 400_000 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        if gpu_command_bounded(0x0100, &[], 2_000_000) {
+            return true;
+        }
+        attempt += 1;
+    }
+    false
 }
 
 /// Gửi một lệnh điều khiển: `cmd_type` + payload; chờ response. Trả về true
 /// khi response là OK (0x1100/0x1101). Payload chép ngay sau header 24 byte.
-fn gpu_command(cmd_type: u32, payload: &[u8]) -> bool {
+fn gpu_command_bounded(cmd_type: u32, payload: &[u8], bound: u64) -> bool {
     let base = unsafe { GPU_BASE };
     if unsafe { !GPU_READY } || base == 0 {
         return false;
@@ -1463,9 +1477,8 @@ fn gpu_command(cmd_type: u32, payload: &[u8]) -> bool {
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     gpu_write32(base, 0x50, 0);
     let target = unsafe { core::ptr::read_volatile(&q.used.idx) }.wrapping_add(1);
-    // Vòng 70: bound rộng hơn cho lệnh GPU (trước đây 4M hay trượt dưới tải).
     let mut spins = 0u64;
-    while unsafe { core::ptr::read_volatile(&q.used.idx) } != target && spins < 10_000_000 {
+    while unsafe { core::ptr::read_volatile(&q.used.idx) } != target && spins < bound {
         core::hint::spin_loop();
         spins += 1;
     }
@@ -1475,6 +1488,11 @@ fn gpu_command(cmd_type: u32, payload: &[u8]) -> bool {
     }
     let resp_type = u32::from_le_bytes([q.resp[0], q.resp[1], q.resp[2], q.resp[3]]);
     resp_type == GPU_RESP_OK_NODATA || resp_type == GPU_RESP_OK_DISPLAY_INFO
+}
+
+/// Gửi lệnh GPU với bound mặc định (10M spins).
+fn gpu_command(cmd_type: u32, payload: &[u8]) -> bool {
+    gpu_command_bounded(cmd_type, payload, 10_000_000)
 }
 
 /// Font 5x7 tối giản cho dòng chữ boot "ViFastOs" (vòng 73). Mỗi glyph là 5

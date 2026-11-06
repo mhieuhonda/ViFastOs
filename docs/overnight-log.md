@@ -1343,3 +1343,11 @@ follow-up `62b31f4`.
 - Cổng qua `scripts/gate.sh`: all steps passed.
 - Xem `docs/agent2-report-75.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `ad5ef32545916eadc267d15813883a80afdca4f33654eda85f4ed148d67af1ca`.
+
+## 9.55 — Vòng 76: ổn định GPU aarch64 + doc VirtIO
+
+- Soak 15 vòng: aarch64 chỉ 7/15 do `VIRTIO GPU INIT FAIL`. Sửa: `gpu_init`
+  retry 4 lần bound ngắn. Đo lại 10/10 và soak sạch 8/8 cả 3 arch.
+- Thêm `docs/11-hien-tai/13-virtio.md` (driver, thứ tự init, lỗi đã gặp, marker).
+- Xem `docs/agent2-report-76.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `03ec0f0518cb1087a2eeb718ea15645e20ae878480fc9ee20e18b960a3e87df8`.

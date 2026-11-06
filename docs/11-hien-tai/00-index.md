@@ -25,7 +25,8 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
 11. [11-phase-3b-decisions.md](11-phase-3b-decisions.md) — quyết định VSpace riêng,
     BootInfo; root/server/client đã tách VSpace, client dùng Untyped con.
 12. [12-vifast-pte.md](12-vifast-pte.md) — encode/decode PTE an toàn cho 3 arch.
-13. `vifast-elf` — parser ELF64 PT_LOAD và host test. Nạp root ELF là Bước 6.
+13. [13-virtio.md](13-virtio.md) — driver VirtIO-MMIO: block, net, gpu, input, rng.
+14. `vifast-elf` — parser ELF64 PT_LOAD và host test. Nạp root ELF là Bước 6.
 
 ## Bản đồ crate
 
