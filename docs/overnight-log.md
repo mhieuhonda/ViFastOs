@@ -1064,3 +1064,11 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-43.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `bd6265fb5fffc8db8b5d36f9f6db1de980c87115bbbcffcfdcb440c7a519bb63`.
+
+## 9.23 — Vòng 44: đọc feature bits net (pha 3 bước 4)
+
+- `net_features` đọc DeviceFeatures 0x10/0x14 read-only; cả hai
+  `mac=52:54:00:12:34:56 feats=0x30bf8024` (MAC/STATUS/MTU/MQ/...).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-44.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `ebb4936c8aa9af5583942306c3d4bf18b98254a5283c52263ebaa06c44cef1de`.

@@ -137,6 +137,20 @@ pub fn net_mac(base: u64) -> Option<[u8; 6]> {
     Some(mac)
 }
 
+/// Read a VirtIO-net device's offered feature bits (DeviceFeatures, 0x10/0x14).
+/// Read-only: safe to call during the pre-init probe (vòng 39-44 showed only
+/// post-claim state writes can hang QEMU). Returns None for non-net slots.
+pub fn net_features(base: u64) -> Option<u64> {
+    let magic = unsafe { core::ptr::read_volatile(base as *const u32) };
+    let device = unsafe { core::ptr::read_volatile((base + 8) as *const u32) };
+    if magic != 0x7472_6976 || device != DEVICE_NET {
+        return None;
+    }
+    let lo = unsafe { core::ptr::read_volatile((base + 0x10) as *const u32) };
+    let hi = unsafe { core::ptr::read_volatile((base + 0x14) as *const u32) };
+    Some(lo as u64 | ((hi as u64) << 32))
+}
+
 fn init_at(candidate: u64) -> bool {
     fn read_at(base: u64, offset: u64) -> u32 {
         unsafe { core::ptr::read_volatile((base + offset) as *const u32) }

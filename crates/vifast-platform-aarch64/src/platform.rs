@@ -1326,16 +1326,18 @@ impl Platform for Aarch64Platform {
                 );
                 if device == vifast_virtio::DEVICE_NET {
                     if let Some(mac) = vifast_virtio::net_mac(base) {
+                        let feats = vifast_virtio::net_features(base).unwrap_or(0);
                         vifast_kernel::klog!(
                             Aarch64Platform,
-                            "VIRTIO NET base={:#x} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                            "VIRTIO NET base={:#x} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} feats={:#x}",
                             base,
                             mac[0],
                             mac[1],
                             mac[2],
                             mac[3],
                             mac[4],
-                            mac[5]
+                            mac[5],
+                            feats
                         );
                     }
                 }
