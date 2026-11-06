@@ -39,3 +39,4 @@
 | 55 | Header FDT OK, quét struct treo, giữ header-only | Parse sau MMU ổn định hoặc copy DTB | 7d39f97 |
 | 56 | Log đủ header FDT v17 trong vùng an toàn | strings_off=5716; sẵn copy DTB parse sau | dec123c |
 | 57 | Tổng kết pha 4 ở hạ tầng probe, docs-only | Parse sâu để vòng sau (user-space/sau MMU) | e97bf13 |
+| 58 | Dump opt-in chứng minh ARP TX lên dây | Pcap 60B đúng chuẩn; reply là backend/timing | cf7b6a1 |
