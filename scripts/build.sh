@@ -187,6 +187,20 @@ VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.
 
 echo "== aarch64 bare metal =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
+KERNEL_ARM=target/aarch64-unknown-none/release/vifast-kernel-aarch64
+# KERNEL_STORAGE is a ~560 KiB static in .data placed just before BKL.
+# If Kernel grows, reset() silently clobbers BKL/KERNEL_PTR (vòng 30 DABT).
+# Fail loudly here by measuring the real static size from the binary.
+KS_INFO="$("$NM" --print-size "$KERNEL_ARM" | awk '$4 ~ /KERNEL_STORAGE/ { print "0x" $1 " 0x" $2; exit }')"
+BKL_ADDR="$("$NM" "$KERNEL_ARM" | awk '$3 ~ /platform3BKL$/ { print "0x" $1; exit }')"
+KS_ADDR=$(( ${KS_INFO%% *} ))
+KS_SIZE=$(( ${KS_INFO##* } ))
+BKL_ADDR=$((BKL_ADDR))
+echo "AArch64 static check storage=${KS_ADDR}+${KS_SIZE} end=$((KS_ADDR + KS_SIZE)) bkl=${BKL_ADDR}"
+if (( KS_ADDR + KS_SIZE >= BKL_ADDR )); then
+    echo "AArch64 KERNEL STATIC OVERFLOW: storage end past BKL" >&2
+    exit 1
+fi
 
 echo "== aarch64 destroy-smp feature build =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-destroy-smp

@@ -967,3 +967,11 @@ follow-up `62b31f4`.
 - Mở goal dài hạn M1→M3: static an toàn → pager v2 → net → display/input.
 - Xem `docs/agent2-report-32.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `46350433f8736abeeae093c695b63f1400ad948ad6249d0bb5f7c9a685c63867`.
+
+## 9.12 — Vòng 33: check tràn static AArch64 trong build
+
+- `scripts/build.sh` đo `KERNEL_STORAGE` + size vs `BKL` bằng `llvm-nm`,
+  fail nếu đè nhau. Hiện khít 8 byte, PASS. Guard 2 lớp với runtime budget.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 462, host 203, 0 warning.
+- Xem `docs/agent2-report-33.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `92519e179d77cada3fa19455fab26a3578a6bbe80e07a8981e7254c60cae5aa2`.
