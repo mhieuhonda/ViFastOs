@@ -892,13 +892,8 @@ impl Platform for Aarch64Platform {
         }
         // Pha 4 (vòng 54): probe DTB header magic read-only (0xd00dfeed BE).
         if info.dtb != 0 {
-            let magic =
-                unsafe { core::ptr::read_volatile(info.dtb as *const u32) };
-            vifast_kernel::klog!(
-                Aarch64Platform,
-                "DTB magic={:#x}",
-                u32::from_be(magic)
-            );
+            let magic = unsafe { core::ptr::read_volatile(info.dtb as *const u32) };
+            vifast_kernel::klog!(Aarch64Platform, "DTB magic={:#x}", u32::from_be(magic));
         }
     }
 
@@ -1325,12 +1320,7 @@ impl Platform for Aarch64Platform {
         {
             let fw_base = 0x0902_0000u64;
             let sig = unsafe { core::ptr::read_volatile(fw_base as *const u32) };
-            vifast_kernel::klog!(
-                Aarch64Platform,
-                "FWCFG base={:#x} sig={:#x}",
-                fw_base,
-                sig
-            );
+            vifast_kernel::klog!(Aarch64Platform, "FWCFG base={:#x} sig={:#x}", fw_base, sig);
         }
         // Pha 3 (vòng 42-45): probe 32 slot đầu TRƯỚC init — an toàn.
         // Đọc MAC net qua config space khi gặp device=1. Vòng 45 log thêm
@@ -1390,10 +1380,9 @@ impl Platform for Aarch64Platform {
                                         "VIRTIO NET ARP sent len={}",
                                         len
                                     ),
-                                    None => vifast_kernel::klog!(
-                                        Aarch64Platform,
-                                        "VIRTIO NET ARP FAIL"
-                                    ),
+                                    None => {
+                                        vifast_kernel::klog!(Aarch64Platform, "VIRTIO NET ARP FAIL")
+                                    }
                                 }
                                 match vifast_virtio::net_recv_arp() {
                                     Some(rmac) => vifast_kernel::klog!(

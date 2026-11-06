@@ -14,12 +14,11 @@ use vifast_abi::user_layout::{
     CODE_VA, FAULT1_STACK_TOP, FAULT1_TCB_SLOT, FAULT2_STACK_TOP, FAULT2_TCB_SLOT,
     FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IDLE_STACK_BASE,
     IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, PAGER2_STACK_BASE, PAGER2_STACK_TOP,
-    PAGER3_STACK_BASE, PAGER3_STACK_TOP,
-    PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP,
-    SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
-    WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
-    WORKER_C_STACK_BASE, WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP,
-    WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
+    PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP,
+    PAGER_STACK_BASE, PAGER_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2,
+    USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE, WORKER_A_STACK_TOP,
+    WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE, WORKER_C_STACK_TOP,
+    WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
 };
 use vifast_abi::{
     BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
@@ -218,11 +217,8 @@ pub extern "C" fn pager_server() -> ! {
             // Untyped con, copy lại nội dung và map lại. Client fault lần 2
             // vẫn đọc đúng giá trị.
             if message.data[0] == PAGER2_VALUE {
-                let _ = vifast_user::frame_unmap(
-                    PAGER_SERVER_VSPACE,
-                    PAGER2_VA,
-                    PAGER_SERVER_FRAME2,
-                );
+                let _ =
+                    vifast_user::frame_unmap(PAGER_SERVER_VSPACE, PAGER2_VA, PAGER_SERVER_FRAME2);
                 let _ = vifast_user::object_destroy(PAGER_SERVER_FRAME2);
                 // Retype frame mới vào đúng slot cũ (slot đã trống sau destroy).
                 if vifast_user::retype(

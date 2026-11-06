@@ -884,19 +884,12 @@ impl Platform for RiscvPlatform {
         // version (off 20) + strings_off (off 12) — cùng 7 word header đã kiểm
         // chứng an toàn, không chạm struct block (treo vòng 55).
         if info.dtb != 0 {
-            let magic =
-                unsafe { core::ptr::read_volatile(info.dtb as *const u32) };
-            vifast_kernel::klog!(
-                RiscvPlatform,
-                "DTB magic={:#x}",
-                u32::from_be(magic)
-            );
+            let magic = unsafe { core::ptr::read_volatile(info.dtb as *const u32) };
+            vifast_kernel::klog!(RiscvPlatform, "DTB magic={:#x}", u32::from_be(magic));
             if u32::from_be(magic) == 0xd00dfeed {
                 let dtb = info.dtb;
                 let rd = |off: u64| unsafe {
-                    u32::from_be(core::ptr::read_volatile(
-                        (dtb + off) as *const u32,
-                    ))
+                    u32::from_be(core::ptr::read_volatile((dtb + off) as *const u32))
                 };
                 vifast_kernel::klog!(
                     RiscvPlatform,
@@ -1110,12 +1103,7 @@ impl Platform for RiscvPlatform {
         {
             let fw_base = 0x1010_0000u64;
             let sig = unsafe { core::ptr::read_volatile(fw_base as *const u32) };
-            vifast_kernel::klog!(
-                RiscvPlatform,
-                "FWCFG base={:#x} sig={:#x}",
-                fw_base,
-                sig
-            );
+            vifast_kernel::klog!(RiscvPlatform, "FWCFG base={:#x} sig={:#x}", fw_base, sig);
         }
         {
             let (qaddr, qsize) = vifast_virtio::net_queue_info();
@@ -1173,10 +1161,7 @@ impl Platform for RiscvPlatform {
                                     "VIRTIO NET ARP sent len={}",
                                     len
                                 ),
-                                None => vifast_kernel::klog!(
-                                    RiscvPlatform,
-                                    "VIRTIO NET ARP FAIL"
-                                ),
+                                None => vifast_kernel::klog!(RiscvPlatform, "VIRTIO NET ARP FAIL"),
                             }
                             match vifast_virtio::net_recv_arp() {
                                 Some(rmac) => vifast_kernel::klog!(
@@ -1212,11 +1197,9 @@ impl Platform for RiscvPlatform {
                                 }
                             }
                         }
-                        None => vifast_kernel::klog!(
-                            RiscvPlatform,
-                            "VIRTIO NET FAIL base={:#x}",
-                            base
-                        ),
+                        None => {
+                            vifast_kernel::klog!(RiscvPlatform, "VIRTIO NET FAIL base={:#x}", base)
+                        }
                     }
                 }
             }

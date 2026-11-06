@@ -1200,3 +1200,12 @@ follow-up `62b31f4`.
   máy, chạy lại đều 3/3).
 - Xem `docs/agent2-report-59.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `d74aad27c89873aed58efefca23d83232ab733ae2155e08732bbb09333c901a5`.
+
+## 9.39 — Vòng 60: fmt cleanup + đánh giá M1→M3
+
+- `cargo fmt` 3 file (whitespace-only); `fmt --check` PASS lại.
+- Đánh giá: M1 + MVP các pha đạt (bằng chứng đầy đủ); demand-load/RX-reply/
+  vẽ-pixel mở có lý do; goal giữ active.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-60.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `c33cb6900fe23e0ce53310772c21cbe247616dab45913c752cdd7784474c6e79`.
