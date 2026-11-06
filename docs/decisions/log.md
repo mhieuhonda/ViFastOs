@@ -19,3 +19,4 @@
 | 35 | Pager retype frame mới từ Untyped con meta (pha 2 bước 2) | Data chật x86; vòng đời khép kín qua pager | 1212b4d |
 | 36 | Nâng MAX_CAPS_ROOT 96→128 (mở đường PAGER3/VFS) | Hết slot root; tăng root rẻ hơn task (+2 KiB) | 1810227 |
 | 37 | PAGER3 client thứ ba (pha 2 bước 3) | Gộp stash vòng 34; 8 fault, harness 483 | e017792 |
+| 38 | Tổng kết pha 2 ở MVP, hoãn demand-load VFS | Thiếu endpoint/IPC/slot; tránh rủi ro khi slot chật | cd4bb01 |
