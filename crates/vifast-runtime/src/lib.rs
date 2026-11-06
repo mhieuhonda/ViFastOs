@@ -412,6 +412,25 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     let kernel = A::init_kernel();
     kernel.set_page_table_ops(A::page_table_ops());
+    // Guard against static-storage overflow: `Kernel` lives in a platform
+    // `.data`/`.bss` static. If it grows past its neighbors (e.g. a pool
+    // array added to `Kernel`), `reset()` silently clobbers them — on AArch64
+    // this zeroes KERNEL_PTR/BKL and faults after BOOTINFO (vòng 29).
+    // Keep this budget in sync with the linker layout of each platform.
+    const KERNEL_STATIC_BUDGET: usize = 716_800;
+    if core::mem::size_of::<Kernel>() > KERNEL_STATIC_BUDGET {
+        vifast_kernel::klog!(
+            A,
+            "KERNEL STATIC OVERFLOW size={} budget={}",
+            core::mem::size_of::<Kernel>(),
+            KERNEL_STATIC_BUDGET
+        );
+        A::exit(1);
+    }
+    // Publish the kernel pointer before any secondary hart is started: the
+    // AP boot path calls `Platform::kernel()` as soon as PSCI/HSM/SIPI brings
+    // it online.
+    A::set_kernel(kernel as *mut Kernel);
     vifast_kernel::klog!(
         A,
         "SELFTEST PASS (ipc_tx={} ipc_rx={} ntfn={} ctx={} ticks={})",
@@ -874,7 +893,6 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     let root_slot = A::kernel().context_slot(root).unwrap_or(0) as usize;
     contexts[root_slot] = root_context;
 
-    A::set_kernel(kernel as *mut Kernel);
     kernel.enqueue(root);
     let _ = kernel.pick_on(A::hart_id());
     note_current_tcb::<A>(kernel);

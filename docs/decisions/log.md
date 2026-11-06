@@ -11,3 +11,4 @@
 | 28 | Thử tách TCB pool, revert vì AArch 0/3 | Baseline xanh ưu tiên; lỗi AArch cần debug riêng | — |
 | 29 | Wrap CPU_STATES + KERNEL_STORAGE AArch bằng UnsafeCell, không đổi hành vi | Giảm static mut, QEMU 3/3×3 + check-all xanh | d266ab7,36a5b91 |
 | 29 | Stash CNode pool WIP, chỉ commit layout probe | CNode pool AArch 0/3; tách riêng để giữ baseline xanh | stash@{0},6682fa5 |
+| 30 | Root cause tràn .data; guard KERNEL_STATIC_BUDGET; revert pool | Kernel pool đè KERNEL_PTR; exit rõ thay vì exception mù | (vòng này) |

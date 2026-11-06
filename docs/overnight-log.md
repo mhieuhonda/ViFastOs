@@ -934,3 +934,17 @@ follow-up `62b31f4`.
   current=705552 size=710248`; QEMU 3/3 ×3, persist 7×3, harness 462, 0 warning.
 - Xem `docs/agent2-report-29.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `2dd522f6d5579fdd89ac32501928895586dc0ce04fc1b10ee71f33173ed6e2ad`.
+
+## 9.09 — Vòng 30: root cause AArch64 + guard tràn static
+
+- Root cause M1.1/M1.3: `Kernel` pool 743.016 B làm `KERNEL_STORAGE`
+  (`0x400B7000` .data) tràn qua `BKL` (`0x40164670`), `KERNEL_PTR`
+  (`0x40171120`); `kernel.reset()` ghi đè → `KERNEL_PTR=0` → DABT
+  `FAR=0xb4410` (= offset `current`) sau `BOOTINFO OK`. Baseline 710.248 B
+  vừa khít trước BKL 8 byte.
+- Giữ hunk runtime `set_kernel` sớm (xanh 3/3); revert toàn bộ pool logic.
+- Thêm `KERNEL_STATIC_BUDGET=716.800` trong `boot()`: exit rõ ràng thay vì
+  exception mù khi `Kernel` phình.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 462, host 203, 0 warning.
+- Xem `docs/agent2-report-30.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `9865606d3980d5122a5600a0a50bc5b8c2a0eaa47ef8707b689dd367da522c5e`.

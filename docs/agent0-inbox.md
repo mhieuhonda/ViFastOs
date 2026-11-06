@@ -44,3 +44,12 @@
   chỉ commit layout probe (`LAYOUT objs=0 root_cspace=698544 current=705552`).
 - QEMU 3/3×3 + persist 7×3 + harness 462 xanh với layout probe.
 - Đề xuất tiếp: giảm `MAX_CAPS_TASK` 64→48, hoặc tách `Tcb.cspace/fds` trước.
+
+## [vòng 30] GIẢI ĐƯỢC blocker M1.1/M1.3 — tràn `.data`, đã có guard
+- Root cause: `Kernel` pool 743.016 B làm `KERNEL_STORAGE` (`0x400B7000`)
+  tràn qua `BKL`/`KERNEL_PTR` (`0x40171120`); `reset()` zero `KERNEL_PTR`
+  → DABT `FAR=0xb4410` (= offset `current`). Baseline 710.248 B vừa khít.
+- Fix: giữ `set_kernel` sớm + thêm `KERNEL_STATIC_BUDGET=716.800` exit rõ;
+  revert pool. QEMU 3/3×3, persist 7×3, harness 462 xanh.
+- Muốn tách pool phải dời `KERNEL_STORAGE` sang `.bss` riêng hoặc cấp phát
+  động, không nhồi vào `Kernel`. Xem `docs/agent2-report-30.md`.
