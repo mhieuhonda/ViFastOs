@@ -50,3 +50,4 @@
 | 66 | Display MVP qua virtio-gpu 160x120, pixel xác nhận bằng screendump | fw_cfg chặn hẳn; framebuffer lớn vượt headroom nên giảm kích thước | c8274e3 |
 | 67 | Demand-load: nội dung trang nạp lúc fault | x86 hết Untyped nên chỉ bật theo target_arch; harness nới luật fault vì evict race | 0be7e59 |
 | 68 | DNS A parser: guest resolve example.com ra IP thật | Marker DNS A best-effort (phụ thuộc DNS host), DNS sent vẫn cứng | ff37780 |
+| 69 | Demand-load cả 3 arch: server tự retype frame lúc fault | Không cần root cấp frame; harness bỏ loại trừ x86 (495 cases) | 845b11d |
