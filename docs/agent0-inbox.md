@@ -24,3 +24,13 @@
 - Bối cảnh: data 368 KiB + `MAX_OBJECTS` 163 không khả thi với headroom.
 - Đề xuất: tách pool object (M1) để giảm `Object` từ 4.752 xuống ≤256 B.
 - Đang chặn: M2 pager v2 | Nhánh: M1 → M2.
+
+## [vòng 28] Tách TCB pool lần đầu — AArch64 KERNEL EXCEPTION
+- Bối cảnh: đã tách `Kind::Tcb(TcbId)` + `Kernel.tcbs: [Option<Tcb>; 22]`,
+  host test 134/134 PASS, Object 4.752→4.152, Kernel 710.248→706.576.
+  Nhưng QEMU: RISC-V 3/3, AArch64 0/3 (`KERNEL EXCEPTION vector=4`,
+  `ELR=0x40092fa0` địa chỉ vật lý, `FAR=0xab5b8`), x86 2/3 (1 timeout).
+- Đã revert để giữ baseline xanh; đây là lần thử 1/3.
+- Giả thuyết: lỗi nền AArch64 với thay đổi layout bằng `.bss`/object table
+  (VBAR/MMU/stack?), không phải logic pool (host test xanh).
+- Đang chặn: M1.3 | Nhánh tạm: M1.4 docs? hoặc debug AArch tối thiểu.

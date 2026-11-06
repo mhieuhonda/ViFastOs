@@ -8,3 +8,4 @@
 | 27 | M1.1 chỉ commit phần đo, HWM sang inbox | AArch/x86 crash 3 lần | 216035d |
 | 28 | M1.2 tách bước a/b/c, sửa runtime context indexing | ROOT ERR 16 do runtime dùng tcb.index | 91f7496 |
 | 28 | HWM thử lần 4 (runtime read-only) vẫn lỗi AArch → BLOCKED, đi M1.3 | Quy tắc 2.5: 2 phiên BLOCKED thì đổi nhánh | — |
+| 28 | Thử tách TCB pool, revert vì AArch 0/3 | Baseline xanh ưu tiên; lỗi AArch cần debug riêng | — |
