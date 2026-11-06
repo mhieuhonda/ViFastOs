@@ -1984,6 +1984,8 @@ E. Desktop / Space
 87. Vòng 38 (tổng kết pha 2): demand-load qua VFS cần endpoint + IPC buffer
     cho pager (tốn ~4 slot, rủi ro cao) nên dừng ở MVP evict/retype; pha 2
     đạt 3 client + vòng đời khép kín, chưa nạp file.
+88. Vòng 39 (pha 3 bước 1): VirtIO scan API (DEVICE_NET/BLOCK +
+    scan_devices); platform log VIRTIO DEV mỗi slot, chuẩn bị gắn net.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

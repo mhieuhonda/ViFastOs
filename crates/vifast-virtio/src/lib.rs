@@ -8,6 +8,9 @@
 use core::sync::atomic::{fence, Ordering};
 
 pub const SECTOR_SIZE: usize = 512;
+/// VirtIO device IDs (subset relevant to QEMU virt).
+pub const DEVICE_NET: u32 = 1;
+pub const DEVICE_BLOCK: u32 = 2;
 const QUEUE_SIZE: usize = 8;
 const DESC_NEXT: u16 = 1;
 const DESC_WRITE: u16 = 2;
@@ -173,6 +176,22 @@ fn init_at(candidate: u64) -> bool {
     write_at(candidate, 0x70, 1 | 2 | 8 | 4);
     unsafe { READY = true };
     true
+}
+
+/// Scan a VirtIO-MMIO window and report every present device slot.
+/// The callback receives `(base, device_id)`; slot 0 is the block device
+/// used by `init`. Device IDs: 1 = net, 2 = block, 4 = entropy, 9 = console.
+pub fn scan_devices(start: u64, end: u64, stride: u64, mut visit: impl FnMut(u64, u32)) {
+    let mut base = start;
+    while base < end {
+        let magic = unsafe { core::ptr::read_volatile(base as *const u32) };
+        let version = unsafe { core::ptr::read_volatile((base + 4) as *const u32) };
+        let device = unsafe { core::ptr::read_volatile((base + 8) as *const u32) };
+        if magic == 0x7472_6976 && (version == 1 || version == 2) && device != 0 {
+            visit(base, device);
+        }
+        base += stride;
+    }
 }
 
 /// Scan a VirtIO-MMIO window.  The caller supplies the window and stride so

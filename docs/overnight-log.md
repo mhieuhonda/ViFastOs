@@ -1022,3 +1022,11 @@ follow-up `62b31f4`.
 - Không đổi code; cổng giữ nguyên vòng 37.
 - Xem `docs/agent2-report-38.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `1e16538530324ebb1f80d9ad33087160a2c997499cebbd93fd745e9c17541793`.
+
+## 9.18 — Vòng 39: VirtIO scan API (pha 3 bước 1)
+
+- `vifast-virtio`: `DEVICE_NET/BLOCK` + `scan_devices` duyệt MMIO window.
+  Platform AArch64/RISC-V log `VIRTIO DEV` mỗi slot trong `init_block`.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-39.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `1899e78bc39ebefb3c3ec64c37f2a1574d5cae15cf8fed1b044b04db5e21baaf`.

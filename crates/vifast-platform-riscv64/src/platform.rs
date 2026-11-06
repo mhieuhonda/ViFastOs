@@ -1098,6 +1098,16 @@ impl Platform for RiscvPlatform {
                 device
             );
         }
+        // Pha 3 bước 1 (vòng 39): liệt kê mọi VirtIO device để chuẩn bị net.
+        // Hiện QEMU chỉ gắn blk; net (device=1) sẽ log khi thêm -device.
+        vifast_virtio::scan_devices(0x1000_1000, 0x1000_9000, 0x1000, |base, device| {
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "VIRTIO DEV base={:#x} device={}",
+                base,
+                device
+            );
+        });
     }
     fn init_kernel() -> &'static mut Kernel {
         unsafe {
