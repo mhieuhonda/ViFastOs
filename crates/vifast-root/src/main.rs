@@ -82,6 +82,7 @@ const PAGER_SERVER_VSPACE: u8 = 3;
 const PAGER_SERVER_FRAME: u8 = 4;
 const PAGER_SERVER_TCB2: u8 = 5;
 const PAGER_SERVER_FRAME2: u8 = 6;
+const PAGER_SERVER_UNTYPED: u8 = 7;
 const TLB_A: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 const TLB_B: u64 = 0xBBBB_BBBB_BBBB_BBBB;
 const TLB_REMAP_OK: &[u8] = b"TLB REMAP OK (seen_new=1)\n";
@@ -193,15 +194,33 @@ pub extern "C" fn pager_server() -> ! {
                     PAGER_EVICT_BAD
                 });
             }
-            // Pager v2 evict demo (vòng 34, bước 1): sau khi client2 đọc xong,
-            // unmap trang để chứng minh fault lại + map lại thành công.
-            // Bước tiếp theo sẽ thêm destroy/retype khi server có Untyped con.
+            // Pager v2 evict demo (vòng 34-35): sau khi client2 đọc xong,
+            // unmap + destroy frame cũ (trả về Untyped), retype frame mới từ
+            // Untyped con, copy lại nội dung và map lại. Client fault lần 2
+            // vẫn đọc đúng giá trị.
             if message.data[0] == PAGER2_VALUE {
                 let _ = vifast_user::frame_unmap(
                     PAGER_SERVER_VSPACE,
                     PAGER2_VA,
                     PAGER_SERVER_FRAME2,
                 );
+                let _ = vifast_user::object_destroy(PAGER_SERVER_FRAME2);
+                // Retype frame mới vào đúng slot cũ (slot đã trống sau destroy).
+                if vifast_user::retype(
+                    PAGER_SERVER_UNTYPED,
+                    ObjType::Frame as u64,
+                    PAGER_SERVER_FRAME2,
+                )
+                .error
+                    == KError::Ok
+                {
+                    let _ = vifast_user::frame_write(
+                        PAGER_SERVER_FRAME2,
+                        0,
+                        &PAGER2_VALUE as *const u64 as u64,
+                        8,
+                    );
+                }
             }
         }
     }
@@ -832,6 +851,22 @@ fn spawn_pager_server(
     copy(pager_frame, server_tcb, PAGER_SERVER_FRAME, Rights::READ);
     copy(pager2_tcb, server_tcb, PAGER_SERVER_TCB2, Rights::WRITE);
     copy(pager2_frame, server_tcb, PAGER_SERVER_FRAME2, Rights::READ);
+    // Pager v2 (vòng 35): cấp Untyped con riêng để server tự retype Frame
+    // mới sau evict thay vì map lại frame cũ. Dùng meta_untyped vì
+    // data_untyped đã chật trên x86 (page table 4-level tốn objects).
+    let pager_untyped = slots.alloc();
+    check(vifast_user::retype_untyped(
+        meta_untyped,
+        4096,
+        2,
+        pager_untyped,
+    ));
+    copy(
+        pager_untyped,
+        server_tcb,
+        PAGER_SERVER_UNTYPED,
+        Rights::WRITE,
+    );
     check(vifast_user::tcb_configure(
         server_tcb,
         pager_server as extern "C" fn() -> ! as u64,

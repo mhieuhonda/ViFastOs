@@ -985,3 +985,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 471, host 203, 0 warning.
 - Xem `docs/agent2-report-34.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `172cbed0e2d7f6f1a9baf0653476a7f1011ccfd4b0ff2dcaf039b4ed89c0be0c`.
+
+## 9.14 — Vòng 35: pager retype frame mới (pha 2 bước 2)
+
+- Root cấp Untyped con 4 KiB/2 obj từ meta cho pager slot 7.
+- Evict đầy đủ: unmap + destroy + retype frame mới + frame_write lại giá trị.
+  Dùng meta vì data chật trên x86.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 471, host 203, 0 warning.
+- Xem `docs/agent2-report-35.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `3eddf2395734c016b160f37d11e4b6defab9b0cc05aec55b2aa3181ae5b154f5`.
