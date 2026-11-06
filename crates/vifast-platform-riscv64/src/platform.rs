@@ -880,9 +880,11 @@ impl Platform for RiscvPlatform {
             init_cpu(info.hartid);
         }
         init_plic();
-        // Pha 4 (vòng 54): probe DTB header magic read-only (0xd00dfeed BE).
-        // DTB do bootloader/OpenSBI map sẵn; đọc an toàn, chuẩn bị parse
-        // framebuffer. Platform cho phép unsafe trong impl (runtime cấm).
+        // Pha 4 (vòng 54-55): probe DTB header read-only (magic + totalsize).
+        // Vòng 55 thử quét struct block tìm "framebuffer" nhưng treo guest
+        // (không log fb_present, rc=-9) — struct parse cần làm ngoài boot sớm
+        // hoặc với page đã map chắc chắn. Giữ header-only (đã kiểm chứng),
+        // quét để vòng sau (dùng vùng nhớ đã map rõ ràng).
         if info.dtb != 0 {
             let magic =
                 unsafe { core::ptr::read_volatile(info.dtb as *const u32) };
@@ -891,6 +893,20 @@ impl Platform for RiscvPlatform {
                 "DTB magic={:#x}",
                 u32::from_be(magic)
             );
+            if u32::from_be(magic) == 0xd00dfeed {
+                let dtb = info.dtb;
+                let rd = |off: u64| unsafe {
+                    u32::from_be(core::ptr::read_volatile(
+                        (dtb + off) as *const u32,
+                    ))
+                };
+                vifast_kernel::klog!(
+                    RiscvPlatform,
+                    "FDT size={} struct_off={}",
+                    rd(4),
+                    rd(8)
+                );
+            }
         }
     }
 

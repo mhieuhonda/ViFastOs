@@ -1159,3 +1159,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-54.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `761ffef48af497fffde29d1348f4d31084ef3e989d800bf59f727ccb8e51e063`.
+
+## 9.34 — Vòng 55: quét FDT treo, giữ header-only (pha 4 bước 4)
+
+- Header FDT OK (size=10319); quét struct tìm framebuffer treo rc=-9 cả bản
+  bounded → revert header-only, gate xanh.
+- Bài học: parse FDT sau MMU ổn định hoặc copy DTB vào vùng đã map.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-55.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `7d555265f89b421cbe6ca113d5e1184193fa7fddd9dca6548a8472cbb2f7d8ed`.
