@@ -1175,3 +1175,11 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-56.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `cc76cc1be70ebe452d425c5e1ddeef7ea4f23eff10f4b56bc55ecc5d81c608d0`.
+
+## 9.36 — Vòng 57: tổng kết pha 4 display (không đổi code)
+
+- Chốt hạ tầng probe: ramfb + fw_cfg + DTB header RISC-V v17.
+- Parse sâu để vòng sau (user-space hoặc sau MMU ổn định).
+- Cổng giữ nguyên vòng 56.
+- Xem `docs/agent2-report-57.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `40a4ddeba0373b0c9e86f4977b5ded7d04e1a18655e45328a3720518947a3633`.
