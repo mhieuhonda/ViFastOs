@@ -9,11 +9,11 @@ cargo fmt --all -- --check
 echo "== build + host tests =="
 ./scripts/build.sh
 
-echo "== QEMU (3 runs per architecture) =="
-python3 scripts/test-qemu.py --repeat 3
-
 echo "== QEMU destroy-smp feature (5 runs per architecture) =="
 python3 scripts/test-qemu.py --feature test-destroy-smp --repeat 5
+
+echo "== QEMU (3 runs per architecture, standard status) =="
+python3 scripts/test-qemu.py --repeat 3
 
 echo "== persistence =="
 python3 scripts/test-persist.py
