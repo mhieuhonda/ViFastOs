@@ -209,7 +209,7 @@ cargo test -p vifast-elf
 
 - Userland vẫn là chương trình demo (root/server/client/fault/worker/shell),
   chưa có libc, shell hệ thống đầy đủ, dynamic linking hay ứng dụng thật.
-- CNode mới là bảng phẳng 64 slot (CNodeMint/CNodeInstall), chưa có guard,
+- CNode mới là bảng phẳng 48 slot (CNodeMint/CNodeInstall), chưa có guard,
   nhiều cấp hay zombie reaping. Timer IRQ và UART IRQ đã có
   object/notification/ack + platform routing trên cả 3 kiến trúc.
   SchedContext budget/period đã có object và scheduler thật.
@@ -258,7 +258,7 @@ bare-metal này.
   binary duy nhất chạy x86_64 + ARM + RISC-V.
 - `vifast-kernel` là `#![forbid(unsafe_code)]` và không còn dependency
   `vifast-arch`; `unsafe` chỉ nằm trong arch/boot.
-- Fixed-capacity object table (147 object, 18 TCB, 96 cap root / 64 cap task, 64 mapping/VSpace)
+- Fixed-capacity object table (147 object, 18 TCB, 96 cap root / 48 cap task, 64 mapping/VSpace)
   để chứng minh lõi không cần heap; `Kernel` đặt trong static storage per port
   (khoảng 397 KiB), không đặt trên boot stack. Đây là reference implementation, chưa phải allocator cuối.
 - Stack kernel hiện đặt 256 KiB trong linker script cho RISC-V/AArch64 vì

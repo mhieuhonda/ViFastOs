@@ -948,3 +948,13 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 462, host 203, 0 warning.
 - Xem `docs/agent2-report-30.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `9865606d3980d5122a5600a0a50bc5b8c2a0eaa47ef8707b689dd367da522c5e`.
+
+## 9.10 — Vòng 31: giảm MAX_CAPS_TASK 64→48
+
+- Audit: user tối đa slot 11, CNode dest 1, host test tới 36 → 48 an toàn.
+- Object 4.752→3.728, Tcb 4.696→3.672, CNode 4.096→3.072;
+  Kernel 710.248→559.720 (tiết kiệm 150.528 B, dưới budget 716.800).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 462, host 203, 0 warning.
+- Docs: `00-hien-trang`, `11-hien-tai/02`, `README` (2 chỗ) 64→48.
+- Xem `docs/agent2-report-31.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `b20a8d12514acb51509132ae1094529cf442a578698293717b15f66fdea82785`.

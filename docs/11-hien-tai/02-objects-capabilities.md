@@ -11,7 +11,7 @@ Kernel dùng một bảng cố định:
 MAX_OBJECTS  = 147
 MAX_TCBS     = 18
 MAX_CAPS_ROOT = 96
-MAX_CAPS_TASK = 64
+MAX_CAPS_TASK = 48
 MAX_QUEUE    = 8
 MAX_FDS      = 8
 MAX_MAPPINGS = 64
@@ -47,7 +47,7 @@ use-after-free mà không cần con trỏ thô trong lõi portable.
 | `Frame` | Trang vật lý có thể map |
 | `VSpace` | Reverse mapping table + root page table |
 | `PageTable` | Metadata page table page |
-| `CNode` | Bảng cap phẳng 64 slot |
+| `CNode` | Bảng cap phẳng 48 slot |
 | `SchedContext` | Budget/period + TCB bound |
 | `Irq` | Logical IRQ + notification + pending |
 | `Iommu` | Domain + 32 DMA mapping |

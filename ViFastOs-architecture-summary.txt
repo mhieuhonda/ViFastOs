@@ -178,6 +178,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d266ab7 refactor: wrap aarch64 per-cpu states without static mut
 - 36a5b91 refactor: wrap aarch64 kernel storage without static mut
 - 6682fa5 test: record kernel layout offsets for pool design
+- 6dd4e34 feat: guard kernel static overflow and publish pointer before smp
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -236,8 +237,8 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 290128 byte (`kernel_end=0x803b92b0`)
-- `Kernel = 710248`, `Object = 4752`, `Tcb = 4696`, `Cap = 64` byte
+- RISC-V headroom: 441680 byte (`kernel_end=0x803942b0`)
+- `Kernel = 559720`, `Object = 3728`, `Tcb = 3672`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
@@ -548,7 +549,7 @@ Giới hạn cố định (sinh từ code, ghi kèm crate):
 - `vifast-kernel::MAX_OBJECTS = 147`
 - `vifast-kernel::MAX_TCBS = 18`
 - `vifast-kernel::MAX_CAPS_ROOT = 96`
-- `vifast-kernel::MAX_CAPS_TASK = 64`
+- `vifast-kernel::MAX_CAPS_TASK = 48`
 - `vifast-kernel::MAX_QUEUE = 8`
 - `vifast-kernel::MAX_MAPPINGS = 64`
 - `vifast-kernel::MAX_IOMMU_MAPPINGS = 32`
@@ -1954,6 +1955,8 @@ E. Desktop / Space
 79. Vòng 30: root cause tràn `.data` — Kernel pool 743.016 B đè BKL/KERNEL_PTR,
     `reset()` zero KERNEL_PTR → DABT FAR=0xb4410; thêm
     KERNEL_STATIC_BUDGET=716.800 trong `boot()`; revert pool, giữ baseline xanh.
+80. Vòng 31: giảm MAX_CAPS_TASK 64→48 (user tối đa slot 11, test tới 36);
+    Object 4.752→3.728, Kernel 710.248→559.720 (tiết kiệm 150.528 B).
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

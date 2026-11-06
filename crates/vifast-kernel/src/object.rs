@@ -14,7 +14,9 @@ pub const MAX_CAPS_ROOT: usize = 96;
 /// Ordinary TCB cspace capacity.  Keeping this compact is important: `Tcb`
 /// is the largest `Object` variant, so every unused slot costs
 /// `MAX_OBJECTS * sizeof(Option<Cap>)` bytes of the static kernel image.
-pub const MAX_CAPS_TASK: usize = 64;
+/// Task slots used in practice stay below 12 (client IRQ/UART, pager server);
+/// 48 leaves headroom while saving ~1 KiB per TCB vs 64.
+pub const MAX_CAPS_TASK: usize = 48;
 /// Historical name used by the BootInfo slot range (root cspace).
 pub const MAX_CAPS: usize = MAX_CAPS_ROOT;
 pub const MAX_QUEUE: usize = 8;
