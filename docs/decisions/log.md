@@ -17,3 +17,4 @@
 | 33 | Check tràn static AArch64 trong build | nm đo storage vs BKL; guard 2 lớp với runtime | 18772fa |
 | 34 | Pager evict/unmap + fault lại (pha 2 bước 1) | Không tốn slot; PAGER3 stash do hết slot root | 9675b6e |
 | 35 | Pager retype frame mới từ Untyped con meta (pha 2 bước 2) | Data chật x86; vòng đời khép kín qua pager | 1212b4d |
+| 36 | Nâng MAX_CAPS_ROOT 96→128 (mở đường PAGER3/VFS) | Hết slot root; tăng root rẻ hơn task (+2 KiB) | 1810227 |
