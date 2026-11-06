@@ -35,3 +35,4 @@
 | 51 | Backend sống (monitor), chốt pha 3 MVP docs-only | Chuỗi probe→TX kiểm chứng; reply để sau | faf82b4 |
 | 52 | Gắn ramfb + probe fw_cfg read-only cả 2 arch | sig=QEMU cả hai; sẵn đọc etc/ramfb | 4ed3ac1 |
 | 53 | Ghi selector fw_cfg treo guest, revert sig-only | MMIO không có signature cố định; thử DMA/DTB sau | 6451851 |
+| 54 | Probe DTB magic trong init_platform (runtime cấm unsafe) | RISC-V đúng, ARM cần map DTB | 9c2580b |
