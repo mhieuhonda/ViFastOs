@@ -1,6 +1,6 @@
 //! AArch64 QEMU `virt` platform: 4-level MMU, GICv2, generic timer and PSCI.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::bkl::{BigKernelGuard, BigKernelLock};
@@ -65,14 +65,19 @@ static mut METADATA: Metadata = Metadata([0; 81920]);
 const _: () = assert!(vifast_kernel::MAX_OBJECTS <= u8::MAX as usize);
 static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_OBJECTS] =
     [TrapFrame::empty(); vifast_kernel::MAX_OBJECTS];
-static mut TIMER_INTERVAL: u64 = 0;
+static TIMER_INTERVAL: AtomicU64 = AtomicU64::new(0);
 static mut TRAP_STACKS: [UserStack; MAX_HARTS] = [UserStack([0; 32768]); MAX_HARTS];
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct BootPool([u8; 131072]);
 static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
-static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
+struct KernelPointer(core::cell::UnsafeCell<*mut Kernel>);
+// Safety: boot installs the pointer once before any secondary hart starts and
+// only reads it afterwards; all kernel entry points run under the BKL.
+unsafe impl Sync for KernelPointer {}
+static KERNEL_PTR: KernelPointer =
+    KernelPointer(core::cell::UnsafeCell::new(core::ptr::null_mut()));
 static SECONDARY_ONLINE: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static BSP_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
@@ -422,8 +427,9 @@ fn init_timer() {
     let freq: u64;
     unsafe {
         core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
-        TIMER_INTERVAL = (freq / TIMER_HZ).max(1);
-        core::arch::asm!("msr cntp_tval_el0, {}", in(reg) TIMER_INTERVAL);
+        let interval = (freq / TIMER_HZ).max(1);
+        TIMER_INTERVAL.store(interval, Ordering::Relaxed);
+        core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval);
         core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) 1u64);
     }
 }
@@ -589,10 +595,11 @@ fn assert_current_tcb() {
 
 fn active_root_matches_current() -> bool {
     unsafe {
-        if KERNEL_PTR.is_null() || active_root() == 0 {
+        let kernel_ptr = *KERNEL_PTR.0.get();
+        if kernel_ptr.is_null() || active_root() == 0 {
             return false;
         }
-        let kernel = &*KERNEL_PTR;
+        let kernel = &*kernel_ptr;
         let Some(tcb) = kernel.current_on((*cpu_state()).hart_id) else {
             return false;
         };
@@ -880,12 +887,14 @@ impl Platform for Aarch64Platform {
     }
 
     fn set_kernel(kernel: *mut Kernel) {
+        // Safety: single boot-time install before secondary harts start.
         unsafe {
-            KERNEL_PTR = kernel;
+            *KERNEL_PTR.0.get() = kernel;
         }
     }
     fn kernel() -> &'static mut Kernel {
-        unsafe { &mut *KERNEL_PTR }
+        // Safety: installed once at boot and never replaced.
+        unsafe { &mut **KERNEL_PTR.0.get() }
     }
 
     fn boot_page() -> &'static mut [u8] {
@@ -1130,7 +1139,8 @@ impl Platform for Aarch64Platform {
 
     fn reload_timer() {
         unsafe {
-            core::arch::asm!("msr cntp_tval_el0, {}", in(reg) TIMER_INTERVAL);
+            let interval = TIMER_INTERVAL.load(Ordering::Relaxed);
+            core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval);
             core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) 1u64);
         }
     }

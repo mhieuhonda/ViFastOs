@@ -56,7 +56,12 @@ static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_OBJECTS] =
 #[repr(align(4096))]
 struct BootPool([u8; 131072]);
 static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
-static mut KERNEL_PTR: *mut Kernel = core::ptr::null_mut();
+struct KernelPointer(core::cell::UnsafeCell<*mut Kernel>);
+// Safety: boot installs the pointer once before any secondary hart starts and
+// only reads it afterwards; all kernel entry points run under the BKL.
+unsafe impl Sync for KernelPointer {}
+static KERNEL_PTR: KernelPointer =
+    KernelPointer(core::cell::UnsafeCell::new(core::ptr::null_mut()));
 #[allow(dead_code)]
 #[repr(align(16))]
 #[derive(Clone, Copy)]
@@ -588,10 +593,11 @@ fn assert_current_tcb() {
 
 fn active_root_matches_current() -> bool {
     unsafe {
-        if KERNEL_PTR.is_null() || active_root() == 0 {
+        let kernel_ptr = *KERNEL_PTR.0.get();
+        if kernel_ptr.is_null() || active_root() == 0 {
             return false;
         }
-        let kernel = &*KERNEL_PTR;
+        let kernel = &*kernel_ptr;
         let Some(tcb) = kernel.current() else {
             return false;
         };
@@ -1101,13 +1107,15 @@ impl Platform for RiscvPlatform {
     }
 
     fn set_kernel(kernel: *mut Kernel) {
+        // Safety: single boot-time install before secondary harts start.
         unsafe {
-            KERNEL_PTR = kernel;
+            *KERNEL_PTR.0.get() = kernel;
         }
     }
 
     fn kernel() -> &'static mut Kernel {
-        unsafe { &mut *KERNEL_PTR }
+        // Safety: installed once at boot and never replaced.
+        unsafe { &mut **KERNEL_PTR.0.get() }
     }
 
     fn boot_page() -> &'static mut [u8] {
