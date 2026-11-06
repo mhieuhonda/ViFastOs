@@ -1028,7 +1028,8 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
   USER FAULT thứ tư tại 0x1000301000.
 - Fault1 load 0x8000_0000; fault2 chạy lệnh đặc quyền; fault3 ghi vào stack
   server 0x1000002000; fault4 trong VSpace client ghi root stack 0x1000301000
-  -> cả sáu log USER FAULT (bốn fault trên và hai fault pager/fault4 của vòng 22.2).
+  -> cả sáu log USER FAULT (bốn fault trên và hai fault pager client tại
+  PAGER_VA/PAGER2_VA của vòng 22.2).
 - Server VSpace riêng, code dùng chung Frame root, stack riêng +0x2000.
   Client dùng VSpace riêng và Untyped con 16 KiB/4 object từ 7.5; không còn cap
   tới root VSpace hay data Untyped của root.
@@ -1469,8 +1470,10 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   vào root VSpace, entry từ ELF, stack ROOT_ELF_STACK_TOP; bỏ root assembly;
   harness yêu cầu ROOT RUST/ROOT READY, không ROOT PANIC; từ 7.5 harness yêu cầu
   đúng 4 USER FAULT, thêm địa chỉ root Rust stack.
-- Vòng 22.2 nâng lên 6 USER FAULT: thêm hai fault của fault4 (0x1001000000,
-  0x1001001000).
+- Vòng 22.2 nâng lên 6 USER FAULT: thêm hai fault của pager client tại
+  PAGER_VA/PAGER2_VA (0x1001000000, 0x1001001000). [đính chính vòng 26: bản
+  ghi cũ nói "fault4"; thực tế hai fault này do pager đọc PAGER_VA/PAGER2_VA,
+  xác minh từ vifast-root main.rs].
 - Boot Untyped tăng lên 128 KiB/32 object; data Untyped giảm còn 48 object;
   tổng quota 5 + 32 + 48 + 32 = 117 <= 128. Log in used/free pages và objects.
 - Không còn code_page()/build_page_tables()/bảng user tĩnh; init_platform chỉ
@@ -1532,7 +1535,8 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - #DF/NMI/#MC dùng IST1 và luôn panic, kể cả khi CS là user.
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault1/2/3 (kernel VA, illegal instruction, stack server) và fault4 (root
-  Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 6 USER FAULT.
+  Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
+  [đính chính vòng 26: từ vòng 22.2 có thêm hai fault pager, tổng 6].
 - Kernel/cspace limits lấy từ hằng trong `object.rs`; `Kernel` dùng static
   storage. Test harness cần stack 8 MiB (`.cargo/config.toml`).
 - Host test hiện có: xem vùng `tests` sinh tự động.
@@ -1599,7 +1603,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   runtime pages.
 - Root/server/client mỗi task một VSpace; root VSpace không còn stack client.
 - Boot Untyped 128 KiB/32 object đã dùng cho root + server + BootInfo; log QEMU
-  còn 11-13 trang và 13 object (RISC-V 13/13, AArch64/x86 11/13).
+  còn trống 8/5/4 trang (RISC-V 24/32, AArch64 27/32, x86_64 28/32).
 - Server VSpace cap slot 12 do runtime cài; root đọc từ BootInfo, không còn
   hard-code trong root task.
 - Shared-code builder root/server chỉ nhận một trang code; builder ELF đã hỗ trợ

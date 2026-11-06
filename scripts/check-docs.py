@@ -95,6 +95,9 @@ def main() -> int:
         "chưa cần quá 128 object",
         "x2APIC/per-hart runqueue",
         "x86 25.296",
+        "hai fault pager/fault4",
+        "hai fault của fault4",
+        "còn 11-13 trang",
     ]
     if "KError::Busy = 20" not in summary or "KError::HasDependents = 21" not in summary:
         fail("generated error table is missing Busy/HasDependents")
@@ -197,6 +200,9 @@ def main() -> int:
             "vượt 128 object",
             "x2APIC/per-hart runqueue",
             "x86 25.296",
+            "hai fault pager/fault4",
+            "hai fault của fault4",
+            "còn 11-13 trang",
         ]
         base = SUMMARY.read_text()
         for phrase in forbidden:
