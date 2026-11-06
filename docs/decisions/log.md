@@ -58,3 +58,4 @@
 | 74 | `scripts/gate.sh` chạy toàn bộ cổng bằng một lệnh | Dùng cho các vòng liên tục và soak; `--quick` bỏ QEMU/persist | 6af1885 |
 | 75 | virtio-rng (device 4) đọc entropy thật, 2 mẫu khác nhau | Harness khóa `VIRTIO RNG READY`; QEMU thêm virtio-rng-device | 5a09244 |
 | 76 | GPU init retry 4 lần bound ngắn cho aarch64 | Soak 15 vòng lộ flake 7/15; sau fix 10/10 + soak sạch 8/8 | 6509b2d |
+| 77 | TCP echo server cổng 8080 + `--tcp-check` qua hostfwd | 1 kết nối, không retransmit, chưa thường trú; marker LISTEN OK | 2dbefef |
