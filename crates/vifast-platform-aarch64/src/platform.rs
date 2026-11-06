@@ -60,7 +60,11 @@ static mut USER_DATA: DataPool = DataPool([0; 311296]);
 #[repr(align(16))]
 struct Metadata([u8; 81920]);
 static mut METADATA: Metadata = Metadata([0; 81920]);
-static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
+// Per-object user contexts indexed by `ObjRef::index`.  The kernel object
+// table has MAX_OBJECTS slots, so the array must cover that full domain.
+const _: () = assert!(vifast_kernel::MAX_OBJECTS <= u8::MAX as usize);
+static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_OBJECTS] =
+    [TrapFrame::empty(); vifast_kernel::MAX_OBJECTS];
 static mut TIMER_INTERVAL: u64 = 0;
 static mut TRAP_STACKS: [UserStack; MAX_HARTS] = [UserStack([0; 32768]); MAX_HARTS];
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];

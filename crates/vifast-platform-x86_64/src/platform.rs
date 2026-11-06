@@ -64,7 +64,11 @@ static mut USER_FRAME: DataPool = DataPool([0; 311296]);
 #[repr(align(16))]
 struct Metadata([u8; 81920]);
 static mut METADATA: Metadata = Metadata([0; 81920]);
-static mut CONTEXTS: [TrapFrame; 128] = [TrapFrame::empty(); 128];
+// Per-object user contexts indexed by `ObjRef::index`.  The kernel object
+// table has MAX_OBJECTS slots, so the array must cover that full domain.
+const _: () = assert!(vifast_kernel::MAX_OBJECTS <= u8::MAX as usize);
+static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_OBJECTS] =
+    [TrapFrame::empty(); vifast_kernel::MAX_OBJECTS];
 static mut TRAP_STACKS: [Stack; MAX_HARTS] = [Stack([0; 32768]); MAX_HARTS];
 static mut IST_STACKS: [Stack; MAX_HARTS] = [Stack([0; 32768]); MAX_HARTS];
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
@@ -611,7 +615,7 @@ fn kernel_data_ranges() -> [(u64, usize); 14] {
         ),
         (
             core::ptr::addr_of!(CONTEXTS) as u64,
-            core::mem::size_of::<[TrapFrame; 32]>(),
+            core::mem::size_of::<[TrapFrame; vifast_kernel::MAX_OBJECTS]>(),
         ),
         (
             core::ptr::addr_of!(GDT) as u64,
