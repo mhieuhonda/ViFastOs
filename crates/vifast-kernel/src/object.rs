@@ -537,6 +537,9 @@ pub struct Tcb {
     pub wake_at: Option<u64>,
     /// Bitmask of harts allowed to run this TCB.  Default: hart 0 only.
     pub affinity: u8,
+    /// Dense pool slot for the platform trap context (0xFF = unassigned).
+    /// Step a of M1.2 only records the field; no path assigns or consumes it.
+    pub context_slot: u8,
 }
 
 impl Tcb {
@@ -565,6 +568,7 @@ impl Tcb {
             queue_seq: 0,
             wake_at: None,
             affinity: 1,
+            context_slot: 0xFF,
         }
     }
 }
