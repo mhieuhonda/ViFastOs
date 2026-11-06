@@ -1329,3 +1329,9 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 501, 0 warning.
 - Xem `docs/agent2-report-73.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `06ca36cdf758509427a32a3599b1316c76f1f396119d4b18edf6339549de30b6`.
+
+## 9.53 — Vòng 74: script gate tổng hợp
+
+- `scripts/gate.sh` chạy build + QEMU 3/3×3 + persist + harness + fmt + docs,
+  in PASS/FAIL từng bước và trả mã lỗi nếu có bước hỏng; `--quick` bỏ QEMU/persist.
+- Đã chạy full: all steps passed.
