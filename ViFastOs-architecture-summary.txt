@@ -164,6 +164,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 64ffef1 test: exercise object destroy while a secondary hart runs
 - 7964803 feat: measure boot stack high-water mark on all ports
 - 199ce90 fix: cascade untyped watermark and fuzz reclaim churn
+- 14ad2fe feat: define pager v2 wire protocol
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -224,7 +225,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 253264 byte (`kernel_end=0x803c22b0`)
 - `Kernel = 710248`, `Object = 4752`, `Tcb = 4696`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 5`): riscv64 5/5, aarch64 5/5, x86_64 5/5
+- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped (đo 2026-11-06): RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B
@@ -962,6 +963,31 @@ InvalidArg, Alignment, AlreadyMapped, NotMapped, NoCaller,
 ObjectDestroyed, MissingPageTable, IllegalOperation, NotImplemented,
 WouldBlock, NotFound, Busy, HasDependents.
 
+### BEGIN GENERATED errors
+- `KError::Ok = 0`
+- `KError::InvalidCap = 1`
+- `KError::WrongType = 2`
+- `KError::NoRights = 3`
+- `KError::SlotOccupied = 4`
+- `KError::OutOfMemory = 5`
+- `KError::InvalidArg = 6`
+- `KError::Alignment = 7`
+- `KError::AlreadyMapped = 8`
+- `KError::NotMapped = 9`
+- `KError::NoCaller = 10`
+- `KError::ObjectDestroyed = 11`
+- `KError::IrqInUse = 12`
+- `KError::PrioTooHigh = 13`
+- `KError::Cancelled = 14`
+- `KError::MissingPageTable = 15`
+- `KError::IllegalOperation = 16`
+- `KError::NotImplemented = 17`
+- `KError::WouldBlock = 18`
+- `KError::NotFound = 19`
+- `KError::Busy = 20`
+- `KError::HasDependents = 21`
+### END GENERATED errors
+
 12. ROOT TASK VÀ USER DEMO
 ----------------------------
 Runtime chỉ tạo duy nhất root TCB. Root task nhận `BootInfo` READ-only qua arg0
@@ -1579,6 +1605,25 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   object table hiện là 147 slot và chưa cần tách pool.
 - `OBJ_TCB_BYTES=4096` chỉ là quota accounting, không phản ánh đúng `size_of::<Tcb>()`.
 - Server fault khi client BlockedReply sẽ làm client chờ vô hạn; fault endpoint sẽ xử lý.
+
+### BEGIN GENERATED limits
+- `MAX_OBJECTS = 147`
+- `MAX_TCBS = 18`
+- `MAX_CAPS_ROOT = 96`
+- `MAX_CAPS_TASK = 64`
+- `MAX_QUEUE = 8`
+- `MAX_MAPPINGS = 64`
+- `MAX_IOMMU_MAPPINGS = 32`
+- `MAX_FDS = 8`
+- `MAX_UNTYPED_FREE = 16`
+- `MAX_CLIENTS = 4`
+- `MAX_NAME = 8`
+- `MAX_COMPONENT = 28`
+- `MAX_IO = 128`
+- `MAX_FILES = 16`
+- `MAX_PATH = 128`
+- `MAX_FD = 8`
+### END GENERATED limits
 
 17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
 ----------------------------------

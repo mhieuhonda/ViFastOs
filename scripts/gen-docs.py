@@ -32,6 +32,8 @@ MARKERS = {
     "tests": ("### BEGIN GENERATED tests", "### END GENERATED tests"),
     "pass": ("### BEGIN GENERATED pass", "### END GENERATED pass"),
     "status": ("### BEGIN GENERATED status", "### END GENERATED status"),
+    "errors": ("### BEGIN GENERATED errors", "### END GENERATED errors"),
+    "limits": ("### BEGIN GENERATED limits", "### END GENERATED limits"),
 }
 
 
@@ -173,6 +175,38 @@ def qemu_status() -> str:
     )
 
 
+def error_codes() -> str:
+    text = (ROOT / "crates" / "vifast-abi" / "src" / "lib.rs").read_text()
+    match = re.search(r"pub enum KError\s*\{(.*?)\n\}", text, re.S)
+    if not match:
+        raise SystemExit("gen-docs: cannot find KError enum")
+    lines = []
+    for line in match.group(1).splitlines():
+        item = re.match(r"\s*([A-Z][A-Za-z0-9_]*)\s*=\s*(\d+),", line)
+        if item:
+            lines.append(f"- `KError::{item.group(1)} = {item.group(2)}`")
+    if not lines:
+        raise SystemExit("gen-docs: KError enum is empty")
+    return "\n".join(lines)
+
+def limits() -> str:
+    lines = []
+    seen = set()
+    for source in (
+        ROOT / "crates" / "vifast-kernel" / "src" / "object.rs",
+        ROOT / "crates" / "vifast-abi" / "src" / "lib.rs",
+    ):
+        text = source.read_text()
+        for match in re.finditer(r"pub const (MAX_[A-Z0-9_]+): usize = (\d+);", text):
+            name = match.group(1)
+            if name in seen:
+                continue
+            seen.add(name)
+            lines.append(f"- `{name} = {match.group(2)}`")
+    if not lines:
+        raise SystemExit("gen-docs: no MAX_* limits found")
+    return "\n".join(lines)
+
 def generated() -> dict[str, str]:
     return {
         "commits": git_commits(),
@@ -180,6 +214,8 @@ def generated() -> dict[str, str]:
         "tests": build_results(),
         "pass": pass_conditions(),
         "status": qemu_status(),
+        "errors": error_codes(),
+        "limits": limits(),
     }
 
 

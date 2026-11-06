@@ -40,6 +40,8 @@ def main() -> int:
         "### BEGIN GENERATED tests",
         "### BEGIN GENERATED pass",
         "### BEGIN GENERATED status",
+        "### BEGIN GENERATED errors",
+        "### BEGIN GENERATED limits",
     ]
     for marker in required_markers:
         if marker not in summary:
