@@ -871,7 +871,12 @@ unsafe fn build_kernel_page_tables() {
 
 static PAGE_OPS: PageOps = PageOps;
 
-static mut KERNEL_STORAGE: Kernel = Kernel::new_const();
+struct KernelStorage(core::cell::UnsafeCell<Kernel>);
+// Safety: the single boot hart initializes it before any secondary hart starts;
+// all later access is serialized by the BKL.
+unsafe impl Sync for KernelStorage {}
+static KERNEL_STORAGE: KernelStorage =
+    KernelStorage(core::cell::UnsafeCell::new(Kernel::new_const()));
 
 impl Platform for Aarch64Platform {
     type Context = TrapFrame;
@@ -888,8 +893,9 @@ impl Platform for Aarch64Platform {
     }
 
     fn init_kernel() -> &'static mut Kernel {
+        // Safety: boot-time initialization, before secondary harts start.
         unsafe {
-            let kernel = &mut *core::ptr::addr_of_mut!(KERNEL_STORAGE);
+            let kernel = &mut *KERNEL_STORAGE.0.get();
             kernel.reset();
             kernel
         }
