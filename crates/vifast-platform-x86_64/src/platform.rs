@@ -66,9 +66,9 @@ struct Metadata([u8; 81920]);
 static mut METADATA: Metadata = Metadata([0; 81920]);
 // Per-object user contexts indexed by `ObjRef::index`.  The kernel object
 // table has MAX_OBJECTS slots, so the array must cover that full domain.
-const _: () = assert!(vifast_kernel::MAX_OBJECTS <= u8::MAX as usize);
-static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_OBJECTS] =
-    [TrapFrame::empty(); vifast_kernel::MAX_OBJECTS];
+const _: () = assert!(vifast_kernel::MAX_TCBS <= u8::MAX as usize);
+static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_TCBS] =
+    [TrapFrame::empty(); vifast_kernel::MAX_TCBS];
 static mut TRAP_STACKS: [Stack; MAX_HARTS] = [Stack([0; 32768]); MAX_HARTS];
 static mut IST_STACKS: [Stack; MAX_HARTS] = [Stack([0; 32768]); MAX_HARTS];
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
@@ -620,7 +620,7 @@ fn kernel_data_ranges() -> [(u64, usize); 14] {
         ),
         (
             core::ptr::addr_of!(CONTEXTS) as u64,
-            core::mem::size_of::<[TrapFrame; vifast_kernel::MAX_OBJECTS]>(),
+            core::mem::size_of::<[TrapFrame; vifast_kernel::MAX_TCBS]>(),
         ),
         (
             core::ptr::addr_of!(GDT) as u64,
@@ -1035,7 +1035,8 @@ unsafe fn ap_idle_loop() -> ! {
             if vifast_runtime::ensure_current_root::<X86Platform>().is_err() {
                 X86Platform::exit(1);
             }
-            let context = X86Platform::contexts()[tcb.index as usize];
+            let slot = X86Platform::kernel().context_slot(tcb).unwrap_or(0) as usize;
+            let context = X86Platform::contexts()[slot];
             <X86Platform as Platform>::enter_user(&context);
         }
         if ready {

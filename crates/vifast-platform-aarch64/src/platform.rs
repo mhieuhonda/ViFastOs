@@ -62,9 +62,9 @@ struct Metadata([u8; 81920]);
 static mut METADATA: Metadata = Metadata([0; 81920]);
 // Per-object user contexts indexed by `ObjRef::index`.  The kernel object
 // table has MAX_OBJECTS slots, so the array must cover that full domain.
-const _: () = assert!(vifast_kernel::MAX_OBJECTS <= u8::MAX as usize);
-static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_OBJECTS] =
-    [TrapFrame::empty(); vifast_kernel::MAX_OBJECTS];
+const _: () = assert!(vifast_kernel::MAX_TCBS <= u8::MAX as usize);
+static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_TCBS] =
+    [TrapFrame::empty(); vifast_kernel::MAX_TCBS];
 static TIMER_INTERVAL: AtomicU64 = AtomicU64::new(0);
 static mut TRAP_STACKS: [UserStack; MAX_HARTS] = [UserStack([0; 32768]); MAX_HARTS];
 static mut CPU_STATES: [CpuState; MAX_HARTS] = [CpuState::empty(); MAX_HARTS];
@@ -522,7 +522,8 @@ pub extern "C" fn rust_secondary(_context: u64) -> ! {
                 picked
             };
             if let Some(tcb) = picked {
-                let context = Aarch64Platform::contexts()[tcb.index as usize];
+                let slot = Aarch64Platform::kernel().context_slot(tcb).unwrap_or(0) as usize;
+                let context = Aarch64Platform::contexts()[slot];
                 <Aarch64Platform as Platform>::enter_user(&context);
             }
         }

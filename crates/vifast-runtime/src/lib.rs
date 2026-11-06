@@ -871,7 +871,8 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         &mut root_context,
         vifast_abi::user_layout::ROOT_BOOTINFO_VA as u64,
     );
-    contexts[root.index as usize] = root_context;
+    let root_slot = A::kernel().context_slot(root).unwrap_or(0) as usize;
+    contexts[root_slot] = root_context;
 
     A::set_kernel(kernel as *mut Kernel);
     kernel.enqueue(root);
@@ -894,7 +895,8 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         core::sync::atomic::Ordering::SeqCst,
     );
     vifast_kernel::klog!(A, "entering user mode at {:#x}", A::user_code_base());
-    let first = contexts[root.index as usize];
+    let root_slot = A::kernel().context_slot(root).unwrap_or(0) as usize;
+    let first = contexts[root_slot];
     A::enter_user(&first)
 }
 
@@ -933,7 +935,11 @@ pub mod syscall {
             }
             UserAction::ConfigureTcb { tcb, entry, stack } => {
                 let contexts = A::contexts();
-                if let Some(slot) = contexts.get_mut(tcb.index as usize) {
+                let index = kernel
+                    .context_slot(tcb)
+                    .map(|slot| slot as usize)
+                    .unwrap_or(usize::MAX);
+                if let Some(slot) = contexts.get_mut(index) {
                     *slot = A::context_for_user(entry as usize, stack as usize);
                     A::write_result(context, KError::Ok, 0, 0, [0; 4]);
                 } else {
@@ -942,7 +948,11 @@ pub mod syscall {
             }
             UserAction::RestartTcb { tcb, entry, stack } => {
                 let contexts = A::contexts();
-                if let Some(slot) = contexts.get_mut(tcb.index as usize) {
+                let index = kernel
+                    .context_slot(tcb)
+                    .map(|slot| slot as usize)
+                    .unwrap_or(usize::MAX);
+                if let Some(slot) = contexts.get_mut(index) {
                     *slot = A::context_for_user(entry as usize, stack as usize);
                     A::write_result(context, KError::Ok, 0, 0, [0; 4]);
                 } else {
@@ -1168,13 +1178,15 @@ pub mod syscall {
         let contexts = A::contexts();
         let hart = A::hart_id();
         if let Some(old) = kernel.current_on(hart) {
-            contexts[old.index as usize] = *context;
+            let slot = kernel.context_slot(old).unwrap_or(0) as usize;
+            contexts[slot] = *context;
         }
         let Some(next) = kernel.pick_on(hart) else {
             return false;
         };
         note_current_tcb::<A>(kernel);
-        *context = contexts[next.index as usize];
+        let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+        *context = contexts[slot];
         crate::syscall::apply_resume::<A>(context, next);
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
@@ -1191,7 +1203,8 @@ pub mod syscall {
             return false;
         };
         note_current_tcb::<A>(kernel);
-        *context = contexts[next.index as usize];
+        let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+        *context = contexts[slot];
         crate::syscall::apply_resume::<A>(context, next);
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
@@ -1246,7 +1259,8 @@ pub mod fault {
         };
         note_current_tcb::<A>(kernel);
         loop {
-            *context = A::contexts()[next.index as usize];
+            let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+            *context = A::contexts()[slot];
             crate::syscall::apply_resume::<A>(context, next);
             if ensure_current_root::<A>().is_ok() {
                 return;
@@ -1273,7 +1287,8 @@ pub mod timer {
         let old = kernel.current_on(hart);
         let old_index = old.map(|tcb| tcb.index);
         if let Some(old) = old {
-            contexts[old.index as usize] = *context;
+            let slot = kernel.context_slot(old).unwrap_or(0) as usize;
+            contexts[slot] = *context;
         }
         let woke = kernel.tick(hart);
         let irq_woke = kernel.irq_raise(vifast_abi::IRQ_TIMER);
@@ -1406,7 +1421,8 @@ pub mod timer {
             A::exit(1);
         };
         note_current_tcb::<A>(kernel);
-        *context = contexts[next.index as usize];
+        let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+        *context = contexts[slot];
         crate::syscall::apply_resume::<A>(context, next);
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);

@@ -49,9 +49,9 @@ struct Metadata([u8; 81920]);
 static mut METADATA: Metadata = Metadata([0; 81920]);
 // Per-object user contexts indexed by `ObjRef::index`.  The kernel object
 // table has MAX_OBJECTS slots, so the array must cover that full domain.
-const _: () = assert!(vifast_kernel::MAX_OBJECTS <= u8::MAX as usize);
-static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_OBJECTS] =
-    [TrapFrame::empty(); vifast_kernel::MAX_OBJECTS];
+const _: () = assert!(vifast_kernel::MAX_TCBS <= u8::MAX as usize);
+static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_TCBS] =
+    [TrapFrame::empty(); vifast_kernel::MAX_TCBS];
 #[allow(dead_code)]
 #[repr(align(4096))]
 struct BootPool([u8; 131072]);
@@ -456,7 +456,8 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
             picked
         };
         if let Some(tcb) = picked {
-            let context = RiscvPlatform::contexts()[tcb.index as usize];
+            let slot = RiscvPlatform::kernel().context_slot(tcb).unwrap_or(0) as usize;
+            let context = RiscvPlatform::contexts()[slot];
             <RiscvPlatform as Platform>::enter_user(&context);
         }
         // No task and no newly-ready task: enter the masked-WFI idle window.
