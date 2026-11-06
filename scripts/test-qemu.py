@@ -315,6 +315,11 @@ def run_qemu(
     output = ""
     if os.path.exists(serial):
         output = open(serial, "rb").read().decode("utf-8", errors="replace")
+    if os.environ.get("VIFAST_KEEP_SERIAL") == "1" and os.path.exists(serial):
+        # Giữ lại serial của từng lần chạy để điều tra flake (vòng 67).
+        shutil.copyfile(
+            serial, f"{tempfile.gettempdir()}/vifast-keep-{name}-{index}.serial"
+        )
     print(f"\n--- {name} (rc={rc}, {elapsed:.1f}s) ---")
     print(output[-1800:])
     faults = fault_addresses(output)

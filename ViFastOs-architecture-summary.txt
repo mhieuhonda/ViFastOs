@@ -209,6 +209,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 55a2b0b feat: complete virtio-net TX+RX, guest pings the gateway
 - cd82b4a feat: add UDP and DNS round trip over virtio-net
 - 72a0f9b test: cover checksum with RFC 1071 vectors and run it in the gate
+- c8274e3 feat: bring up virtio-gpu and prove real pixels on screen
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1376,6 +1377,7 @@ Cấm xuất hiện:
 - `PAGER2 BAD` — forbidden
 - `PAGER EVICT BAD` — forbidden
 - `PAGER3 BAD` — forbidden
+- `DEMAND LOAD BAD` — forbidden
 - `HARD LINK BAD` — forbidden
 - `SYMLINK BAD` — forbidden
 - `IRQ BAD` — forbidden
@@ -2095,6 +2097,10 @@ E. Desktop / Space
     RESOURCE_CREATE_2D/ATTACH_BACKING/SET_SCANOUT/TRANSFER/FLUSH) vẽ gradient
     160x120; `--gpu-check` screendump và xác nhận đúng pixel cả riscv64 lẫn
     aarch64. Framebuffer 320x240 từng làm vượt headroom kernel → giảm 160x120.
+116. Vòng 67 (M2 demand-load): PAGER4_VA chưa map; server ghi backing image
+    vào frame đúng lúc fault rồi map + resume → `DEMAND LOAD OK` trên
+    riscv64/aarch64. x86_64 hết Untyped nên dùng client rút gọn. Harness nới
+    luật fault (kiểm tra hiện diện thay vì tổng số) vì evict có race.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

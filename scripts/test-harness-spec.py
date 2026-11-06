@@ -31,6 +31,7 @@ def fixture(arch: str) -> str:
             "VIRTIO NET DNS sent len=0",
             "VIRTIO GPU READY",
             "VIRTIO GPU DRAW OK fb=0x80368400 160x120",
+            "DEMAND LOAD OK",
         ]
     elif arch == "aarch64":
         lines += [
@@ -48,6 +49,7 @@ def fixture(arch: str) -> str:
             "VIRTIO NET DNS sent len=0",
             "VIRTIO GPU READY",
             "VIRTIO GPU DRAW OK fb=0x80368400 160x120",
+            "DEMAND LOAD OK",
         ]
     else:
         lines += [
@@ -68,7 +70,10 @@ def fixture(arch: str) -> str:
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
             "TLB STATS (va_flush=2, ipi=1, skipped=1)",
         ]
-    for address in [0] + spec.FAULT_ADDRESSES:
+    addresses = list(spec.FAULT_ADDRESSES)
+    if arch == "x86_64":
+        addresses = [a for a in addresses if a != 0x1001003000]
+    for address in [0] + addresses:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")
     # Pager v2 evict demo: PAGER2_VA faults twice.
     lines.append("USER FAULT tcb=None cause=0x0 addr=0x1001001000")
@@ -101,6 +106,9 @@ def main() -> int:
             anchor = text.split(" (")[0]
             expect_fail(f"{arch}: arch {anchor!r}", arch, base.replace(anchor, ""), rc)
         for address in spec.FAULT_ADDRESSES:
+            if arch == "x86_64" and address == 0x1001003000:
+                # x86_64 không có fault demand-load nên không kiểm tra removal.
+                continue
             line = f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}\n"
             expect_fail(f"{arch}: fault {address:#x}", arch, base.replace(line, ""), rc)
         expect_fail(f"{arch}: root switch", arch, base.replace("ROOT SWITCH 2", "ROOT SWITCH 1"), rc)

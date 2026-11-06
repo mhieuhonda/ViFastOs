@@ -76,6 +76,13 @@ const PAGER3_LABEL: u64 = 0x5041_4747;
 const PAGER3_VA: u64 = PAGER_VA + 0x2000;
 const PAGER3_VALUE: u64 = 0x5041_4745_5200_0003;
 const PAGER3_OK: &[u8] = b"PAGER3 OK\n";
+const PAGER4_VA: u64 = PAGER_VA + 0x3000;
+const PAGER4_LABEL: u64 = 0x5041_4748;
+/// Nội dung trang chỉ tồn tại ở server (backing image) và chỉ được ghi vào
+/// frame TẠI THỜI ĐIỂM FAULT — đặc trưng của demand-load (vòng 67).
+const PAGER4_IMAGE: u64 = 0x4445_4d41_4e44_0004;
+const DEMAND_LOAD_OK: &[u8] = b"DEMAND LOAD OK\n";
+const DEMAND_LOAD_BAD: &[u8] = b"DEMAND LOAD BAD\n";
 const PAGER3_BAD: &[u8] = b"PAGER3 BAD\n";
 const PAGER_EVICT_OK: &[u8] = b"PAGER EVICT OK\n";
 const PAGER_EVICT_BAD: &[u8] = b"PAGER EVICT BAD\n";
@@ -90,6 +97,7 @@ const PAGER_SERVER_FRAME2: u8 = 6;
 const PAGER_SERVER_UNTYPED: u8 = 7;
 const PAGER_SERVER_TCB3: u8 = 8;
 const PAGER_SERVER_FRAME3: u8 = 9;
+const PAGER_SERVER_FRAME4: u8 = 10;
 const TLB_A: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 const TLB_B: u64 = 0xBBBB_BBBB_BBBB_BBBB;
 const TLB_REMAP_OK: &[u8] = b"TLB REMAP OK (seen_new=1)\n";
@@ -146,10 +154,24 @@ pub extern "C" fn pager2_client() -> ! {
     }
 }
 
+/// Biến thể không có demand-load (dùng khi hết Untyped, vd x86_64).
+#[no_mangle]
+pub extern "C" fn pager3_only_client() -> ! {
+    let value = unsafe { core::ptr::read_volatile(PAGER3_VA as *const u64) };
+    let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER3_LABEL, value, 0, 0);
+    loop {
+        let _ = vifast_user::yield_now();
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn pager3_client() -> ! {
     let value = unsafe { core::ptr::read_volatile(PAGER3_VA as *const u64) };
     let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER3_LABEL, value, 0, 0);
+    // Demand-load (vòng 67): trang này CHƯA được map và nội dung chỉ được
+    // server ghi vào frame khi nhận fault — client đọc sau khi được resume.
+    let demand = unsafe { core::ptr::read_volatile(PAGER4_VA as *const u64) };
+    let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER4_LABEL, demand, 0, 0);
     loop {
         let _ = vifast_user::yield_now();
     }
@@ -170,6 +192,16 @@ pub extern "C" fn pager_server() -> ! {
                 (PAGER_SERVER_FRAME2, PAGER_SERVER_TCB2)
             } else if message.data[0] == PAGER3_VA {
                 (PAGER_SERVER_FRAME3, PAGER_SERVER_TCB3)
+            } else if message.data[0] == PAGER4_VA {
+                // Demand-load: nội dung trang nằm trong backing image của
+                // server, chỉ chép vào frame lúc fault (chưa map trước đó).
+                let _ = vifast_user::frame_write(
+                    PAGER_SERVER_FRAME4,
+                    0,
+                    &PAGER4_IMAGE as *const u64 as u64,
+                    8,
+                );
+                (PAGER_SERVER_FRAME4, PAGER_SERVER_TCB3)
             } else {
                 write(PAGER_BAD);
                 continue;
@@ -185,6 +217,12 @@ pub extern "C" fn pager_server() -> ! {
             } else {
                 write(PAGER_BAD);
             }
+        } else if message.label == PAGER4_LABEL {
+            write(if message.data[0] == PAGER4_IMAGE {
+                DEMAND_LOAD_OK
+            } else {
+                DEMAND_LOAD_BAD
+            });
         } else if message.label == PAGER_LABEL {
             write(if message.data[0] == PAGER_VALUE {
                 PAGER_OK
@@ -849,6 +887,8 @@ fn spawn_pager_server(
     pager2_frame: u8,
     pager3_tcb: u8,
     pager3_frame: u8,
+    pager4_frame: u8,
+    enable_demand: bool,
     slots: &mut SlotAllocator,
 ) {
     let server_tcb = slots.alloc();
@@ -876,6 +916,17 @@ fn spawn_pager_server(
     copy(pager2_frame, server_tcb, PAGER_SERVER_FRAME2, Rights::READ);
     copy(pager3_tcb, server_tcb, PAGER_SERVER_TCB3, Rights::WRITE);
     copy(pager3_frame, server_tcb, PAGER_SERVER_FRAME3, Rights::READ);
+    // Vòng 67: frame cho demand-load — chỉ cấp cap, KHÔNG map trước.
+    // Cần WRITE để frame_write nội dung trang lúc fault, rồi mới map READ.
+    // Không có Untyped (x86_64) thì bỏ qua demand-load hoàn toàn.
+    if enable_demand {
+        copy(
+            pager4_frame,
+            server_tcb,
+            PAGER_SERVER_FRAME4,
+            Rights::READ | Rights::WRITE,
+        );
+    }
     // Pager v2 (vòng 35): cấp Untyped con riêng để server tự retype Frame
     // mới sau evict thay vì map lại frame cũ. Dùng meta_untyped vì
     // data_untyped đã chật trên x86 (page table 4-level tốn objects).
@@ -1305,6 +1356,24 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         pager2_client as extern "C" fn() -> ! as usize,
         &mut slots,
     );
+    // Vòng 67: demand-load chỉ bật trên riscv64/aarch64 — x86_64 dùng page
+    // table 4 cấp nên data_untyped/meta_untyped đều cạn, không đủ frame mới.
+    // Quyết định theo kiến trúc lúc biên dịch (không probe trước khi spawn).
+    let have_demand = cfg!(any(target_arch = "riscv64", target_arch = "aarch64"));
+    let pager4_frame = if have_demand {
+        let slot = slots.alloc();
+        if vifast_user::retype(data_untyped, ObjType::Frame as u64, slot).error != KError::Ok {
+            retype(meta_untyped, ObjType::Frame, slot);
+        }
+        slot
+    } else {
+        0
+    };
+    let pager3_entry = if have_demand {
+        pager3_client as extern "C" fn() -> ! as usize
+    } else {
+        pager3_only_client as extern "C" fn() -> ! as usize
+    };
     let (pager3_tcb, pager3_frame) = spawn_pager(
         meta_untyped,
         data_untyped,
@@ -1314,7 +1383,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         PAGER3_STACK_TOP,
         PAGER3_VA,
         PAGER3_VALUE,
-        pager3_client as extern "C" fn() -> ! as usize,
+        pager3_entry,
         &mut slots,
     );
     spawn_pager_server(
@@ -1328,6 +1397,8 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         pager2_frame,
         pager3_tcb,
         pager3_frame,
+        pager4_frame,
+        have_demand,
         &mut slots,
     );
 

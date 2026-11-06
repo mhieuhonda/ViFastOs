@@ -1265,3 +1265,13 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 489, host 207, 0 warning.
 - Xem `docs/agent2-report-66.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `5089e083d5553519e3ec51cfc6d1ed9fc935b70ef4edb44275a33b7b122a26a6`.
+
+## 9.46 — Vòng 67: M2 demand-load
+
+- Trang PAGER4 chỉ được cấp + nạp nội dung lúc fault; `DEMAND LOAD OK` trên
+  riscv64/aarch64. Sửa 3 lỗi: cap thiếu WRITE, x86 hết Untyped (dùng cfg),
+  harness fault-count quá chặt (nới thành kiểm tra hiện diện).
+- Thêm `VIFAST_KEEP_SERIAL=1` để điều tra flake.
+- Cổng: QEMU 3/3 ×3 (2 lần), persist 7×3, harness 494, host 207, 0 warning.
+- Xem `docs/agent2-report-67.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `2f7437bb0b34f002729d44810026e5452dff8ccab9592f0c5bf4ab375ae8da1a`.
