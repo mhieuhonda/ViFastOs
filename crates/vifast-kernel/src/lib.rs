@@ -7550,6 +7550,82 @@ mod tests {
     }
 
     #[test]
+    fn boot_chain_reset_retypes_and_configures_two_tcbs() {
+        let mut kernel = Kernel::new();
+        // Runtime initializes the kernel, runs the self-test kernel, then
+        // resets the final kernel; model the reset boundary explicitly.
+        kernel.reset();
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x8a0_0000, 0x8000, 4096, 8)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let mut tcbs = std::vec::Vec::new();
+        let mut spaces = std::vec::Vec::new();
+        for slot in [2u64, 3] {
+            let action = kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Tcb as u64,
+                slot,
+                0,
+                0,
+                0,
+            );
+            assert!(matches!(
+                action,
+                UserAction::Return {
+                    error: KError::Ok,
+                    ..
+                }
+            ));
+            let tcb = kernel
+                .cap_at(SlotAddr {
+                    tcb: root,
+                    slot: slot as u8,
+                })
+                .unwrap()
+                .obj;
+            tcbs.push(tcb);
+            let space_action = kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::VSpace as u64,
+                slot + 2,
+                0,
+                0,
+                0,
+            );
+            assert!(matches!(
+                space_action,
+                UserAction::Return {
+                    error: KError::Ok,
+                    ..
+                }
+            ));
+            let space = kernel
+                .cap_at(SlotAddr {
+                    tcb: root,
+                    slot: slot as u8 + 2,
+                })
+                .unwrap()
+                .obj;
+            spaces.push(space);
+        }
+        for (index, tcb) in tcbs.iter().enumerate() {
+            kernel
+                .configure_tcb(*tcb, 0x1000_0000, 0x2000_0000, spaces[index], 5)
+                .unwrap();
+            kernel.resume_tcb(*tcb).unwrap();
+        }
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn object_variant_sizes_for_pool_design() {
         eprintln!(
             "VARIANT Object={} Tcb={} CNode={} VSpace={} Endpoint={} Notification={} Frame={} Untyped={} Irq={} Iommu={} BlockDevice={} Cap={} Kernel={}",
