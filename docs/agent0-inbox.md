@@ -8,6 +8,12 @@
   mốc), (b) chỉ đo current counts, (c) debug riêng AArch64 với static tối thiểu.
 - Đề xuất agent2: (c) trước, vì đây có thể là lỗi nền về vị trí static/AT.
 - Đang chặn: M1.1 (POOL HWM) | Không chặn M0.2/M1.2
+- **Cập nhật vòng 28:** đã thử biến thể thứ 4 — sampling **read-only** từ runtime
+  (`Kernel::pool_counts()` + atomic trong runtime, không ghi gì vào kernel)
+  trên nền M1.2c. AArch64 vẫn lỗi (`USER FAULT tcb=None`, `PANIC hart=64`) sau
+  `BOOTINFO OK`. Đã revert. HWM BLOCKED 2 phiên liên tiếp → theo mục 2.5 không
+  thử lần 3; chuyển sang M1.3 (tách TCB pool) và sẽ đo HWM sau bằng số slot
+  pool đang dùng nếu runtime sampling còn lỗi.
 - Nhánh đang đi trong lúc chờ: M0.2 (xong) + M1.2.
 - Đã xử lý phần ROOT ERR 16: nguyên nhân là **runtime vẫn index CONTEXTS theo
   `tcb.index`** sau khi mảng đổi sang MAX_TCBS; ConfigureTcb dùng get_mut(OOB)
