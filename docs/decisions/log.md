@@ -57,3 +57,4 @@
 | 73 | Boot splash: font 5x7 vẽ "ViFastOs" trên framebuffer | Verify bằng pixel chữ + hộp tối trong --gpu-check; ảnh PNG lưu docs/assets | 88a4a29 |
 | 74 | `scripts/gate.sh` chạy toàn bộ cổng bằng một lệnh | Dùng cho các vòng liên tục và soak; `--quick` bỏ QEMU/persist | 6af1885 |
 | 75 | virtio-rng (device 4) đọc entropy thật, 2 mẫu khác nhau | Harness khóa `VIRTIO RNG READY`; QEMU thêm virtio-rng-device | 5a09244 |
+| 76 | GPU init retry 4 lần bound ngắn cho aarch64 | Soak 15 vòng lộ flake 7/15; sau fix 10/10 + soak sạch 8/8 | 6509b2d |
