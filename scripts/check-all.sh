@@ -19,6 +19,7 @@ echo "== harness negative cases =="
 python3 scripts/test-harness-spec.py
 
 echo "== docs =="
+python3 scripts/gen-docs.py
 python3 scripts/check-docs.py
 
 echo "ALL CHECKS PASS"

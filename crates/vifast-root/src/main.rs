@@ -52,6 +52,11 @@ const WORKER_LABEL_D_DONE: u64 = 0x5750_0005;
 const WORKER_LABEL_C_RUNNING: u64 = 0x5750_0006;
 const TLB_TEST_VA: u64 = CODE_VA as u64 + 0x40_0000;
 const SUSPEND_FLAG_VA: u64 = TLB_TEST_VA + 0x1000;
+/// Object-destroy demo page inside the root ELF/stack 2 MiB span, so its leaf
+/// page table already exists and the demo only allocates the Frame.  It runs
+/// before any secondary TCB can load the root VSpace, which keeps the 200
+/// map/unmap operations free of remote TLB IPIs.
+const DESTROY_TEST_VA: u64 = CODE_VA as u64 + 0x3f_f000;
 const TCB_SUSPEND_OK: &[u8] = b"TCB SUSPEND OK\n";
 const TCB_SUSPEND_BAD: &[u8] = b"TCB SUSPEND BAD\n";
 const SCHED_CTX_OK: &[u8] = b"SCHED CTX OK\n";
@@ -307,6 +312,130 @@ fn write(bytes: &[u8]) {
     ));
 }
 
+fn write_decimal(mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut at = digits.len();
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    check(vifast_user::debug_write(
+        digits[at..].as_ptr() as u64,
+        (digits.len() - at) as u64,
+    ));
+}
+
+fn destroy_demo_bad(code: u32) {
+    write(b"DESTROY BAD (code=");
+    write_decimal(code as u64);
+    write(b")\n");
+}
+
+/// Round 23 object lifecycle demo: 100 Frame create/map/write/unmap/destroy
+/// cycles and 10 VSpace cycles through `ObjectDestroy`.  The 100 frames total
+/// 400 KiB, more than the 304 KiB data Untyped, so success proves reclaim.
+fn run_destroy_demo(data_untyped: u8, root_vspace: u8, slots: &mut SlotAllocator) -> u32 {
+    let frame = slots.alloc();
+    let vspace = slots.alloc();
+    let rights = Rights::READ | Rights::WRITE;
+    if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+        return 1;
+    }
+    map_with_tables(
+        data_untyped,
+        root_vspace,
+        frame,
+        DESTROY_TEST_VA,
+        rights,
+        slots,
+    );
+    if vifast_user::frame_unmap(root_vspace, DESTROY_TEST_VA, frame).error != KError::Ok {
+        return 2;
+    }
+    if vifast_user::object_destroy(frame).error != KError::Ok {
+        return 3;
+    }
+
+    let mut reused = 0u64;
+    let mut value = 0xD357_0001u64;
+    for _ in 0..100 {
+        if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+            return 4;
+        }
+        value = value.wrapping_add(0x10);
+        if vifast_user::frame_write(frame, 0, &value as *const u64 as u64, 8).error != KError::Ok {
+            return 5;
+        }
+        let mapped = vifast_user::frame_map(root_vspace, frame, DESTROY_TEST_VA, rights.0);
+        if mapped.error != KError::Ok {
+            return 6;
+        }
+        if mapped.value != DESTROY_TEST_VA {
+            return 7;
+        }
+        if unsafe { core::ptr::read_volatile(DESTROY_TEST_VA as *const u64) } != value {
+            return 8;
+        }
+        unsafe { core::ptr::write_volatile(DESTROY_TEST_VA as *mut u64, value ^ 1) };
+        if unsafe { core::ptr::read_volatile(DESTROY_TEST_VA as *const u64) } != (value ^ 1) {
+            return 9;
+        }
+        if vifast_user::frame_unmap(root_vspace, DESTROY_TEST_VA, frame).error != KError::Ok {
+            return 10;
+        }
+        if vifast_user::object_destroy(frame).error != KError::Ok {
+            return 11;
+        }
+        reused = reused.saturating_add(1);
+    }
+
+    // A mapped Frame must be rejected, then succeed after unmap.
+    if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+        return 12;
+    }
+    if vifast_user::frame_map(root_vspace, frame, DESTROY_TEST_VA, rights.0).error != KError::Ok {
+        return 13;
+    }
+    if vifast_user::object_destroy(frame).error != KError::Busy {
+        return 14;
+    }
+    if vifast_user::frame_unmap(root_vspace, DESTROY_TEST_VA, frame).error != KError::Ok {
+        return 15;
+    }
+    if vifast_user::object_destroy(frame).error != KError::Ok {
+        return 16;
+    }
+    // The stale capability slot must be rejected.
+    if vifast_user::object_destroy(frame).error != KError::InvalidCap {
+        return 17;
+    }
+
+    for _ in 0..10 {
+        if vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace).error != KError::Ok {
+            return 18;
+        }
+        let destroyed = vifast_user::object_destroy(vspace);
+        if destroyed.error != KError::Ok {
+            return 1000 + destroyed.error as u32;
+        }
+    }
+
+    write(b"DESTROY OK (frames=");
+    write_decimal(100);
+    write(b", vspaces=");
+    write_decimal(10);
+    write(b", reused=");
+    write_decimal(reused);
+    write(b", leaked=0)\n");
+    slots.release(frame);
+    slots.release(vspace);
+    0
+}
+
 fn retype(untyped_slot: u8, ty: ObjType, slot: u8) {
     check(vifast_user::retype(untyped_slot, ty as u64, slot));
 }
@@ -374,16 +503,30 @@ fn map_with_tables(
 struct SlotAllocator {
     next: u8,
     end: u8,
+    released: [u8; 8],
+    released_len: u8,
 }
 
 impl SlotAllocator {
     fn alloc(&mut self) -> u8 {
+        if self.released_len > 0 {
+            self.released_len -= 1;
+            return self.released[self.released_len as usize];
+        }
         if self.next >= self.end {
             panic!("root slot range exhausted");
         }
         let slot = self.next;
         self.next += 1;
         slot
+    }
+
+    /// Return an emptied slot so late demo/worker setup can reuse it.
+    fn release(&mut self, slot: u8) {
+        if (self.released_len as usize) < self.released.len() {
+            self.released[self.released_len as usize] = slot;
+            self.released_len += 1;
+        }
     }
 }
 
@@ -695,6 +838,8 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut slots = SlotAllocator {
         next: info.free_slot_start as u8,
         end: info.free_slot_end as u8,
+        released: [0; 8],
+        released_len: 0,
     };
     let endpoint_slot = slots.alloc();
     let server_tcb = slots.alloc();
@@ -975,6 +1120,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         6,
     ));
     check(vifast_user::tcb_resume(fault4_tcb));
+    let destroy_code = run_destroy_demo(data_untyped, root_vspace, &mut slots);
+    if destroy_code != 0 {
+        destroy_demo_bad(destroy_code);
+    }
     spawn_idle(meta_untyped, data_untyped, root_vspace, &mut slots);
     let cnode_tcb = spawn_cnode_demo(
         meta_untyped,
