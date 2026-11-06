@@ -32,11 +32,11 @@
 | A6 | DONE | `36a4e34` | SHA log + bundle 21, 22 |
 | B1 | DONE | `ba2e753` | ABI + kernel `ObjectDestroy` + 10 host test |
 | B2 | DONE | `d499677` | reclaim Untyped + 5 host test |
-| B3 | DONE | (commit này) | demo root + harness `DESTROY OK`/`DESTROY BAD` |
-| B4 | DONE | (commit này) | docs/00, ABI, object docs, report, bundle 23 |
+| B3 | DONE | `4584536` | demo root + harness `DESTROY OK`/`DESTROY BAD`; sửa `check-all.sh` |
+| B4 | DONE | `4272391` | docs/00, ABI, object docs, report, bundle 23 |
 | C1 | DONE | — | `-smp 4` chạy thủ công 3 kiến trúc |
 | C2 | DONE | — | soak `--repeat 10` 3 kiến trúc |
-| C3 | DONE | (commit này) | `docs/design/pager-v2.md` |
+| C3 | DONE | `4272391` | `docs/design/pager-v2.md` |
 | C4 | DONE | — | khảo sát `static mut` AArch64 (mục 6.4) |
 
 ## 2. Số liệu
@@ -208,13 +208,28 @@ là `CONTEXTS` nếu một TCB bị chạy đồng thời 2 hart (scheduler hi�
 
 ```text
 $ git log --oneline c86de49..HEAD
+453e013 docs: ignore qemu flake artifacts
+4272391 docs: document object destroy and reclaim
+4584536 feat: add object destroy demo and harness markers
+d499677 feat: reclaim untyped memory on destroy
+ba2e753 feat: add ObjectDestroy syscall
+2d7db0e chore: reduce riscv boot stack to restore headroom
+9519051 docs: refresh agent handoff for round 22
+36a4e34 docs: sync log sha and add bundles 21-22
+f09dae8 docs: mark historical summary sections
+cfc7b50 docs: fix user fault count wording
+f39f817 docs: refresh testing guide and crate map
+21063cf fix: remove fn-to-int cast warnings in root
 ```
+
+Cổng cuối: `./scripts/check-all.sh` → **ALL CHECKS PASS** (QEMU 3/3 ×3,
+persistence 7×3, harness 435, docs). Bundle: `docs/bundles/ViFastOs-round-23.md`.
 
 ## Part 2 - Quick status
 
 ```text
 code commit: 4584536
-docs commit: pending B4 commit
+docs commit: c8d6371
 tests: 192 host test; QEMU 3/3 x3; persistence 7x3; harness 435
 RISC-V headroom: 261456 byte
 summary SHA-256: 0cbf117fc7aa8f6f8a7e569ca79cbd5b1929983e36613b8cacb11b44de47cf66
@@ -2118,4 +2133,4 @@ targeted + fallback full ASID, remote fence.i. Khoảng trống tiếp theo:
 hardware IOMMU, x2APIC/per-hart runqueue, network/input, compositor/ViFastKey.
 ```
 
-SHA-256 part1=d927bbf910d83ed6b1ce3e239f648e798c67c16ee3b1d373658a2ababa38f06d part3=0cbf117fc7aa8f6f8a7e569ca79cbd5b1929983e36613b8cacb11b44de47cf66
+SHA-256 part1=ab3494d1e8a7732df5e2c20f6e77f2dc38e998d74eb20f85c40b6b75c2d1fdbb part3=0cbf117fc7aa8f6f8a7e569ca79cbd5b1929983e36613b8cacb11b44de47cf66
