@@ -3551,6 +3551,238 @@ impl Kernel {
         false
     }
 
+    /// True when `reference` still names a live cap for `object`.
+    fn cap_ref_matches(&self, reference: CapRef, object: ObjRef) -> bool {
+        self.cap_at(reference.addr)
+            .is_some_and(|cap| cap.id == reference.id && cap.obj == object)
+    }
+
+    /// Count capabilities that still point at `object`, ignoring the cap the
+    /// caller is about to destroy.  Every capability lives in exactly one
+    /// physical table: the root cspace, a TCB's embedded cspace, or a CNode.
+    fn other_caps_to(&self, object: ObjRef, keep: u64) -> usize {
+        let mut count = 0usize;
+        for cap in self.root_cspace.iter().flatten() {
+            if cap.obj == object && cap.id != keep {
+                count += 1;
+            }
+        }
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self.root == Some(reference) {
+                continue;
+            }
+            if let Some(table) = self.tcb(reference) {
+                if table.cnode.is_none() {
+                    for cap in table.cspace.iter().flatten() {
+                        if cap.obj == object && cap.id != keep {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            if let Some(node) = self.cnode(reference) {
+                for cap in node.slots.iter().flatten() {
+                    if cap.obj == object && cap.id != keep {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    fn frame_still_mapped(&self, object: ObjRef, frame: Frame) -> bool {
+        let start = frame.pa as u64;
+        let end = start.saturating_add(frame.size as u64);
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if let Some(space) = self.vspace(reference) {
+                if space.mappings.iter().flatten().any(|mapping| {
+                    mapping.frame == object || (mapping.pa >= start && mapping.pa < end)
+                }) {
+                    return true;
+                }
+            }
+            if let Some(domain) = self.iommu(reference) {
+                if domain
+                    .mappings
+                    .iter()
+                    .flatten()
+                    .any(|mapping| mapping.frame == object)
+                {
+                    return true;
+                }
+            }
+            if let Some(table) = self.tcb(reference) {
+                if table
+                    .ipc_buffer
+                    .is_some_and(|buffer| buffer.frame == object)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn endpoint_in_use(&self, object: ObjRef) -> bool {
+        let Some(endpoint) = self.endpoint(object) else {
+            return true;
+        };
+        if !endpoint.send.is_empty() || !endpoint.recv.is_empty() {
+            return true;
+        }
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if let Some(table) = self.tcb(reference) {
+                if table
+                    .fault_ep
+                    .is_some_and(|fault| self.cap_ref_matches(fault, object))
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn notification_in_use(&self, object: ObjRef) -> bool {
+        if self
+            .notification(object)
+            .is_some_and(|notification| notification.waiter.is_some())
+        {
+            return true;
+        }
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self
+                .tcb(reference)
+                .is_some_and(|table| table.bound_ntfn == Some(object))
+            {
+                return true;
+            }
+            if self
+                .irq(reference)
+                .is_some_and(|irq| irq.notification == Some(object))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn page_table_has_entries(&self, root: u64) -> bool {
+        let Some(ops) = self.page_table_ops else {
+            return false;
+        };
+        (0..512).any(|index| ops.read_pte(root, index) != 0)
+    }
+
+    fn vspace_in_use(&self, object: ObjRef) -> bool {
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self
+                .tcb(reference)
+                .is_some_and(|table| table.vspace == Some(object))
+            {
+                return true;
+            }
+            if let Some(space) = self.vspace(reference) {
+                if space.mappings.iter().any(Option::is_some) {
+                    return true;
+                }
+            }
+            if let Some(table) = self.page_table(reference) {
+                if table.mapped.is_some_and(|mapping| mapping.vspace == object) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn cnode_in_use(&self, object: ObjRef) -> bool {
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self
+                .tcb(reference)
+                .is_some_and(|table| table.cnode == Some(object))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn object_in_use(&self, object: ObjRef, ty: ObjType) -> bool {
+        match ty {
+            ObjType::Frame => self
+                .frame(object)
+                .is_some_and(|frame| self.frame_still_mapped(object, *frame)),
+            ObjType::Endpoint => self.endpoint_in_use(object),
+            ObjType::Notification => self.notification_in_use(object),
+            ObjType::PageTable => self.page_table(object).is_some_and(|table| {
+                table.mapped.is_some() || self.page_table_has_entries(table.root)
+            }),
+            ObjType::VSpace => self.vspace_in_use(object),
+            ObjType::CNode => self.cnode_in_use(object),
+            ObjType::SchedContext => false,
+            _ => true,
+        }
+    }
+
+    /// Destroy one retyped object through its root capability.  The caller
+    /// must hold the original retype cap (not a copy/mint), every derived cap
+    /// must already be revoked, and the object must not be in use.  The
+    /// object slot is released by `destroy_object`; memory reclamation is
+    /// handled by the Untyped that owns it.
+    pub fn destroy_cap_object(&mut self, tcb: ObjRef, slot: u8) -> KResult<()> {
+        let cap = self.lookup_cap(tcb, slot, None, Rights::WRITE)?;
+        let creator = self.get(cap.obj).ok_or(KError::ObjectDestroyed)?.creator;
+        match cap.ty {
+            ObjType::Frame
+            | ObjType::Endpoint
+            | ObjType::Notification
+            | ObjType::PageTable
+            | ObjType::VSpace
+            | ObjType::CNode
+            | ObjType::SchedContext => {}
+            _ => return Err(KError::InvalidArg),
+        }
+        let Some(creator) = creator else {
+            return Err(KError::NoRights);
+        };
+        if cap.root || cap.parent != Some(creator) {
+            return Err(KError::NoRights);
+        }
+        if self.other_caps_to(cap.obj, cap.id) != 0 {
+            return Err(KError::HasDependents);
+        }
+        if self.object_in_use(cap.obj, cap.ty) {
+            return Err(KError::Busy);
+        }
+        self.destroy_object(cap.obj)
+    }
+
     fn destroy_object(&mut self, obj: ObjRef) -> KResult<()> {
         let Some(kind) = self.get(obj).map(|object| object.kind) else {
             return Ok(());
@@ -4915,6 +5147,16 @@ impl Kernel {
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
+            n if n == SyscallId::ObjectDestroy as u64 => {
+                let slot = slot_arg(a0).unwrap_or(0);
+                match self.destroy_cap_object(tcb, slot) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
             n if n == SyscallId::SchedContextConfigure as u64 => {
                 let context = match self.lookup_cap(
                     tcb,
@@ -5998,6 +6240,188 @@ mod tests {
             .unwrap()
             .find(IOMMU_IOVA_BASE)
             .is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    fn test_root_with_untyped(kernel: &mut Kernel, base: usize, limit: usize) -> ObjRef {
+        let root = kernel.root().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(base, 0x4000, 4096, limit)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        root
+    }
+
+    fn retype_at(kernel: &mut Kernel, root: ObjRef, ty: ObjType, dest: u8) -> ObjRef {
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ty as u64,
+                dest as u64,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: dest as u64,
+                error: KError::Ok
+            }
+        );
+        kernel
+            .cap_at(SlotAddr {
+                tcb: root,
+                slot: dest,
+            })
+            .unwrap()
+            .obj
+    }
+
+    #[test]
+    fn object_destroy_requires_original_cap_and_no_dependents() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x700_0000, 8);
+        let endpoint = retype_at(&mut kernel, root, ObjType::Endpoint, 2);
+        kernel.copy_cap(root, 2, root, 3, Rights::ALL, 0).unwrap();
+        // A copy is not the root capability.
+        assert_eq!(kernel.destroy_cap_object(root, 3), Err(KError::NoRights));
+        // The root cap cannot be destroyed while another cap still points at it.
+        assert_eq!(
+            kernel.destroy_cap_object(root, 2),
+            Err(KError::HasDependents)
+        );
+        kernel.delete_cap(root, 3).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.get(endpoint).is_none());
+        assert!(kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).is_none());
+        assert_eq!(kernel.destroy_cap_object(root, 2), Err(KError::InvalidCap));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_refuses_mapped_frame() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x710_0000, 16);
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        let vspace = retype_at(&mut kernel, root, ObjType::VSpace, 3);
+        let mapping = kernel.map_frame(vspace, frame, 0, Rights::READ).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 2), Err(KError::Busy));
+        kernel.unmap_frame(vspace, mapping.va).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_refuses_dma_mapped_frame() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x715_0000, 16);
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        let domain = retype_at(&mut kernel, root, ObjType::Iommu, 3);
+        kernel
+            .iommu_map(domain, frame, IOMMU_IOVA_BASE, Rights::READ)
+            .unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 2), Err(KError::Busy));
+        kernel.iommu_unmap(domain, IOMMU_IOVA_BASE).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_refuses_endpoint_with_waiters() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x720_0000, 16);
+        let endpoint = retype_at(&mut kernel, root, ObjType::Endpoint, 2);
+        let sender = retype_at(&mut kernel, root, ObjType::Tcb, 3);
+        assert_eq!(
+            kernel.send(sender, endpoint, 0, Message::default(), false),
+            Ok(false)
+        );
+        assert_eq!(kernel.destroy_cap_object(root, 2), Err(KError::Busy));
+        assert!(kernel.recv(root, endpoint, 0).unwrap().is_some());
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_refuses_bound_notification() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x730_0000, 16);
+        let notification = retype_at(&mut kernel, root, ObjType::Notification, 2);
+        let tcb = retype_at(&mut kernel, root, ObjType::Tcb, 3);
+        kernel.bind_notification(tcb, notification).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 2), Err(KError::Busy));
+        kernel.tcb_mut(tcb).unwrap().bound_ntfn = None;
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_refuses_vspace_in_use() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x740_0000, 16);
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        let vspace = retype_at(&mut kernel, root, ObjType::VSpace, 3);
+        let mapping = kernel.map_frame(vspace, frame, 0, Rights::READ).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 3), Err(KError::Busy));
+        kernel.unmap_frame(vspace, mapping.va).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 3), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_refuses_attached_page_table() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x750_0000, 16);
+        let table = retype_at(&mut kernel, root, ObjType::PageTable, 2);
+        let vspace = retype_at(&mut kernel, root, ObjType::VSpace, 3);
+        kernel.page_table_mut(table).unwrap().mapped = Some(PageTableMapping {
+            vspace,
+            va_base: 0x4000_0000,
+            level: 2,
+        });
+        assert_eq!(kernel.destroy_cap_object(root, 2), Err(KError::Busy));
+        kernel.page_table_mut(table).unwrap().mapped = None;
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_rejects_unsupported_types() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x760_0000, 16);
+        // Untyped root cap is rejected even though other checks would pass.
+        assert_eq!(kernel.destroy_cap_object(root, 1), Err(KError::InvalidArg));
+        let tcb = retype_at(&mut kernel, root, ObjType::Tcb, 2);
+        assert_eq!(kernel.destroy_cap_object(root, 2), Err(KError::InvalidArg));
+        assert!(kernel.get(tcb).is_some());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_allows_sched_context_and_unbinds() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x770_0000, 16);
+        let context = retype_at(&mut kernel, root, ObjType::SchedContext, 2);
+        let tcb = retype_at(&mut kernel, root, ObjType::Tcb, 3);
+        kernel.configure_sched_context(context, 2, 10).unwrap();
+        kernel.bind_sched_context(tcb, context).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.tcb(tcb).unwrap().sched_context.is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_from_copy_holder_is_rejected() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x780_0000, 16);
+        let endpoint = retype_at(&mut kernel, root, ObjType::Endpoint, 2);
+        let other = retype_at(&mut kernel, root, ObjType::Tcb, 3);
+        kernel.copy_cap(root, 2, other, 2, Rights::ALL, 0).unwrap();
+        assert_eq!(kernel.destroy_cap_object(other, 2), Err(KError::NoRights));
+        assert!(kernel.get(endpoint).is_some());
         assert!(kernel.check_invariants().is_ok());
     }
 

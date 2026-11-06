@@ -155,6 +155,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 46e8ad6 feat: reap TCBs and serve two pager clients
 - 13c26f8 feat: add VFS stat-by-path request
 - 21063cf fix: remove fn-to-int cast warnings in root
+- 2d7db0e chore: reduce riscv boot stack to restore headroom
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -201,7 +202,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 112/112 PASS
+- `cargo test -p vifast-kernel`: 122/122 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -212,7 +213,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 200016 byte (`kernel_end=0x803cf2b0`)
+- RISC-V headroom: 261456 byte (`kernel_end=0x803c02b0`)
 - `Kernel = 709072`, `Object = 4744`, `Tcb = 4696`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
@@ -863,6 +864,7 @@ Số syscall chính:
 47 ConsoleRead — implemented
 48 CNodeInstall — implemented
 49 TcbDestroy — implemented
+50 ObjectDestroy — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,

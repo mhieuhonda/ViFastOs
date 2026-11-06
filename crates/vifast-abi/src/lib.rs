@@ -293,6 +293,10 @@ pub enum KError {
     NotImplemented = 17,
     WouldBlock = 18,
     NotFound = 19,
+    /// The object is still referenced by a mapping, queue, binding or TCB.
+    Busy = 20,
+    /// Other capabilities still point at the object (revoke them first).
+    HasDependents = 21,
 }
 
 impl KError {
@@ -318,6 +322,8 @@ impl KError {
             17 => KError::NotImplemented,
             18 => KError::WouldBlock,
             19 => KError::NotFound,
+            20 => KError::Busy,
+            21 => KError::HasDependents,
             _ => KError::InvalidArg,
         }
     }
@@ -344,6 +350,8 @@ impl KError {
             KError::NotImplemented => "NOT_IMPLEMENTED",
             KError::WouldBlock => "WOULD_BLOCK",
             KError::NotFound => "NOT_FOUND",
+            KError::Busy => "BUSY",
+            KError::HasDependents => "HAS_DEPENDENTS",
         }
     }
 }
@@ -604,6 +612,8 @@ pub enum SyscallId {
     CNodeInstall = 48,
     /// Destroy a non-current TCB after revoking/reparenting its cspace caps.
     TcbDestroy = 49,
+    /// Destroy a retyped object through its root capability.
+    ObjectDestroy = 50,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -660,6 +670,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::ConsoleRead, true),
     (SyscallId::CNodeInstall, true),
     (SyscallId::TcbDestroy, true),
+    (SyscallId::ObjectDestroy, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

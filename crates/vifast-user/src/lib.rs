@@ -1095,6 +1095,16 @@ pub fn tcb_set_priority(tcb_slot: u8, priority: u8) -> SyscallResult {
 /// Destroy a non-current TCB and release its object slot.  The target's
 /// cspace caps are reparented/removed first; its VSpace and stack frames are
 /// not implicitly destroyed.
+pub fn object_destroy(cap_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::ObjectDestroy as u64,
+            [cap_slot as u64, 0, 0, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn tcb_destroy(tcb_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(
