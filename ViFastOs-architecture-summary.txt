@@ -175,6 +175,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 809a1da refactor(M1.2a): add dedicated tcb context slot field
 - 91f7496 refactor(M1.2b): assign dense context slots to tcbs
 - d1b998f refactor(M1.2c): index trap contexts by tcb pool slot
+- d266ab7 refactor: wrap aarch64 per-cpu states without static mut
+- 36a5b91 refactor: wrap aarch64 kernel storage without static mut
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
