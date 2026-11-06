@@ -26,3 +26,4 @@
 | 42 | Probe net trước init + gắn virtio-net cả 2 arch | Serial đúng ở $TMPDIR; riscv net 0x10007000, arm 0xa003c00 | 66de790 |
 | 43 | Log MAC net cả 2 arch qua net_mac trước init | Cả hai mac=52:54:00:12:34:56; config-space đọc tốt | 8fc0ae8 |
 | 44 | Đọc feature bits net read-only, log kèm MAC | feats=0x30bf8024 đủ cho MVP 1 queue pair | d68f416 |
+| 45 | NetQueue static riêng ngoài Kernel, log addr/size | Khe hở AArch64 giữ 8B; .bss sau BKL còn chỗ | b7bb020 |
