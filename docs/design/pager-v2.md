@@ -39,16 +39,19 @@ Root cấp các cap này lúc spawn pager; pager không tự `CapCopy` từ clie
 Giữ label 64-bit, 4 data word, tối đa 1 cap chuyển kèm (`msg.cap`).
 
 ```text
-PAGER_FAULT   (client → pager)  data = [va, cause, fault_ep_slot, tcb]
+PAGER_FAULT   (kernel → pager)  data = [va, cause, fault_ep_slot, badge]
 PAGER_MAP     (root  → pager)  data = [vspace_slot, file_ino, offset, len]
 PAGER_UNMAP   (root  → pager)  data = [vspace_slot, va]
 PAGER_EVICT   (root  → pager)  data = [vspace_slot, va]
-PAGER_REPLY   (pager → root/client) data = [va, error, frame_pa?]
+PAGER_REPLY   (pager → root/client) data = [va, error, 0]
 ```
 
-- `PAGER_FAULT` do kernel sinh từ fault handler, không do client tự gửi.
+- **Client được xác định bằng badge 1..4** do root mint trên fault endpoint;
+  `data[3]` là badge, không phải TCB/object index của kernel.
+- `PAGER_FAULT` do kernel sinh; pager giữ bảng `badge -> (VSpace, TCB,
+  backing)`.
+- Trang file map **READ-only**; trang ẩn danh map READ|WRITE, không EXEC.
 - `error` dùng `KError` 32-bit; 0 = OK.
-- `frame_pa` chỉ để log/kiểm thử, không phải địa chỉ cấp cho user.
 
 ## 5. Luồng fault
 
@@ -88,6 +91,8 @@ PAGER_EVICT(vspace, va)
 - Frame phải không còn mapping nào (kể cả IOMMU, IPC buffer) → đã unmap.
 - Không còn cap copy: pager phải tiêu thụ/xoá cap phụ trước khi destroy, hoặc
   giữ đúng một cap gốc và dùng nó.
+- Chọn **ObjectDestroy rồi Retype lại** (không giữ pool Frame) để đi qua
+  reclaim; báo cáo `reused` lấy từ free list.
 - Page table leaf đã bị `FrameUnmap` xoá; không cần destroy PageTable (bảng
   dùng lại cho lần fault sau).
 
@@ -133,8 +138,9 @@ QEMU:
 
 ## 10. Câu hỏi mở
 
-1. Cấp PageTable cap cho pager hay để kernel tự tạo bảng khi `FrameMap` có
-   `PAGER` flag? (đề xuất: cấp cap, rõ ràng hơn.)
+1. ~~Cấp PageTable cap hay kernel tự tạo bảng?~~ **Đã chốt:** pager nhận
+   Untyped con riêng và tự `Retype(PageTable)`; gặp `MissingPageTable` thì
+   retype rồi thử lại.
 2. Có cần dirty bit để quyết định ghi lại trang? (đề xuất: mọi trang map RW
    đều coi là dirty ở MVP.)
 3. Giới hạn số client đồng thời có nên là 4 hay theo MAX_TCBS?
