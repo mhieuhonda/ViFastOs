@@ -1191,3 +1191,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-58.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `946ffb025a4610f2bc9e658d9a0964fcb758b421388803c118968a4512cd7211`.
+
+## 9.38 — Vòng 59: khóa net vào harness gate
+
+- `VIRTIO NET READY` exact-one riscv64+aarch64 (x86 loại trừ); fixture đúng
+  base thật; harness âm giữ 483.
+- Cổng: QEMU 3/3 ×3, persist 7×3, host 203, 0 warning (2 flaky đơn lẻ do tải
+  máy, chạy lại đều 3/3).
+- Xem `docs/agent2-report-59.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `d74aad27c89873aed58efefca23d83232ab733ae2155e08732bbb09333c901a5`.

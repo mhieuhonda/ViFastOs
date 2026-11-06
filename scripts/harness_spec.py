@@ -173,6 +173,7 @@ ARCH_EXACT_ONE = {
         "SMP SCHED OK",
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
+        "VIRTIO NET READY",
     ],
     "aarch64": [
         "SMP OK",
@@ -183,6 +184,7 @@ ARCH_EXACT_ONE = {
         "SMP SCHED OK",
         "SMP WORKERS OK",
         "SMP POST IDLE OK",
+        "VIRTIO NET READY",
     ],
     "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK", "SMP PREEMPT OK", "SMP TIMER RATE", "SMP IPI COUNT", "SMP SCHED OK", "SMP WORKERS OK", "SMP POST IDLE OK"],
 }

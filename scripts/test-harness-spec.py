@@ -26,6 +26,7 @@ def fixture(arch: str) -> str:
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
             "TLB STATS (va_flush=2, ipi=1, skipped=1)",
+            "VIRTIO NET READY base=0x10007000 accepted=0x10020",
         ]
     elif arch == "aarch64":
         lines += [
@@ -38,6 +39,7 @@ def fixture(arch: str) -> str:
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
             "TLB STATS (va_flush=2, ipi=0, skipped=0)",
+            "VIRTIO NET READY base=0xa003c00 accepted=0x10020",
         ]
     else:
         lines += [
