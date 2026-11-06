@@ -30,7 +30,10 @@ SECTIONS
 
     .stack (NOLOAD) : ALIGN(16) {
         __stack_bottom = .;
-        . += 0x40000;
+        /* 192 KiB boot stack: the BSP is the only hart using it and trap
+         * stacks live in KERNEL_STORAGE.  64 KiB are returned to the
+         * 4 MiB kernel window so object-destroy code keeps headroom. */
+        . += 0x30000;
         __stack_top = .;
         __kernel_end = .;
     }
