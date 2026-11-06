@@ -130,6 +130,84 @@ pub fn net_queue_info() -> (u64, usize) {
     (base, core::mem::size_of::<NetQueue>())
 }
 
+static mut NET_READY: bool = false;
+static mut NET_BASE: u64 = 0;
+
+/// Negotiate a VirtIO-net device at `base`: reset, ACK+DRIVER, read features,
+/// accept the MAC/STATUS/VERSION_1 subset we need for a 1-queue-pair MVP,
+/// attach queue 1 (TX) to the dedicated `NET_QUEUE` static, then DRIVER_OK.
+/// Queue 0 (RX) is left for the next round. Returns the accepted feature word.
+/// Mirrors `init_at` (block) but never touches the block queue or globals.
+pub fn net_init_tx(base: u64) -> Option<u64> {
+    fn read_at(base: u64, offset: u64) -> u32 {
+        unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
+    }
+    fn write_at(base: u64, offset: u64, value: u32) {
+        unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+    }
+    fn write64_at(base: u64, offset: u64, value: u64) {
+        write_at(base, offset, value as u32);
+        write_at(base, offset + 4, (value >> 32) as u32);
+    }
+    let magic = read_at(base, 0);
+    let version = read_at(base, 4);
+    let device = read_at(base, 8);
+    if magic != 0x7472_6976 || version != 2 || device != DEVICE_NET {
+        return None;
+    }
+    // We only need MAC + STATUS for the MVP; accept that subset.
+    const WANT: u64 = (1 << 5) | (1 << 16) | (1 << 32);
+    write_at(base, 0x70, 0);
+    write_at(base, 0x70, 1 | 2);
+    let offered = read_at(base, 0x10) as u64 | ((read_at(base, 0x14) as u64) << 32);
+    let accepted = offered & WANT;
+    write_at(base, 0x20, accepted as u32);
+    write_at(base, 0x24, (accepted >> 32) as u32);
+    write_at(base, 0x70, 1 | 2 | 8);
+    if read_at(base, 0x70) & 8 == 0 {
+        return None;
+    }
+    // Attach TX queue (index 1) to the dedicated static.
+    let queue = core::ptr::addr_of_mut!(NET_QUEUE);
+    unsafe {
+        (*queue).avail.idx = 0;
+        (*queue).used.idx = 0;
+        (*queue).hdr = [0; NET_HDR_SIZE];
+    }
+    write_at(base, 0x30, 1);
+    write_at(base, 0x38, QUEUE_SIZE as u32);
+    let qbase = queue as u64;
+    write64_at(
+        base,
+        0x80,
+        qbase + core::mem::offset_of!(NetQueue, desc) as u64,
+    );
+    write64_at(
+        base,
+        0x90,
+        qbase + core::mem::offset_of!(NetQueue, avail) as u64,
+    );
+    write64_at(
+        base,
+        0xa0,
+        qbase + core::mem::offset_of!(NetQueue, used) as u64,
+    );
+    write_at(base, 0x44, 1);
+    write_at(base, 0x70, 1 | 2 | 8 | 4);
+    if read_at(base, 0x70) & 4 == 0 {
+        return None;
+    }
+    unsafe {
+        NET_READY = true;
+        NET_BASE = base;
+    }
+    Some(accepted)
+}
+
+pub fn net_ready() -> bool {
+    unsafe { NET_READY }
+}
+
 static mut BASE: u64 = 0;
 static mut READY: bool = false;
 static mut LAST_BASE: u64 = 0;

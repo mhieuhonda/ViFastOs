@@ -1112,6 +1112,20 @@ impl Platform for RiscvPlatform {
                         mac[5],
                         feats
                     );
+                    // Vòng 46: init TX queue cho net (device riêng, chưa claim).
+                    match vifast_virtio::net_init_tx(base) {
+                        Some(acc) => vifast_kernel::klog!(
+                            RiscvPlatform,
+                            "VIRTIO NET READY base={:#x} accepted={:#x}",
+                            base,
+                            acc
+                        ),
+                        None => vifast_kernel::klog!(
+                            RiscvPlatform,
+                            "VIRTIO NET FAIL base={:#x}",
+                            base
+                        ),
+                    }
                 }
             }
         }

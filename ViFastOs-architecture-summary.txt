@@ -191,6 +191,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 66de790 feat: probe virtio-net before block init on riscv64+aarch64
 - 8fc0ae8 feat: log virtio-net MAC on both arches before block init
 - d68f416 feat: log virtio-net offered features on both arches
+- b7bb020 feat: add dedicated net split-queue static outside Kernel
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -2007,6 +2008,9 @@ E. Desktop / Space
     EVENT_IDX/VERSION_1); đủ cho MVP 1 queue pair.
 94. Vòng 45 (pha 3 bước 5): NetQueue static riêng ~4 KiB ngoài Kernel
     (khe hở AArch64 giữ nguyên 8B); log VIRTIO NETQ addr/size cả 2 arch.
+95. Vòng 46 (pha 3 bước 6): net_init_tx() reset/ACK/accept MAC+STATUS+
+    VERSION_1, gắn queue TX(1) vào NET_QUEUE, DRIVER_OK — cả 2 arch
+    NET READY accepted=0x10020; RX để vòng sau.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

@@ -1081,3 +1081,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-45.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `9c8b26bbd682d5e90b46601bd95d475251111eacbd948445a3647519d613d0f4`.
+
+## 9.25 — Vòng 46: init TX queue net (pha 3 bước 6)
+
+- `net_init_tx`: reset/ACK/accept MAC+STATUS+VERSION_1, gắn queue TX(1) vào
+  NET_QUEUE, DRIVER_OK; cả hai NET READY accepted=0x10020.
+- Khe hở static giữ 8B; cổng QEMU 3/3 ×3, persist 7×3, harness 483, host
+  203, 0 warning.
+- Xem `docs/agent2-report-46.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `5604fb94955d8a09d317599bfbee1d0d6e7a9bac51272f684b998c2e64d3d3ce`.
