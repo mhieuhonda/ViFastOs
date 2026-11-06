@@ -57,6 +57,8 @@ stack  = code + 0x1000 .. code + 0x8fff
 | 17 | `NotImplemented` | Syscall chưa hỗ trợ |
 | 18 | `WouldBlock` | Server đang giữ caller khác |
 | 19 | `NotFound` | Không tìm thấy file |
+| 20 | `Busy` | Object còn mapping/queue/binding/TCB đang dùng |
+| 21 | `HasDependents` | Còn capability khác trỏ tới object |
 
 ## 3. Quyền `Rights`
 
@@ -77,7 +79,7 @@ GRANT = 0x8
 ## 4. Object type và thread state
 
 `ObjType`: `Untyped`, `Tcb`, `Endpoint`, `Notification`, `CNode`, `Frame`,
-`VSpace`, `PageTable`, `SchedContext`.
+`VSpace`, `PageTable`, `SchedContext`, `Iommu`, `Irq`, `BlockDevice`.
 
 `ThreadState`: `Inactive`, `Ready`, `Running`, `BlockedSend`, `BlockedRecv`,
 `BlockedReply`, `BlockedNotification`, `Faulted`.
@@ -145,33 +147,59 @@ Số syscall là ổn định. `-` nghĩa là không dùng.
 
 | Số | Tên | Tham số chính | Kết quả/ghi chú |
 |---:|---|---|---|
-| 0 | `Send` | a0 endpoint cap, a1 label, a2..a4 data, a5 cap slot | Có thể block |
+| 0 | `Send` | a0 endpoint, a1 label, a2..a4 data, a5 cap slot | Có thể block |
 | 1 | `Call` | như `Send` | Block đến khi server `Reply` |
-| 2 | `Recv` | a0 endpoint cap, a1 recv slot cho cap | Trả message hoặc block |
-| 3 | `Reply` | a0 bỏ qua, a1 label, a2..a5 data | Trả lời caller hiện tại |
-| 4 | `ReplyRecv` | a0 endpoint cap, a1 recv slot, a2 label, a3..a5 data | Reply caller hiện tại rồi Recv; không caller thì chỉ Recv |
-| 5 | `Signal` | a0 notification cap | Set bit, đánh thức waiter |
-| 6 | `Wait` | a0 notification cap | Trả word hoặc block |
-| 7 | `Poll` | a0 notification cap | Trả word và clear |
-| 8 | `Yield` | — | Hiện trả `Ok`, chưa chuyển context |
-| 9 | `Retype` | a0 Untyped cap, a1 ObjType, a2 dest slot; Untyped con: a3 size bytes, a4 child max_objects | Endpoint/Notification/Tcb/Frame/PageTable/VSpace/Untyped con |
-| 10 | `CapCopy` | a0 src slot, a1 TCB cap, a2 dst slot, a3 rights | Copy cap sang TCB khác |
-| 14 | `CapRevoke` | a0 slot | Revoke cap; Untyped destroy object con + unmap qua PageTableOps |
-| 15 | `TcbConfigure` | a0 TCB cap, a1 entry, a2 stack, a3 VSpace cap, a4 priority, a5 fault endpoint cap slot (0 = none) | Set context/fault endpoint |
-| 16 | `TcbResume` | a0 TCB cap | Đưa TCB vào runqueue |
-| 24 | `PageTableMap` | a0 PageTable cap, a1 VSpace cap, a2 VA | Kernel tự chọn level; trả level; toàn bộ table_span phải nằm trong user range |
-| 25 | `FrameMap` | a0 VSpace cap, a1 Frame cap, a2 VA hint, a3 rights | Map, trả VA; rights phải có READ; từ chối W^X theo Frame |
-| 26 | `FrameUnmap` | a0 VSpace cap, a1 VA, a2 Frame cap | Unmap + flush; Frame cap phải khớp PA |
-| 27–31 | IO/IRQ | — | Chưa triển khai |
-| 32 | `DebugWrite` | a0 user ptr, a1 len | In ra console |
-| 33 | `GetTime` | — | Trả tick kernel |
+| 2 | `Recv` | a0 endpoint, a1 recv slot cho cap | Message hoặc block |
+| 3 | `Reply` | a1 label, a2..a5 data | Trả lời caller hiện tại |
+| 4 | `ReplyRecv` | a0 endpoint, a1 recv slot, a2 label, a3..a5 data | Reply rồi Recv; không caller thì chỉ Recv |
+| 5 | `Signal` | a0 notification | Set bit, đánh thức waiter |
+| 6 | `Wait` | a0 notification | Word hoặc block |
+| 7 | `Poll` | a0 notification | Word và clear |
+| 8 | `Yield` | — | Nhường CPU nếu có TCB Ready |
+| 9 | `Retype` | a0 Untyped, a1 ObjType, a2 dest; con Untyped: a3 size, a4 max_objects | Tạo object/con Untyped |
+| 10 | `CapCopy` | a0 src slot, a1 TCB cap, a2 dest, a3 rights | Copy cap sang TCB khác |
+| 11 | `CapMint` | a0 src, a1 TCB cap, a2 dest, a3 rights, a4 badge | Mint badge (Endpoint/Notification) |
+| 12 | `CNodeMint` | a0 src, a1 CNode cap, a2 dest index, a3 rights, a4 badge | Mint thẳng vào CNode |
+| 13 | `CapDelete` | a0 slot | Xoá cap lá; từ chối nếu còn con/object phụ thuộc |
+| 14 | `CapRevoke` | a0 slot | Revoke cây cap; Untyped revoke destroy object con |
+| 15 | `TcbConfigure` | a0 TCB, a1 entry, a2 stack, a3 VSpace, a4 priority, a5 fault endpoint slot | Set context/fault endpoint |
+| 16 | `TcbResume` | a0 TCB | Đưa TCB vào runqueue |
+| 17 | `TcbSuspend` | a0 TCB | Rút khỏi queue/endpoint |
+| 18 | `TcbRestart` | a0 TCB | Dựng lại context tại entry/stack |
+| 19 | `TcbSetPriority` | a0 TCB, a1 priority | Chỉ hạ/giữ trong priority caller |
+| 20 | `TcbSetAffinity` | a0 TCB, a1 hart mask | Requeue nếu đang queued |
+| 21 | `TcbBindNotification` | a0 TCB, a1 notification | Bind notification vào TCB |
+| 22 | `SchedContextConfigure` | a0 context, a1 budget, a2 period | 1 ≤ budget ≤ period |
+| 23 | `SchedContextBind` | a0 TCB, a1 context | 1 context ↔ 1 TCB |
+| 24 | `PageTableMap` | a0 PageTable, a1 VSpace, a2 VA | Kernel chọn level; trả level |
+| 25 | `FrameMap` | a0 VSpace, a1 Frame, a2 VA hint, a3 rights | Map; rights phải có READ; W^X theo Frame |
+| 26 | `FrameUnmap` | a0 VSpace, a1 VA, a2 Frame | Unmap + flush |
+| 27 | `IoMap` | a0 Iommu, a1 Frame, a2 IOVA, a3 rights | READ/WRITE, không EXEC |
+| 28 | `IoUnmap` | a0 Iommu, a1 IOVA | Xoá DMA mapping |
+| 29 | `IrqGet` | a0 logical IRQ, a1 dest slot | Root-only |
+| 30 | `IrqSetNotification` | a0 IRQ cap, a1 notification | Signal nếu đang pending |
+| 31 | `IrqAck` | a0 IRQ cap | Xoá pending |
+| 32 | `DebugWrite` | a0 user ptr, a1 len | In console |
+| 33 | `GetTime` | — | Tick kernel toàn hệ thống |
 | 34 | `Exit` | — | Thoát QEMU |
 | 35 | `Open` | a0 path ptr, a1 len, a2 flags | Trả fd |
-| 36 | `Read` | a0 fd, a1 buffer ptr, a2 len | Trả số byte |
-| 37 | `Write` | a0 fd, a1 buffer ptr, a2 len | Trả số byte |
+| 36 | `Read` | a0 fd, a1 buffer, a2 len | Trả số byte |
+| 37 | `Write` | a0 fd, a1 buffer, a2 len | Trả số byte |
 | 38 | `Close` | a0 fd | Đóng fd |
 | 39 | `Stat` | a0 fd | Trả kích thước |
 | 40 | `Seek` | a0 fd, a1 offset | Trả offset mới |
+| 41 | `TcbSetIpcBuffer` | a0 TCB, a1 Frame, a2 VA | Gắn IPC buffer |
+| 42 | `FrameWrite` | a0 Frame, a1 offset, a2 ptr, a3 len | Ghi qua PA |
+| 43 | `BlockRead` | a0 LBA, a1 buffer | 512 byte |
+| 44 | `BlockWrite` | a0 LBA, a1 buffer | 512 byte |
+| 45 | `BlockFlush` | — | Flush cache thiết bị |
+| 46 | `Sleep` | a0 deadline tick | BlockedSleep |
+| 47 | `ConsoleRead` | a0 buffer, a1 len | Đọc input IRQ-driven |
+| 48 | `CNodeInstall` | a0 TCB, a1 CNode cap (0 = bỏ) | Chỉ TCB Inactive/Suspended/Faulted |
+| 49 | `TcbDestroy` | a0 TCB | Reparent cspace rồi destroy |
+| 50 | `ObjectDestroy` | a0 cap slot gốc | Destroy Frame/Endpoint/Notification/PageTable/VSpace/CNode/SchedContext; trả bộ nhớ về Untyped |
+
+Tất cả 51 số 0..50 đều có handler (`SYSCALL_STATUS = true`).
 
 ## 7. Quy ước thanh ghi
 

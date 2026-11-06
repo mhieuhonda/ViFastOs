@@ -78,16 +78,18 @@ def main() -> int:
     summary_hash = hashlib.sha256(summary_bytes).hexdigest()
 
     log = LOG.read_text()
-    match = re.search(
+    # The log appends one SHA block per round; the newest entry is the current
+    # summary hash.
+    matches = re.findall(
         r"SHA-256 `ViFastOs-architecture-summary\.txt`: `([0-9a-f]{64})`", log
     )
-    if not match:
+    if not matches:
         print("overnight log has no summary SHA-256", file=sys.stderr)
         return 1
-    if match.group(1) != summary_hash:
+    if matches[-1] != summary_hash:
         print(
             "summary SHA-256 mismatch: "
-            f"log={match.group(1)} file={summary_hash}",
+            f"log={matches[-1]} file={summary_hash}",
             file=sys.stderr,
         )
         return 1

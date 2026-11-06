@@ -14,9 +14,12 @@ symlink, double-indirect, O_APPEND/O_EXCL/O_DIRECTORY, `STAT_PATH`, block
 cache write-back data, fsync/flush thật**, persistence 7 phase,
 **Sleep deadline + BSP idle TCB**, **SchedContext budget/period**, `TcbRestart`,
 `TcbBindNotification`, và **console input + shell nhỏ** (`ls`, `cat`, `stat`,
-`sync`...). Có 50 syscall number (50 implemented, 0 placeholder). CNode phẳng
-+ CNodeInstall, user-space pager server hai client, TCB destroy/reap, Timer IRQ
-và UART IRQ dùng object IRQ + notification; shell block trên UART IRQ.
+`sync`...). Có 51 syscall number (51 implemented, 0 placeholder).
+`ObjectDestroy` (50) destroy từng Frame/Endpoint/Notification/PageTable/VSpace/
+CNode/SchedContext và trả bộ nhớ về Untyped (watermark + free list, có bộ đếm
+`leaked`). CNode phẳng + CNodeInstall, user-space pager server hai client,
+TCB destroy/reap, Timer IRQ/UART IRQ dùng object IRQ + notification; shell
+block trên UART IRQ.
 
 Đây vẫn chưa phải một hệ điều hành dùng được hàng ngày: chưa có driver
 network/GPU, compositor, hardware IOMMU, CNode guard/nhiều cấp, ứng dụng

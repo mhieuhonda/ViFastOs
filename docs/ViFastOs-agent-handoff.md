@@ -1,6 +1,6 @@
 # ViFastOs — Báo cáo bàn giao cho agent0
 
-**Phiên bản:** 2026-11-06, sau vòng 22.2  
+**Phiên bản:** 2026-11-06, cập nhật sau vòng 23 (ObjectDestroy)  
 **Repo:** `/Users/mps/dvchd/ViFastOs` (nhánh `main`)  
 **HEAD:** `c86de49` — `docs: document VFS stat-by-path`  
 **Mốc code gần nhất:** `13c26f8` — VFS `STAT_PATH`  
@@ -35,7 +35,8 @@ hệ điều hành production.
   TCB nạp từ Rust ELF. Root, server, client có VSpace riêng; fault1–3 dùng
   VSpace root, fault4 dùng VSpace client; các TCB demo (idle, CNode worker,
   pager) chạy trong VSpace root.
-- **50/50 syscall number implemented, 0 placeholder** (bảng `SYSCALL_STATUS`).
+- **51/51 syscall number implemented, 0 placeholder** (bảng `SYSCALL_STATUS`),
+  gồm `ObjectDestroy` (50) + reclaim Untyped (free list 16 vùng, `leaked`).
 - Object/capability/Untyped/retype, IPC Call/Reply/ReplyRecv, notification,
   chuyển capability qua IPC, badge, revoke theo cây.
 - SMP 2 hart cả 3 kiến trúc: scheduler trên hart phụ, ready queue theo hart,
@@ -124,8 +125,8 @@ Kết quả ngày 2026-11-06:
 | Host test `vifast-acpi` | 8/8 PASS |
 | Host test `vifast-fs` | 22/22 PASS |
 | `vifast-runtime`, `vifast-user`, `vifast-fsutil` | 0 unit test (kiểm qua QEMU/build) |
-| Tổng host test duy nhất | **177** |
-| Harness âm | **426 case PASS** |
+| Tổng host test duy nhất | **192** |
+| Harness âm | **435 case PASS** |
 | QEMU `--repeat 3` | riscv64 **3/3**, aarch64 **3/3**, x86_64 **3/3** |
 | Exit code QEMU | RISC-V 0, AArch64 0, x86_64 **3** (`isa-debug-exit`) |
 | Persistence | **7 phase × 3 kiến trúc PASS** (24 dòng PASS, 0 FAIL) |
@@ -222,6 +223,7 @@ DATA UNTYPED pages=69/76 objects=66/76
 | 20 | per-hart runqueue + work stealing; VFS bulk I/O; hard link; FS v3 bền vững | scheduler SMP thật + VFS dùng được |
 | 21 | Chuẩn hóa tên; write-through cache; fsync/BlockFlush; VF04 double-indirect; Sleep deadline; TcbRestart/BindNotification; console input + shell; O_TRUNC/fsutil; tăng capacity | mở đường driver + userland |
 | 22 | SchedContext budget; IRQ object + timer/UART IRQ; CNode phẳng; O_APPEND; write-back data; pager demo; TcbDestroy/reap; O_EXCL/O_DIRECTORY; pager server 2 client; STAT_PATH | **50/50 syscall, hết placeholder; user-space service thật** |
+| 23 | ObjectDestroy + reclaim Untyped; demo DESTROY OK; 0 warning; docs/bundle 21-22; -smp 4 thử; pager v2 design | **51/51 syscall; vòng đời object khép kín** |
 
 Trong khoảng từ mốc vòng 20 (`925f633`) đến HEAD có **46 commit**, chủ yếu là
 feature + docs sync. Tốc độ hiện tại: vài feature dọc/ngày, mỗi feature kèm
@@ -235,7 +237,7 @@ host test + QEMU + persistence khi chạm FS.
   chi tiết MMU/GIC/PIC/ACPI.
 - **Lõi portable sạch**: kernel/runtime/fs không `unsafe`, không `cfg(target)`;
   platform là nơi duy nhất chạm asm/MMIO.
-- **Harness mạnh**: 426 case âm bảo vệ hợp đồng; marker cụ thể, đếm chính xác.
+- **Harness mạnh**: 435 case âm bảo vệ hợp đồng; marker cụ thể, đếm chính xác.
 - **FS thực dụng**: journal, cache, fsync, hard/sym link, persistence 7 phase;
   đây là phần "giống OS" nhất.
 - **User-space service**: VFS server và pager server chạy ngoài kernel, đúng
@@ -260,7 +262,7 @@ host test + QEMU + persistence khi chạm FS.
 ### 2.4 Kết luận tiến độ
 
 Dự án đã vượt giai đoạn "bring-up kernel": hiện là **microkernel có user-space
-services, FS bền vững, SMP 2 hart và 50 syscall**. Khoảng cách còn lại tới mục
+services, FS bền vững, SMP 2 hart và 51 syscall**. Khoảng cách còn lại tới mục
 tiêu "OS dùng được" nằm ở **driver + userland + bộ nhớ/scale**, không còn ở
 lõi ABI. Vì vậy các vòng tiếp theo nên ưu tiên (a) vòng đời object/bộ nhớ,
 (b) pager tổng quát, (c) thiết bị mạng/đồ họa — thay vì thêm syscall.
@@ -786,7 +788,7 @@ Một commit = một thay đổi logic + docs liên quan. Không commit binary/`
 | `scripts/check-all.sh` | cổng cục bộ: fmt + build + QEMU repeat 3 + persist + harness + docs |
 | `scripts/test-qemu.py` | boot QEMU, đối chiếu `harness_spec.py`, dump artifact khi timeout |
 | `scripts/test-persist.py` | 7 phase × 3 arch, dùng `vifast-fsutil` |
-| `scripts/test-harness-spec.py` | 426 case âm cho harness |
+| `scripts/test-harness-spec.py` | 435 case âm cho harness |
 | `scripts/gen-docs.py` | sinh summary từ ABI/git/test/target json |
 | `scripts/check-docs.py` | kiểm summary/handoff khớp code + harness |
 | `scripts/make-bundle.py` | bundle 1 file: report + status + summary |
@@ -874,7 +876,7 @@ Một commit = một thay đổi logic + docs liên quan. Không commit binary/`
 
 ---
 
-## Phụ lục A — 50 syscall (0..49)
+## Phụ lục A — 51 syscall (0..50)
 
 ```text
  0 Send              1 Call               2 Recv              3 Reply
@@ -889,10 +891,10 @@ Một commit = một thay đổi logic + docs liên quan. Không commit binary/`
 35 Open             36 Read              37 Write             38 Close
 39 Stat             40 Seek              41 TcbSetIpcBuffer   42 FrameWrite
 43 BlockRead        44 BlockWrite        45 BlockFlush        46 Sleep
-47 ConsoleRead      48 CNodeInstall      49 TcbDestroy
+47 ConsoleRead      48 CNodeInstall      49 TcbDestroy       50 ObjectDestroy
 ```
 
-Tất cả `SYSCALL_STATUS = true` (implemented); không còn placeholder.
+Tất cả `SYSCALL_STATUS = true` (implemented, 0..50); không còn placeholder.
 
 ## Phụ lục B — Commit tiêu biểu (một phần, từ mốc vòng 20)
 

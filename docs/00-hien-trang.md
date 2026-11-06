@@ -20,6 +20,7 @@ chưa được port sang bản bare-metal này.
 | Root/server/client VSpace riêng | có | có | có |
 | IPC Call/Reply, notification, cap transfer | có | có | có |
 | Untyped con + BootInfo + TCB idle/restart/bind | có | có | có |
+| `ObjectDestroy` + reclaim Untyped (7 loại object) | có | có | có |
 | VFS v3 journal + directory + permission | có | có | có |
 | Hard link / symlink / double-indirect / O_APPEND / O_EXCL / O_DIRECTORY / STAT_PATH | có | có | có |
 | Block cache write-back data + fsync/BlockFlush | có | có | có |
@@ -55,8 +56,12 @@ Kernel portable hiện có:
   `STAT_PATH`, block cache write-back cho data, write-through journal/metadata,
   `fsync` → `BlockFlush`;
 - software IOMMU domain + `IoMap`/`IoUnmap`;
-- 50 syscall number: 50 implemented, 0 placeholder; CNode phẳng, SchedContext
+- 51 syscall number: 51 implemented, 0 placeholder; CNode phẳng, SchedContext
   budget/period, timer IRQ/UART IRQ, TCB destroy/reap đã chạy;
+- `ObjectDestroy` (số 50) cho Frame/Endpoint/Notification/PageTable/VSpace/
+  CNode/SchedContext: chỉ cap gốc, không còn cap khác, object không đang dùng
+  (`Busy`/`HasDependents`); bộ nhớ trả về Untyped qua watermark + free list 16
+  vùng đã hợp nhất, có bộ đếm `leaked` khi free list đầy;
 - console input IRQ qua UART 16550/PL011/COM1, RxQueue lock-free và shell
   block trên notification UART thay vì polling.
 - fault endpoint → user-space pager server map Frame → TcbResume cho hai
@@ -71,7 +76,8 @@ Kernel portable hiện có:
 - Mount/pager tổng quát (demo pager mới xử lý hai client), barrier phần cứng
   thật, driver disk ngoài QEMU.
 - Khóa mịn/x2APIC; scheduler mới test 2 hart.
-- Allocator vật lý tổng quát/free object ngoài revoke.
+- Allocator vật lý tổng quát (reclaim chỉ nằm trong từng Untyped; chưa có
+  free page toàn cục), barrier phần cứng thật.
 - CI (GitHub không dùng), formal verification/Kani/Verus.
 - Userland đầy đủ: libc, shell hệ thống, dynamic linking, ứng dụng thật.
 
@@ -99,10 +105,12 @@ python3 scripts/check-docs.py
 ```
 
 Kỳ vọng: 3/3 kiến trúc PASS, persistence 7 phase × 3 PASS, host test PASS,
-0 warning. Client in `SLEEP OK` và `shell> ` sau demo; QEMU test-exit tự thoát.
+0 warning; root in `DESTROY OK (frames=100, vspaces=10, reused=100, leaked=0)`;
+client in `SLEEP OK` và `shell> ` sau demo; QEMU test-exit tự thoát.
+Cổng đầy đủ: `./scripts/check-all.sh` (gồm harness 435 case âm).
 
 ## Tài liệu thành phần
 
 - [`docs/11-hien-tai/00-index.md`](11-hien-tai/00-index.md)
 - [`ViFastOs-architecture-summary.txt`](../ViFastOs-architecture-summary.txt)
-- [`docs/agent2-report-21.md`](agent2-report-21.md)
+- [`docs/agent2-report-23.md`](agent2-report-23.md)

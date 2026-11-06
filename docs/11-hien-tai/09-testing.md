@@ -43,7 +43,7 @@ Thứ tự:
 2. `cargo test -p vifast-kernel layout_sizes_for_status -- --nocapture`
    (in kích thước `Kernel`/`Object`/`Tcb`/`Cap`).
 3. `cargo build -p vifast-fsutil` (công cụ host cho persistence).
-4. `python3 scripts/test-harness-spec.py` (426 case âm).
+4. `python3 scripts/test-harness-spec.py` (435 case âm).
 5. Build root/server/client ELF cho 3 target, `llvm-objcopy --strip-all`,
    kiểm tra bằng `scripts/check-root-elf.sh` (ET_EXEC, segment/window,
    soft-float).
@@ -52,9 +52,9 @@ Thứ tự:
 Kết quả baseline 2026-11-06:
 
 ```text
-root ELF OK: riscv64imac   size=22808 bytes memsz=16650
-root ELF OK: aarch64       size=26632 bytes memsz=18912
-root ELF OK: x86_64        size=25296 bytes memsz=18067
+root ELF OK: riscv64imac   size=22960 bytes memsz=17064
+root ELF OK: aarch64       size=26784 bytes memsz=20268
+root ELF OK: x86_64        size=29440 bytes memsz=19431
 build complete (0 warning)
 ```
 
@@ -62,14 +62,14 @@ build complete (0 warning)
 
 | Crate | Số test | Ghi chú |
 |---|---|---|
-| `vifast-kernel` | **112/112** | + 1 test fuzz dài `#[ignore]`, chạy `--ignored` |
+| `vifast-kernel` | **127/127** | + 1 test fuzz dài `#[ignore]`, chạy `--ignored` |
 | `vifast-arch` | 7/7 | |
 | `vifast-pte` | 11/11 | |
 | `vifast-elf` | 17/17 | |
 | `vifast-acpi` | 8/8 | |
 | `vifast-fs` | 22/22 | |
 | `vifast-runtime`, `vifast-user`, `vifast-fsutil` | 0 | kiểm qua QEMU/build |
-| **Tổng duy nhất** | **177** | |
+| **Tổng duy nhất** | **192** | |
 
 Phạm vi chính của `vifast-kernel`:
 
@@ -135,11 +135,11 @@ Tóm tắt:
   `PERCPU CLOBBER OK`, `TIME MONOTONIC OK`, `TLB REMAP OK`, `CAP DELETE OK`,
   `TCB SUSPEND OK`, `FS LARGE OK`, `FS APPEND OK`, `FS OPEN FLAGS OK`,
   `FS STAT PATH OK`, `HARD LINK OK`, `SYMLINK OK`, `IRQ OK`, `CNODE OK`,
-  `TCB REAP OK`, `PAGER OK`, `PAGER2 OK`.
+  `TCB REAP OK`, `PAGER OK`, `PAGER2 OK`, `DESTROY OK`.
 - **Fault**: đúng **6** dòng `USER FAULT`; phải có các địa chỉ `0x80000000`,
   `0x1000002000`, `0x1000301000`, `0x1001000000`, `0x1001001000`
   (record còn lại hiện là `0x0`).
-- **Không được xuất hiện**: các marker `... BAD` tương ứng, `ROOT PANIC`,
+- **Không được xuất hiện**: các marker `... BAD` tương ứng (gồm `DESTROY BAD`), `ROOT PANIC`,
   `STALL`, `BOOT HANDOFF FAIL`, `KERNEL IRQ OUTSIDE IDLE`, `AP PIC IRQ`,
   `FS CORRUPT`.
 - **RISC-V/AArch64**: `SMP OK (... ipi=1)`, `SMP TIMER RATE`, `SMP TIMER OK`,
@@ -177,7 +177,7 @@ Script không có `--help`; gọi không tham số là chạy toàn bộ.
 
 ## 6. Harness âm — `scripts/test-harness-spec.py`
 
-426 case: mỗi điều kiện trong `harness_spec.py` bị xoá khỏi output tổng hợp và
+435 case: mỗi điều kiện trong `harness_spec.py` bị xoá khỏi output tổng hợp và
 kiểm tra rằng `accept()` trả `False`. Case đặc biệt: fault count/address,
 SMP counter, thứ tự marker, exit code, feature mode.
 

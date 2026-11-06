@@ -791,3 +791,46 @@ follow-up `62b31f4`.
 - Client có `vfs_stat_path`; test `/motd`, `/`, path không tồn tại.
 - Output mới `FS STAT PATH OK`; harness 426 case.
 - QEMU repeat 3/3, persistence 7×3; kernel 112/112.
+
+## 9.03 — Vòng 23: ObjectDestroy + reclaim Untyped
+
+- Pha A: sửa 4 warning `function_casts_as_integer` ở `vifast-root` (0 warning);
+  viết lại `docs/11-hien-tai/09-testing.md`; bổ sung crate `vifast-fs`,
+  `vifast-fsutil`, `vifast-virtio`, `vifast-acpi`, `vifast-server`,
+  `vifast-client` vào bảng crate; sửa mô tả NUMERIC "5" → "6 USER FAULT"
+  (giữ `accept()` = 6); gắn `[HISTORICAL]` cho mục changelog và sửa số liệu
+  hiện tại trong summary; cập nhật SHA log + sinh bundle 21, 22.
+- Pha B:
+  - `ObjectDestroy` = syscall 50; chỉ nhận cap gốc (`cap.parent ==
+    object.creator`), từ chối bản copy/mint (`NoRights`), còn cap khác
+    (`HasDependents`), đang dùng (`Busy`); mã lỗi mới 20/21 ở cuối enum.
+  - Hỗ trợ Frame/Endpoint/Notification/PageTable/VSpace/CNode/SchedContext;
+    Tcb/Untyped/Irq/Iommu/BlockDevice trả `InvalidArg`.
+  - Reclaim Untyped: `untyped_take` ưu tiên vùng free đúng kích thước, rồi
+    first-fit, rồi bump; `untyped_reclaim` hạ watermark/gộp vùng, free list
+    16 entry, `leaked` khi đầy; object lưu `alloc_offset/alloc_len`.
+  - 15 host test mới (ObjectDestroy + reclaim + zero-on-reuse).
+  - Demo root: 100 vòng Frame map/write/unmap/destroy + 10 VSpace; thử destroy
+    Frame đang map (`Busy`) và slot cũ (`InvalidCap`); in
+    `DESTROY OK (frames=100, vspaces=10, reused=100, leaked=0)`.
+  - Harness thêm `DESTROY OK` (exact one), `DESTROY BAD` (forbidden): 435 case.
+- Hạ boot stack RISC-V 256→192 KiB để giữ headroom sau khi thêm code; hiện
+  `kernel_end=0x803d02b0`, headroom 261.456 byte.
+- Sửa flaky phát hiện khi demo đặt trước `ROOT_READY`: 200 map/unmap sinh IPI
+  TLB khi hart phụ đã load root VSpace, làm timeout RISC-V và lệch timer x86.
+  Chuyển demo lên trước `spawn_idle` (chưa TCB phụ nào dùng root VSpace) và
+  chọn VA trong span 2 MiB của root ELF; thêm free list nhỏ cho SlotAllocator
+  để worker E trên x86 không hết slot.
+- Pha C:
+  - `-smp 4`: RISC-V/AArch64 boot PASS, chỉ 2 hart online (HSM/PSCI start 1
+    hart phụ); x86_64 panic `AP EXCEPTION`/exit 7 vì mới có trampoline cho một
+    AP.
+  - Soak `--repeat 10`: 10/10 cả 3 kiến trúc, 0 flaky, 2m21s.
+  - `docs/design/pager-v2.md`: protocol MAP/UNMAP/EVICT/FAULT_REPLY, cap
+    VSpace/PageTable/TCB, evict = unmap + ObjectDestroy, test plan `PAGER3 OK`.
+  - Khảo sát `static mut` AArch64: bảng biến/người ghi/bảo vệ trong báo cáo
+    vòng 23; không có data race nếu giữ bất biến per-hart/1-writer.
+- Số liệu cuối: kernel 127/127 (+1 fuzz ignored), tổng host test 192;
+  harness 435; QEMU 3/3 ×3; persistence 7×3; 0 warning; `Kernel=710248`,
+  `Object=4752`, `Tcb=4696`, `Cap=64`; SYSCALL_STATUS 51/51.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `0cbf117fc7aa8f6f8a7e569ca79cbd5b1929983e36613b8cacb11b44de47cf66`.

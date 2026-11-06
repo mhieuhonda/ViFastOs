@@ -8,12 +8,14 @@ Nguồn: `crates/vifast-kernel/src/object.rs`,
 Kernel dùng một bảng cố định:
 
 ```rust
-MAX_OBJECTS = 128
-MAX_TCBS    = 16
-MAX_CAPS    = 64
-MAX_QUEUE   = 8
-MAX_FDS     = 8
-MAX_MAPPINGS = 32
+MAX_OBJECTS  = 147
+MAX_TCBS     = 18
+MAX_CAPS_ROOT = 96
+MAX_CAPS_TASK = 64
+MAX_QUEUE    = 8
+MAX_FDS      = 8
+MAX_MAPPINGS = 64
+MAX_IOMMU_MAPPINGS = 32
 ```
 
 Mỗi object có:
@@ -24,6 +26,8 @@ pub struct Object {
     pub kind: Kind,
     pub owner: Option<ObjRef>, // Untyped đã tạo object
     pub creator: Option<CapRef>, // cap chính xác đã dùng để retype
+    pub alloc_offset: u32, // offset trong Untyped, dùng để reclaim
+    pub alloc_len: u32,    // số byte đã charge
 }
 ```
 
@@ -43,6 +47,11 @@ use-after-free mà không cần con trỏ thô trong lõi portable.
 | `Frame` | Trang vật lý có thể map |
 | `VSpace` | Reverse mapping table + root page table |
 | `PageTable` | Metadata page table page |
+| `CNode` | Bảng cap phẳng 64 slot |
+| `SchedContext` | Budget/period + TCB bound |
+| `Irq` | Logical IRQ + notification + pending |
+| `Iommu` | Domain + 32 DMA mapping |
+| `BlockDevice` | Cap quyền block I/O |
 
 ## 2. Capability
 
@@ -106,25 +115,50 @@ pub struct Untyped {
     pub max_objects: usize,
     pub objects: usize,
     pub reserved: usize,
+    pub free: [Option<FreeRegion>; 16], // (offset, len) đã trả
+    pub leaked: u32,                    // byte trả khi free list đầy
 }
+
+pub struct FreeRegion { pub offset: u32, pub len: u32 }
 ```
 
 `retype` hiện hỗ trợ:
 
-- `Frame`: cấp một page, `pa` căn theo `page_size`;
-- `PageTable`: cấp một page, `root = pa`, `level = 3`;
-- `Endpoint`: tiêu 256 byte Untyped;
-- `Notification`: tiêu 128 byte Untyped;
-- `Tcb`: tiêu 1024 byte Untyped.
+| Loại | Charge | Ghi chú |
+|---|---:|---|
+| `Frame` | page (4096) | `pa` căn page; zero lại khi cấp |
+| `PageTable` | page | `root = pa`; zero lại khi cấp |
+| `VSpace` | page × `vspace_pages` | root + aux; zero/install kernel |
+| `Endpoint` | 256 | |
+| `Notification` | 128 | |
+| `Tcb` | 4096 | quota, không phải `size_of::<Tcb>` |
+| `CNode` | 4096 | |
+| `SchedContext` | 64 | |
+| `Iommu` | 1024 | |
+| `BlockDevice` | 64 | |
 
-Mỗi object đều tiêu `bump` và một slot `objects`; nếu không đủ byte hoặc
-không đủ `objects + reserved + 1`, trả `OutOfMemory`. `reserved` giữ tổng
-`max_objects` của các Untyped con trực tiếp, để sibling không tiêu hết quota
-của con. Retype Untyped con lấy vùng căn trang từ bump của cha; con có bump/
-objects/reserved riêng. Revoke Untyped cha thu hồi object bên trong con trước,
-sau đó hủy con và trả `reserved`; revoke cap con chỉ reset nội dung của con,
-không đụng tới cha. Revoke Untyped destroy object thật, đặt `Kind::Free`, tăng
-`gen`, rồi reset `bump = 0`, `objects = 0`.
+Cấp phát (`untyped_take`):
+
+1. Tìm vùng free **đúng kích thước** và căn đúng `align`;
+2. nếu không có, lấy vùng free lớn hơn đầu tiên (first fit, tách phần dư);
+3. nếu hết, cấp từ `bump` (căn lên theo `align`).
+
+Thu hồi (`untyped_reclaim`) khi object bị destroy:
+
+- nếu vùng nằm sát `bump` (đỉnh): hạ `bump`, rồi gộp tiếp các vùng free
+  liền kề bên dưới;
+- ngược lại: gộp với vùng free liền kề và đưa vào free list 16 entry;
+- free list đầy: object vẫn bị destroy nhưng byte được cộng vào `leaked`
+  (không tái sử dụng, được in ra để theo dõi);
+- vùng chồng lấn (double free) bị coi là leak, không làm hỏng free list.
+
+Mỗi object đều tiêu một slot `objects`; nếu không đủ byte hoặc không đủ
+`objects + reserved + 1`, trả `OutOfMemory`. `reserved` giữ tổng `max_objects`
+của các Untyped con trực tiếp, để sibling không tiêu hết quota của con.
+Retype Untyped con lấy vùng căn trang từ cha (qua free list hoặc bump); con có
+bump/objects/reserved/free riêng. Revoke Untyped cha thu hồi object bên trong
+con trước, sau đó hủy con và trả `reserved`; revoke cap con chỉ reset nội dung
+của con, không đụng tới cha.
 
 ## 4. Frame, VSpace, PageTable
 
@@ -192,9 +226,41 @@ mỗi trang vật lý chỉ có một bộ đếm W/X duy nhất.
 
 ## 5. Object lifecycle
 
-Object table **chưa có API free tổng quát**. Đường `revoke Untyped` đã destroy
-Frame/TCB/Endpoint/Notification con, unmap Frame và tăng generation; ngoài
-đường đó chưa có syscall free object/frame độc lập.
+Có ba đường destroy:
+
+1. `CapRevoke` trên Untyped: thu hồi cả cây object do các cap con tạo;
+2. `TcbDestroy` (49): reparent cspace rồi destroy một TCB không phải current;
+3. `ObjectDestroy` (50): destroy **một** object qua cap gốc.
+
+`ObjectDestroy` chấp nhận `Frame`, `Endpoint`, `Notification`, `PageTable`,
+`VSpace`, `CNode`, `SchedContext`; từ chối `Tcb`, `Untyped`, `Irq`, `Iommu`,
+`BlockDevice` bằng `InvalidArg`.
+
+Điều kiện (kiểm theo thứ tự):
+
+1. cap hợp lệ, object còn sống, caller có `WRITE`;
+2. cap là cap gốc do `Retype` tạo (`cap.parent == object.creator`), không phải
+   bản copy/mint và không phải cap runtime (`root = true`);
+3. không còn cap nào khác trỏ tới object → nếu còn trả `HasDependents`
+   (phải `CapRevoke` trước);
+4. object không đang dùng → nếu đang dùng trả `Busy`:
+
+| Loại | Busy khi |
+|---|---|
+| Frame | còn mapping trong bất kỳ VSpace, IOMMU domain, hoặc là IPC buffer |
+| Endpoint | send/recv queue không rỗng, hoặc là `fault_ep` của TCB |
+| Notification | có waiter, bind vào TCB, hoặc gắn với IRQ |
+| PageTable | đang gắn vào VSpace, hoặc còn PTE khác 0 |
+| VSpace | có TCB dùng, còn mapping, hoặc có PageTable gắn vào |
+| CNode | đang là cspace của TCB |
+| SchedContext | không từ chối: destroy tự unbind + đánh thức TCB |
+
+Thành công: gọi `destroy_object` (unmap/detach nếu cần), xoá cap, trả slot
+object về `Free`, tăng `gen`, trả byte về Untyped qua `untyped_reclaim`.
+`SchedContext` đang budget-blocked được đưa về Ready và wake.
+
+Chưa có: destroy `Irq/Iommu/BlockDevice/Untyped`, huỷ Frame đang map (phải
+`FrameUnmap` trước), pager eviction (sẽ dùng ObjectDestroy ở vòng 24).
 
 ## 6. Invariant checker
 
@@ -211,7 +277,9 @@ Frame/TCB/Endpoint/Notification con, unmap Frame và tăng generation; ngoài
 - Frame/PageTable/VSpace root+aux không chồng dải PA; Untyped chỉ lồng theo
   owner chain và con nằm trọn trong cha;
 - Frame/PageTable alignment;
-- Untyped bump không vượt size;
+- Untyped bump không vượt size; các free region dương, không chồng nhau và
+  nằm dưới bump; `leaked <= size`; `alloc_offset/alloc_len` của object nằm
+  trong Untyped chủ;
 - notification waiter còn sống.
 
 Hàm này chạy trong self-test. Trong tương lai có thể chạy định kỳ hoặc từ
