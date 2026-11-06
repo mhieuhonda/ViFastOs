@@ -13,3 +13,4 @@
 | 29 | Stash CNode pool WIP, chỉ commit layout probe | CNode pool AArch 0/3; tách riêng để giữ baseline xanh | stash@{0},6682fa5 |
 | 30 | Root cause tràn .data; guard KERNEL_STATIC_BUDGET; revert pool | Kernel pool đè KERNEL_PTR; exit rõ thay vì exception mù | (vòng này) |
 | 31 | Giảm MAX_CAPS_TASK 64→48 sau audit slot | User max 11, test tới 36; tiết kiệm 150 KB Kernel | d6272f1 |
+| 32 | Budget dùng chung kernel/runtime; mở goal dài hạn | Một ngưỡng duy nhất, tránh lệch; pha 1 M1→M3 | 25ac72c |
