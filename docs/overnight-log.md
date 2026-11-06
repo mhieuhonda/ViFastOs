@@ -1134,3 +1134,11 @@ follow-up `62b31f4`.
 - Cổng giữ nguyên vòng 50 (không đổi code guest).
 - Xem `docs/agent2-report-51.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `bd0bf7da8232f42c880e068dfbd2bca36560c706eea41579fc6c7488da2f0707`.
+
+## 9.31 — Vòng 52: ramfb + fw_cfg sống (pha 4 bước 1)
+
+- QEMU gắn `-device ramfb` cả 2 arch; probe fw_cfg read-only, cả hai
+  `sig=0x554d4551` — kênh sống, sẵn đọc `etc/ramfb` vòng sau.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-52.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `0936b21d6997f828f2ee97e713ddf89ef49bca8a1c132d1e344261d49665521c`.

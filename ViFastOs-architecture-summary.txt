@@ -2034,6 +2034,8 @@ E. Desktop / Space
     (nic 52:54:00:12:34:56 + user 10.0.2.0 restrict=off, MAC khớp guest);
     chuỗi probe→TX đã kiểm chứng; reply để vòng sau (dump/timing). Không
     đổi code guest.
+101. Vòng 52 (pha 4 bước 1): gắn ramfb cả 2 arch + probe fw_cfg read-only —
+    cả hai sig=0x554d4551 ("QEMU"), kênh sống, sẵn sàng đọc etc/ramfb.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

@@ -1310,6 +1310,17 @@ impl Platform for Aarch64Platform {
     }
 
     fn init_block() {
+        // Pha 4 (vòng 52): probe fw_cfg read-only (QEMU virt: 0x09020000).
+        {
+            let fw_base = 0x0902_0000u64;
+            let sig = unsafe { core::ptr::read_volatile(fw_base as *const u32) };
+            vifast_kernel::klog!(
+                Aarch64Platform,
+                "FWCFG base={:#x} sig={:#x}",
+                fw_base,
+                sig
+            );
+        }
         // Pha 3 (vòng 42-45): probe 32 slot đầu TRƯỚC init — an toàn.
         // Đọc MAC net qua config space khi gặp device=1. Vòng 45 log thêm
         // địa chỉ NetQueue static riêng.

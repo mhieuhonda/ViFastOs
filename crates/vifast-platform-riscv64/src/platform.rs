@@ -1075,9 +1075,19 @@ impl Platform for RiscvPlatform {
             );
             return;
         }
-        // Pha 3 (vòng 42-45): probe MMIO TRƯỚC init — an toàn vì chưa claim
-        // device nào. Đọc MAC net qua config space (offset 0x100).
-        // Vòng 45: log thêm địa chỉ NetQueue static riêng (ngoài Kernel).
+        // Pha 4 (vòng 52): probe fw_cfg read-only (QEMU virt: 0x10100000).
+        // ramfb cấu hình qua fw_cfg file etc/ramfb; đọc magic để xác minh
+        // kênh còn sống, chưa ghi gì (an toàn như probe net trước init).
+        {
+            let fw_base = 0x1010_0000u64;
+            let sig = unsafe { core::ptr::read_volatile(fw_base as *const u32) };
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "FWCFG base={:#x} sig={:#x}",
+                fw_base,
+                sig
+            );
+        }
         {
             let (qaddr, qsize) = vifast_virtio::net_queue_info();
             vifast_kernel::klog!(

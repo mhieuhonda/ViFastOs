@@ -266,6 +266,7 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         "-device", "virtio-blk-device,drive=vd0",
         "-device", "virtio-net-device,netdev=vn0",
         "-netdev", "user,id=vn0",
+        "-device", "ramfb",
         "-bios", "default",
         "-kernel", kernel,
     ]
@@ -310,6 +311,7 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         "-device", "virtio-blk-device,drive=vd0",
         "-device", "virtio-net-device,netdev=vn0",
         "-netdev", "user,id=vn0",
+        "-device", "ramfb",
         "-kernel", kernel,
     ]
     return run_qemu(
