@@ -994,3 +994,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 471, host 203, 0 warning.
 - Xem `docs/agent2-report-35.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `3eddf2395734c016b160f37d11e4b6defab9b0cc05aec55b2aa3181ae5b154f5`.
+
+## 9.15 — Vòng 36: nâng trần slot root 96→128
+
+- Root spawn pager/VFS cạn slot 96 (blocker PAGER3 vòng 34). Tăng root rẻ
+  hơn tăng task (1 root, +2 KiB Kernel 559.720→561.768, dưới budget).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 471, host 203, 0 warning.
+- Docs: `00-hien-trang`, `11-hien-tai/02`, `README` 96→128.
+- Xem `docs/agent2-report-36.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `e33a9de11077d730c69b410217391d07a22ef8eec7060f90a24166e4c32a055b`.

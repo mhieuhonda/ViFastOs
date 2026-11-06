@@ -9,8 +9,9 @@ use vifast_abi::*;
 pub const MAX_OBJECTS: usize = 147;
 pub const MAX_TCBS: usize = 18;
 /// Root task cspace capacity.  Root owns the large slot range used while it
-/// builds the initial task graph.
-pub const MAX_CAPS_ROOT: usize = 96;
+/// builds the initial task graph. Raised 96→128 (vòng 36) for pager v2
+/// (PAGER3 + VFS caps); costs one root cspace only (~2 KiB), not per-TCB.
+pub const MAX_CAPS_ROOT: usize = 128;
 /// Ordinary TCB cspace capacity.  Keeping this compact is important: `Tcb`
 /// is the largest `Object` variant, so every unused slot costs
 /// `MAX_OBJECTS * sizeof(Option<Cap>)` bytes of the static kernel image.
