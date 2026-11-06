@@ -219,6 +219,35 @@ def main() -> int:
     if spec.accept("riscv64", feature_base, 0):
         failures.append("riscv64: normal run accepted handoff marker")
 
+    for arch in ("riscv64", "aarch64", "x86_64"):
+        destroy_base = fixture(arch) + "DESTROY SMP OK (frames=20, vspaces=2)\n"
+        rc = next(iter(spec.EXIT_CODES[arch]))
+        cases += 1
+        if not spec.accept(arch, destroy_base, rc, feature_mode="test-destroy-smp"):
+            failures.append(f"{arch}: destroy-smp feature rejected")
+        cases += 1
+        if spec.accept(arch, fixture(arch), rc, feature_mode="test-destroy-smp"):
+            failures.append(f"{arch}: destroy-smp missing accepted")
+        cases += 1
+        if spec.accept(
+            arch,
+            destroy_base + "DESTROY SMP BAD (code=1)\n",
+            rc,
+            feature_mode="test-destroy-smp",
+        ):
+            failures.append(f"{arch}: destroy-smp bad marker accepted")
+        cases += 1
+        if spec.accept(
+            arch,
+            destroy_base + "DESTROY SMP OK (frames=20, vspaces=2)\n",
+            rc,
+            feature_mode="test-destroy-smp",
+        ):
+            failures.append(f"{arch}: destroy-smp duplicate accepted")
+        cases += 1
+        if spec.accept(arch, destroy_base, rc):
+            failures.append(f"{arch}: normal run accepted destroy-smp marker")
+
     if failures:
         print("harness negative tests FAILED:")
         for failure in failures:

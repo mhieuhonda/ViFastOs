@@ -240,6 +240,8 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         kernel_name = "vifast-kernel-riscv64-panic"
     elif feature == "test-skip-tlb-ipi":
         kernel_name = "vifast-kernel-riscv64-skip-tlb"
+    elif feature == "test-destroy-smp":
+        kernel_name = "vifast-kernel-riscv64-destroy-smp"
     else:
         kernel_name = "vifast-kernel-riscv64"
     kernel = os.path.join(
@@ -281,7 +283,12 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
 
 
 def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
-    name = "vifast-kernel-aarch64-panic" if feature == "test-panic-hart1" else "vifast-kernel-aarch64"
+    if feature == "test-panic-hart1":
+        name = "vifast-kernel-aarch64-panic"
+    elif feature == "test-destroy-smp":
+        name = "vifast-kernel-aarch64-destroy-smp"
+    else:
+        name = "vifast-kernel-aarch64"
     kernel = os.path.join(ROOT, "target", "aarch64-unknown-none", "release", name)
     serial = os.path.join(tempfile.gettempdir(), "vifast-aarch64.serial")
     disk = make_disk("aarch64")
@@ -331,7 +338,11 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
         else (
             "vifast-kernel-x86_64-uefi-skip-tlb.efi"
             if feature == "test-skip-tlb-ipi"
-            else "vifast-kernel-x86_64-uefi.efi"
+            else (
+                "vifast-kernel-x86_64-uefi-destroy-smp.efi"
+                if feature == "test-destroy-smp"
+                else "vifast-kernel-x86_64-uefi.efi"
+            )
         ),
     )
     tmp = tempfile.mkdtemp(prefix="vifast-uefi-")
@@ -402,7 +413,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--feature",
-        choices=("test-boot-handoff", "test-panic-hart1", "test-skip-tlb-ipi"),
+        choices=(
+            "test-boot-handoff",
+            "test-panic-hart1",
+            "test-skip-tlb-ipi",
+            "test-destroy-smp",
+        ),
         help="run a test-only feature build",
     )
     args = parser.parse_args()

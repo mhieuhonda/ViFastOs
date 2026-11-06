@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
+test-destroy-smp = []
 default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
 test-panic-hart1 = ["vifast-runtime/test-panic-hart1"]

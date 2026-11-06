@@ -12,6 +12,9 @@ echo "== build + host tests =="
 echo "== QEMU (3 runs per architecture) =="
 python3 scripts/test-qemu.py --repeat 3
 
+echo "== QEMU destroy-smp feature (5 runs per architecture) =="
+python3 scripts/test-qemu.py --feature test-destroy-smp --repeat 5
+
 echo "== persistence =="
 python3 scripts/test-persist.py
 

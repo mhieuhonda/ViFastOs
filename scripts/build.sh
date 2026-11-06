@@ -87,6 +87,57 @@ cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
 "$OBJCOPY" --strip-all "$ROOT_X86" "$ROOT_X86.stripped"
 scripts/check-root-elf.sh "$ROOT_X86.stripped" x86_64-unknown-none 62
 
+echo "== destroy-smp root variants =="
+cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf --features test-destroy-smp -- \
+    -C code-model=medium -C relocation-model=static \
+    -C link-arg=-T -C link-arg=crates/vifast-root/linkers/riscv64.ld \
+    -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
+    -C link-arg=-z -C link-arg=max-page-size=4096 \
+    -C link-arg=-z -C link-arg=separate-code
+"$OBJCOPY" --strip-all "$ROOT_RV" "${ROOT_RV}.smp.stripped"
+scripts/check-root-elf.sh "${ROOT_RV}.smp.stripped" riscv64imac-unknown-none-elf 243
+cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf -- \
+    -C code-model=medium -C relocation-model=static \
+    -C link-arg=-T -C link-arg=crates/vifast-root/linkers/riscv64.ld \
+    -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
+    -C link-arg=-z -C link-arg=max-page-size=4096 \
+    -C link-arg=-z -C link-arg=separate-code
+"$OBJCOPY" --strip-all "$ROOT_RV" "$ROOT_RV.stripped"
+
+cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat --features test-destroy-smp -- \
+    -C relocation-model=static \
+    -C link-arg=-T -C link-arg=crates/vifast-root/linkers/aarch64.ld \
+    -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
+    -C link-arg=-z -C link-arg=max-page-size=4096 \
+    -C link-arg=-z -C link-arg=separate-code
+"$OBJCOPY" --strip-all "$ROOT_ARM" "${ROOT_ARM}.smp.stripped"
+scripts/check-root-elf.sh "${ROOT_ARM}.smp.stripped" aarch64-unknown-none-softfloat 183
+cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
+    -C relocation-model=static \
+    -C link-arg=-T -C link-arg=crates/vifast-root/linkers/aarch64.ld \
+    -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
+    -C link-arg=-z -C link-arg=max-page-size=4096 \
+    -C link-arg=-z -C link-arg=separate-code
+"$OBJCOPY" --strip-all "$ROOT_ARM" "$ROOT_ARM.stripped"
+
+cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none --features test-destroy-smp -- \
+    -C relocation-model=pic \
+    -C link-arg=-T -C link-arg=crates/vifast-root/linkers/x86_64.ld \
+    -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
+    -C link-arg=-z -C link-arg=max-page-size=4096 \
+    -C link-arg=-z -C link-arg=separate-code \
+    -C link-arg=-no-pie
+"$OBJCOPY" --strip-all "$ROOT_X86" "${ROOT_X86}.smp.stripped"
+scripts/check-root-elf.sh "${ROOT_X86}.smp.stripped" x86_64-unknown-none 62
+cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
+    -C relocation-model=pic \
+    -C link-arg=-T -C link-arg=crates/vifast-root/linkers/x86_64.ld \
+    -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
+    -C link-arg=-z -C link-arg=max-page-size=4096 \
+    -C link-arg=-z -C link-arg=separate-code \
+    -C link-arg=-no-pie
+"$OBJCOPY" --strip-all "$ROOT_X86" "$ROOT_X86.stripped"
+
 echo "== riscv64 bare metal =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 NM="$(rustc --print sysroot)/lib/rustlib/${HOST}/bin/llvm-nm"
@@ -103,6 +154,20 @@ if (( KERNEL_LIMIT - KERNEL_END < 196608 )); then
     echo "RISC-V KERNEL HEADROOM BELOW 192 KiB: $((KERNEL_LIMIT - KERNEL_END)) bytes" >&2
     exit 1
 fi
+
+
+echo "== riscv64 destroy-smp feature build =="
+VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-destroy-smp
+KERNEL_VAR=target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-destroy-smp
+cp "$KERNEL_RV" "$KERNEL_VAR"
+KERNEL_END="$("$NM" "$KERNEL_VAR" | awk '$3 == "__kernel_end" { print "0x" $1; exit }')"
+KERNEL_END=$((KERNEL_END))
+echo "RISC-V destroy-smp kernel_end=${KERNEL_END} headroom=$((KERNEL_LIMIT - KERNEL_END))"
+if (( KERNEL_LIMIT - KERNEL_END < 196608 )); then
+    echo "RISC-V DESTROY-SMP HEADROOM BELOW 192 KiB" >&2
+    exit 1
+fi
+VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 
 echo "== riscv64 boot-handoff test build =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-boot-handoff
@@ -121,6 +186,12 @@ VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.
 
 echo "== aarch64 bare metal =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
+
+echo "== aarch64 destroy-smp feature build =="
+VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-destroy-smp
+cp target/aarch64-unknown-none/release/vifast-kernel-aarch64 target/aarch64-unknown-none/release/vifast-kernel-aarch64-destroy-smp
+VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
+
 echo "== aarch64 panic-halt feature build =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-panic-hart1
 cp target/aarch64-unknown-none/release/vifast-kernel-aarch64 target/aarch64-unknown-none/release/vifast-kernel-aarch64-panic
@@ -128,6 +199,12 @@ VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM
 
 echo "== x86_64 UEFI =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
+
+echo "== x86_64 destroy-smp feature build =="
+VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-destroy-smp
+cp target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi-destroy-smp.efi
+VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
+
 echo "== x86_64 panic-halt feature build =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-panic-hart1
 cp target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi-panic.efi

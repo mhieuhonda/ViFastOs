@@ -436,6 +436,62 @@ fn run_destroy_demo(data_untyped: u8, root_vspace: u8, slots: &mut SlotAllocator
     0
 }
 
+#[cfg(feature = "test-destroy-smp")]
+fn destroy_smp_bad(code: u32) {
+    write(b"DESTROY SMP BAD (code=");
+    write_decimal(code as u64);
+    write(b")\n");
+}
+
+/// Variant used by `--feature test-destroy-smp`: the same lifecycle exercise
+/// runs after a secondary hart has already executed a worker, so TLB IPIs and
+/// concurrent scheduler state are live.
+#[cfg(feature = "test-destroy-smp")]
+fn run_destroy_smp_demo(data_untyped: u8, root_vspace: u8, slots: &mut SlotAllocator) -> u32 {
+    let frame = slots.alloc();
+    let vspace = slots.alloc();
+    let rights = Rights::READ | Rights::WRITE;
+    let mut value = 0x5A5A_0001u64;
+    for _ in 0..20 {
+        if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+            return 1;
+        }
+        value = value.wrapping_add(0x10);
+        if vifast_user::frame_write(frame, 0, &value as *const u64 as u64, 8).error != KError::Ok {
+            return 2;
+        }
+        let mapped = vifast_user::frame_map(root_vspace, frame, DESTROY_TEST_VA, rights.0);
+        if mapped.error != KError::Ok || mapped.value != DESTROY_TEST_VA {
+            return 3;
+        }
+        if unsafe { core::ptr::read_volatile(DESTROY_TEST_VA as *const u64) } != value {
+            return 4;
+        }
+        if vifast_user::object_destroy(frame).error != KError::Busy {
+            return 8;
+        }
+        if vifast_user::frame_unmap(root_vspace, DESTROY_TEST_VA, frame).error != KError::Ok {
+            return 5;
+        }
+        if vifast_user::object_destroy(frame).error != KError::Ok {
+            return 6;
+        }
+    }
+    for _ in 0..2 {
+        if vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace).error != KError::Ok {
+            return 7;
+        }
+        let destroyed = vifast_user::object_destroy(vspace);
+        if destroyed.error != KError::Ok {
+            return 1000 + destroyed.error as u32;
+        }
+    }
+    slots.release(frame);
+    slots.release(vspace);
+    write(b"DESTROY SMP OK (frames=20, vspaces=2)\n");
+    0
+}
+
 fn retype(untyped_slot: u8, ty: ObjType, slot: u8) {
     check(vifast_user::retype(untyped_slot, ty as u64, slot));
 }
@@ -1315,8 +1371,21 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut reap_done = false;
     let mut pending_worker_e = false;
     let mut start_worker_e = false;
+    #[cfg(feature = "test-destroy-smp")]
+    let mut destroy_smp_done = false;
     loop {
         let message = unsafe { vifast_user::recv_message(fault_endpoint_slot, 0) };
+        #[cfg(feature = "test-destroy-smp")]
+        if !destroy_smp_done
+            && message.error == KError::Ok
+            && (message.label == WORKER_LABEL_C_RUNNING || message.label == WORKER_LABEL_D_READY)
+        {
+            let code = run_destroy_smp_demo(data_untyped, root_vspace, &mut slots);
+            if code != 0 {
+                destroy_smp_bad(code);
+            }
+            destroy_smp_done = true;
+        }
         if message.error == KError::Ok {
             if message.label == CNODE_LABEL {
                 write(CNODE_OK);

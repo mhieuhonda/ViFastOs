@@ -265,6 +265,13 @@ def accept(
     require_disk: bool = True,
     feature_mode: str | None = None,
 ) -> bool:
+    if feature_mode == "test-destroy-smp":
+        # Variant of the normal run: the generic lifecycle demo runs again
+        # after a secondary hart is executing a worker.
+        if output.count("DESTROY SMP OK") != 1 or "DESTROY SMP BAD" in output:
+            return False
+    elif "DESTROY SMP OK" in output:
+        return False
     if feature_mode == "test-panic-hart1":
         if rc == 0:
             return False
@@ -295,7 +302,10 @@ def accept(
         return False
     if not all(value.split(" (")[0] in output for value, _ in ARCH[name]):
         return False
-    if not all(output.count(anchor) == 1 for anchor in ARCH_EXACT_ONE[name]):
+    if not all(
+        sum(1 for line in output.splitlines() if line.startswith(anchor)) == 1
+        for anchor in ARCH_EXACT_ONE[name]
+    ):
         return False
     faults = fault_addresses(output)
     if len(faults) != 6:
