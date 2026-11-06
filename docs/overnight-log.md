@@ -1183,3 +1183,11 @@ follow-up `62b31f4`.
 - Cổng giữ nguyên vòng 56.
 - Xem `docs/agent2-report-57.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `40a4ddeba0373b0c9e86f4977b5ded7d04e1a18655e45328a3720518947a3633`.
+
+## 9.37 — Vòng 58: xác minh TX bằng packet dump
+
+- `VIFAST_NET_DUMP=1` opt-in filter-dump; pcap chứng minh ARP who-has
+  10.0.2.2 đúng chuẩn 60B đã lên dây. Gate mặc định không đổi.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-58.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `946ffb025a4610f2bc9e658d9a0964fcb758b421388803c118968a4512cd7211`.

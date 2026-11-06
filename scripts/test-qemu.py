@@ -253,6 +253,16 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
     serial = os.path.join(tempfile.gettempdir(), "vifast-riscv64.serial")
     disk = make_disk("riscv64")
     monitor = make_monitor("riscv64", index)
+    # Vòng 58: opt-in packet dump để kiểm chứng TX thực sự (mặc định tắt,
+    # không ảnh hưởng gate). Đặt VIFAST_NET_DUMP=1 để QEMU ghi pcap qua
+    # filter-dump (QEMU mới đã bỏ dumpfile= trong -netdev).
+    netdev_rv = "user,id=vn0"
+    dump_rv: list[str] = []
+    if os.environ.get("VIFAST_NET_DUMP") == "1":
+        dump_rv = [
+            "-object",
+            f"filter-dump,id=fdump0,netdev=vn0,file={tempfile.gettempdir()}/vifast-net-riscv64.pcap",
+        ]
     cmd = [
         QEMU_RV,
         "-machine", "virt",
@@ -265,7 +275,8 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         "-drive", f"if=none,id=vd0,file={disk},format=raw",
         "-device", "virtio-blk-device,drive=vd0",
         "-device", "virtio-net-device,netdev=vn0",
-        "-netdev", "user,id=vn0",
+        "-netdev", netdev_rv,
+        *dump_rv,
         "-device", "ramfb",
         "-bios", "default",
         "-kernel", kernel,
@@ -296,6 +307,13 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
     serial = os.path.join(tempfile.gettempdir(), "vifast-aarch64.serial")
     disk = make_disk("aarch64")
     monitor = make_monitor("aarch64", index)
+    netdev_arm = "user,id=vn0"
+    dump_arm: list[str] = []
+    if os.environ.get("VIFAST_NET_DUMP") == "1":
+        dump_arm = [
+            "-object",
+            f"filter-dump,id=fdump0,netdev=vn0,file={tempfile.gettempdir()}/vifast-net-aarch64.pcap",
+        ]
     cmd = [
         QEMU_ARM,
         "-machine", "virt,gic-version=2",
@@ -310,7 +328,8 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         "-drive", f"if=none,id=vd0,file={disk},format=raw",
         "-device", "virtio-blk-device,drive=vd0",
         "-device", "virtio-net-device,netdev=vn0",
-        "-netdev", "user,id=vn0",
+        "-netdev", netdev_arm,
+        *dump_arm,
         "-device", "ramfb",
         "-kernel", kernel,
     ]

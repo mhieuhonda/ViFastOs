@@ -2055,6 +2055,9 @@ E. Desktop / Space
 106. Vòng 57 (tổng kết pha 4 display): chốt hạ tầng probe đã kiểm chứng
     (ramfb + fw_cfg + DTB header RISC-V); parse sâu để vòng sau (user-space
     hoặc sau MMU ổn định). Không đổi code.
+107. Vòng 58: VIFAST_NET_DUMP opt-in (filter-dump) + pcap chứng minh ARP TX
+    đã lên dây (broadcast who-has 10.0.2.2 đúng chuẩn 60B); reply là việc
+    backend/timing. Gate mặc định không đổi.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
