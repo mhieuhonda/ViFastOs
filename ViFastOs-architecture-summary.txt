@@ -185,6 +185,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 9675b6e feat: pager evict and refault demo with dedicated marker
 - 1212b4d feat: pager evict with fresh frame retype from child untyped
 - 1810227 refactor: raise root cspace to 128 slots for pager v2 headroom
+- e017792 feat: serve third pager client on shared fault endpoint
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1980,6 +1981,9 @@ E. Desktop / Space
     mở đường PAGER3/VFS (hết slot root là blocker vòng 34).
 86. Vòng 37 (pha 2 bước 3): PAGER3 client thứ ba (stack 0x1e000, VA
     0x1001002000, slot server 8/9); 8 fault; harness 483 cases.
+87. Vòng 38 (tổng kết pha 2): demand-load qua VFS cần endpoint + IPC buffer
+    cho pager (tốn ~4 slot, rủi ro cao) nên dừng ở MVP evict/retype; pha 2
+    đạt 3 client + vòng đời khép kín, chưa nạp file.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

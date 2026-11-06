@@ -1012,3 +1012,13 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-37.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `6400792c50b07a3ed35806364d70dd0be08516703009dcd12613fcd0e510cb69`.
+
+## 9.17 — Vòng 38: tổng kết pha 2 pager (không đổi code)
+
+- Đánh giá demand-load qua VFS: pager cần endpoint + IPC buffer + slot
+  (~4 slot root/task), rủi ro cao khi slot đã chật → dừng ở MVP.
+- Pha 2 đạt: 3 client, evict unmap + destroy + retype, `PAGER EVICT OK`.
+  Chưa có: nạp file qua VFS, PAGER3 evict, dirty tracking.
+- Không đổi code; cổng giữ nguyên vòng 37.
+- Xem `docs/agent2-report-38.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `1e16538530324ebb1f80d9ad33087160a2c997499cebbd93fd745e9c17541793`.
