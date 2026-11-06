@@ -462,6 +462,12 @@ def main() -> int:
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
     with open(result_path, "w") as handle:
         json.dump(payload, handle, indent=2)
+    # The docs status block may only consume the standard configuration
+    # (no feature build, exactly three runs per architecture).
+    if args.feature is None and args.repeat == 3:
+        standard = os.path.join(ROOT, "target", "qemu-status-standard.json")
+        with open(standard, "w") as handle:
+            json.dump(payload, handle, indent=2)
     failed = False
     for name in names:
         runs = results[name]

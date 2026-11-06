@@ -145,10 +145,17 @@ def pass_conditions() -> str:
 
 
 def qemu_status() -> str:
-    result_path = ROOT / "target" / "vifast-qemu-last.json"
+    result_path = ROOT / "target" / "qemu-status-standard.json"
     if not result_path.exists():
         raise SystemExit(
-            "gen-docs: target/vifast-qemu-last.json missing; run test-qemu.py first"
+            "gen-docs: target/qemu-status-standard.json missing; "
+            "run test-qemu.py --repeat 3 first"
+        )
+    build_path = ROOT / "target" / "vifast-build.log"
+    if build_path.exists() and result_path.stat().st_mtime < build_path.stat().st_mtime:
+        raise SystemExit(
+            "gen-docs: standard QEMU status is older than the kernel build; "
+            "rerun test-qemu.py --repeat 3"
         )
     import json
 
