@@ -210,6 +210,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - cd82b4a feat: add UDP and DNS round trip over virtio-net
 - 72a0f9b test: cover checksum with RFC 1071 vectors and run it in the gate
 - c8274e3 feat: bring up virtio-gpu and prove real pixels on screen
+- 0be7e59 feat: demand-load pages on fault behind the pager endpoint
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
