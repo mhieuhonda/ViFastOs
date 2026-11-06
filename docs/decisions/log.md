@@ -55,3 +55,5 @@
 | 71 | Demand-load nạp /page.bin từ VFS lúc fault (riscv/arm) | x86 giữ ảnh tĩnh; server sinh file theo chunk để không phình ELF | 694a7b2 |
 | 72 | Thử x86 VFS demand-load qua boot Untyped — không khả thi | Thiếu cả frame lẫn PageTable; hoãn tới khi có cách giải phóng staging/untyped | (revert) |
 | 73 | Boot splash: font 5x7 vẽ "ViFastOs" trên framebuffer | Verify bằng pixel chữ + hộp tối trong --gpu-check; ảnh PNG lưu docs/assets | 88a4a29 |
+| 74 | `scripts/gate.sh` chạy toàn bộ cổng bằng một lệnh | Dùng cho các vòng liên tục và soak; `--quick` bỏ QEMU/persist | 6af1885 |
+| 75 | virtio-rng (device 4) đọc entropy thật, 2 mẫu khác nhau | Harness khóa `VIRTIO RNG READY`; QEMU thêm virtio-rng-device | 5a09244 |
