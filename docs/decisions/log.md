@@ -30,3 +30,4 @@
 | 46 | net_init_tx gắn queue TX, accept MAC/STATUS/VERSION_1 | Cả hai READY accepted=0x10020; RX để sau | e88bcdb |
 | 47 | net_send_arp gửi ARP who-has gateway qua TX | Cả hai sent len=0 (QEMU consumed); RX reply sau | 774130b |
 | 48 | Thêm RX API, hoãn gắn sau DRIVER_OK (QEMU kill rc=-9) | Giữ TX-only; vòng sau net_init_both | 33ef7a0 |
+| 49 | net_init_both gắn RX+TX trước DRIVER_OK; bound RX 2M | Treo do poll 20M>20s, không phải QEMU kill | 4afaf71 |
