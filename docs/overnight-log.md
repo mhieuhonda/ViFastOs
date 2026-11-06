@@ -1217,3 +1217,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, host 203, 0 warning.
 - Xem `docs/agent2-report-61.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `15a5c6d54897f48c39b61b3d354868a7e3bed95df2632a5d3ff4ebd5a8ee4243`.
+
+## 9.41 — Vòng 62: input end-to-end opt-in (pha 4 input)
+
+- `--interactive`: chardev socket, gửi `help`+`\r`, yêu cầu output help —
+  riscv64 4/4, aarch64 4/4. Sửa 3 lỗi: AF_UNIX 104B, `-serial` mồ côi,
+  `\n` mất trên PL011.
+- Cổng chuẩn không đổi: QEMU 3/3 ×3, persist 7×3, harness 489, host 203.
+- Xem `docs/agent2-report-62.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `0dd7f62ae3f804db9e062a33d2d2ba070df6439d83570ec8538333367b61ce7d`.

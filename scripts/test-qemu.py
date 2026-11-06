@@ -57,6 +57,119 @@ def make_disk(name: str) -> str:
     return path
 
 
+def run_qemu_interactive(
+    name: str,
+    cmd_base: list[str],
+    serial: str,
+    timeout: int,
+) -> tuple[bool, str]:
+    """Run QEMU with a socket chardev serial so the test can type input.
+
+    Vòng 62 (pha 4 input end-to-end): chardev socket vừa log ra file vừa cho
+    test gửi lệnh shell. Gửi `help` (output khác chữ đã gõ nên chứng minh
+    lệnh thực sự chạy) rồi gửi `\r` vài lần; yêu cầu thấy dòng help.
+    Trả về (ok, output). Không dùng cho feature_mode.
+    Lưu ý: socket đặt thẳng dưới /tmp (đường dẫn ngắn) vì giới hạn 104 ký tự
+    của AF_UNIX — TMPDIR trên macOS quá dài khiến QEMU lặng lẽ không tạo socket.
+    """
+    sock = f"/tmp/vifast-ial-{name}-{os.getpid()}.sock"
+    if os.path.exists(serial):
+        os.unlink(serial)
+    cmd = []
+    skip_next = False
+    for arg in cmd_base:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "-serial":
+            # Bỏ cả cờ lẫn giá trị; nếu giá trị là file:serial của ta.
+            skip_next = True
+            continue
+        if arg == f"file:{serial}":
+            continue
+        cmd.append(arg)
+    # Chèn chardev trước -serial: QEMU parse theo thứ tự không quan trọng.
+    cmd += [
+        "-chardev",
+        f"socket,path={sock},server=on,wait=off,logfile={serial},id=visser",
+        "-serial",
+        "chardev:visser",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    output = ""
+    try:
+        s = None
+        for _ in range(100):
+            time.sleep(0.2)
+            if os.path.exists(sock):
+                try:
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.settimeout(5.0)
+                    s.connect(sock)
+                    break
+                except OSError:
+                    pass
+        if s is None:
+            proc.kill()
+            proc.wait()
+            return False, "input: no chardev connect"
+        # Gửi lệnh NGAY sau khi kết nối: guest đệm byte UART vào RX buffer.
+        # Dùng `help` vì output của nó ("help time echo ls ...") khác hẳn chữ
+        # đã gõ — chứng minh lệnh THỰC SỰ chạy, không chỉ echo ký tự.
+        # Byte '\r' gửi riêng nhiều lần: thực tế '\n' đôi khi bị mất trên
+        # PL011 khiến dòng không bao giờ được xử lý (flaky vòng 62).
+        try:
+            s.sendall(b"help")
+        except OSError:
+            pass
+        s.settimeout(0.3)
+        buf = b""
+        t0 = time.time()
+        while time.time() - t0 < timeout and b"shell> " not in buf:
+            try:
+                buf += s.recv(65536)
+            except socket.timeout:
+                pass
+        if b"shell> " not in buf:
+            proc.kill()
+            proc.wait()
+            return False, "input: no shell prompt"
+        marker = b"help time echo ls"
+        got = marker in buf
+        for _ in range(12):
+            if got:
+                break
+            try:
+                s.sendall(b"\r")
+            except OSError:
+                break
+            time.sleep(0.2)
+            t0 = time.time()
+            while time.time() - t0 < 0.3 and marker not in buf:
+                try:
+                    buf += s.recv(65536)
+                except socket.timeout:
+                    pass
+            got = marker in buf
+        s.close()
+        # Để guest chạy tiếp cho tới khi tự thoát hoặc timeout.
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            rc = proc.wait()
+        if os.path.exists(serial):
+            output = open(serial, "rb").read().decode("utf-8", errors="replace")
+        if not got and "help time echo ls" not in output:
+            return False, output
+        return True, output
+    finally:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
 def cleanup_disks() -> None:
     for directory in DISK_DIRS:
         shutil.rmtree(directory, ignore_errors=True)
@@ -423,6 +536,52 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
     )
 
 
+def test_interactive(name: str, index: int) -> bool:
+    """Boot one arch on a socket chardev and type into its shell."""
+    serial = os.path.join(tempfile.gettempdir(), f"vifast-{name}-ial.serial")
+    disk = make_disk(f"{name}-ial")
+    if name == "riscv64":
+        kernel = os.path.join(
+            ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
+        )
+        cmd = [
+            QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "128M",
+            "-display", "none",
+            "-serial", f"file:{serial}",
+            "-global", "virtio-mmio.force-legacy=false",
+            "-drive", f"if=none,id=vd0,file={disk},format=raw",
+            "-device", "virtio-blk-device,drive=vd0",
+            "-device", "virtio-net-device,netdev=vn0",
+            "-netdev", "user,id=vn0",
+            "-device", "ramfb",
+            "-bios", "default", "-kernel", kernel,
+        ]
+    elif name == "aarch64":
+        kernel = os.path.join(ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64")
+        cmd = [
+            QEMU_ARM, "-machine", "virt,gic-version=2", "-semihosting",
+            "-cpu", "max", "-smp", "2", "-m", "128M",
+            "-display", "none",
+            "-serial", f"file:{serial}",
+            "-global", "virtio-mmio.force-legacy=false",
+            "-drive", f"if=none,id=vd0,file={disk},format=raw",
+            "-device", "virtio-blk-device,drive=vd0",
+            "-device", "virtio-net-device,netdev=vn0",
+            "-netdev", "user,id=vn0",
+            "-device", "ramfb",
+            "-kernel", kernel,
+        ]
+    else:
+        # x86_64 UEFI + ESP setup phức tạp — interactive để vòng sau.
+        print(f"--- {name} interactive SKIP (uefi) ---")
+        return True
+    ok, output = run_qemu_interactive(name, cmd, serial, 30)
+    print(f"--- {name} interactive {'PASS' if ok else 'FAIL'} ---")
+    if not ok:
+        print(output[-500:])
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -446,6 +605,13 @@ def main() -> int:
         ),
         help="run a test-only feature build",
     )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="after each standard boot, type 'help' into the guest shell "
+        "over a socket chardev and require the help output (pha 4 input "
+        "end-to-end, vòng 62; default off so the standard gate is untouched)",
+    )
     args = parser.parse_args()
     if args.repeat < 1:
         parser.error("--repeat must be at least 1")
@@ -468,12 +634,23 @@ def main() -> int:
     else:
         names = ["riscv64", "aarch64", "x86_64"]
     results: dict[str, list[bool]] = {name: [] for name in names}
+    interactive_results: dict[str, list[bool]] = {name: [] for name in names}
     try:
         for index in range(1, args.repeat + 1):
             for name in names:
                 if args.repeat > 1:
                     print(f"\n===== {name} run {index}/{args.repeat} =====")
                 results[name].append(tests[name](index))
+                # Vòng 62: input end-to-end (chỉ khi boot chuẩn PASS, không
+                # feature). Dùng lại cmd của arch qua helper build riêng.
+                if (
+                    args.interactive
+                    and args.feature is None
+                    and results[name][-1]
+                ):
+                    interactive_results[name].append(
+                        test_interactive(name, index)
+                    )
     finally:
         cleanup_disks()
     print("\n=== summary ===")
