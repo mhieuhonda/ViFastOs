@@ -14,11 +14,12 @@ use vifast_abi::user_layout::{
     CODE_VA, FAULT1_STACK_TOP, FAULT1_TCB_SLOT, FAULT2_STACK_TOP, FAULT2_TCB_SLOT,
     FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IDLE_STACK_BASE,
     IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, PAGER2_STACK_BASE, PAGER2_STACK_TOP,
-    PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP,
-    PAGER_STACK_BASE, PAGER_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2,
-    USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE, WORKER_A_STACK_TOP,
-    WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE, WORKER_C_STACK_TOP,
-    WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
+    PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_IPC_BUF_VA, PAGER_SERVER_STACK_BASE,
+    PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_FAULT1,
+    USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE,
+    WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE,
+    WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE,
+    WORKER_E_STACK_TOP,
 };
 use vifast_abi::{
     BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
@@ -95,6 +96,13 @@ const PAGER_SERVER_FRAME: u8 = 4;
 const PAGER_SERVER_TCB2: u8 = 5;
 const PAGER_SERVER_FRAME2: u8 = 6;
 const PAGER_SERVER_UNTYPED: u8 = 7;
+/// Slot trong cspace của pager server giữ cap tới VFS endpoint (vòng 71).
+const PAGER_SERVER_VFS_ENDPOINT: u8 = 11;
+/// Bật đường nạp trang từ VFS (chỉ riscv64/aarch64 — x86 hết Untyped cho
+/// thêm frame IPC buffer).
+static mut PAGER_VFS_ENABLED: bool = false;
+const DEMAND_LOAD_VFS_OK: &[u8] = b"DEMAND VFSLOAD OK\n";
+const DEMAND_LOAD_VFS_BAD: &[u8] = b"DEMAND VFSLOAD BAD\n";
 const PAGER_SERVER_TCB3: u8 = 8;
 const PAGER_SERVER_FRAME3: u8 = 9;
 const PAGER_SERVER_FRAME4: u8 = 10;
@@ -177,6 +185,95 @@ pub extern "C" fn pager3_client() -> ! {
     }
 }
 
+/// Gọi VFS (chặn) từ pager server, retry khi WouldBlock. Trả về reply hoặc
+/// None nếu lỗi khác/timeout.
+fn pager_vfs_call(
+    label: u64,
+    data0: u64,
+    data1: u64,
+    data2: u64,
+) -> Option<vifast_user::MessageResult> {
+    let mut attempts = 0u32;
+    loop {
+        let reply = unsafe {
+            vifast_user::call_message(PAGER_SERVER_VFS_ENDPOINT, label, data0, data1, data2)
+        };
+        if reply.error == KError::Ok {
+            return Some(reply);
+        }
+        if reply.error != KError::WouldBlock {
+            return None;
+        }
+        attempts += 1;
+        if attempts > 2000 {
+            return None;
+        }
+        let _ = vifast_user::yield_now();
+    }
+}
+
+/// Nạp một trang từ file VFS vào frame `frame_slot` (vòng 71).
+/// Đọc từng khối 128 byte qua IPC buffer của pager server, ghi vào frame, và
+/// kiểm tra 8 byte cuối khớp DEMAND_TAIL.
+fn load_page_from_vfs(frame_slot: u8) -> bool {
+    let path = vifast_abi::pager::DEMAND_FILE;
+    let buf = PAGER_IPC_BUF_VA as *mut u8;
+    // Đường dẫn nằm trong IPC buffer để VFS server đọc.
+    unsafe {
+        let mut i = 0;
+        while i < path.len() {
+            core::ptr::write_volatile(buf.add(i), path[i]);
+            i += 1;
+        }
+    }
+    let open = match pager_vfs_call(vifast_abi::vfs::OPEN, 0, path.len() as u64, 0) {
+        Some(reply) => reply,
+        None => return false,
+    };
+    if open.label != vifast_abi::vfs::OK {
+        return false;
+    }
+    let fd = open.data[0];
+    let mut offset = 0usize;
+    let total = vifast_abi::pager::DEMAND_BYTES;
+    while offset < total {
+        let want = core::cmp::min(128usize, total - offset);
+        let reply = match pager_vfs_call(vifast_abi::vfs::READ, fd, offset as u64, want as u64) {
+            Some(reply) => reply,
+            None => return false,
+        };
+        let count = reply.label as usize;
+        if count == 0 || count > 128 {
+            return false;
+        }
+        if vifast_user::frame_write(
+            frame_slot,
+            offset as u64,
+            PAGER_IPC_BUF_VA as u64,
+            count as u64,
+        )
+        .error
+            != KError::Ok
+        {
+            return false;
+        }
+        offset += count;
+    }
+    // Khối cuối nằm trong IPC buffer; 8 byte cuối phải là DEMAND_TAIL.
+    let last_chunk_start = total - 128;
+    let tail_offset = (total - 8) - last_chunk_start;
+    let mut tail = [0u8; 8];
+    unsafe {
+        let mut i = 0;
+        while i < 8 {
+            tail[i] = core::ptr::read_volatile(buf.add(tail_offset + i));
+            i += 1;
+        }
+    }
+    let _ = pager_vfs_call(vifast_abi::vfs::CLOSE, fd, 0, 0);
+    u64::from_le_bytes(tail) == vifast_abi::pager::DEMAND_TAIL
+}
+
 #[no_mangle]
 pub extern "C" fn pager_server() -> ! {
     loop {
@@ -207,12 +304,23 @@ pub extern "C" fn pager_server() -> ! {
                     write(DEMAND_LOAD_BAD);
                     continue;
                 }
-                let _ = vifast_user::frame_write(
-                    PAGER_SERVER_FRAME4,
-                    0,
-                    &PAGER4_IMAGE as *const u64 as u64,
-                    8,
-                );
+                if unsafe { PAGER_VFS_ENABLED } {
+                    // Vòng 71: nạp trang từ file /page.bin qua VFS.
+                    if load_page_from_vfs(PAGER_SERVER_FRAME4) {
+                        write(DEMAND_LOAD_VFS_OK);
+                    } else {
+                        write(DEMAND_LOAD_VFS_BAD);
+                        write(DEMAND_LOAD_BAD);
+                        continue;
+                    }
+                } else {
+                    let _ = vifast_user::frame_write(
+                        PAGER_SERVER_FRAME4,
+                        0,
+                        &PAGER4_IMAGE as *const u64 as u64,
+                        8,
+                    );
+                }
                 (PAGER_SERVER_FRAME4, PAGER_SERVER_TCB3)
             } else {
                 write(PAGER_BAD);
@@ -893,6 +1001,7 @@ fn spawn_pager_server(
     data_untyped: u8,
     root_vspace: u8,
     endpoint_slot: u8,
+    vfs_endpoint: u8,
     pager_tcb: u8,
     pager_frame: u8,
     pager2_tcb: u8,
@@ -949,6 +1058,37 @@ fn spawn_pager_server(
         root_vspace,
         5,
     ));
+
+    // Vòng 71: cấp IPC buffer + cap VFS để pager server tự đọc /page.bin khi
+    // fault. Chỉ riscv64/aarch64 vì x86_64 đã cạn Untyped cho frame phụ.
+    let enable_vfs = cfg!(any(target_arch = "riscv64", target_arch = "aarch64"));
+    unsafe {
+        PAGER_VFS_ENABLED = enable_vfs;
+    }
+    if enable_vfs {
+        let ipc_frame = slots.alloc();
+        retype(data_untyped, ObjType::Frame, ipc_frame);
+        map_with_tables(
+            data_untyped,
+            root_vspace,
+            ipc_frame,
+            PAGER_IPC_BUF_VA as u64,
+            Rights::READ | Rights::WRITE,
+            slots,
+        );
+        check(vifast_user::tcb_set_ipc_buffer(
+            server_tcb,
+            ipc_frame,
+            PAGER_IPC_BUF_VA as u64,
+        ));
+        check(vifast_user::cap_mint(
+            vfs_endpoint,
+            server_tcb,
+            PAGER_SERVER_VFS_ENDPOINT,
+            Rights::WRITE.0,
+            vifast_abi::BADGE_PAGER,
+        ));
+    }
     check(vifast_user::tcb_resume(server_tcb));
 }
 
@@ -1376,6 +1516,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         data_untyped,
         root_vspace,
         pager_endpoint,
+        endpoint_slot,
         pager_tcb,
         pager_frame,
         pager2_tcb,

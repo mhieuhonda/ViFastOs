@@ -214,6 +214,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - ff37780 feat: parse DNS A records and resolve example.com in the guest
 - f900894 feat: demand-load on x86_64 by retyping the frame inside the pager
 - 845b11d test: add soak runner for long weekend runs
+- c61e3f1 feat: bring up virtio-input so a QEMU keyboard types into the shell
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -272,7 +273,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 334448 byte (`kernel_end=0x803ae590`)
+- RISC-V headroom: 330352 byte (`kernel_end=0x803af590`)
 - `Kernel = 561768`, `Object = 3728`, `Tcb = 3672`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
@@ -1382,6 +1383,7 @@ Cấm xuất hiện:
 - `PAGER EVICT BAD` — forbidden
 - `PAGER3 BAD` — forbidden
 - `VIRTIO INPUT INIT FAIL` — forbidden
+- `DEMAND VFSLOAD BAD` — forbidden
 - `DEMAND LOAD BAD` — forbidden
 - `HARD LINK BAD` — forbidden
 - `SYMLINK BAD` — forbidden
@@ -2116,6 +2118,10 @@ E. Desktop / Space
     kick + re-post), map ASCII vào RxQueue UART từ timer IRQ nên shell hiện có
     dùng được; `--input-check` gửi sendkey và thấy `VIRTIO KEY 18`. Harness
     khóa `VIRTIO INPUT READY` (498 cases); đảo GPU init trước net để hết flake.
+120. Vòng 71 (VFS-backed demand-load): pager server có IPC buffer + cap VFS
+    (slot 11, badge 3), nạp `/page.bin` 4 KiB từ VFS theo khối 128 B lúc fault
+    và kiểm tra DEMAND_TAIL → `DEMAND VFSLOAD OK` trên riscv64/aarch64; x86
+    giữ ảnh tĩnh. Server sinh file theo chunk để không phình ELF. Harness 501.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

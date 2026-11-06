@@ -1303,3 +1303,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 498, 0 warning.
 - Xem `docs/agent2-report-70.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `b5409d77ec304c05c25ca42045e733494179d80b99c437e2385bd38ca35ee299`.
+
+## 9.50 — Vòng 71: demand-load nạp từ VFS
+
+- Pager server có IPC buffer + cap VFS; nạp `/page.bin` (4 KiB) theo khối
+  128 B lúc fault, kiểm tra tail → `DEMAND VFSLOAD OK` (riscv64/aarch64).
+- x86 giữ ảnh tĩnh; sửa panic do static 4 KiB làm server ELF phình.
+- Harness 498→501. Cổng: QEMU 3/3 ×3, persist 7×3, 0 warning.
+- Xem `docs/agent2-report-71.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `183d806fd4de471fb371e3979a0a8f59debb0a0b8d3ad64c33e84f7fcc504080`.

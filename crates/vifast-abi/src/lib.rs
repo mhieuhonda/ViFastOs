@@ -32,6 +32,12 @@ pub mod pager {
     pub const POOL_FRAMES: usize = 8;
     pub const BACKING_ENTRIES: usize = 16;
     pub const PAGE_BYTES: usize = 4096;
+    /// File backing demand-load từ VFS (vòng 71): trang 4 KiB với giá trị
+    /// nhận dạng ở đầu và cuối để kiểm tra nội dung nạp đúng.
+    pub const DEMAND_FILE: &[u8] = b"/page.bin";
+    pub const DEMAND_VALUE: u64 = 0x4445_4d41_4e44_0004;
+    pub const DEMAND_TAIL: u64 = 0x4445_4d41_4e44_ffff;
+    pub const DEMAND_BYTES: usize = PAGE_BYTES;
 
     /// Private VA window reserved for pager clients, above the bootstrap
     /// user image and below the file-backed window of the next round.
@@ -248,6 +254,8 @@ pub mod user_layout {
     /// same fault endpoint (vòng 37, cần MAX_CAPS_ROOT=128 ở vòng 36).
     pub const PAGER3_STACK_BASE: usize = CODE_VA + 0x1e000;
     pub const PAGER3_STACK_TOP: usize = CODE_VA + 0x1f000;
+    /// Trang IPC buffer riêng của pager server khi nó gọi VFS (vòng 71).
+    pub const PAGER_IPC_BUF_VA: usize = CODE_VA + 0x1f000;
     const _: () = assert!(WORKER_A_STACK_BASE > DATA_VA);
     const _: () = assert!(WORKER_A_STACK_TOP <= WORKER_B_STACK_BASE);
     const _: () = assert!(WORKER_B_STACK_TOP <= WORKER_C_STACK_BASE);
@@ -259,6 +267,7 @@ pub mod user_layout {
     const _: () = assert!(PAGER_STACK_TOP <= PAGER_SERVER_STACK_BASE);
     const _: () = assert!(PAGER_SERVER_STACK_TOP <= PAGER2_STACK_BASE);
     const _: () = assert!(PAGER2_STACK_TOP <= PAGER3_STACK_BASE);
+    const _: () = assert!(PAGER3_STACK_TOP <= PAGER_IPC_BUF_VA);
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one
@@ -380,6 +389,8 @@ pub const CAP_NONE: u64 = u64::MAX;
 /// the single superuser badge is 0xFFFF.
 pub const BADGE_NONE: u64 = 0;
 pub const BADGE_SUPERUSER: u64 = 0xFFFF;
+/// Badge cấp cho pager server khi gọi VFS (vòng 71).
+pub const BADGE_PAGER: u64 = 3;
 
 /// File open flags for the tiny ramfs.
 pub const O_RDONLY: u64 = 0;

@@ -83,6 +83,47 @@ fn write(bytes: &[u8]) {
     let _ = vifast_user::debug_write(bytes.as_ptr() as u64, bytes.len() as u64);
 }
 
+/// Tạo file backing cho demand-load (vòng 71) theo từng khối 128 byte — không
+/// dùng static 4 KiB để server ELF không phình thêm frame (x86 rất chật).
+/// Nội dung: byte i = i XOR 0x5a, 8 byte đầu = DEMAND_VALUE, 8 byte cuối =
+/// DEMAND_TAIL. Idempotent khi file đã có dữ liệu.
+fn ensure_demand_file() -> bool {
+    use vifast_abi::pager::{DEMAND_BYTES, DEMAND_FILE, DEMAND_TAIL, DEMAND_VALUE};
+    let fs = fs();
+    let ino = match fs.lookup(DEMAND_FILE, 0) {
+        Ok(ino) => ino,
+        Err(FsError::NotFound) => match fs.create(DEMAND_FILE, 0, INODE_FILE) {
+            Ok(ino) => ino,
+            Err(_) => return false,
+        },
+        Err(_) => return false,
+    };
+    if fs.info(ino).map(|info| info.size).unwrap_or(0) != 0 {
+        return true;
+    }
+    let mut chunk = [0u8; 128];
+    let mut offset = 0usize;
+    while offset < DEMAND_BYTES {
+        let n = core::cmp::min(128, DEMAND_BYTES - offset);
+        let mut i = 0;
+        while i < n {
+            chunk[i] = ((offset + i) as u8) ^ 0x5a;
+            i += 1;
+        }
+        if offset == 0 {
+            chunk[0..8].copy_from_slice(&DEMAND_VALUE.to_le_bytes());
+        }
+        if offset + n == DEMAND_BYTES {
+            chunk[n - 8..n].copy_from_slice(&DEMAND_TAIL.to_le_bytes());
+        }
+        if fs.write(ino, offset, &chunk[..n], 0).is_err() {
+            return false;
+        }
+        offset += n;
+    }
+    true
+}
+
 fn fs() -> &'static mut ServerFs {
     unsafe { &mut *core::ptr::addr_of_mut!(FS) }
 }
@@ -229,6 +270,12 @@ fn init_fs() {
         }
     }
     if ensure_file(b"/motd", MOTD).is_err() {
+        write(b"FS CORRUPT\n");
+    }
+    // Vòng 71: file backing cho demand-load.
+    if ensure_demand_file() {
+        write(b"FS PAGE FILE OK\n");
+    } else {
         write(b"FS CORRUPT\n");
     }
     if fs().lookup(b"/p/nonce", 0).is_ok() {
