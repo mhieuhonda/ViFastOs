@@ -23,3 +23,4 @@
 | 39 | VirtIO scan API + log device mỗi slot (pha 3 bước 1) | Chuẩn bị gắn net; hiện chỉ blk | b3b06bf |
 | 40 | Giữ scan API, tắt log MMIO sau init (treo QEMU) | Đọc sau claim treo; probe trước init ở vòng sau | b1e39f3 |
 | 41 | Xác minh treo MMIO, giữ nguyên code (docs-only) | Net hiện 1 lần rồi treo; serial test khác đường đọc | cce8546 |
+| 42 | Probe net trước init + gắn virtio-net cả 2 arch | Serial đúng ở $TMPDIR; riscv net 0x10007000, arm 0xa003c00 | 66de790 |
