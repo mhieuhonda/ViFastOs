@@ -1114,12 +1114,26 @@ impl Platform for RiscvPlatform {
                     );
                     // Vòng 46: init TX queue cho net (device riêng, chưa claim).
                     match vifast_virtio::net_init_tx(base) {
-                        Some(acc) => vifast_kernel::klog!(
-                            RiscvPlatform,
-                            "VIRTIO NET READY base={:#x} accepted={:#x}",
-                            base,
-                            acc
-                        ),
+                        Some(acc) => {
+                            vifast_kernel::klog!(
+                                RiscvPlatform,
+                                "VIRTIO NET READY base={:#x} accepted={:#x}",
+                                base,
+                                acc
+                            );
+                            // Vòng 47: gửi ARP request đầu tiên qua TX.
+                            match vifast_virtio::net_send_arp() {
+                                Some(len) => vifast_kernel::klog!(
+                                    RiscvPlatform,
+                                    "VIRTIO NET ARP sent len={}",
+                                    len
+                                ),
+                                None => vifast_kernel::klog!(
+                                    RiscvPlatform,
+                                    "VIRTIO NET ARP FAIL"
+                                ),
+                            }
+                        }
                         None => vifast_kernel::klog!(
                             RiscvPlatform,
                             "VIRTIO NET FAIL base={:#x}",

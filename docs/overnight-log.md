@@ -1090,3 +1090,12 @@ follow-up `62b31f4`.
   203, 0 warning.
 - Xem `docs/agent2-report-46.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `5604fb94955d8a09d317599bfbee1d0d6e7a9bac51272f684b998c2e64d3d3ce`.
+
+## 9.26 — Vòng 47: gửi ARP đầu tiên (pha 3 bước 7)
+
+- `net_send_arp`: Ethernet broadcast + ARP who-has 10.0.2.2 tell 10.0.2.15,
+  2 descriptors, kick TX, poll used; cả hai `sent len=0` (QEMU consumed).
+- Khe hở static giữ 8B; cổng QEMU 3/3 ×3, persist 7×3, harness 483, host
+  203, 0 warning.
+- Xem `docs/agent2-report-47.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `941152e9203a693e89ce3e508b2d34d68fa9b97fe2db413bb0ed3a038374e00a`.

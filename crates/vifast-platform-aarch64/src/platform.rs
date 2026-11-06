@@ -1350,13 +1350,27 @@ impl Platform for Aarch64Platform {
                             feats
                         );
                         // Vòng 46: init TX queue cho net (device riêng, chưa claim).
+                        // Vòng 47: gửi ARP request đầu tiên qua TX.
                         match vifast_virtio::net_init_tx(base) {
-                            Some(acc) => vifast_kernel::klog!(
-                                Aarch64Platform,
-                                "VIRTIO NET READY base={:#x} accepted={:#x}",
-                                base,
-                                acc
-                            ),
+                            Some(acc) => {
+                                vifast_kernel::klog!(
+                                    Aarch64Platform,
+                                    "VIRTIO NET READY base={:#x} accepted={:#x}",
+                                    base,
+                                    acc
+                                );
+                                match vifast_virtio::net_send_arp() {
+                                    Some(len) => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET ARP sent len={}",
+                                        len
+                                    ),
+                                    None => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET ARP FAIL"
+                                    ),
+                                }
+                            }
                             None => vifast_kernel::klog!(
                                 Aarch64Platform,
                                 "VIRTIO NET FAIL base={:#x}",

@@ -208,6 +208,81 @@ pub fn net_ready() -> bool {
     unsafe { NET_READY }
 }
 
+/// Build an ARP who-has request in `NET_QUEUE.buf` and transmit it on the
+/// already-negotiated TX queue (vòng 47). Uses our MAC from `net_mac`,
+/// asks for the QEMU user-net gateway 10.0.2.2, tells 10.0.2.15 (the usual
+/// guest address). Two descriptors: 12-byte virtio-net header (zeroed) +
+/// 42-byte Ethernet+ARP. Kicks the queue and polls the used ring with a
+/// bounded spin; returns the device-reported length on success.
+/// Never touches the block queue. Safe to call once after `net_init_tx`.
+pub fn net_send_arp() -> Option<u32> {
+    let (base, mac) = unsafe {
+        if !NET_READY || NET_BASE == 0 {
+            return None;
+        }
+        (NET_BASE, net_mac(NET_BASE)?)
+    };
+    fn write_at(base: u64, offset: u64, value: u32) {
+        unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+    }
+    // Ethernet: broadcast dst, our src, ethertype ARP (0x0806).
+    // ARP: htype=1, ptype=0x0800, hlen=6, plen=4, oper=1 (request),
+    // sha=our mac, spa=10.0.2.15, tha=00:00:00:00:00:00, tpa=10.0.2.2.
+    const SPA: [u8; 4] = [10, 0, 2, 15];
+    const TPA: [u8; 4] = [10, 0, 2, 2];
+    let mut frame = [0u8; 42];
+    frame[0..6].copy_from_slice(&[0xff; 6]);
+    frame[6..12].copy_from_slice(&mac);
+    frame[12..14].copy_from_slice(&[0x08, 0x06]);
+    frame[14..16].copy_from_slice(&[0x00, 0x01]);
+    frame[16..18].copy_from_slice(&[0x08, 0x00]);
+    frame[18] = 6;
+    frame[19] = 4;
+    frame[20..22].copy_from_slice(&[0x00, 0x01]);
+    frame[22..28].copy_from_slice(&mac);
+    frame[28..32].copy_from_slice(&SPA);
+    frame[32..38].copy_from_slice(&[0; 6]);
+    frame[38..42].copy_from_slice(&TPA);
+    let queue = core::ptr::addr_of_mut!(NET_QUEUE);
+    unsafe {
+        let q = &mut *queue;
+        q.hdr = [0; NET_HDR_SIZE];
+        q.buf[..42].copy_from_slice(&frame);
+        let qb = q as *const NetQueue as u64;
+        q.desc[0] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, hdr) as u64,
+            len: NET_HDR_SIZE as u32,
+            flags: DESC_NEXT,
+            next: 1,
+        };
+        q.desc[1] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, buf) as u64,
+            len: 42,
+            flags: 0,
+            next: 0,
+        };
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let next_avail = q.avail.idx.wrapping_add(1);
+        q.avail.ring[(q.avail.idx as usize) % QUEUE_SIZE] = 0;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        core::ptr::write_volatile(&mut q.avail.idx, next_avail);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        write_at(base, 0x50, 1);
+        let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        let mut spins = 0u64;
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < 20_000_000 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        if core::ptr::read_volatile(&q.used.idx) != target {
+            return None;
+        }
+        let elem = core::ptr::read_volatile(&q.used.ring[0]);
+        Some(elem.len)
+    }
+}
+
 static mut BASE: u64 = 0;
 static mut READY: bool = false;
 static mut LAST_BASE: u64 = 0;
