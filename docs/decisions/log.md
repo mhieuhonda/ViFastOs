@@ -41,3 +41,4 @@
 | 57 | Tổng kết pha 4 ở hạ tầng probe, docs-only | Parse sâu để vòng sau (user-space/sau MMU) | e97bf13 |
 | 58 | Dump opt-in chứng minh ARP TX lên dây | Pcap 60B đúng chuẩn; reply là backend/timing | cf7b6a1 |
 | 59 | Khóa NET READY vào harness riscv64+aarch64 | Exact-one, fixture đúng base; pha 3 có test bảo vệ | b795c2c |
+| 60 | Fmt 3 file + đánh giá M1-M3 trung thực | MVP đạt, mục mở có lý do, goal giữ active | 53a4dd6 |
