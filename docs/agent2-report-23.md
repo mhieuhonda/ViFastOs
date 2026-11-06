@@ -29,10 +29,10 @@
 | B1 | DONE | `ba2e753` | ABI + kernel `ObjectDestroy` + 10 host test |
 | B2 | DONE | `d499677` | reclaim Untyped + 5 host test |
 | B3 | DONE | `4584536` | demo root + harness `DESTROY OK`/`DESTROY BAD`; sửa `check-all.sh` |
-| B4 | DONE | (commit docs cuối) | docs/00, ABI, object docs, report, bundle 23 |
+| B4 | DONE | `4272391` | docs/00, ABI, object docs, report, bundle 23 |
 | C1 | DONE | — | `-smp 4` chạy thủ công 3 kiến trúc |
 | C2 | DONE | — | soak `--repeat 10` 3 kiến trúc |
-| C3 | DONE | (commit docs cuối) | `docs/design/pager-v2.md` |
+| C3 | DONE | `4272391` | `docs/design/pager-v2.md` |
 | C4 | DONE | — | khảo sát `static mut` AArch64 (mục 6.4) |
 
 ## 2. Số liệu
@@ -204,6 +204,8 @@ là `CONTEXTS` nếu một TCB bị chạy đồng thời 2 hart (scheduler hi�
 
 ```text
 $ git log --oneline c86de49..HEAD
+453e013 docs: ignore qemu flake artifacts
+4272391 docs: document object destroy and reclaim
 4584536 feat: add object destroy demo and harness markers
 d499677 feat: reclaim untyped memory on destroy
 ba2e753 feat: add ObjectDestroy syscall
