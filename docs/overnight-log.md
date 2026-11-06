@@ -891,4 +891,4 @@ follow-up `62b31f4`.
 - C2: soak 10/10 ×3 thường + 10/10 ×3 feature; sau đó repeat 3 chuẩn.
 - Số liệu: host 200 (kernel 131, abi 4); harness 462; QEMU 3/3 ×3; feature
   5/5 ×3; persistence 7×3; 0 warning; headroom 253.264 (`kernel_end=0x803c22b0`).
-- SHA-256 `ViFastOs-architecture-summary.txt`: `996a01de0222cf8b017bbe3621d9b4977023eddd9a14d5724f24aceecfc565d4`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `e381d5a20a921c325a868d8ccef79630823e3db69a6308ee7e7e0e61c81e6444`.

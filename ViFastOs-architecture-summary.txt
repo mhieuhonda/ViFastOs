@@ -168,6 +168,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - e9f73a7 chore: add docs checker self-test for stale phrases
 - a4c2a84 test: render all harness rules and pin status to standard run
 - fa89e89 refactor: atomic timer interval and wrapped kernel pointer
+- 81a4b67 test: run feature build before standard status
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
