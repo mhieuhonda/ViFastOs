@@ -21,8 +21,10 @@ OVMF cung cấp; **chưa có PCI enumeration** nên x86 MVP dùng **PS/2 keyboar
   `RAMFBCfg { addr, fourcc, flags, width, height, stride }` vào file fw_cfg.
 - Cần **PA liên tục**: cấp một Frame lớn (2 MiB) từ Untyped (retype nhiều page
   liền nhau hoặc thêm `Frame::contiguous`) và ghi PA vào `addr`.
-- fw_cfg DMA: dùng cổng `0x514`/DMA address; driver user-space map MMIO fw_cfg
-  qua `IoMap` (software IOMMU) trước khi ghi.
+- fw_cfg DMA: QEMU virt (RISC-V/AArch64) đặt fw_cfg ở **MMIO** (base từ device
+  tree/QEMU virt constant), x86 dùng **I/O port** `0x510/0x514`. Driver
+  user-space được cấp device Frame/MMIO window qua BootInfo (không tự chọn PA),
+  map bằng `IoMap`/`FrameMap` rồi mới ghi DMA address.
 - Không có IOMMU cứng nên QEMU thấy PA thật; phải đảm bảo vùng PA nằm ngoài
   kernel image và không bị reclaim.
 
@@ -32,9 +34,11 @@ OVMF cung cấp; **chưa có PCI enumeration** nên x86 MVP dùng **PS/2 keyboar
   - `BlockDevice`-like: thêm `Framebuffer` và `InputDevice` object type.
   - MMIO window cấp qua `IoMap` (software IOMMU) hoặc `FrameMap` device.
 - Kernel chỉ cung cấp:
-  - phát hiện thiết bị (ACPI/DT) và tạo cap;
+  - phát hiện thiết bị bằng nguồn hiện có: MADT cho x86, hằng địa chỉ QEMU virt
+  cho RISC-V/AArch64 (DT parser chưa có — việc của vòng sau);
   - IRQ object cho keyboard;
-  - shared memory frame cho framebuffer (write-combining map).
+  - shared Frame cho framebuffer, map qua `FrameMap` thường (write-combining
+    cần thêm cờ trong PageTableOps — chưa có, ghi là future).
 
 ## 3. Framebuffer protocol
 
@@ -81,9 +85,11 @@ INPUT_READ  (client → server) data=[buf_va, max_events]
 ## 7. Rủi ro
 
 - GOP framebuffer x86 có thể nằm ngoài 1 GiB identity map (OVMF thường cấp
-  BAR > 4 GiB). Phương án: `Frame::from_pa` + `FrameMap` vào VSpace driver với
-  quyền WRITE (không cần identity), hoặc thêm window MMIO tạm trong
-  `check_kernel_mappings`; không map toàn bộ BAR vào kernel.
+  BAR > 4 GiB). Phương án: runtime tạo **device Frame cap** từ thông tin
+  firmware (GOP/ACPI) và giao cho root qua BootInfo — giống `BlockDevice`;
+  user không bao giờ được chọn PA tùy ý. Root `FrameMap` device Frame vào
+  VSpace driver với WRITE (không cần identity); không map toàn bộ BAR vào
+  kernel.
 - ramfb yêu cầu PA liên tục; cấp Frame 2 MiB từ Untyped và ghi qua fw_cfg DMA.
 - PS/2 IRQ1 trên x86 đi qua PIC (hiện đã có IRQ object cho timer/UART).
 - Chưa có GPU 3D/compositor; MVP chỉ blit 2D.
