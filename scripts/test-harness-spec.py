@@ -28,6 +28,7 @@ def fixture(arch: str) -> str:
             "TLB STATS (va_flush=2, ipi=1, skipped=1)",
             "VIRTIO NET READY base=0x10007000 accepted=0x10020",
             "VIRTIO NET PING REPLY from 10.0.2.2",
+            "VIRTIO NET DNS sent len=0",
         ]
     elif arch == "aarch64":
         lines += [
@@ -42,6 +43,7 @@ def fixture(arch: str) -> str:
             "TLB STATS (va_flush=2, ipi=0, skipped=0)",
             "VIRTIO NET READY base=0xa003c00 accepted=0x10020",
             "VIRTIO NET PING REPLY from 10.0.2.2",
+            "VIRTIO NET DNS sent len=0",
         ]
     else:
         lines += [

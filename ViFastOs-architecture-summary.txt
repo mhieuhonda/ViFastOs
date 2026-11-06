@@ -206,6 +206,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 53a4dd6 style: cargo fmt three files plus M1-M3 evidence review
 - 6102104 feat: log SHELL READY and require it in harness on all arches
 - 80e424c test: add opt-in interactive shell input check
+- 55a2b0b feat: complete virtio-net TX+RX, guest pings the gateway
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -264,7 +265,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 421200 byte (`kernel_end=0x803992b0`)
+- RISC-V headroom: 417104 byte (`kernel_end=0x8039a2b0`)
 - `Kernel = 561768`, `Object = 3728`, `Tcb = 3672`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
@@ -2080,6 +2081,10 @@ E. Desktop / Space
     arch. Ba bug gốc: header virtio-net phải 10B (không MRG_RXBUF), QueueReady
     phải ghi 1 (không phải index → RX không ready), RX cần kick + re-post.
     Harness khóa `VIRTIO NET PING REPLY`.
+113. Vòng 64 (UDP + DNS): net_send_udp/net_recv_udp, DNS query A cho
+    example.com tới slirp 10.0.2.3:53 và nhận reply len=69 cả 2 arch. Bug:
+    sau khi nhận thành công phải re-post buffer RX (gói kế bị bỏ). Harness
+    khóa `VIRTIO NET DNS sent`.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

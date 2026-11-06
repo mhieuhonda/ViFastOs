@@ -1420,6 +1420,43 @@ impl Platform for Aarch64Platform {
                                         "VIRTIO NET PING NO REPLY"
                                     ),
                                 }
+                                // Vòng 64: DNS query A cho example.com qua slirp
+                                // (10.0.2.3:53) — chứng minh UDP hai chiều.
+                                let mut dns = [0u8; 32];
+                                dns[0] = 0x12;
+                                dns[1] = 0x34;
+                                dns[2] = 0x01; // RD
+                                dns[5] = 0x01; // QDCOUNT = 1
+                                let qname = b"\x07example\x03com\x00";
+                                dns[12..12 + qname.len()].copy_from_slice(qname);
+                                let qoff = 12 + qname.len();
+                                dns[qoff..qoff + 2].copy_from_slice(&[0x00, 0x01]); // QTYPE A
+                                dns[qoff + 2..qoff + 4].copy_from_slice(&[0x00, 0x01]); // QCLASS IN
+                                match vifast_virtio::net_send_udp(
+                                    [10, 0, 2, 3],
+                                    53,
+                                    &dns[..qoff + 4],
+                                ) {
+                                    Some(len) => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET DNS sent len={}",
+                                        len
+                                    ),
+                                    None => {
+                                        vifast_kernel::klog!(Aarch64Platform, "VIRTIO NET DNS FAIL")
+                                    }
+                                }
+                                match vifast_virtio::net_recv_udp([10, 0, 2, 3], 53) {
+                                    Some(len) => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET DNS REPLY len={}",
+                                        len
+                                    ),
+                                    None => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET DNS NO REPLY"
+                                    ),
+                                }
                             }
                             None => vifast_kernel::klog!(
                                 Aarch64Platform,

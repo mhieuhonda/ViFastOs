@@ -248,6 +248,7 @@ pub fn net_recv_arp() -> Option<[u8; 6]> {
             }
         };
         if mac.is_some() {
+            net_rx_post();
             return mac;
         }
         net_rx_post();
@@ -276,14 +277,14 @@ fn net_rx_post() {
     unsafe { core::ptr::write_volatile((base + 0x50) as *mut u32, 0) };
 }
 
-/// Chờ một gói RX mới (used.idx tiến). Bounded 2M spins.
-fn net_rx_poll() -> bool {
+/// Chờ một gói RX mới (used.idx tiến), bound tuỳ ý.
+fn net_rx_poll_bounded(bound: u64) -> bool {
     let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
     unsafe {
         let q = &mut *queue;
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         let mut spins = 0u64;
-        while core::ptr::read_volatile(&q.used.idx) == RX_SEEN && spins < 2_000_000 {
+        while core::ptr::read_volatile(&q.used.idx) == RX_SEEN && spins < bound {
             core::hint::spin_loop();
             spins += 1;
         }
@@ -296,9 +297,137 @@ fn net_rx_poll() -> bool {
     }
 }
 
+/// Mặc định 2M spins cho gói cục bộ (ARP/ICMP).
+fn net_rx_poll() -> bool {
+    net_rx_poll_bounded(2_000_000)
+}
+
 /// Cấp lại buffer RX sau khi tiêu thụ một gói (vòng 63).
 pub fn net_rx_rearm() {
     net_rx_post();
+}
+
+/// Gửi một Ethernet frame qua TX queue (kick + poll used, vòng 64).
+/// Tách từ net_ping để UDP dùng lại; frame tối đa 60 byte (đã pad).
+fn net_tx_frame(frame: &[u8]) -> Option<u32> {
+    let base = unsafe {
+        if !NET_READY || NET_BASE == 0 {
+            return None;
+        }
+        NET_BASE
+    };
+    fn write_at(base: u64, offset: u64, value: u32) {
+        unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+    }
+    let queue = core::ptr::addr_of_mut!(NET_QUEUE);
+    unsafe {
+        let q = &mut *queue;
+        q.hdr = [0; NET_HDR_SIZE];
+        q.buf[..frame.len()].copy_from_slice(frame);
+        let qb = q as *const NetQueue as u64;
+        q.desc[0] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, hdr) as u64,
+            len: NET_HDR_SIZE as u32,
+            flags: DESC_NEXT,
+            next: 1,
+        };
+        q.desc[1] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, buf) as u64,
+            len: frame.len() as u32,
+            flags: 0,
+            next: 0,
+        };
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let next_avail = q.avail.idx.wrapping_add(1);
+        q.avail.ring[(q.avail.idx as usize) % QUEUE_SIZE] = 0;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        core::ptr::write_volatile(&mut q.avail.idx, next_avail);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        write_at(base, 0x50, 1);
+        let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        let mut spins = 0u64;
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < 2_000_000 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        if core::ptr::read_volatile(&q.used.idx) != target {
+            return None;
+        }
+        let done = q.used.idx.wrapping_sub(1) as usize % QUEUE_SIZE;
+        let elem = core::ptr::read_volatile(&q.used.ring[done]);
+        Some(elem.len)
+    }
+}
+
+/// Gửi UDP datagram tới `dst_ip:dst_port` (vòng 64). Ethernet dst dùng MAC
+/// ảo slirp của đích (52:55:0a:00:02:xx). Payload tối đa 26 byte để vừa khung
+/// 60B; đủ cho một DNS query ngắn.
+pub fn net_send_udp(dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -> Option<u32> {
+    let mac = unsafe { net_mac(NET_BASE)? };
+    const SRC_IP: [u8; 4] = [10, 0, 2, 15];
+    let udp_len = 8 + payload.len();
+    let ip_len = 20 + udp_len;
+    let total = 14 + ip_len;
+    if total > NET_BUF_SIZE {
+        return None;
+    }
+    let mut frame = [0u8; NET_BUF_SIZE];
+    frame[0..6].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, dst_ip[3]]);
+    frame[6..12].copy_from_slice(&mac);
+    frame[12..14].copy_from_slice(&[0x08, 0x00]);
+    let ip = &mut frame[14..34];
+    ip[0] = 0x45;
+    ip[1] = 0;
+    ip[2..4].copy_from_slice(&(ip_len as u16).to_be_bytes());
+    ip[4..6].copy_from_slice(&0x4321u16.to_be_bytes());
+    ip[6..8].copy_from_slice(&0x4000u16.to_be_bytes());
+    ip[8] = 64;
+    ip[9] = 17; // UDP
+    ip[10..12].copy_from_slice(&[0, 0]);
+    ip[12..16].copy_from_slice(&SRC_IP);
+    ip[16..20].copy_from_slice(&dst_ip);
+    let ip_sum = checksum(&ip[..20]);
+    ip[10..12].copy_from_slice(&ip_sum.to_be_bytes());
+    let udp = &mut frame[34..34 + udp_len];
+    udp[0..2].copy_from_slice(&49152u16.to_be_bytes());
+    udp[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    udp[4..6].copy_from_slice(&(udp_len as u16).to_be_bytes());
+    udp[6..8].copy_from_slice(&[0, 0]); // checksum 0 = optional trong IPv4
+    udp[8..].copy_from_slice(payload);
+    net_tx_frame(&frame[..total])
+}
+
+/// Chờ một UDP datagram từ `src_ip:src_port` (vòng 64). Trả về độ dài
+/// payload nếu khớp (bỏ qua gói khác, tối đa 4 gói).
+pub fn net_recv_udp(src_ip: [u8; 4], src_port: u16) -> Option<usize> {
+    for _ in 0..4 {
+        // DNS đi qua slirp forward ra host nên chậm hơn ICMP nội bộ; dùng
+        // bound lớn hơn (8M spins) để không bỏ lỡ reply.
+        if !net_rx_poll_bounded(8_000_000) {
+            return None;
+        }
+        let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
+        let found = unsafe {
+            let q = &mut *queue;
+            let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
+            let ok = ethertype == 0x0800
+                && q.buf[14 + 9] == 17
+                && q.buf[14 + 12..14 + 16] == src_ip
+                && u16::from_be_bytes([q.buf[34], q.buf[35]]) == src_port;
+            if ok {
+                Some(u16::from_be_bytes([q.buf[38], q.buf[39]]) as usize)
+            } else {
+                None
+            }
+        };
+        if found.is_some() {
+            net_rx_post();
+            return found;
+        }
+        net_rx_post();
+    }
+    None
 }
 
 /// Poll RX chờ ICMP echo reply (vòng 63). Trả về IP nguồn nếu thấy reply.
@@ -321,6 +450,7 @@ pub fn net_recv_icmp() -> Option<[u8; 4]> {
             }
         };
         if src.is_some() {
+            net_rx_post();
             return src;
         }
         net_rx_post();
@@ -427,7 +557,7 @@ pub fn net_ping(dst_ip: [u8; 4]) -> Option<u32> {
         };
         q.desc[1] = Descriptor {
             addr: qb + core::mem::offset_of!(NetQueue, buf) as u64,
-            len: 60,
+            len: frame.len() as u32,
             flags: 0,
             next: 0,
         };
@@ -475,10 +605,6 @@ pub fn net_init_both(base: u64) -> Option<u64> {
     }
     fn write_at(base: u64, offset: u64, value: u32) {
         unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
-    }
-    fn write64_at(base: u64, offset: u64, value: u64) {
-        write_at(base, offset, value as u32);
-        write_at(base, offset + 4, (value >> 32) as u32);
     }
     fn attach(base: u64, index: u32, qbase: u64) {
         fn write_at(base: u64, offset: u64, value: u32) {
@@ -637,7 +763,7 @@ pub fn net_send_arp_to(tpa: [u8; 4]) -> Option<u32> {
         };
         q.desc[1] = Descriptor {
             addr: qb + core::mem::offset_of!(NetQueue, buf) as u64,
-            len: 60,
+            len: frame.len() as u32,
             flags: 0,
             next: 0,
         };

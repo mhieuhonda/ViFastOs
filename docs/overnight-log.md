@@ -1235,3 +1235,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 489, host 203, 0 warning.
 - Xem `docs/agent2-report-63.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `e5c41d8646f5040c9533b32ec5cfaa9034f2681416d95051ea0a4a0f92ab68c5`.
+
+## 9.43 — Vòng 64: UDP + DNS hai chiều
+
+- `net_send_udp`/`net_recv_udp` + DNS query example.com qua slirp; nhận
+  `DNS REPLY len=69` cả riscv64/aarch64. Bug: thiếu re-post RX sau khi nhận.
+- Harness khóa `VIRTIO NET DNS sent`; reply best-effort (không phụ thuộc DNS host).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 489, host 203, 0 warning.
+- Xem `docs/agent2-report-64.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `184612c9cee45493f9f05021c29268b46e8a8e78e891447b4a8ec6714bea420a`.
