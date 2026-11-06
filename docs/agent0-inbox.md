@@ -8,7 +8,11 @@
   mốc), (b) chỉ đo current counts, (c) debug riêng AArch64 với static tối thiểu.
 - Đề xuất agent2: (c) trước, vì đây có thể là lỗi nền về vị trí static/AT.
 - Đang chặn: M1.1 (POOL HWM) | Không chặn M0.2/M1.2
-- Nhánh đang đi trong lúc chờ: M0.2 (C1 xong, C2/C3 tiếp) + M1.2 host test.
+- Nhánh đang đi trong lúc chờ: M0.2 (xong) + M1.2.
+- Đã xử lý phần ROOT ERR 16: nguyên nhân là **runtime vẫn index CONTEXTS theo
+  `tcb.index`** sau khi mảng đổi sang MAX_TCBS; ConfigureTcb dùng get_mut(OOB)
+  nên trả IllegalOperation. Sửa runtime dùng `context_slot` (commit M1.2c).
+  HWM AArch vẫn chưa thử lại sau sửa này.
 
 ## [vòng 26] Ngân sách pager v2
 - Bối cảnh: data 368 KiB + `MAX_OBJECTS` 163 không khả thi với headroom.
