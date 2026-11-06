@@ -36,3 +36,4 @@
 | 52 | Gắn ramfb + probe fw_cfg read-only cả 2 arch | sig=QEMU cả hai; sẵn đọc etc/ramfb | 4ed3ac1 |
 | 53 | Ghi selector fw_cfg treo guest, revert sig-only | MMIO không có signature cố định; thử DMA/DTB sau | 6451851 |
 | 54 | Probe DTB magic trong init_platform (runtime cấm unsafe) | RISC-V đúng, ARM cần map DTB | 9c2580b |
+| 55 | Header FDT OK, quét struct treo, giữ header-only | Parse sau MMU ổn định hoặc copy DTB | 7d39f97 |
