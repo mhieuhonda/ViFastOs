@@ -1284,3 +1284,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 494, 0 warning.
 - Xem `docs/agent2-report-68.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `e05c22484dec8e3be673d5112a5b80f5867e3bc024685ea027a783fbd7ada488`.
+
+## 9.48 — Vòng 69: demand-load cả 3 arch + soak runner
+
+- Server tự retype Frame từ Untyped riêng lúc fault (không cần root cấp) →
+  x86_64 có `DEMAND LOAD OK`; harness bỏ loại trừ x86 (494→495).
+- Thêm `scripts/soak.py` (chạy lặp, lưu artifact lần hỏng).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 495, 0 warning.
+- Xem `docs/agent2-report-69.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `9099e13df51d79247d1659524c8a62b3fe6756933403a87bd919d23a31f361f8`.

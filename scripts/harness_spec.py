@@ -206,7 +206,7 @@ ARCH_EXACT_ONE = {
         "VIRTIO GPU DRAW OK",
         "DEMAND LOAD OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK", "SMP PREEMPT OK", "SMP TIMER RATE", "SMP IPI COUNT", "SMP SCHED OK", "SMP WORKERS OK", "SMP POST IDLE OK"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK", "SMP PREEMPT OK", "SMP TIMER RATE", "SMP IPI COUNT", "SMP SCHED OK", "SMP WORKERS OK", "SMP POST IDLE OK", "DEMAND LOAD OK"],
 }
 
 NUMERIC = {
@@ -346,11 +346,6 @@ def accept(
     # PAGER2_VA hoặc không (race server map lại trước khi client đọc), nên chỉ
     # kiểm tra sự hiện diện của từng địa chỉ thay vì tổng số tuyệt đối.
     required = list(FAULT_ADDRESSES)
-    if name == "x86_64":
-        # x86_64 hết Untyped cho frame demand-load nên không có fault này.
-        required = [address for address in required if address != 0x1001003000]
-        if 0x1001003000 in faults:
-            return False
     if not all(address in faults for address in required):
         return False
     if faults.count(0x1001001000) not in (1, 2):
