@@ -126,6 +126,17 @@ def pass_conditions() -> str:
         for rule in harness_spec.NUMERIC[arch]:
             lines.append(f"  - {rule}")
     lines.append("")
+    lines.append("Boot stack (mọi kiến trúc):")
+    lines.append("- `BOOT STACK used=U size=S` — exactly once; S >= 131072, 1 <= U*2 <= S")
+    lines.append("")
+    lines.append("Fault rule:")
+    lines.append("- 6 + F USER FAULT records: 5 địa chỉ cũ bắt buộc + F fault trong dải pager (F <= 64)")
+    lines.append("")
+    lines.append("Feature test-destroy-smp:")
+    lines.append("- `DESTROY SMP OK (frames=20, vspaces=2)` — exactly once")
+    lines.append("- `DESTROY SMP BAD` — forbidden")
+    lines.append("- build thường không được chứa `DESTROY SMP OK`")
+    lines.append("")
     lines.append("Thứ tự bắt buộc:")
     for arch, pairs in harness_spec.ORDER.items():
         for before, after in pairs:
@@ -145,6 +156,16 @@ def qemu_status() -> str:
     results = data.get("results", {})
     if not results:
         raise SystemExit("gen-docs: QEMU result file has no results")
+    if data.get("repeat") != 3:
+        raise SystemExit(
+            "gen-docs: status must come from the standard run (--repeat 3); "
+            f"last run was repeat={data.get('repeat')}"
+        )
+    if set(results) != {"riscv64", "aarch64", "x86_64"}:
+        raise SystemExit(
+            "gen-docs: status needs all three architectures; "
+            f"got {sorted(results)}"
+        )
     pieces = [
         f"{name} {value[0]}/{value[1]}"
         for name, value in results.items()

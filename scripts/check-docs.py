@@ -167,6 +167,8 @@ def main() -> int:
         + sum(len(values) for values in harness_spec.NUMERIC.values())
         + sum(len(values) for values in harness_spec.ORDER.values())
         + len(harness_spec.EXIT_CODES)
+        # gen-docs also renders boot-stack, fault-rule and feature rules.
+        + 5
     )
     if generated_count != expected_count:
         fail(

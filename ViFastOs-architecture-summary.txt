@@ -165,6 +165,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 7964803 feat: measure boot stack high-water mark on all ports
 - 199ce90 fix: cascade untyped watermark and fuzz reclaim churn
 - 14ad2fe feat: define pager v2 wire protocol
+- e9f73a7 chore: add docs checker self-test for stale phrases
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -225,7 +226,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 253264 byte (`kernel_end=0x803c22b0`)
 - `Kernel = 710248`, `Object = 4752`, `Tcb = 4696`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): aarch64 3/3
+- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped (đo 2026-11-06): RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B
@@ -1383,6 +1384,17 @@ Theo kiến trúc:
   - B >= 5 and B/2 <= T <= 2B
   - TLB STATS: V >= 1, I >= 1, K >= 1 (regex, exactly once)
   - Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2
+
+Boot stack (mọi kiến trúc):
+- `BOOT STACK used=U size=S` — exactly once; S >= 131072, 1 <= U*2 <= S
+
+Fault rule:
+- 6 + F USER FAULT records: 5 địa chỉ cũ bắt buộc + F fault trong dải pager (F <= 64)
+
+Feature test-destroy-smp:
+- `DESTROY SMP OK (frames=20, vspaces=2)` — exactly once
+- `DESTROY SMP BAD` — forbidden
+- build thường không được chứa `DESTROY SMP OK`
 
 Thứ tự bắt buộc:
 - x86_64: `AP REAL MODE OK` trước `AP LONG MODE OK`
