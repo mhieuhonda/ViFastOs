@@ -22,3 +22,4 @@
 | 38 | Tổng kết pha 2 ở MVP, hoãn demand-load VFS | Thiếu endpoint/IPC/slot; tránh rủi ro khi slot chật | cd4bb01 |
 | 39 | VirtIO scan API + log device mỗi slot (pha 3 bước 1) | Chuẩn bị gắn net; hiện chỉ blk | b3b06bf |
 | 40 | Giữ scan API, tắt log MMIO sau init (treo QEMU) | Đọc sau claim treo; probe trước init ở vòng sau | b1e39f3 |
+| 41 | Xác minh treo MMIO, giữ nguyên code (docs-only) | Net hiện 1 lần rồi treo; serial test khác đường đọc | cce8546 |
