@@ -154,7 +154,7 @@ bundle 25.
 
 ```text
 code commit: 81a4b67
-docs commit: ac8a696
+docs commit: 273841e
 tests: 200 host test; QEMU 3/3 x3; feature 5/5 x3; persistence 7x3; harness 462
 RISC-V headroom: 253264 byte
 summary SHA-256: e381d5a20a921c325a868d8ccef79630823e3db69a6308ee7e7e0e61c81e6444
@@ -2235,6 +2235,53 @@ INPUT_READ  (client → server) data=[buf_va, max_events]
 - PS/2 IRQ1 trên x86 đi qua PIC (hiện đã có IRQ object cho timer/UART).
 - Chưa có GPU 3D/compositor; MVP chỉ blit 2D.
 
+### docs/design/memory-budget-v1.md
+
+# Ngân sách bộ nhớ để mở pager v2 (đề xuất vòng 26)
+
+Trạng thái: **đề xuất**, chưa code. Mục tiêu: tìm đường hợp lệ cho data Untyped
+368 KiB + `MAX_OBJECTS` đủ object cho pager mà vẫn giữ headroom RISC-V
+≥ 196.608 byte.
+
+## 1. Vì sao đề xuất cũ bất khả thi
+
+- Data 304→368 KiB: −65.536 headroom → còn 187.728 < guard.
+- `MAX_OBJECTS` 147→163: Object 4.752 byte × 16 = −76.032 nữa → 144.464.
+- Giữ 147 slot thì data max_objects chỉ 76; pager cần ~16 object, chỉ trống
+  6–10 sau khi reap fault TCB.
+
+## 2. Hai nguồn bộ nhớ có thể giải phóng
+
+1. **CONTEXTS theo object index → dense TCB index.** Hiện mỗi platform giữ
+   `[TrapFrame; 147]`; chỉ cần `MAX_TCBS` (22) phần tử nếu `Tcb` lưu
+   `context_slot: u8` cấp phát/giải phóng theo pool. Tiết kiệm khoảng
+   `(147−22) × size_of::<TrapFrame>()` (đo thực tế khi làm; ước 60 KiB).
+2. **Giảm `MAX_CAPS_TASK` 64→48.** `Tcb.cspace` chiếm 4.096 byte; giảm 16 slot
+   tiết kiệm 1.024 byte/Tcb, kéo `Object` từ 4.752 xuống ~3.728. Với 163
+   object, tiết kiệm ~90 KiB so với 147×4.752. Cần kiểm tra user hiện dùng
+   slot tối đa (client ≤ 7) và cập nhật docs/ABI.
+
+## 3. Phương án đề xuất
+
+| Bước | Thay đổi | Headroom ước tính |
+|---|---|---:|
+| 0 | hiện tại | 253.264 |
+| 1 | dense CONTEXTS | ~313.000 |
+| 2 | data +64 KiB, BOOT_POOL handoff −32 KiB | ~281.000 |
+| 3 | `MAX_CAPS_TASK` 48 (Object ~3.728) | ~371.000 |
+| 4 | `MAX_OBJECTS` 163 (quota 5+34+92+32) | ~295.000 |
+
+Kết quả: đủ data 92 trang/92 object cho pager, vẫn ≥ 212.992 mục tiêu.
+Bước 1–2 độc lập, có thể làm trước; bước 3–4 cần một vòng riêng vì đổi
+layout object/cap.
+
+## 4. Rủi ro
+
+- Dense context index phải cấp/giải phóng cùng TCB; TCB destroy hiện reparent
+  cap, cần trả context slot.
+- Giảm cap task ảnh hưởng test cspace; phải grep toàn bộ slot > 47.
+- `Object` size đổi làm mọi mốc LAYOUT/headroom trong docs phải sinh lại.
+
 ### docs/design/pager-v2.md
 
 # Thiết kế pager protocol v2 (dự thảo cho vòng 24)
@@ -2384,4 +2431,4 @@ QEMU:
    đều coi là dirty ở MVP.)
 3. Giới hạn số client đồng thời có nên là 4 hay theo MAX_TCBS?
 
-SHA-256 part1=89ad84dbfc99d2162782db9b8918b6bc4a052ecc677a0a0a4dcf25a98ba5b631 part3=e381d5a20a921c325a868d8ccef79630823e3db69a6308ee7e7e0e61c81e6444 part4=display-input-v1.md=88dba3828263f8f6bc5889db2e276f91b0a23899409a404c251ee8e84d38b429 pager-v2.md=79cdd56930f6ce7e5400886aa0f012a1f87596216908e4c9a7c5da7d160beba2
+SHA-256 part1=89ad84dbfc99d2162782db9b8918b6bc4a052ecc677a0a0a4dcf25a98ba5b631 part3=e381d5a20a921c325a868d8ccef79630823e3db69a6308ee7e7e0e61c81e6444 part4=display-input-v1.md=88dba3828263f8f6bc5889db2e276f91b0a23899409a404c251ee8e84d38b429 memory-budget-v1.md=6ec697a600c319337ad268ef6d6c8e5579dc099f5eabee29e8fc913a47e7f002 pager-v2.md=79cdd56930f6ce7e5400886aa0f012a1f87596216908e4c9a7c5da7d160beba2
