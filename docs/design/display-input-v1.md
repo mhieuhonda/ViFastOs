@@ -8,11 +8,23 @@ sang framebuffer + bàn phím, đủ để chạy shell và demo đồ hoạ đ�
 | Kiến trúc | Framebuffer | Input |
 |---|---|---|
 | x86_64 | GOP (UEFI) hoặc Bochs VBE (`0x1234:0x1111`) | PS/2 keyboard (IRQ1) |
-| AArch64 | ramfb (QEMU `virt`) | PL031? Không; dùng virtio-keyboard |
-| RISC-V | ramfb (QEMU `virt`) | virtio-keyboard |
+| AArch64 | ramfb qua fw_cfg DMA | virtio-keyboard (MMIO) |
+| RISC-V | ramfb qua fw_cfg DMA | virtio-keyboard (MMIO) |
 
-MVP chọn **ramfb + virtio-keyboard** cho RISC-V/AArch64 (QEMU hỗ trợ sẵn),
-x86 dùng GOP do OVMF cung cấp. Nếu GOP không có, fallback Bochs VBE.
+MVP chọn **ramfb + virtio-keyboard MMIO** cho RISC-V/AArch64. x86 dùng GOP do
+OVMF cung cấp; **chưa có PCI enumeration** nên x86 MVP dùng **PS/2 keyboard**
+(IRQ1 qua PIC) thay vì virtio-keyboard. Nếu GOP không có thì fallback Bochs VBE.
+
+## 1.1 ramfb: fw_cfg DMA và bộ nhớ liên tục
+
+- ramfb không phải PCI: QEMU cấu hình qua fw_cfg (`etc/ramfb`), ghi struct
+  `RAMFBCfg { addr, fourcc, flags, width, height, stride }` vào file fw_cfg.
+- Cần **PA liên tục**: cấp một Frame lớn (2 MiB) từ Untyped (retype nhiều page
+  liền nhau hoặc thêm `Frame::contiguous`) và ghi PA vào `addr`.
+- fw_cfg DMA: dùng cổng `0x514`/DMA address; driver user-space map MMIO fw_cfg
+  qua `IoMap` (software IOMMU) trước khi ghi.
+- Không có IOMMU cứng nên QEMU thấy PA thật; phải đảm bảo vùng PA nằm ngoài
+  kernel image và không bị reclaim.
 
 ## 2. Driver model
 
@@ -39,12 +51,13 @@ FB_MAP    (root  → server)  data=[paddr, size, format]
 ## 4. Input protocol
 
 ```text
-INPUT_EVENT (kernel → server) data=[scancode, modifiers, pressed, timestamp]
+INPUT_READY (kernel → server) = notification signal, không mang scancode
 INPUT_READ  (client → server) data=[buf_va, max_events]
 ```
 
-- Kernel IRQ handler chỉ đẩy scancode vào ring buffer (lock-free) và signal
-  notification; server dịch sang keycode.
+- Kernel **không** đẩy scancode: IRQ handler chỉ `IrqAck` + `Signal` notification
+  cho driver user-space. Driver đọc MMIO/PS/2 data port, tự dịch keycode và
+  đẩy vào ring buffer của server.
 - Server giữ ring 256 event; client đọc theo lô.
 - Không expose IRQ trực tiếp cho client.
 
@@ -59,13 +72,18 @@ INPUT_READ  (client → server) data=[buf_va, max_events]
 - Host test: glyph renderer (bitmap → pixel), ring buffer input, format/stride.
 - QEMU: in `FB OK (w=1024 h=768 stride=4096)`; vẽ 4 ô màu và đọc lại pixel
   qua `FrameWrite`/shared frame → `FB PIXEL OK`.
-- Input: gửi scancode giả qua virtio queue → `INPUT OK (events=N)`.
+- Input: gửi scancode giả qua virtio queue/PS/2 → `INPUT OK (events=N)`.
+- Test tự động framebuffer: QEMU monitor `screendump` ra PPM, so checksum vùng
+  4 ô màu (host script) → `FB SCREEN OK (crc=...)`; không cần đọc pixel qua
+  guest.
 - Harness: marker exact-one, không thay đổi hợp đồng cũ.
 
 ## 7. Rủi ro
 
-- GOP framebuffer nằm ngoài 1 GiB identity map của x86 → cần map tạm hoặc
-  IOMMU window.
-- ramfb yêu cầu địa chỉ PA liên tục; cấp bằng Frame lớn (2 MiB) từ Untyped.
+- GOP framebuffer x86 có thể nằm ngoài 1 GiB identity map (OVMF thường cấp
+  BAR > 4 GiB). Phương án: `Frame::from_pa` + `FrameMap` vào VSpace driver với
+  quyền WRITE (không cần identity), hoặc thêm window MMIO tạm trong
+  `check_kernel_mappings`; không map toàn bộ BAR vào kernel.
+- ramfb yêu cầu PA liên tục; cấp Frame 2 MiB từ Untyped và ghi qua fw_cfg DMA.
 - PS/2 IRQ1 trên x86 đi qua PIC (hiện đã có IRQ object cho timer/UART).
 - Chưa có GPU 3D/compositor; MVP chỉ blit 2D.
