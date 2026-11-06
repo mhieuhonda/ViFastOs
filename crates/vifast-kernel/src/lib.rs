@@ -7550,6 +7550,27 @@ mod tests {
     }
 
     #[test]
+    fn object_variant_sizes_for_pool_design() {
+        eprintln!(
+            "VARIANT Object={} Tcb={} CNode={} VSpace={} Endpoint={} Notification={} Frame={} Untyped={} Irq={} Iommu={} BlockDevice={} Cap={} Kernel={}",
+            core::mem::size_of::<Object>(),
+            core::mem::size_of::<Tcb>(),
+            core::mem::size_of::<CNode>(),
+            core::mem::size_of::<VSpace>(),
+            core::mem::size_of::<Endpoint>(),
+            core::mem::size_of::<Notification>(),
+            core::mem::size_of::<Frame>(),
+            core::mem::size_of::<Untyped>(),
+            core::mem::size_of::<Irq>(),
+            core::mem::size_of::<IommuDomain>(),
+            core::mem::size_of::<BlockDevice>(),
+            core::mem::size_of::<Cap>(),
+            core::mem::size_of::<Kernel>(),
+        );
+        assert!(core::mem::size_of::<Object>() <= 4752);
+    }
+
+    #[test]
     fn tcb_pool_limit_is_enforced() {
         let mut kernel = Kernel::new();
         while kernel.tcb_count() < MAX_TCBS {

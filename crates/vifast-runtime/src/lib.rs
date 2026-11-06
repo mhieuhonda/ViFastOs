@@ -1378,6 +1378,7 @@ pub mod timer {
                 );
             }
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
+            vifast_kernel::klog!(A, "CTX SIZE {}", core::mem::size_of::<A::Context>());
             if let Some((size, bump, objects, max_objects)) =
                 kernel.untyped_usage_by_base(A::data_page().as_ptr() as usize)
             {
