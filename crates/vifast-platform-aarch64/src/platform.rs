@@ -890,6 +890,16 @@ impl Platform for Aarch64Platform {
             build_kernel_page_tables();
             init_cpu(info.hartid);
         }
+        // Pha 4 (vòng 54): probe DTB header magic read-only (0xd00dfeed BE).
+        if info.dtb != 0 {
+            let magic =
+                unsafe { core::ptr::read_volatile(info.dtb as *const u32) };
+            vifast_kernel::klog!(
+                Aarch64Platform,
+                "DTB magic={:#x}",
+                u32::from_be(magic)
+            );
+        }
     }
 
     fn init_kernel() -> &'static mut Kernel {

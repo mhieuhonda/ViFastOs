@@ -880,6 +880,18 @@ impl Platform for RiscvPlatform {
             init_cpu(info.hartid);
         }
         init_plic();
+        // Pha 4 (vòng 54): probe DTB header magic read-only (0xd00dfeed BE).
+        // DTB do bootloader/OpenSBI map sẵn; đọc an toàn, chuẩn bị parse
+        // framebuffer. Platform cho phép unsafe trong impl (runtime cấm).
+        if info.dtb != 0 {
+            let magic =
+                unsafe { core::ptr::read_volatile(info.dtb as *const u32) };
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "DTB magic={:#x}",
+                u32::from_be(magic)
+            );
+        }
     }
 
     fn set_current_tcb(tcb: Option<usize>) {

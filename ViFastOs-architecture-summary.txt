@@ -2040,6 +2040,9 @@ E. Desktop / Space
 102. Vòng 53 (pha 4 bước 2): ghi selector fw_cfg treo guest (rc=-9) — fw_cfg
     MMIO không có signature cố định, đọc offset 0 ra DATA selector hiện tại;
     revert sig-only, gate xanh. Bài học: không ghi MMIO chưa hiểu sequencing.
+103. Vòng 54 (pha 4 bước 3): probe DTB magic trong init_platform (runtime cấm
+    unsafe) — RISC-V 0xd00dfeed đúng (OpenSBI map sẵn), ARM 0x0 (chưa map,
+    cần map vòng sau). Đường an toàn thay fw_cfg MMIO.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

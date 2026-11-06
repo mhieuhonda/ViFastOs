@@ -1151,3 +1151,11 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-53.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `e99f190acf754fd303deacd25842338b2c52c71224f68e6a438c84b5cbcb900f`.
+
+## 9.33 — Vòng 54: DTB đọc được trên RISC-V (pha 4 bước 3)
+
+- Probe DTB magic trong `init_platform` (runtime cấm unsafe).
+- RISC-V `0xd00dfeed` đúng; ARM `0x0` (chưa map, cần map vòng sau).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-54.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `761ffef48af497fffde29d1348f4d31084ef3e989d800bf59f727ccb8e51e063`.
