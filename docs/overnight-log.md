@@ -1312,3 +1312,11 @@ follow-up `62b31f4`.
 - Harness 498→501. Cổng: QEMU 3/3 ×3, persist 7×3, 0 warning.
 - Xem `docs/agent2-report-71.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `183d806fd4de471fb371e3979a0a8f59debb0a0b8d3ad64c33e84f7fcc504080`.
+
+## 9.51 — Vòng 72: thử x86 VFS demand-load (kết quả âm)
+
+- Thử expose boot Untyped (slot 14) để cấp frame IPC buffer cho pager trên
+  x86_64: retype frame được nhưng `map_with_tables` cần thêm PageTable từ
+  data/meta Untyped (đã cạn) → panic OutOfMemory. Đã revert, giữ VFS
+  demand-load cho riscv64/aarch64; x86 giữ ảnh tĩnh.
+- Gate xanh trở lại: QEMU 3/3.

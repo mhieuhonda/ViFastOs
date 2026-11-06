@@ -53,3 +53,4 @@
 | 69 | Demand-load cả 3 arch: server tự retype frame lúc fault | Không cần root cấp frame; harness bỏ loại trừ x86 (495 cases) | 845b11d |
 | 70 | virtio-input (device 18) đưa phím vào RxQueue UART, shell cũ dùng được | Test yêu cầu mã phím thô thay vì gõ lệnh (guest sống ngắn); đảo GPU trước net để hết flake | c61e3f1 |
 | 71 | Demand-load nạp /page.bin từ VFS lúc fault (riscv/arm) | x86 giữ ảnh tĩnh; server sinh file theo chunk để không phình ELF | 694a7b2 |
+| 72 | Thử x86 VFS demand-load qua boot Untyped — không khả thi | Thiếu cả frame lẫn PageTable; hoãn tới khi có cách giải phóng staging/untyped | (revert) |

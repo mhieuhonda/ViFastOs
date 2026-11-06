@@ -1060,7 +1060,8 @@ fn spawn_pager_server(
     ));
 
     // Vòng 71: cấp IPC buffer + cap VFS để pager server tự đọc /page.bin khi
-    // fault. Chỉ riscv64/aarch64 vì x86_64 đã cạn Untyped cho frame phụ.
+    // fault. Chỉ riscv64/aarch64 — x86_64 đã cạn Untyped cho cả frame IPC
+    // buffer lẫn page table của VA mới (vòng 72 thử boot Untyped vẫn thiếu PT).
     let enable_vfs = cfg!(any(target_arch = "riscv64", target_arch = "aarch64"));
     unsafe {
         PAGER_VFS_ENABLED = enable_vfs;
