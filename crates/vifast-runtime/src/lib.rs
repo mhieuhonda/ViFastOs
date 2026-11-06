@@ -196,6 +196,10 @@ pub trait Platform: Arch + Console {
     fn tlb_stats() -> Option<(usize, usize, usize)> {
         None
     }
+    /// Boot-stack high-water mark from the 0xA5 paint, `(used, size)`.
+    fn boot_stack_usage() -> Option<(usize, usize)> {
+        None
+    }
 
     fn secondary_none_wakes() -> usize {
         0
@@ -1386,6 +1390,9 @@ pub mod timer {
                     objects,
                     max_objects
                 );
+                if let Some((used, size)) = A::boot_stack_usage() {
+                    vifast_kernel::klog!(A, "BOOT STACK used={} size={}", used, size);
+                }
             }
             A::exit(0);
         }

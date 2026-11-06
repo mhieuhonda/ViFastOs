@@ -232,6 +232,7 @@ ACPI_RE = re.compile(r"ACPI MADT OK \(cpus=(\d+), bsp=\d+, lapic=0x[0-9a-fA-F]+\
 POST_RE = re.compile(
     r"SMP POST IDLE OK \(ticks=(\d+), idle_entries=(\d+), wake_timer=(\d+)\)"
 )
+BOOT_STACK_RE = re.compile(r"BOOT STACK used=(\d+) size=(\d+)")
 RATE_RE = re.compile(r"SMP TIMER RATE \(ap=(\d+), bsp=(\d+)\)")
 TLB_RE = re.compile(r"TLB STATS \(va_flush=(\d+), ipi=(\d+), skipped=(\d+)\)")
 IPI_RE = re.compile(r"SMP IPI COUNT \(sent=(\d+), seen=(\d+)\)")
@@ -306,6 +307,13 @@ def accept(
         sum(1 for line in output.splitlines() if line.startswith(anchor)) == 1
         for anchor in ARCH_EXACT_ONE[name]
     ):
+        return False
+    stack = BOOT_STACK_RE.search(output)
+    if not stack or output.count("BOOT STACK used=") != 1:
+        return False
+    stack_used = int(stack.group(1))
+    stack_size = int(stack.group(2))
+    if stack_size < 0x20000 or stack_used < 1 or stack_used * 2 > stack_size:
         return False
     faults = fault_addresses(output)
     if len(faults) != 6:

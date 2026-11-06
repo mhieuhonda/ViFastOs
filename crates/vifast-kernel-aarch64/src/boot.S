@@ -8,6 +8,13 @@ _start:
 1:
     ldr x0, =__stack_top
     mov sp, x0
+    /* Paint the boot stack so the exit path can report a high-water mark. */
+    ldr x1, =__stack_bottom
+    mov w2, #0xA5
+.Lpaint_boot_stack:
+    strb w2, [x1], #1
+    cmp x1, x0
+    b.lo .Lpaint_boot_stack
     bl rust_main
 3:
     wfi

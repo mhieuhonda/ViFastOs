@@ -13,6 +13,14 @@ _start:
      */
     bnez a0, promote_hart0
     la sp, __stack_top
+    /* Paint the boot stack so the exit path can report a high-water mark. */
+    la t0, __stack_bottom
+    la t1, __stack_top
+    li t2, 0xA5A5A5A5
+.Lpaint_boot_stack:
+    sw t2, 0(t0)
+    addi t0, t0, 4
+    bltu t0, t1, .Lpaint_boot_stack
     call rust_main
 1:
     wfi

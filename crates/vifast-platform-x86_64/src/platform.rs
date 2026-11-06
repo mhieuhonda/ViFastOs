@@ -2333,6 +2333,23 @@ impl Platform for X86Platform {
         ))
     }
 
+    fn boot_stack_usage() -> Option<(usize, usize)> {
+        extern "C" {
+            static __vifast_boot_stack_bottom: u8;
+            static __vifast_boot_stack_top: u8;
+        }
+        let bottom = core::ptr::addr_of!(__vifast_boot_stack_bottom) as usize;
+        let top = core::ptr::addr_of!(__vifast_boot_stack_top) as usize;
+        let mut cursor = bottom;
+        while cursor < top {
+            if unsafe { core::ptr::read_volatile(cursor as *const u8) } != 0xA5 {
+                return Some((top - cursor, top - bottom));
+            }
+            cursor += 1;
+        }
+        Some((0, top - bottom))
+    }
+
     fn start_smp() {
         // The AP is started from switch_root after the kernel page tables and
         // LAPIC are active.  D2: AP kernel IF=0, idle/poll via pause.

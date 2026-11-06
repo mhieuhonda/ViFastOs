@@ -60,6 +60,7 @@ def fixture(arch: str) -> str:
         ]
     for address in [0] + spec.FAULT_ADDRESSES:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")
+    lines.append("BOOT STACK used=1000 size=196608")
     lines.append("ROOT SWITCH 2")
     return "\n".join(lines) + "\n"
 
@@ -218,6 +219,30 @@ def main() -> int:
     cases += 1
     if spec.accept("riscv64", feature_base, 0):
         failures.append("riscv64: normal run accepted handoff marker")
+
+    for arch in ("riscv64", "aarch64", "x86_64"):
+        base = fixture(arch)
+        rc = next(iter(spec.EXIT_CODES[arch]))
+        cases += 1
+        if spec.accept(arch, base.replace("BOOT STACK used=1000 size=196608\n", ""), rc):
+            failures.append(f"{arch}: boot stack missing accepted")
+        cases += 1
+        if spec.accept(
+            arch,
+            base.replace("BOOT STACK used=1000", "BOOT STACK used=100000"),
+            rc,
+        ):
+            failures.append(f"{arch}: boot stack over half accepted")
+        cases += 1
+        if spec.accept(
+            arch, base.replace("BOOT STACK used=1000", "BOOT STACK used=0"), rc
+        ):
+            failures.append(f"{arch}: boot stack zero accepted")
+        cases += 1
+        if spec.accept(
+            arch, base + "BOOT STACK used=1000 size=196608\n", rc
+        ):
+            failures.append(f"{arch}: boot stack duplicate accepted")
 
     for arch in ("riscv64", "aarch64", "x86_64"):
         destroy_base = fixture(arch) + "DESTROY SMP OK (frames=20, vspaces=2)\n"

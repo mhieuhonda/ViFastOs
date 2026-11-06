@@ -6,6 +6,33 @@ use core::panic::PanicInfo;
 use vifast_arch::Arch;
 use vifast_platform_x86_64::X86Platform;
 
+core::arch::global_asm!(
+    r#"
+    .section .bss
+    .align 16
+    .globl __vifast_boot_stack_bottom
+__vifast_boot_stack_bottom:
+    .space 0x30000
+    .globl __vifast_boot_stack_top
+__vifast_boot_stack_top:
+
+    .section .text.entry, "ax"
+    .globl efi_main
+efi_main:
+    mov r8, rcx
+    mov r9, rdx
+    lea rdi, [rip + __vifast_boot_stack_bottom]
+    lea rcx, [rip + __vifast_boot_stack_top]
+    sub rcx, rdi
+    mov al, 0xA5
+    rep stosb
+    lea rsp, [rip + __vifast_boot_stack_top]
+    mov rcx, r8
+    mov rdx, r9
+    jmp efi_main_rust
+    "#
+);
+
 #[repr(C)]
 struct Guid {
     data1: u32,
@@ -189,7 +216,10 @@ unsafe fn allocate_trampoline(system_table: *mut c_void) -> u64 {
 }
 
 #[no_mangle]
-pub extern "efiapi" fn efi_main(image_handle: *mut c_void, system_table: *mut c_void) -> usize {
+pub extern "efiapi" fn efi_main_rust(
+    image_handle: *mut c_void,
+    system_table: *mut c_void,
+) -> usize {
     if !unsafe { check_loaded_image(image_handle, system_table) } {
         <X86Platform as Arch>::write_str("\r\nX86 IMAGE OUTSIDE 0..1 GiB\r\n");
         X86Platform::exit(1);

@@ -1220,6 +1220,23 @@ impl Platform for Aarch64Platform {
         Some((TLB_VA_FLUSH.load(Ordering::Relaxed), 0, 0))
     }
 
+    fn boot_stack_usage() -> Option<(usize, usize)> {
+        extern "C" {
+            static __stack_bottom: u8;
+            static __stack_top: u8;
+        }
+        let bottom = core::ptr::addr_of!(__stack_bottom) as usize;
+        let top = core::ptr::addr_of!(__stack_top) as usize;
+        let mut cursor = bottom;
+        while cursor < top {
+            if unsafe { core::ptr::read_volatile(cursor as *const u8) } != 0xA5 {
+                return Some((top - cursor, top - bottom));
+            }
+            cursor += 1;
+        }
+        Some((0, top - bottom))
+    }
+
     fn secondary_user_ticks() -> usize {
         SECONDARY_USER_TICKS.load(Ordering::Relaxed)
     }
