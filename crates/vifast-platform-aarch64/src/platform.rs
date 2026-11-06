@@ -1310,7 +1310,8 @@ impl Platform for Aarch64Platform {
     }
 
     fn init_block() {
-        // Pha 3 (vòng 42): probe 32 slot đầu TRƯỚC init — an toàn.
+        // Pha 3 (vòng 42-43): probe 32 slot đầu TRƯỚC init — an toàn.
+        // Đọc MAC net qua config space khi gặp device=1.
         for i in 0..32u64 {
             let base = 0x0a00_0000u64 + i * 0x200;
             let magic = unsafe { core::ptr::read_volatile(base as *const u32) };
@@ -1323,6 +1324,21 @@ impl Platform for Aarch64Platform {
                     magic,
                     device
                 );
+                if device == vifast_virtio::DEVICE_NET {
+                    if let Some(mac) = vifast_virtio::net_mac(base) {
+                        vifast_kernel::klog!(
+                            Aarch64Platform,
+                            "VIRTIO NET base={:#x} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                            base,
+                            mac[0],
+                            mac[1],
+                            mac[2],
+                            mac[3],
+                            mac[4],
+                            mac[5]
+                        );
+                    }
+                }
             }
         }
         if vifast_virtio::init() {

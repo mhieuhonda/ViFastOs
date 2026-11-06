@@ -1075,8 +1075,8 @@ impl Platform for RiscvPlatform {
             );
             return;
         }
-        // Pha 3 (vòng 42): probe MMIO TRƯỚC init — an toàn vì chưa claim
-        // device nào. Đã xác minh chạy tốt trên serial đúng ($TMPDIR).
+        // Pha 3 (vòng 42-43): probe MMIO TRƯỚC init — an toàn vì chưa claim
+        // device nào. Đọc MAC net qua config space (offset 0x100).
         for base in [0x1000_1000u64, 0x1000_7000, 0x1000_8000] {
             let magic = unsafe { core::ptr::read_volatile(base as *const u32) };
             let device = unsafe { core::ptr::read_volatile((base + 8) as *const u32) };
@@ -1087,6 +1087,21 @@ impl Platform for RiscvPlatform {
                 magic,
                 device
             );
+            if device == vifast_virtio::DEVICE_NET {
+                if let Some(mac) = vifast_virtio::net_mac(base) {
+                    vifast_kernel::klog!(
+                        RiscvPlatform,
+                        "VIRTIO NET base={:#x} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        base,
+                        mac[0],
+                        mac[1],
+                        mac[2],
+                        mac[3],
+                        mac[4],
+                        mac[5]
+                    );
+                }
+            }
         }
         if vifast_virtio::init_range(0x1000_1000, 0x1000_9000, 0x1000) {
             let (base, magic, version, device) = vifast_virtio::probe_info();
