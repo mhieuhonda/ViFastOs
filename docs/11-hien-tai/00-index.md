@@ -38,7 +38,13 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
 | `vifast-user` | `crates/vifast-user/src/lib.rs` | Syscall wrapper cho 3 kiến trúc |
 | `vifast-pte` | `crates/vifast-pte/src/lib.rs` | Encode/decode/index PTE an toàn |
 | `vifast-elf` | `crates/vifast-elf/src/lib.rs` | Parse/validate ELF64 PT_LOAD, W^X, range, overlap |
+| `vifast-fs` | `crates/vifast-fs/src/lib.rs` | FS VF04/VF03/VF02: journal, inode, thư mục, link, fsck, cache |
+| `vifast-fsutil` | `crates/vifast-fsutil/src/main.rs` | Công cụ host: format/migrate/inspect ảnh FS |
+| `vifast-virtio` | `crates/vifast-virtio/src/lib.rs` | VirtIO-MMIO block transport (RISC-V/AArch64) |
+| `vifast-acpi` | `crates/vifast-acpi/src/lib.rs` | ACPI RSDP/MADT cho x86_64 |
 | `vifast-root` | `crates/vifast-root/src/main.rs` | Root task Rust ELF, `_start` asm, linker ROOT_ELF_BASE |
+| `vifast-server` | `crates/vifast-server/src/main.rs` | VFS server user-space (IPC request/reply) |
+| `vifast-client` | `crates/vifast-client/src/main.rs` | Client demo, shell, test FS/IRQ |
 | `vifast-arch-*` | `crates/vifast-arch-*/src/lib.rs` | UART/PL011/COM1, clock, IRQ mask, shutdown |
 | `vifast-platform-*` | `crates/vifast-platform-*/src/` | MMU, trap, timer, IRQ, SMP, user entry |
 | `vifast-kernel-*` | `crates/vifast-kernel-*/src/main.rs` | Entry, linker, user image asset |

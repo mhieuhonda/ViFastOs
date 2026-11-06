@@ -1,180 +1,198 @@
 # 11.9. Kiểm thử và tiêu chí PASS
 
-## 1. Build
+Cập nhật: 2026-11-06, sau vòng 22.2 (HEAD `c86de49`, code `13c26f8`).
+Số liệu dưới đây là số liệu thật của baseline; khi code đổi, chạy lại các lệnh
+ở mục 1 rồi cập nhật tài liệu này.
+
+## 1. Cổng kiểm tra
 
 ```bash
-./scripts/build.sh
+export PATH="$HOME/.cargo/bin:$PATH"
+./scripts/check-all.sh        # cổng đầy đủ: fmt + build + QEMU + persist + harness + docs
 ```
 
-Bao gồm:
-
-- host test `vifast-kernel`, `vifast-pte`, `vifast-elf`, `vifast-runtime`,
-  `vifast-user`;
-- build/validate root ELF cho 3 target
-  (`riscv64imac-unknown-none-elf`, `aarch64-unknown-none-softfloat`,
-  `x86_64-unknown-none`) bằng `vifast-elf` và kiểm tra FP/SIMD;
-- build RISC-V64 bare metal;
-- build AArch64 bare metal;
-- build x86_64 UEFI.
-
-## 2. Host test
-
-```bash
-cargo test -p vifast-kernel
-cargo test -p vifast-pte
-cargo test -p vifast-elf
-cargo test -p vifast-runtime
-cargo test -p vifast-user
-# build.sh cũng build root ELF cho 3 target và chạy vifast-elf-validate
-```
-
-`.cargo/config.toml` đặt `RUST_MIN_STACK=8 MiB` vì `Kernel` debug hiện ~600 KiB.
-
-Hiện có **104 test** trong `vifast-kernel` + 21 test trong `vifast-fs` +
-11 test trong `vifast-pte` + 17 test trong `vifast-elf` + 8 test `vifast-acpi`
-+ 6 test `vifast-arch`:
-
-- kiểm tra kích thước `Kernel`/`Object`/`Tcb`;
-- self-test đầy đủ;
-- BootInfo layout cố định 32 byte và offset từng field;
-- ReplyRecv: no caller chỉ Recv; reply trước rồi nhận caller kế; stale epoch
-  trả NoCaller;
-- IPC buffer: cần mapping RW đúng Frame; copy 32 word qua PA; unmap Frame xoá
-  liên kết;
-- Fault endpoint: handler waiting nhận message, không waiting thì queue, revoke
-  cap endpoint xoá link; QEMU in FAULT EP OK;
-- QEMU yêu cầu đúng 4 USER FAULT, gồm 0x80000000, 0x1000002000 và root Rust
-  stack 0x1000301000; client dùng VSpace/Untyped con riêng, `Zero OK` vẫn qua;
-- capability rights monotonic;
-- revoke descendant;
-- VSpace W^X + overlap + unmap;
-- W^X theo Frame: RW ở một VA rồi RX cùng Frame ở VA/VSpace khác bị từ chối,
-  snapshot page table không đổi; unmap hoặc revoke VSpace giải phóng bộ đếm;
-- mapping bắt buộc có READ (mask rỗng/W-only/X-only trả `InvalidArg`);
-- PA uniqueness: Frame-Frame và PageTable-VSpace trùng dải bị từ chối; bố cục
-  Frame/PageTable/VSpace rời nhau được chấp nhận;
-- map EXEC gọi `sync_icache`, map RW không gọi;
-- `mapped_w/mapped_x` tràn u16 trả `OutOfMemory`, không quay vòng;
-- frame alignment;
-- syscall từ chối cap sai type/đã revoke và W^X;
-- chuyển cap yêu cầu slot đích rõ ràng, không fallback;
-- user pointer validation cho DebugWrite/Open/Read/Write;
-- Untyped byte accounting + OutOfMemory;
-- revoke Untyped destroy Frame + xoá mapping cũ;
-- revoke Untyped detach TCB đang BlockedRecv;
-- max_objects limit; Untyped con: range/quota, sibling PA uniqueness, frame
-  nằm trong dải con, revoke cha/con, nested child, cap không root, reparent TCB;
-- cap copy giữ parent chain;
-- TcbConfigure không còn validation entry/stack;
-- TcbResume từ chối TCB chưa configure;
-- Yield thật qua switch_blocked;
-- checked_add/overflow + buffer vắt qua hai page khác quyền;
-- self-revoke Untyped bị từ chối khi TCB hiện tại là con;
-- retype Frame và PageTable đều gọi zero page qua PageTableOps;
-- generic page-table walk xoá leaf qua PageTableOps giả lập;
-- TCB pool quota đầy trả OutOfMemory;
-- walk safety: user range, thiếu bảng, leaf cấp cao, PTE valid, snapshot không đổi;
-- PageTableMap gán level 1/2/3, FrameMap qua bảng mới, từ chối bảng vượt range;
-- retype VSpace cấp root + aux page, hai VSpace độc lập;
-- revoke bản copy Untyped không chạm object của cap gốc;
-- root revoke thu hồi cả object của cap con; delete cap bị từ chối khi còn con;
-- validate_user_range walk leaf user/R/W, cross-page/high-leaf/overflow;
-- PteFakeOps tách test RISC-V/x86_64/AArch64, dùng encoder/decoder thật cho
-  map/unmap/PageTableMap/validate/build;
-- build không data rồi FrameMap tại `DATA_VA` thành công trên cả 3 format;
-- build_task_space_shared_code map cùng Frame code root/server;
-- build_task_space_elf map PT_LOAD R/RX/RW, BSS zero, segment mid-page, stack
-  4 trang + guard, mở rộng VSpace có sẵn và rollback khi thiếu trang;
-- PteFakeOps đếm leaf chính xác và bắt mapping thừa;
-- FrameUnmap đòi Frame cap đúng PA; VSpace cap đơn lẻ hoặc sai frame bị từ chối;
-- FrameMap chỉ cho quyền mapping ⊆ quyền Frame cap (READ|EXEC không map RW);
-- Frame code dùng chung root/server map RX hai lần, `mapped_x=2`, không WRITE;
-- boot Untyped 128 KiB/32 object và build_task_space host test.
-- PageTableMap không thay entry 0 dùng chung;
-- revoke Untyped unmap Frame trước, rồi PageTable sâu → nông, không còn PTE
-  trỏ tới trang đã free;
-- page table và VSpace thuộc hai Untyped khác nhau: revoke một bên không để
-  reverse map/metadata treo;
-- kernel accessible range và boot-time trap-path slot check trên cả 3 arch.
-
-Boot assert:
-- x86 LoadedImage base/end trong 0..1 GiB;
-- RISC-V/AArch64 kernel image end + metadata/data/boot Untyped trong kernel accessible range;
-- walk leaf thật cho kernel mapping: non-user, X trap entry, W stack/storage.
-
-`vifast-pte` có 11 test cho encode/decode, table_span, KERNEL_SHARED_SLOTS, dải user thật của 3
-kiến trúc, biên index và leaf L3 AArch64 RO+X / RW+NX / EL0 / leaf_is_user.
-
-`vifast-elf` không tự định nghĩa dải user; caller truyền machine và user range.
-Có 17 host test: ELF hợp lệ, magic/class, phdr table/phoff overflow,
-file range, segment/memory offset overflow, congruence vaddr-offset, ET_DYN,
-wrong machine, PT_INTERP/PT_DYNAMIC/PT_TLS, W+X, overlap, entry sai và
-không có PT_LOAD.
-
-`vifast-runtime` hiện chưa có unit test riêng; nó được kiểm tra qua QEMU.
-QEMU kiểm tra thêm `ROOT SWITCH n`: 4.4 chỉ cần n ≥ 1, 4.5 cần n > 1 do
-server/client đổi VSpace khi IPC.
-
-## 3. QEMU test
-
-```bash
-python3 scripts/test-qemu.py
-```
-
-Script chạy:
-
-- RISC-V64: `-machine virt -smp 2`, OpenSBI;
-- AArch64: `-machine virt,gic-version=2 -cpu max -smp 2`;
-- x86_64: OVMF, `-smp 2`.
-
-Điều kiện PASS:
-
-- `SELFTEST PASS`;
-- `booting on`;
-- `BOOT UNTYPED` (log used/free pages và objects);
-- `PREEMPT OK`;
-- `Server`;
-- `Client`;
-- `Mapped`;
-- `Cap OK`;
-- `ViFastOs ramfs`;
-- `ViFastOs write`;
-- `Reply OK`;
-- đúng 3 `USER FAULT`, có `addr=0x80000000` và `addr=0x1000002000`;
-- `ROOT RUST` và `ROOT READY` mỗi chuỗi đúng 1 lần, trước `Server`/`Client`;
-- không có `ROOT PANIC`;
-- `Isolation`;
-- `ROOT SWITCH n` với n > 1;
-- `Zero OK`;
-- RISC-V/AArch64 phải có `SMP OK`;
-- x86_64 chấp nhận `SMP SKIP` ở giai đoạn hiện tại.
-
-## 4. Kết quả hiện tại
+`check-all.sh` lần lượt chạy:
 
 ```text
-riscv64  PASS
-aarch64  PASS
-x86_64   PASS
+cargo fmt --all -- --check
+./scripts/build.sh
+python3 scripts/test-qemu.py --repeat 3
+python3 scripts/test-persist.py
+python3 scripts/test-harness-spec.py
+python3 scripts/check-docs.py
 ```
 
-Đã chạy lặp 3 lần. Exit code QEMU:
+Cổng nhỏ khi chỉ sửa tài liệu:
 
-- RISC-V: 0;
-- AArch64: 0;
-- x86_64: 3 do `isa-debug-exit`.
+```bash
+python3 scripts/gen-docs.py
+python3 scripts/check-docs.py
+cargo fmt --all -- --check
+```
 
-## 5. Debug
+`check-docs.py` phụ thuộc `target/vifast-qemu-last.json`. Nếu chạy QEMU với
+`--repeat` khác lần ghi trong summary, phải chạy `gen-docs.py` trước
+`check-docs.py`, nếu không sẽ báo "summary generated sections are stale".
 
-- Serial được ghi ra file trong `test-qemu.py`.
-- x86 UEFI dùng OVMF; nếu không tìm thấy firmware, test skip/fail.
-- Nếu QEMU x86 treo trước banner, kiểm tra OVMF vars và đường dẫn ESP.
-- Nếu RISC-V/AArch64 `SMP SKIP`, kiểm tra `-smp 2` và HSM/PSCI.
+## 2. Build — `scripts/build.sh`
 
-## 6. Chưa có
+Thứ tự:
 
-- test stress SMP;
-- fuzz syscall;
-- Kani/Verus;
-- test trên phần cứng thật;
-- test filesystem persistence;
-- test network/driver.
+1. `cargo test` cho các crate host: kernel, arch, pte, elf, runtime, user,
+   acpi, fs, fsutil (runtime/user/fsutil hiện không có unit test).
+2. `cargo test -p vifast-kernel layout_sizes_for_status -- --nocapture`
+   (in kích thước `Kernel`/`Object`/`Tcb`/`Cap`).
+3. `cargo build -p vifast-fsutil` (công cụ host cho persistence).
+4. `python3 scripts/test-harness-spec.py` (426 case âm).
+5. Build root/server/client ELF cho 3 target, `llvm-objcopy --strip-all`,
+   kiểm tra bằng `scripts/check-root-elf.sh` (ET_EXEC, segment/window,
+   soft-float).
+6. Build 3 kernel bare-metal (`riscv64gc`, `aarch64`, `x86_64-uefi`).
+
+Kết quả baseline 2026-11-06:
+
+```text
+root ELF OK: riscv64imac   size=22808 bytes memsz=16650
+root ELF OK: aarch64       size=26632 bytes memsz=18912
+root ELF OK: x86_64        size=25296 bytes memsz=18067
+build complete (0 warning)
+```
+
+## 3. Host test
+
+| Crate | Số test | Ghi chú |
+|---|---|---|
+| `vifast-kernel` | **112/112** | + 1 test fuzz dài `#[ignore]`, chạy `--ignored` |
+| `vifast-arch` | 7/7 | |
+| `vifast-pte` | 11/11 | |
+| `vifast-elf` | 17/17 | |
+| `vifast-acpi` | 8/8 | |
+| `vifast-fs` | 22/22 | |
+| `vifast-runtime`, `vifast-user`, `vifast-fsutil` | 0 | kiểm qua QEMU/build |
+| **Tổng duy nhất** | **177** | |
+
+Phạm vi chính của `vifast-kernel`:
+
+- layout `Kernel`/`Object`/`Tcb`/`Cap`, boot Untyped, capacity;
+- object/capability: copy/mint/derive/revoke, badge, quyền monotonic, cây cap,
+  `CapDelete`/`CapRevoke`, CNode phẳng;
+- IPC: Send/Call/Recv/Reply/ReplyRecv, queue, stale epoch, IPC buffer;
+- notification, fault endpoint, `TcbBindNotification`;
+- scheduler: priority, round-robin, per-hart queue, work stealing, affinity,
+  `Sleep`, `BlockedBudget` (SchedContext budget/period);
+- TCB: configure/resume/suspend/restart/destroy/reap, quota;
+- VSpace/Frame/PageTable: generic walk, W^X, PA uniqueness, W^X theo Frame,
+  user range validation, page table rollback, revoke theo thứ tự;
+- Untyped: accounting, quota, con, reparent, `OutOfMemory`;
+- IRQ object: `IrqGet`/`IrqSetNotification`/`IrqAck`, raise coalesce;
+- invariant checker sau các thao tác.
+
+`vifast-fs` kiểm format VF04/VF03/VF02, journal replay/torn commit, hard link,
+symlink, double indirect, `O_APPEND`, `O_EXCL`/`O_DIRECTORY`, `STAT_PATH`,
+fsck, cache write-back, `fsync`.
+
+`vifast-pte` kiểm encode/decode, `table_span`, `KERNEL_SHARED_SLOTS`, dải user
+thật 3 kiến trúc, leaf L3 AArch64. `vifast-elf` kiểm header/phdr, range,
+congruence, W^X, overlap, entry, segment không hỗ trợ.
+
+Fuzz syscall: test dài 100.000 bước × 3 PTE format nằm sau `#[ignore]`;
+bản ngắn hơn chạy mặc định.
+
+## 4. QEMU — `scripts/test-qemu.py`
+
+### Lệnh
+
+```bash
+python3 scripts/test-qemu.py                 # 1 lần mỗi kiến trúc
+python3 scripts/test-qemu.py --repeat 3      # 3 lần mỗi kiến trúc
+python3 scripts/test-qemu.py --arch riscv64  # một kiến trúc
+python3 scripts/test-qemu.py --feature test-panic-hart1   # mutation test
+```
+
+### Máy ảo
+
+| Kiến trúc | QEMU | Ghi chú |
+|---|---|---|
+| RISC-V 64 | `-machine virt -smp 2 -m 128M -bios default` | OpenSBI; VirtIO-MMIO block |
+| AArch64 | `-machine virt,gic-version=2 -cpu max -smp 2 -m 128M` | kernel ELF trực tiếp |
+| x86_64 | `-machine q35 -cpu max -smp 2 -m 256M` + OVMF + FAT ESP | `isa-ide` + `ide-hd` ở `ide.6`; `isa-debug-exit` 0x501 |
+
+Timeout: 20 s (RISC-V/AArch64), 40 s (x86).
+
+### Điều kiện PASS
+
+Nguồn sự thật là `scripts/harness_spec.py`; `test-qemu.py` gọi `accept()`.
+Tóm tắt:
+
+- **Chung**: `SELFTEST PASS`, `booting on`, `BOOT UNTYPED`, `PREEMPT OK`,
+  `Isolation`, `Server`, `Client`, `SLEEP OK`, `Mapped`, `Cap OK`,
+  `ViFastOs ramfs`, `ViFastOs write`, `FS V2 OK`, `FS FSCK OK`, `FS PERM OK`,
+  `BADGE SPOOF DENIED OK`, `IPC BUF OK`, `BLOCK DENIED OK`, `Reply OK`,
+  `ROOT RUST`, `BOOTINFO OK`, `SCHED CTX OK`, `RUST MODULES OK`,
+  `CLIENT VSPACE OK`, `FAULT EP OK`, `ROOT READY`, `Zero OK`, `BLOCK OK`,
+  `FS DISK OK`.
+- **Đúng một lần**: `VFS SERVER OK`, `VFS OK`, `VFS STAT OK`, `IOMMU OK`,
+  `PERCPU CLOBBER OK`, `TIME MONOTONIC OK`, `TLB REMAP OK`, `CAP DELETE OK`,
+  `TCB SUSPEND OK`, `FS LARGE OK`, `FS APPEND OK`, `FS OPEN FLAGS OK`,
+  `FS STAT PATH OK`, `HARD LINK OK`, `SYMLINK OK`, `IRQ OK`, `CNODE OK`,
+  `TCB REAP OK`, `PAGER OK`, `PAGER2 OK`.
+- **Fault**: đúng **6** dòng `USER FAULT`; phải có các địa chỉ `0x80000000`,
+  `0x1000002000`, `0x1000301000`, `0x1001000000`, `0x1001001000`
+  (record còn lại hiện là `0x0`).
+- **Không được xuất hiện**: các marker `... BAD` tương ứng, `ROOT PANIC`,
+  `STALL`, `BOOT HANDOFF FAIL`, `KERNEL IRQ OUTSIDE IDLE`, `AP PIC IRQ`,
+  `FS CORRUPT`.
+- **RISC-V/AArch64**: `SMP OK (... ipi=1)`, `SMP TIMER RATE`, `SMP TIMER OK`,
+  `SMP IDLE OK`, `SMP PREEMPT OK`, `SMP SCHED OK`, `SMP WORKERS OK`,
+  `SMP POST IDLE OK`, `TLB STATS`; AArch64 yêu cầu TLB `ipi == 0`
+  (broadcast), RISC-V `ipi >= 1`, `skipped >= 1`.
+- **x86_64**: thêm `KERNEL DATA NX OK`, `ACPI MADT OK (cpus=2)`, `LAPIC OK`,
+  `AP TRAMPOLINE OK (page < 0xA0000)`, `AP REAL MODE OK` → `AP LONG MODE OK`
+  → `SMP OK` đúng thứ tự, `SMP IPI COUNT (1 <= seen <= sent)`.
+- **Exit code**: RISC-V 0, AArch64 0, x86_64 **3** (kernel ghi 1 vào
+  `isa-debug-exit`).
+
+### Mutation test
+
+`--feature test-panic-hart1` build kernel panic trên hart 1; harness PASS khi
+exit code khác 0 và chỉ có đúng một `PANIC (hart=1)`, không có log sau đó.
+`--feature test-skip-tlb-ipi` và `--feature test-boot-handoff` tương tự cho
+TLB/boot handoff.
+
+## 5. Persistence — `scripts/test-persist.py`
+
+Dùng `target/debug/vifast-fsutil` và QEMU với disk tạm mới mỗi phase. 7 phase
+× 3 kiến trúc:
+
+1. blank format;
+2. two-way persistence;
+3. migration VF03/VF02 → VF04;
+4. valid journal replay;
+5. torn journal;
+6. corrupt superblock (negative);
+7. file lớn double-indirect.
+
+Kỳ vọng: mỗi kiến trúc in `PASS`, exit 0; tổng 21 dòng phase PASS.
+Script không có `--help`; gọi không tham số là chạy toàn bộ.
+
+## 6. Harness âm — `scripts/test-harness-spec.py`
+
+426 case: mỗi điều kiện trong `harness_spec.py` bị xoá khỏi output tổng hợp và
+kiểm tra rằng `accept()` trả `False`. Case đặc biệt: fault count/address,
+SMP counter, thứ tự marker, exit code, feature mode.
+
+## 7. Debug
+
+- Serial file: `/tmp/vifast-riscv64.serial`, `/tmp/vifast-aarch64.serial`,
+  và `serial.txt` trong thư mục tạm x86.
+- Khi timeout, `test-qemu.py` ghi `artifacts/flake-<arch>-<n>/` gồm
+  `registers.txt` (qua QEMU monitor), `tail.txt`, `status.txt`.
+- Nếu x86 treo trước banner: kiểm tra OVMF code/vars và ESP.
+- Nếu RISC-V/AArch64 thiếu `SMP OK`: kiểm tra `-smp 2` và HSM/PSCI.
+
+## 8. Chưa có
+
+- Stress SMP > 2 hart trong harness (`-smp 4` mới chỉ chạy thủ công).
+- Kani/Verus; soak dài nhiều giờ tự động.
+- Test trên phần cứng thật; test network/GPU/driver ngoài QEMU.
+- Hosted CI (đã bỏ theo yêu cầu; dùng `scripts/check-all.sh` cục bộ).

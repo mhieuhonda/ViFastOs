@@ -154,6 +154,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 79005ce feat: move pager handling into user-space server
 - 46e8ad6 feat: reap TCBs and serve two pager clients
 - 13c26f8 feat: add VFS stat-by-path request
+- 21063cf fix: remove fn-to-int cast warnings in root
 ### END GENERATED commits
 
 Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
