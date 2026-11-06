@@ -66,6 +66,7 @@ EXACT_ONE = [
     "PAGER2 OK",
     "PAGER EVICT OK",
     "PAGER3 OK",
+    "SHELL READY",
     "DESTROY OK",
 ]
 

@@ -474,6 +474,9 @@ fn parse_u64(text: &[u8]) -> Option<u64> {
 fn shell() -> ! {
     let mut line = [0u8; 96];
     let mut len = 0usize;
+    // Vòng 61 (pha 4 input): marker chứng minh input task (UART console_read
+    // + IRQ notify) đã vào vòng lặp — harness khóa exact-one cả 3 arch.
+    write(b"SHELL READY\n");
     write(b"shell> ");
     loop {
         let input = vifast_user::console_read();

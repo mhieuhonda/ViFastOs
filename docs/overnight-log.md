@@ -1209,3 +1209,11 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-60.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `c33cb6900fe23e0ce53310772c21cbe247616dab45913c752cdd7784474c6e79`.
+
+## 9.40 — Vòng 61: khóa input task vào harness (pha 4 input)
+
+- Shell in `SHELL READY` khi vào vòng lặp; exact-one cả 3 arch.
+- Harness âm 483→489. Serial chardev 2 chiều để vòng sau.
+- Cổng: QEMU 3/3 ×3, persist 7×3, host 203, 0 warning.
+- Xem `docs/agent2-report-61.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `15a5c6d54897f48c39b61b3d354868a7e3bed95df2632a5d3ff4ebd5a8ee4243`.
