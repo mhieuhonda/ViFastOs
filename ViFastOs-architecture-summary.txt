@@ -169,6 +169,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a4c2a84 test: render all harness rules and pin status to standard run
 - fa89e89 refactor: atomic timer interval and wrapped kernel pointer
 - 81a4b67 test: run feature build before standard status
+- 216035d test(M1.1): measure object variants and context size
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -216,7 +217,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 131/131 PASS
+- `cargo test -p vifast-kernel`: 132/132 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -533,16 +534,35 @@ Root task sau đó tự:
 
 7. OBJECT MODEL VÀ CAPABILITY
 -----------------------------
-Giới hạn cố định:
-- MAX_OBJECTS = 147
-- MAX_TCBS = 18
-- MAX_CAPS_ROOT = 96
-- MAX_CAPS_TASK = 64
-- MAX_QUEUE = 8
-- MAX_FDS = 8
-- MAX_MAPPINGS = 64
-- MAX_IOMMU_MAPPINGS = 32
-- MAX_FILES = 8
+Giới hạn cố định (sinh từ code, ghi kèm crate):
+
+### BEGIN GENERATED limits
+- `vifast-kernel::MAX_OBJECTS = 147`
+- `vifast-kernel::MAX_TCBS = 18`
+- `vifast-kernel::MAX_CAPS_ROOT = 96`
+- `vifast-kernel::MAX_CAPS_TASK = 64`
+- `vifast-kernel::MAX_QUEUE = 8`
+- `vifast-kernel::MAX_MAPPINGS = 64`
+- `vifast-kernel::MAX_IOMMU_MAPPINGS = 32`
+- `vifast-kernel::MAX_FDS = 8`
+- `vifast-kernel::MAX_UNTYPED_FREE = 16`
+- `vifast-abi::MAX_CLIENTS = 4`
+- `vifast-abi::MAX_NAME = 8`
+- `vifast-abi::MAX_COMPONENT = 28`
+- `vifast-abi::MAX_IO = 128`
+- `vifast-abi::MAX_FILES = 16`
+- `vifast-abi::MAX_PATH = 128`
+- `vifast-abi::MAX_FD = 8`
+- `vifast-fs::MAX_INODES = 64`
+- `vifast-fs::MAX_BLOCKS_PER_INODE = 12`
+- `vifast-fs::MAX_DIRECT_BLOCKS = 11`
+- `vifast-fs::MAX_NAME = 28`
+- `vifast-fs::MAX_PATH = 128`
+- `vifast-fs::MAX_SYMLINK_DEPTH = 8`
+### END GENERATED limits
+
+`MAX_FDS` (kernel) là số fd slot mỗi TCB; `MAX_FD` (abi) là giới hạn wrapper
+ABI; `MAX_FILES` (fs) là số file đồng thời của VFS.
 
 Object:
 - Object { gen: u32, kind: Kind, owner: Option<ObjRef>, creator: Option<CapRef> }
@@ -1624,24 +1644,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - `OBJ_TCB_BYTES=4096` chỉ là quota accounting, không phản ánh đúng `size_of::<Tcb>()`.
 - Server fault khi client BlockedReply sẽ làm client chờ vô hạn; fault endpoint sẽ xử lý.
 
-### BEGIN GENERATED limits
-- `MAX_OBJECTS = 147`
-- `MAX_TCBS = 18`
-- `MAX_CAPS_ROOT = 96`
-- `MAX_CAPS_TASK = 64`
-- `MAX_QUEUE = 8`
-- `MAX_MAPPINGS = 64`
-- `MAX_IOMMU_MAPPINGS = 32`
-- `MAX_FDS = 8`
-- `MAX_UNTYPED_FREE = 16`
-- `MAX_CLIENTS = 4`
-- `MAX_NAME = 8`
-- `MAX_COMPONENT = 28`
-- `MAX_IO = 128`
-- `MAX_FILES = 16`
-- `MAX_PATH = 128`
-- `MAX_FD = 8`
-### END GENERATED limits
+
 
 17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
 ----------------------------------

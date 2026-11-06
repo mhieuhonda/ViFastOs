@@ -213,17 +213,18 @@ def error_codes() -> str:
 def limits() -> str:
     lines = []
     seen = set()
-    for source in (
-        ROOT / "crates" / "vifast-kernel" / "src" / "object.rs",
-        ROOT / "crates" / "vifast-abi" / "src" / "lib.rs",
+    for source, crate in (
+        (ROOT / "crates" / "vifast-kernel" / "src" / "object.rs", "vifast-kernel"),
+        (ROOT / "crates" / "vifast-abi" / "src" / "lib.rs", "vifast-abi"),
+        (ROOT / "crates" / "vifast-fs" / "src" / "lib.rs", "vifast-fs"),
     ):
         text = source.read_text()
         for match in re.finditer(r"pub const (MAX_[A-Z0-9_]+): usize = (\d+);", text):
             name = match.group(1)
-            if name in seen:
+            if (crate, name) in seen:
                 continue
-            seen.add(name)
-            lines.append(f"- `{name} = {match.group(2)}`")
+            seen.add((crate, name))
+            lines.append(f"- `{crate}::{name} = {match.group(2)}`")
     if not lines:
         raise SystemExit("gen-docs: no MAX_* limits found")
     return "\n".join(lines)

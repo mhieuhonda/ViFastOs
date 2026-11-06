@@ -125,7 +125,7 @@ def main() -> int:
         match = re.search(rf"pub const {name}: usize = (\d+);", object_source)
         if not match:
             fail(f"cannot parse {name} from vifast-kernel")
-        doc_match = re.search(rf"^- {name} = (\d+)$", summary, re.M)
+        doc_match = re.search(rf"^- `vifast-kernel::{name} = (\d+)`$", summary, re.M)
         if not doc_match:
             fail(f"summary missing {name}")
         if doc_match.group(1) != match.group(1):
