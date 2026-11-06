@@ -1039,3 +1039,11 @@ follow-up `62b31f4`.
 - Bài học: probe net TRƯỚC init blk hoặc dùng monitor `info qdm`.
 - Xem `docs/agent2-report-40.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `55c171597dc3781b348309ecc0c411d652917e9d793dcac9f00d5e60ac1c5500`.
+
+## 9.20 — Vòng 41: xác minh treo MMIO (không đổi code)
+
+- Gắn net: hiện `VIRTIO NET` một lần rồi treo sau `VIRTIO DEV`; revert.
+- Probe trước init không log do serial test khác đường đọc; cần monitor.
+- Giữ nguyên code, gate xanh (làm mới status repeat 3).
+- Xem `docs/agent2-report-41.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `f15f4482c7082bbd92c5e80f803c74094a01c8e13b59bae04ab1f03c085511e2`.
