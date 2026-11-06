@@ -1126,3 +1126,11 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-50.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `5510e63083e5c1327925228ca51dca7e742d62b07aaca2e096de195398b09a6d`.
+
+## 9.30 — Vòng 51: xác minh backend net + chốt pha 3 MVP (không đổi code)
+
+- Monitor `info network`: nic 52:54:00:12:34:56 + user 10.0.2.0 restrict=off;
+  chuỗi probe→TX đã kiểm chứng; reply để vòng sau (dump/timing).
+- Cổng giữ nguyên vòng 50 (không đổi code guest).
+- Xem `docs/agent2-report-51.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `bd0bf7da8232f42c880e068dfbd2bca36560c706eea41579fc6c7488da2f0707`.
