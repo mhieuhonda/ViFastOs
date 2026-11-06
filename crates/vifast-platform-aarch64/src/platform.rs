@@ -1310,7 +1310,8 @@ impl Platform for Aarch64Platform {
     }
 
     fn init_block() {
-        // Pha 4 (vòng 52): probe fw_cfg read-only (QEMU virt: 0x09020000).
+        // Pha 4 (vòng 52-53): probe fw_cfg read-only (QEMU virt: 0x09020000).
+        // Vòng 53 thử đọc dir treo RISC-V nên revert sig-only cả 2 arch.
         {
             let fw_base = 0x0902_0000u64;
             let sig = unsafe { core::ptr::read_volatile(fw_base as *const u32) };

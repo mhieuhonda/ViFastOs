@@ -1142,3 +1142,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-52.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `0936b21d6997f828f2ee97e713ddf89ef49bca8a1c132d1e344261d49665521c`.
+
+## 9.32 — Vòng 53: ghi selector fw_cfg treo, revert an toàn (pha 4 bước 2)
+
+- Ghi selector 0x19 treo RISC-V rc=-9; fw_cfg MMIO không có signature cố
+  định. Revert sig-only cả 2 arch, gate xanh lại.
+- Vòng sau: fw_cfg DMA hoặc device tree framebuffer.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-53.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `e99f190acf754fd303deacd25842338b2c52c71224f68e6a438c84b5cbcb900f`.

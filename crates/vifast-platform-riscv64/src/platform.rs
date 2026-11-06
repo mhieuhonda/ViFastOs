@@ -1075,9 +1075,10 @@ impl Platform for RiscvPlatform {
             );
             return;
         }
-        // Pha 4 (vòng 52): probe fw_cfg read-only (QEMU virt: 0x10100000).
-        // ramfb cấu hình qua fw_cfg file etc/ramfb; đọc magic để xác minh
-        // kênh còn sống, chưa ghi gì (an toàn như probe net trước init).
+        // Pha 4 (vòng 52-53): probe fw_cfg read-only (QEMU virt: 0x10100000).
+        // Vòng 53 thử đọc file dir (selector 0x19) nhưng treo sau ROOT ELF
+        // (rc=-9) — ghi selector MMIO có side-effect chưa rõ. Revert về
+        // sig-only (vòng 52 xanh); nghiên cứu fw_cfg DMA/select kỹ hơn.
         {
             let fw_base = 0x1010_0000u64;
             let sig = unsafe { core::ptr::read_volatile(fw_base as *const u32) };
