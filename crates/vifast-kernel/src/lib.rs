@@ -476,10 +476,34 @@ impl Kernel {
         }
     }
 
+    fn asid_in_use(&self, asid: u16) -> bool {
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self
+                .vspace(reference)
+                .is_some_and(|space| space.asid == asid)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     fn take_asid(&mut self) -> u16 {
-        let asid = self.next_asid;
-        self.next_asid = if asid >= 0x0fff { 1 } else { asid + 1 };
-        asid
+        // Skip ASIDs still owned by a live VSpace when the counter wraps.
+        // With MAX_OBJECTS < 4095 this normally returns on the first try.
+        for _ in 0..0x0fff {
+            let asid = self.next_asid;
+            self.next_asid = if asid >= 0x0fff { 1 } else { asid + 1 };
+            if !self.asid_in_use(asid) {
+                return asid;
+            }
+        }
+        // ASID 0 is reserved by all three ports; never hand it out.
+        0
     }
 
     pub fn note_root_switch(&mut self) {
@@ -3656,6 +3680,20 @@ impl Kernel {
     }
 
     fn destroy_vspace_page_tables(&mut self, obj: ObjRef) {
+        // Invalidate the ASID on every hart that loaded this VSpace before
+        // its page-table pages can be recycled.  Without this a stale TLB
+        // entry could alias a future VSpace once ASIDs wrap.
+        if let Some(space) = self.vspace(obj) {
+            let (asid, mask) = (space.asid, space.harts_loaded);
+            if mask != 0 {
+                if let Some(ops) = self.page_table_ops {
+                    ops.flush_all_asid(asid, mask);
+                }
+            }
+            if let Some(space) = self.vspace_mut(obj) {
+                space.harts_loaded = 0;
+            }
+        }
         let page_size = self.vspace(obj).map(|space| space.page_size);
         // The reverse map is still able to walk through every table here.
         self.unmap_space(obj);
@@ -6372,6 +6410,70 @@ mod tests {
             .map_frame(space, frame_b, 0, Rights::READ | Rights::WRITE)
             .unwrap();
         assert_eq!(reused.va, first_free.va);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    struct FlushOps;
+
+    static FLUSH_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static FLUSH_ASID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static FLUSH_MASK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static FLUSH_OPS: FlushOps = FlushOps;
+
+    impl PageTableOps for FlushOps {
+        fn flush_all_asid(&self, asid: u16, targets: u32) {
+            FLUSH_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            FLUSH_ASID.store(asid as usize, std::sync::atomic::Ordering::SeqCst);
+            FLUSH_MASK.store(targets as usize, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn vspace_destroy_flushes_asid_on_loaded_harts() {
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&FLUSH_OPS);
+        let untyped = kernel
+            .create_untyped_with_limit(0x900_0000, 0x8000, 4096, 8)
+            .unwrap();
+        let vspace = kernel.retype(untyped, ObjType::VSpace).unwrap();
+        kernel.vspace_mut(vspace).unwrap().harts_loaded = 0b10;
+        FLUSH_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        FLUSH_ASID.store(0, std::sync::atomic::Ordering::SeqCst);
+        FLUSH_MASK.store(0, std::sync::atomic::Ordering::SeqCst);
+        let asid = kernel.vspace(vspace).unwrap().asid;
+        kernel.destroy_object(vspace).unwrap();
+        assert_eq!(FLUSH_CALLS.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            FLUSH_ASID.load(std::sync::atomic::Ordering::SeqCst),
+            asid as usize
+        );
+        assert_eq!(FLUSH_MASK.load(std::sync::atomic::Ordering::SeqCst), 0b10);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn asid_allocation_skips_live_vspaces_after_wrap() {
+        let mut kernel = Kernel::new();
+        let untyped = kernel
+            .create_untyped_with_limit(0x920_0000, 0x8000, 4096, 8)
+            .unwrap();
+        let first = kernel.retype(untyped, ObjType::VSpace).unwrap();
+        let second = kernel.retype(untyped, ObjType::VSpace).unwrap();
+        let first_asid = kernel.vspace(first).unwrap().asid;
+        let second_asid = kernel.vspace(second).unwrap().asid;
+        assert_ne!(first_asid, second_asid);
+        // Force the counter back to the two ASIDs that are still live.
+        kernel.next_asid = first_asid;
+        let third = kernel.retype(untyped, ObjType::VSpace).unwrap();
+        let third_asid = kernel.vspace(third).unwrap().asid;
+        assert_ne!(third_asid, first_asid);
+        assert_ne!(third_asid, second_asid);
+        assert_ne!(third_asid, 0);
+        // After destroying the second VSpace its ASID may be reused.
+        kernel.destroy_object(second).unwrap();
+        kernel.next_asid = second_asid;
+        let fourth = kernel.retype(untyped, ObjType::VSpace).unwrap();
+        assert_eq!(kernel.vspace(fourth).unwrap().asid, second_asid);
         assert!(kernel.check_invariants().is_ok());
     }
 
