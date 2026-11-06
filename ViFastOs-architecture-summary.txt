@@ -1912,6 +1912,13 @@ E. Desktop / Space
     100.000 bước leak=0, sửa cascade watermark; harness 462 case; còn 253.264 byte headroom
     (`kernel_end=0x803c22b0`). Pager v2 hoãn vì ngân sách trang/TCB.
 
+
+75. Vòng 25: bảng lỗi/giới hạn sinh từ code; check-docs self-test 8 câu cấm;
+    harness render boot-stack + fault 6+F + feature; status chỉ từ repeat 3;
+    protocol pager v2 (badge, READ-only, Untyped con) + host test;
+    TIMER_INTERVAL AtomicU64, KERNEL_PTR wrapper; soak 10/10 ×3 thường và
+    feature; pager v2 vẫn chờ ngân sách object (147 slot, data quota 76).
+
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
 README.md

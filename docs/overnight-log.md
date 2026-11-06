@@ -868,3 +868,27 @@ follow-up `62b31f4`.
   QEMU 3/3 × 3; persistence 7×3; 0 warning; headroom 253.264;
   `Kernel=710248`, `Object=4752`, `Tcb=4696`, `Cap=64`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `aa8e7f550fcf95dd2fdf32a4f75b9d1de3a440f35af4b96a17c03c56fd0cc86e`.
+
+## 9.05 — Vòng 25: sổ sách, pager protocol, static mut từng phần
+
+- A1: sửa mục 12/15/16, khôi phục HISTORICAL "7.5 đúng 4 USER FAULT" + dòng
+  nâng lên 6 ở vòng 22.2; dời "74. Vòng 24" vào mục 18.
+- A2: `check-docs --self-test` chèn 8 câu cấm vào bản tạm, tất cả phải FAIL;
+  bảng `errors` (KError + số) và `limits` (MAX_*) sinh tự động từ code.
+- A3: render "Boot stack", "Fault rule 6+F", "Feature test-destroy-smp" vào
+  khối generated pass; status từ chối repeat≠3 hoặc thiếu kiến trúc.
+- A4: BLOCKED — data 368 KiB cần +65.536 nhưng headroom còn 187.728; tăng
+  MAX_OBJECTS 163 tốn thêm 76.032 → 144.464; giữ 147 slot thì data chỉ được
+  76 object, không đủ cho pager. Không áp dụng thay đổi.
+- B1: protocol pager v2 trong `vifast-abi` (badge, VA window, Fault/Map
+  encode/decode, 4 host test); `pager-v2.md` sửa theo S7 (READ-only, Untyped
+  con, ObjectDestroy+Retype, VFS badge riêng).
+- B2–B4: BLOCKED do A4; B5: SKIPPED.
+- C1: `TIMER_INTERVAL` → AtomicU64, `KERNEL_PTR` → wrapper UnsafeCell 3 nền
+  tảng, 0 warning; phần static mut còn lại để vòng sau (PARTIAL).
+- C3: sửa display-input (fw_cfg/ramfb PA liền tục, GOP ngoài 1 GiB, x86 PS/2,
+  screendump checksum).
+- C2: soak 10/10 ×3 thường + 10/10 ×3 feature; sau đó repeat 3 chuẩn.
+- Số liệu: host 200 (kernel 131, abi 4); harness 462; QEMU 3/3 ×3; feature
+  5/5 ×3; persistence 7×3; 0 warning; headroom 253.264 (`kernel_end=0x803c22b0`).
+- SHA-256 `ViFastOs-architecture-summary.txt`: `996a01de0222cf8b017bbe3621d9b4977023eddd9a14d5724f24aceecfc565d4`.
