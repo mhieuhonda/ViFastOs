@@ -587,6 +587,8 @@ impl Kernel {
             max_objects,
             objects: 0,
             reserved: 0,
+            free: [None; MAX_UNTYPED_FREE],
+            leaked: 0,
         }))
     }
 
@@ -1390,6 +1392,141 @@ impl Kernel {
     /// Frames and page tables consume one aligned physical page.  Endpoint,
     /// notification and TCB metadata do not consume user physical pages in
     /// this reference model; they are allocated from the fixed object table.
+    /// Allocate `charge` bytes from an Untyped region.  Exact-size free
+    /// ranges win, then any larger free range, then the bump watermark.
+    fn untyped_take(&mut self, untyped: ObjRef, charge: usize, align: usize) -> KResult<usize> {
+        let region = *self.untyped(untyped).ok_or(KError::WrongType)?;
+        if charge == 0 || align == 0 || !align.is_power_of_two() {
+            return Err(KError::Alignment);
+        }
+        let base = region.base;
+        let mut chosen: Option<(usize, usize)> = None;
+        for exact in [true, false] {
+            for (slot, entry) in region.free.iter().enumerate() {
+                let Some(free) = entry else { continue };
+                let len = free.len as usize;
+                if len < charge || (exact && len != charge) {
+                    continue;
+                }
+                let offset = free.offset as usize;
+                let Some(pa) = base.checked_add(offset) else {
+                    continue;
+                };
+                if pa % align != 0 {
+                    continue;
+                }
+                chosen = Some((slot, offset));
+                break;
+            }
+            if chosen.is_some() {
+                break;
+            }
+        }
+        if let Some((slot, offset)) = chosen {
+            let mut region = *self.untyped(untyped).ok_or(KError::WrongType)?;
+            let free = region.free[slot].take().ok_or(KError::IllegalOperation)?;
+            let remaining = free.len as usize - charge;
+            if remaining > 0 {
+                region.free[slot] = Some(FreeRegion {
+                    offset: (offset + charge) as u32,
+                    len: remaining as u32,
+                });
+            }
+            *self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)? = region;
+            return Ok(offset);
+        }
+        let unaligned = region
+            .base
+            .checked_add(region.bump)
+            .ok_or(KError::OutOfMemory)?;
+        let pa = (unaligned + align - 1) & !(align - 1);
+        let end = region
+            .base
+            .checked_add(region.size)
+            .ok_or(KError::OutOfMemory)?;
+        if pa.checked_add(charge).ok_or(KError::OutOfMemory)? > end {
+            return Err(KError::OutOfMemory);
+        }
+        let offset = pa - region.base;
+        let mut region = *self.untyped(untyped).ok_or(KError::WrongType)?;
+        region.bump = offset.checked_add(charge).ok_or(KError::OutOfMemory)?;
+        *self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)? = region;
+        Ok(offset)
+    }
+
+    /// Return one byte range to its Untyped.  Ranges touching the bump
+    /// watermark shrink it; the rest are coalesced into the fixed free list.
+    /// A full list keeps the object destroyed but counts the bytes as leaked.
+    fn untyped_reclaim(&mut self, untyped: ObjRef, offset: usize, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let Some(mut region) = self.untyped(untyped).copied() else {
+            return;
+        };
+        let Some(end) = offset.checked_add(len) else {
+            region.leaked = region.leaked.saturating_add(len as u32);
+            if let Some(dest) = self.untyped_mut(untyped) {
+                *dest = region;
+            }
+            return;
+        };
+        if offset >= end || end > region.size {
+            region.leaked = region.leaked.saturating_add(len as u32);
+            if let Some(dest) = self.untyped_mut(untyped) {
+                *dest = region;
+            }
+            return;
+        }
+        for entry in region.free.iter().flatten() {
+            let start = entry.offset as usize;
+            let entry_end = start.saturating_add(entry.len as usize);
+            if offset < entry_end && start < end {
+                // Overlapping free range: treat as a leak, never corrupt.
+                region.leaked = region.leaked.saturating_add(len as u32);
+                if let Some(dest) = self.untyped_mut(untyped) {
+                    *dest = region;
+                }
+                return;
+            }
+        }
+        let mut start = offset;
+        let mut stop = end;
+        loop {
+            let mut merged = false;
+            for slot in 0..MAX_UNTYPED_FREE {
+                let Some(free) = region.free[slot] else {
+                    continue;
+                };
+                let free_start = free.offset as usize;
+                let free_end = free_start.saturating_add(free.len as usize);
+                if free_end == start || free_start == stop {
+                    region.free[slot] = None;
+                    start = start.min(free_start);
+                    stop = stop.max(free_end);
+                    merged = true;
+                    break;
+                }
+            }
+            if !merged {
+                break;
+            }
+        }
+        if stop == region.bump {
+            region.bump = start;
+        } else if let Some(slot) = region.free.iter_mut().find(|entry| entry.is_none()) {
+            *slot = Some(FreeRegion {
+                offset: start as u32,
+                len: (stop - start) as u32,
+            });
+        } else {
+            region.leaked = region.leaked.saturating_add(len as u32);
+        }
+        if let Some(dest) = self.untyped_mut(untyped) {
+            *dest = region;
+        }
+    }
+
     pub fn retype(&mut self, untyped: ObjRef, ty: ObjType) -> KResult<ObjRef> {
         self.retype_as(untyped, ty, None)
     }
@@ -1410,12 +1547,11 @@ impl Kernel {
             }
             None => None,
         };
-        let (base, size, bump, page, max_objects, objects, reserved) = {
+        let (base, size, page, max_objects, objects, reserved) = {
             let region = self.untyped(untyped).ok_or(KError::WrongType)?;
             (
                 region.base,
                 region.size,
-                region.bump,
                 region.page_size,
                 region.max_objects,
                 region.objects,
@@ -1486,13 +1622,12 @@ impl Kernel {
             ),
             _ => return Err(KError::NotImplemented),
         };
-        let unaligned = base.checked_add(bump).ok_or(KError::OutOfMemory)?;
-        let pa = (unaligned + align - 1) & !(align - 1);
+        let offset = self.untyped_take(untyped, charge, align)?;
+        let pa = base.checked_add(offset).ok_or(KError::OutOfMemory)?;
         let end = base.checked_add(size).ok_or(KError::OutOfMemory)?;
         if pa.checked_add(charge).ok_or(KError::OutOfMemory)? > end {
             return Err(KError::OutOfMemory);
         }
-        let consumed = pa.checked_add(charge).ok_or(KError::OutOfMemory)? - base;
         if matches!(ty, ObjType::Frame | ObjType::PageTable | ObjType::VSpace) {
             if let Some(ops) = self.page_table_ops {
                 for i in 0..vspace_pages.max(1) {
@@ -1537,8 +1672,11 @@ impl Kernel {
         let object = self
             .alloc_owned(kind, Some(untyped), creator)
             .ok_or(KError::OutOfMemory)?;
+        if let Some(record) = self.get_mut(object) {
+            record.alloc_offset = offset as u32;
+            record.alloc_len = charge as u32;
+        }
         let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
-        region.bump = consumed;
         region.objects = objects + 1;
         Ok(object)
     }
@@ -1563,12 +1701,11 @@ impl Kernel {
             }
             None => None,
         };
-        let (base, parent_size, bump, page, max_objects, objects, reserved) = {
+        let (base, parent_size, page, max_objects, objects, reserved) = {
             let region = self.untyped(untyped).ok_or(KError::WrongType)?;
             (
                 region.base,
                 region.size,
-                region.bump,
                 region.page_size,
                 region.max_objects,
                 region.objects,
@@ -1589,14 +1726,13 @@ impl Kernel {
         if required > max_objects {
             return Err(KError::OutOfMemory);
         }
+        let offset = self.untyped_take(untyped, size, page)?;
+        let child_base = base.checked_add(offset).ok_or(KError::OutOfMemory)?;
         let parent_end = base.checked_add(parent_size).ok_or(KError::OutOfMemory)?;
-        let unaligned = base.checked_add(bump).ok_or(KError::OutOfMemory)?;
-        let child_base = (unaligned + page - 1) & !(page - 1);
         let child_end = child_base.checked_add(size).ok_or(KError::OutOfMemory)?;
         if child_end > parent_end {
             return Err(KError::OutOfMemory);
         }
-        let consumed = child_end - base;
         let kind = Kind::Untyped(Untyped {
             base: child_base,
             size,
@@ -1605,12 +1741,17 @@ impl Kernel {
             max_objects: child_max_objects,
             objects: 0,
             reserved: 0,
+            free: [None; MAX_UNTYPED_FREE],
+            leaked: 0,
         });
         let object = self
             .alloc_owned(kind, Some(untyped), creator)
             .ok_or(KError::OutOfMemory)?;
+        if let Some(record) = self.get_mut(object) {
+            record.alloc_offset = offset as u32;
+            record.alloc_len = size as u32;
+        }
         let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
-        region.bump = consumed;
         region.objects = objects + 1;
         region.reserved = reserved + child_max_objects;
         Ok(object)
@@ -1642,14 +1783,20 @@ impl Kernel {
         bump: usize,
         objects: usize,
     ) {
+        let mut all_destroyed = true;
         for object in created.iter().rev() {
-            if object.is_valid() {
-                let _ = self.destroy_object(*object);
+            if object.is_valid() && self.destroy_object(*object).is_err() {
+                all_destroyed = false;
             }
         }
-        if let Some(region) = self.untyped_mut(untyped) {
-            region.bump = bump;
-            region.objects = objects;
+        // Destroying an object already returns its bytes to the Untyped free
+        // list or bump watermark, so only the object counter is repaired here
+        // and only when every rollback teardown succeeded.
+        let _ = bump;
+        if all_destroyed {
+            if let Some(region) = self.untyped_mut(untyped) {
+                region.objects = objects;
+            }
         }
     }
 
@@ -2613,8 +2760,26 @@ impl Kernel {
                             .objects
                             .checked_add(untyped.reserved)
                             .is_none_or(|used| used > untyped.max_objects)
+                        || untyped.leaked as usize > untyped.size
                     {
                         return Err(KError::IllegalOperation);
+                    }
+                    for (slot, entry) in untyped.free.iter().enumerate() {
+                        let Some(free) = entry else { continue };
+                        let start = free.offset as usize;
+                        let Some(end) = start.checked_add(free.len as usize) else {
+                            return Err(KError::IllegalOperation);
+                        };
+                        if free.len == 0 || end > untyped.bump {
+                            return Err(KError::IllegalOperation);
+                        }
+                        for other in untyped.free.iter().skip(slot + 1).flatten() {
+                            let other_start = other.offset as usize;
+                            let other_end = other_start.saturating_add(other.len as usize);
+                            if start < other_end && other_start < end {
+                                return Err(KError::IllegalOperation);
+                            }
+                        }
                     }
                     if untyped_count >= untypeds.len() {
                         return Err(KError::IllegalOperation);
@@ -3703,10 +3868,12 @@ impl Kernel {
             {
                 return true;
             }
-            if let Some(space) = self.vspace(reference) {
-                if space.mappings.iter().any(Option::is_some) {
-                    return true;
-                }
+            if reference == object
+                && self
+                    .vspace(object)
+                    .is_some_and(|space| space.mappings.iter().any(Option::is_some))
+            {
+                return true;
             }
             if let Some(table) = self.page_table(reference) {
                 if table.mapped.is_some_and(|mapping| mapping.vspace == object) {
@@ -3840,23 +4007,36 @@ impl Kernel {
             | Kind::Free => {}
         }
         self.remove_caps_to(obj);
-        let (owner, reserved) = match self.get(obj).map(|object| object.kind) {
-            Some(Kind::Untyped(child)) => (
-                self.get(obj).and_then(|object| object.owner),
-                child.max_objects,
-            ),
-            _ => (self.get(obj).and_then(|object| object.owner), 0),
+        let (owner, reserved, alloc_offset, alloc_len) = match self.get(obj) {
+            Some(object) => {
+                let reserved = match object.kind {
+                    Kind::Untyped(child) => child.max_objects,
+                    _ => 0,
+                };
+                (
+                    object.owner,
+                    reserved,
+                    object.alloc_offset as usize,
+                    object.alloc_len as usize,
+                )
+            }
+            None => (None, 0, 0, 0),
         };
         if let Some(owner) = owner {
             if let Some(region) = self.untyped_mut(owner) {
                 region.objects = region.objects.saturating_sub(1);
                 region.reserved = region.reserved.saturating_sub(reserved);
             }
+            if alloc_len != 0 {
+                self.untyped_reclaim(owner, alloc_offset, alloc_len);
+            }
         }
         if let Some(object) = self.get_mut(obj) {
             object.kind = Kind::Free;
             object.owner = None;
             object.creator = None;
+            object.alloc_offset = 0;
+            object.alloc_len = 0;
             let gen = object.gen.wrapping_add(1);
             object.gen = if gen == 0 { 1 } else { gen };
         }
@@ -6988,6 +7168,109 @@ mod tests {
         fn zero_frame(&self, _pa: u64, _size: usize) {
             ZERO_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
+    }
+
+    #[test]
+    fn object_destroy_reclaims_top_untyped_bytes() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x800_0000, 8);
+        let untyped = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().obj;
+        let endpoint = retype_at(&mut kernel, root, ObjType::Endpoint, 2);
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, 256);
+        assert_eq!(kernel.untyped(untyped).unwrap().objects, 1);
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, 0);
+        assert_eq!(kernel.untyped(untyped).unwrap().objects, 0);
+        assert!(kernel
+            .untyped(untyped)
+            .unwrap()
+            .free
+            .iter()
+            .all(Option::is_none));
+        assert!(kernel.get(endpoint).is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_reuses_exact_free_range() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x810_0000, 16);
+        let untyped = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().obj;
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        let _endpoint = retype_at(&mut kernel, root, ObjType::Endpoint, 3);
+        let old_pa = kernel.frame(frame).unwrap().pa;
+        let bump = kernel.untyped(untyped).unwrap().bump;
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, bump);
+        let frame2 = retype_at(&mut kernel, root, ObjType::Frame, 4);
+        assert_eq!(kernel.frame(frame2).unwrap().pa, old_pa);
+        assert_eq!(kernel.get(frame2).unwrap().alloc_offset, 0);
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, bump);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn untyped_reclaim_coalesces_adjacent_ranges() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x820_0000, 16);
+        let untyped = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().obj;
+        let _e0 = retype_at(&mut kernel, root, ObjType::Endpoint, 2);
+        let _e1 = retype_at(&mut kernel, root, ObjType::Endpoint, 3);
+        let _e2 = retype_at(&mut kernel, root, ObjType::Endpoint, 4);
+        let _e3 = retype_at(&mut kernel, root, ObjType::Endpoint, 5);
+        assert_eq!(kernel.destroy_cap_object(root, 4), Ok(()));
+        assert_eq!(kernel.destroy_cap_object(root, 3), Ok(()));
+        assert_eq!(
+            kernel.untyped(untyped).unwrap().free[0],
+            Some(FreeRegion {
+                offset: 256,
+                len: 512
+            })
+        );
+        let e4 = retype_at(&mut kernel, root, ObjType::Endpoint, 6);
+        assert_eq!(kernel.get(e4).unwrap().alloc_offset, 256);
+        let e5 = retype_at(&mut kernel, root, ObjType::Endpoint, 7);
+        assert_eq!(kernel.get(e5).unwrap().alloc_offset, 512);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn untyped_free_list_full_counts_leak() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x830_0000, 48);
+        let untyped = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().obj;
+        // 35 endpoints: offsets 0, 256, ..., 8704.
+        for slot in 2..37 {
+            retype_at(&mut kernel, root, ObjType::Endpoint, slot);
+        }
+        // Destroy every other endpoint so no two freed ranges are adjacent;
+        // the 17th isolated free range does not fit the 16-entry list.
+        for index in 0..17 {
+            let slot = 2 + index * 2;
+            assert_eq!(kernel.destroy_cap_object(root, slot), Ok(()));
+        }
+        let region = kernel.untyped(untyped).unwrap();
+        assert_eq!(region.objects, 18);
+        assert_eq!(region.leaked, 256);
+        assert_eq!(region.free.iter().flatten().count(), MAX_UNTYPED_FREE);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn reused_frame_is_zeroed_and_keeps_pa() {
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&ZERO_OPS);
+        let root = test_root_with_untyped(&mut kernel, 0x840_0000, 16);
+        ZERO_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        let _endpoint = retype_at(&mut kernel, root, ObjType::Endpoint, 3);
+        let old_pa = kernel.frame(frame).unwrap().pa;
+        assert_eq!(ZERO_CALLS.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        let frame2 = retype_at(&mut kernel, root, ObjType::Frame, 4);
+        assert_eq!(kernel.frame(frame2).unwrap().pa, old_pa);
+        assert_eq!(ZERO_CALLS.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(kernel.check_invariants().is_ok());
     }
 
     #[test]

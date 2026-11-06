@@ -569,6 +569,17 @@ impl Tcb {
     }
 }
 
+/// A returned but not yet reused byte range inside an Untyped region.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FreeRegion {
+    pub offset: u32,
+    pub len: u32,
+}
+
+/// Number of free ranges tracked per Untyped.  Reclaim beyond this capacity
+/// still succeeds but the bytes are only counted in `leaked`.
+pub const MAX_UNTYPED_FREE: usize = 16;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Untyped {
     pub base: usize,
@@ -580,6 +591,10 @@ pub struct Untyped {
     /// Sum of `max_objects` of live direct child Untypeds.  This quota is held
     /// so siblings cannot consume the child's future object budget.
     pub reserved: usize,
+    /// Returned ranges reused before the bump watermark moves.
+    pub free: [Option<FreeRegion>; MAX_UNTYPED_FREE],
+    /// Bytes returned while the free list was full; reported, never reused.
+    pub leaked: u32,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -632,6 +647,10 @@ pub struct Object {
     /// Exact capability through which retype created this object.  Revoking a
     /// different copy of the same Untyped must not destroy it.
     pub creator: Option<CapRef>,
+    /// Byte offset inside the owning Untyped, used to reclaim memory.
+    pub alloc_offset: u32,
+    /// Charged byte length inside the owning Untyped.
+    pub alloc_len: u32,
 }
 
 impl Object {
@@ -641,6 +660,8 @@ impl Object {
             kind: Kind::Free,
             owner: None,
             creator: None,
+            alloc_offset: 0,
+            alloc_len: 0,
         }
     }
 
