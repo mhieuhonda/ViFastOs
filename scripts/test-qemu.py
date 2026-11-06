@@ -815,9 +815,14 @@ def gpu_check(name: str) -> bool:
             print(f"--- {name} gpu FAIL (size {width}x{height}) ---")
             return False
         expected = {
+            # Gradient nền (không bị text che).
             (0, 0): (0, 0, 64),
             (80, 60): (127, 127, 64),
             (159, 119): (253, 252, 64),
+            # Hộp tối của splash (vòng 73): 0x101028.
+            (7, 7): (16, 16, 40),
+            # Nét đầu tiên của chữ 'V' (glyph cột 0, hàng 0) màu trắng.
+            (10, 10): (255, 255, 255),
         }
         for (x, y), want in expected.items():
             i = (y * width + x) * 3

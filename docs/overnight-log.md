@@ -1320,3 +1320,12 @@ follow-up `62b31f4`.
   data/meta Untyped (đã cạn) → panic OutOfMemory. Đã revert, giữ VFS
   demand-load cho riscv64/aarch64; x86 giữ ảnh tĩnh.
 - Gate xanh trở lại: QEMU 3/3.
+
+## 9.52 — Vòng 73: boot splash "ViFastOs"
+
+- Font 5x7 + `gpu_draw_text`; hộp tối + chữ trắng trên nền gradient.
+  `--gpu-check` verify pixel chữ (255,255,255) và hộp (16,16,40) — PASS cả
+  riscv64/aarch64. Ảnh: `docs/assets/vifast-display-160x120.png`.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 501, 0 warning.
+- Xem `docs/agent2-report-73.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `06ca36cdf758509427a32a3599b1316c76f1f396119d4b18edf6339549de30b6`.

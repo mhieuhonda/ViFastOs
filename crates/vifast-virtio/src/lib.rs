@@ -1477,6 +1477,67 @@ fn gpu_command(cmd_type: u32, payload: &[u8]) -> bool {
     resp_type == GPU_RESP_OK_NODATA || resp_type == GPU_RESP_OK_DISPLAY_INFO
 }
 
+/// Font 5x7 tối giản cho dòng chữ boot "ViFastOs" (vòng 73). Mỗi glyph là 5
+/// cột, mỗi cột 1 byte với bit0 = hàng trên cùng.
+fn gpu_glyph(ch: u8) -> Option<[u8; 5]> {
+    let glyph = match ch {
+        b'V' => [0x0F, 0x30, 0x40, 0x30, 0x0F],
+        b'i' => [0x00, 0x5F, 0x00, 0x00, 0x00],
+        b'F' => [0x7F, 0x09, 0x09, 0x01, 0x01],
+        b'a' => [0x26, 0x49, 0x49, 0x2F, 0x40],
+        b's' => [0x26, 0x49, 0x49, 0x32, 0x00],
+        b't' => [0x04, 0x3F, 0x44, 0x40, 0x00],
+        b'O' => [0x3E, 0x41, 0x41, 0x3E, 0x00],
+        _ => return None,
+    };
+    Some(glyph)
+}
+
+/// Tô hình chữ nhật (đã kẹp trong biên framebuffer).
+fn gpu_fill_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
+    let q = unsafe { &mut *core::ptr::addr_of_mut!(GPU_QUEUE) };
+    let mut py = y;
+    while py < y.saturating_add(h) && py < GPU_HEIGHT {
+        let mut px = x;
+        while px < x.saturating_add(w) && px < GPU_WIDTH {
+            q.framebuffer[(py * GPU_WIDTH + px) as usize] = color;
+            px += 1;
+        }
+        py += 1;
+    }
+}
+
+/// Vẽ text bằng font 5x7 với hệ số phóng `scale`, màu `color` (0x00RRGGBB).
+fn gpu_draw_text(text: &[u8], x: u32, y: u32, scale: u32, color: u32) {
+    let mut cursor = x;
+    for &ch in text {
+        let Some(glyph) = gpu_glyph(ch) else {
+            cursor += 6 * scale;
+            continue;
+        };
+        let mut col = 0u32;
+        while col < 5 {
+            let bits = glyph[col as usize];
+            let mut row = 0u32;
+            while row < 7 {
+                if bits & (1 << row) != 0 {
+                    gpu_fill_rect(cursor + col * scale, y + row * scale, scale, scale, color);
+                }
+                row += 1;
+            }
+            col += 1;
+        }
+        cursor += 6 * scale;
+    }
+}
+
+/// Bảng màu cho dải màu nền (giữ nguyên gradient cũ ở vùng không có text).
+fn gpu_gradient_pixel(x: u32, y: u32) -> u32 {
+    let r = (x * 255 / GPU_WIDTH) & 0xff;
+    let g = (y * 255 / GPU_HEIGHT) & 0xff;
+    (r << 16) | (g << 8) | 0x40
+}
+
 /// Dựng khung hình: tạo resource 2D, attach backing, set scanout, tô màu và
 /// flush. Trả về true nếu mọi lệnh thành công.
 pub fn gpu_draw_test_pattern() -> bool {
@@ -1516,19 +1577,19 @@ pub fn gpu_draw_test_pattern() -> bool {
     }
     // Tô màu: dải màu RGB để screendump dễ nhận biết (X8R8G8B8 little-endian
     // nên word = 0x00RRGGBB).
+    // Nền gradient (giữ cho test pixel cũ) + hộp tối và dòng chữ "ViFastOs".
     let q = unsafe { &mut *core::ptr::addr_of_mut!(GPU_QUEUE) };
     let mut y = 0u32;
     while y < GPU_HEIGHT {
         let mut x = 0u32;
         while x < GPU_WIDTH {
-            let r = (x * 255 / GPU_WIDTH) & 0xff;
-            let g = (y * 255 / GPU_HEIGHT) & 0xff;
-            let b = 0x40u32;
-            q.framebuffer[(y * GPU_WIDTH + x) as usize] = (r << 16) | (g << 8) | b;
+            q.framebuffer[(y * GPU_WIDTH + x) as usize] = gpu_gradient_pixel(x, y);
             x += 1;
         }
         y += 1;
     }
+    gpu_fill_rect(6, 6, 74, 22, 0x10_10_28);
+    gpu_draw_text(b"ViFastOs", 10, 10, 2, 0xFF_FF_FF);
     // TRANSFER_TO_HOST_2D: rect + offset + resource_id.
     let mut transfer = [0u8; 32];
     transfer[0..4].copy_from_slice(&0u32.to_le_bytes());
