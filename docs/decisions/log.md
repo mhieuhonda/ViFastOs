@@ -49,3 +49,4 @@
 | 65 | fw_cfg chỉ đọc trong môi trường này; display đi virtio-gpu | Kết quả âm có căn cứ + test checksum vào gate (204→207) | 72a0f9b |
 | 66 | Display MVP qua virtio-gpu 160x120, pixel xác nhận bằng screendump | fw_cfg chặn hẳn; framebuffer lớn vượt headroom nên giảm kích thước | c8274e3 |
 | 67 | Demand-load: nội dung trang nạp lúc fault | x86 hết Untyped nên chỉ bật theo target_arch; harness nới luật fault vì evict race | 0be7e59 |
+| 68 | DNS A parser: guest resolve example.com ra IP thật | Marker DNS A best-effort (phụ thuộc DNS host), DNS sent vẫn cứng | ff37780 |
