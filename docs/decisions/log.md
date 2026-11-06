@@ -32,3 +32,4 @@
 | 48 | Thêm RX API, hoãn gắn sau DRIVER_OK (QEMU kill rc=-9) | Giữ TX-only; vòng sau net_init_both | 33ef7a0 |
 | 49 | net_init_both gắn RX+TX trước DRIVER_OK; bound RX 2M | Treo do poll 20M>20s, không phải QEMU kill | 4afaf71 |
 | 50 | ARP 60B + peek chẩn đoán, xác nhận không có reply | Backend user-net cần kiểm tra ngoài guest | 851c7bc |
+| 51 | Backend sống (monitor), chốt pha 3 MVP docs-only | Chuỗi probe→TX kiểm chứng; reply để sau | faf82b4 |
