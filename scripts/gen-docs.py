@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SUMMARY = ROOT / "ViFastOs-architecture-summary.txt"
 BUILD_LOG = ROOT / "target" / "vifast-build.log"
 PACKAGES = [
+    "vifast-abi",
     "vifast-kernel",
     "vifast-arch",
     "vifast-pte",

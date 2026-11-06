@@ -9,6 +9,7 @@ exec > >(tee "$BUILD_LOG") 2>&1
 
 echo "== host portable-kernel tests =="
 cargo test -p vifast-kernel
+cargo test -p vifast-abi
 cargo test -p vifast-kernel --lib layout_sizes_for_status -- --nocapture
 cargo test -p vifast-arch
 cargo test -p vifast-pte

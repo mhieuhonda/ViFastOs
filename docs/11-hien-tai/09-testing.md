@@ -43,7 +43,7 @@ Thứ tự:
 2. `cargo test -p vifast-kernel layout_sizes_for_status -- --nocapture`
    (in kích thước `Kernel`/`Object`/`Tcb`/`Cap`).
 3. `cargo build -p vifast-fsutil` (công cụ host cho persistence).
-4. `python3 scripts/test-harness-spec.py` (435 case âm).
+4. `python3 scripts/test-harness-spec.py` (462 case âm).
 5. Build root/server/client ELF cho 3 target, `llvm-objcopy --strip-all`,
    kiểm tra bằng `scripts/check-root-elf.sh` (ET_EXEC, segment/window,
    soft-float).
@@ -62,14 +62,15 @@ build complete (0 warning)
 
 | Crate | Số test | Ghi chú |
 |---|---|---|
-| `vifast-kernel` | **127/127** | + 1 test fuzz dài `#[ignore]`, chạy `--ignored` |
+| `vifast-abi` | **4/4** | protocol pager v2: label, VA window, encode/decode |
+| `vifast-kernel` | **131/131** | + 2 test fuzz dài `#[ignore]`, chạy `--ignored` |
 | `vifast-arch` | 7/7 | |
 | `vifast-pte` | 11/11 | |
 | `vifast-elf` | 17/17 | |
 | `vifast-acpi` | 8/8 | |
 | `vifast-fs` | 22/22 | |
 | `vifast-runtime`, `vifast-user`, `vifast-fsutil` | 0 | kiểm qua QEMU/build |
-| **Tổng duy nhất** | **192** | |
+| **Tổng duy nhất** | **200** | |
 
 Phạm vi chính của `vifast-kernel`:
 
@@ -177,7 +178,7 @@ Script không có `--help`; gọi không tham số là chạy toàn bộ.
 
 ## 6. Harness âm — `scripts/test-harness-spec.py`
 
-435 case: mỗi điều kiện trong `harness_spec.py` bị xoá khỏi output tổng hợp và
+462 case: mỗi điều kiện trong `harness_spec.py` bị xoá khỏi output tổng hợp và
 kiểm tra rằng `accept()` trả `False`. Case đặc biệt: fault count/address,
 SMP counter, thứ tự marker, exit code, feature mode.
 

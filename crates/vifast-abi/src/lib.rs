@@ -18,6 +18,179 @@ pub const DEFAULT_PAGE_SIZE: u64 = 4096;
 
 /// Shared user-address layout for all architectures.  The high base keeps
 /// user mappings away from kernel identity maps and low MMIO.
+pub mod pager {
+    //! Wire layout for the general pager service (protocol v2).  The kernel
+    //! only relays faults; mapping, eviction and file I/O stay in user space.
+
+    pub const LABEL_FAULT: u64 = 0x5047_0001;
+    pub const LABEL_MAP: u64 = 0x5047_0002;
+    pub const LABEL_UNMAP: u64 = 0x5047_0003;
+    pub const LABEL_EVICT: u64 = 0x5047_0004;
+    pub const LABEL_REPLY: u64 = 0x5047_0005;
+
+    pub const MAX_CLIENTS: usize = 4;
+    pub const POOL_FRAMES: usize = 8;
+    pub const BACKING_ENTRIES: usize = 16;
+    pub const PAGE_BYTES: usize = 4096;
+
+    /// Private VA window reserved for pager clients, above the bootstrap
+    /// user image and below the file-backed window of the next round.
+    pub const CLIENT_VA_BASE: u64 = super::user_layout::CODE_VA as u64 + 0x200_0000;
+    pub const CLIENT_VA_STRIDE: u64 = 0x10_0000;
+    pub const CLIENT_VA_END: u64 = CLIENT_VA_BASE + MAX_CLIENTS as u64 * CLIENT_VA_STRIDE;
+
+    pub const fn valid_label(label: u64) -> bool {
+        matches!(
+            label,
+            LABEL_FAULT | LABEL_MAP | LABEL_UNMAP | LABEL_EVICT | LABEL_REPLY
+        )
+    }
+
+    pub const fn client_va(slot: usize) -> Option<u64> {
+        if slot >= MAX_CLIENTS {
+            return None;
+        }
+        Some(CLIENT_VA_BASE + slot as u64 * CLIENT_VA_STRIDE)
+    }
+
+    /// Fault relay: one page fault for `tcb` at `va`.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct Fault {
+        pub va: u64,
+        pub cause: u64,
+        pub endpoint_slot: u64,
+        pub tcb: u64,
+    }
+
+    impl Fault {
+        pub const fn encode(self) -> [u64; 4] {
+            [self.va, self.cause, self.endpoint_slot, self.tcb]
+        }
+
+        pub const fn decode(words: [u64; 4]) -> Option<Self> {
+            if words[0] % PAGE_BYTES as u64 != 0 {
+                return None;
+            }
+            Some(Self {
+                va: words[0],
+                cause: words[1],
+                endpoint_slot: words[2],
+                tcb: words[3],
+            })
+        }
+    }
+
+    /// Root asks the pager to install a file-backed mapping.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct Map {
+        pub vspace_slot: u64,
+        pub inode: u16,
+        pub file_offset: u64,
+        pub len: u32,
+    }
+
+    impl Map {
+        pub const fn encode(self) -> [u64; 4] {
+            [
+                self.vspace_slot,
+                self.inode as u64,
+                self.file_offset,
+                self.len as u64,
+            ]
+        }
+
+        pub const fn decode(words: [u64; 4]) -> Option<Self> {
+            let inode = words[1];
+            let len = words[3];
+            if inode > u16::MAX as u64 || len > u32::MAX as u64 || len == 0 {
+                return None;
+            }
+            Some(Self {
+                vspace_slot: words[0],
+                inode: inode as u16,
+                file_offset: words[2],
+                len: len as u32,
+            })
+        }
+    }
+
+    const _: () = assert!(MAX_CLIENTS <= 8);
+    const _: () = assert!(POOL_FRAMES >= 4);
+    const _: () = assert!(CLIENT_VA_BASE % PAGE_BYTES as u64 == 0);
+    const _: () = assert!(CLIENT_VA_STRIDE % PAGE_BYTES as u64 == 0);
+    const _: () = assert!(CLIENT_VA_BASE > super::user_layout::CODE_VA as u64 + 0x100_0000);
+    const _: () = assert!(CLIENT_VA_END <= super::user_layout::USER_VA_END as u64);
+    const _: () = assert!(LABEL_FAULT != LABEL_MAP);
+    const _: () = assert!(LABEL_REPLY != LABEL_EVICT);
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn labels_are_distinct_and_valid() {
+            let labels = [
+                LABEL_FAULT,
+                LABEL_MAP,
+                LABEL_UNMAP,
+                LABEL_EVICT,
+                LABEL_REPLY,
+            ];
+            for (index, label) in labels.iter().enumerate() {
+                assert!(valid_label(*label));
+                for other in labels.iter().skip(index + 1) {
+                    assert_ne!(label, other);
+                }
+            }
+            assert!(!valid_label(0));
+        }
+
+        #[test]
+        fn client_va_windows_are_aligned_and_disjoint() {
+            let mut last_end = CLIENT_VA_BASE;
+            for slot in 0..MAX_CLIENTS {
+                let va = client_va(slot).unwrap();
+                assert_eq!(va % PAGE_BYTES as u64, 0);
+                assert!(va >= last_end);
+                last_end = va + CLIENT_VA_STRIDE;
+            }
+            assert_eq!(last_end, CLIENT_VA_END);
+            assert_eq!(client_va(MAX_CLIENTS), None);
+        }
+
+        #[test]
+        fn fault_roundtrip_rejects_unaligned_va() {
+            let fault = Fault {
+                va: CLIENT_VA_BASE + 0x2000,
+                cause: 15,
+                endpoint_slot: 7,
+                tcb: 42,
+            };
+            assert_eq!(Fault::decode(fault.encode()), Some(fault));
+            let mut words = fault.encode();
+            words[0] += 1;
+            assert_eq!(Fault::decode(words), None);
+        }
+
+        #[test]
+        fn map_roundtrip_checks_ranges() {
+            let map = Map {
+                vspace_slot: 9,
+                inode: 12,
+                file_offset: 4096,
+                len: 8192,
+            };
+            assert_eq!(Map::decode(map.encode()), Some(map));
+            let mut words = map.encode();
+            words[1] = u16::MAX as u64 + 1;
+            assert_eq!(Map::decode(words), None);
+            words = map.encode();
+            words[3] = 0;
+            assert_eq!(Map::decode(words), None);
+        }
+    }
+}
+
 pub mod user_layout {
     pub const CODE_VA: usize = 0x0000_0010_0000_0000;
     pub const DATA_VA: usize = CODE_VA + 0xa000;
