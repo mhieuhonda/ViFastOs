@@ -16,3 +16,4 @@
 | 32 | Budget dùng chung kernel/runtime; mở goal dài hạn | Một ngưỡng duy nhất, tránh lệch; pha 1 M1→M3 | 25ac72c |
 | 33 | Check tràn static AArch64 trong build | nm đo storage vs BKL; guard 2 lớp với runtime | 18772fa |
 | 34 | Pager evict/unmap + fault lại (pha 2 bước 1) | Không tốn slot; PAGER3 stash do hết slot root | 9675b6e |
+| 35 | Pager retype frame mới từ Untyped con meta (pha 2 bước 2) | Data chật x86; vòng đời khép kín qua pager | 1212b4d |
