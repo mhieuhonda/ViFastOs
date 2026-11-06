@@ -72,6 +72,8 @@ const PAGER2_VA: u64 = PAGER_VA + 0x1000;
 const PAGER2_VALUE: u64 = 0x5041_4745_5200_0002;
 const PAGER2_OK: &[u8] = b"PAGER2 OK\n";
 const PAGER2_BAD: &[u8] = b"PAGER2 BAD\n";
+const PAGER_EVICT_OK: &[u8] = b"PAGER EVICT OK\n";
+const PAGER_EVICT_BAD: &[u8] = b"PAGER EVICT BAD\n";
 const PAGER_OK: &[u8] = b"PAGER OK\n";
 const PAGER_BAD: &[u8] = b"PAGER BAD\n";
 const PAGER_SERVER_ENDPOINT: u8 = 1;
@@ -127,6 +129,10 @@ pub extern "C" fn pager_client() -> ! {
 pub extern "C" fn pager2_client() -> ! {
     let value = unsafe { core::ptr::read_volatile(PAGER2_VA as *const u64) };
     let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER2_LABEL, value, 0, 0);
+    // Evict demo: server đã unmap trang sau lần đọc đầu; đọc lại để fault
+    // lần 2 và được map lại cùng frame.
+    let value2 = unsafe { core::ptr::read_volatile(PAGER2_VA as *const u64) };
+    let _ = vifast_user::send(PAGER_SERVER_ENDPOINT, PAGER2_LABEL, value2, 0, 0);
     loop {
         let _ = vifast_user::yield_now();
     }
@@ -167,11 +173,36 @@ pub extern "C" fn pager_server() -> ! {
                 PAGER_BAD
             });
         } else if message.label == PAGER2_LABEL {
-            write(if message.data[0] == PAGER2_VALUE {
-                PAGER2_OK
+            // Lần đầu: PAGER2 OK exact-one (harness). Lần 2 (sau evict):
+            // PAGER EVICT OK exact-one.
+            static mut PAGER2_SEEN: u8 = 0;
+            let seen = unsafe {
+                PAGER2_SEEN = PAGER2_SEEN.wrapping_add(1);
+                PAGER2_SEEN
+            };
+            if seen <= 1 {
+                write(if message.data[0] == PAGER2_VALUE {
+                    PAGER2_OK
+                } else {
+                    PAGER2_BAD
+                });
             } else {
-                PAGER2_BAD
-            });
+                write(if message.data[0] == PAGER2_VALUE {
+                    PAGER_EVICT_OK
+                } else {
+                    PAGER_EVICT_BAD
+                });
+            }
+            // Pager v2 evict demo (vòng 34, bước 1): sau khi client2 đọc xong,
+            // unmap trang để chứng minh fault lại + map lại thành công.
+            // Bước tiếp theo sẽ thêm destroy/retype khi server có Untyped con.
+            if message.data[0] == PAGER2_VALUE {
+                let _ = vifast_user::frame_unmap(
+                    PAGER_SERVER_VSPACE,
+                    PAGER2_VA,
+                    PAGER_SERVER_FRAME2,
+                );
+            }
         }
     }
 }

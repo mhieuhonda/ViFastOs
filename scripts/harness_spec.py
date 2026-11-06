@@ -64,6 +64,7 @@ EXACT_ONE = [
     "TCB REAP OK",
     "PAGER OK",
     "PAGER2 OK",
+    "PAGER EVICT OK",
     "DESTROY OK",
 ]
 
@@ -90,6 +91,7 @@ FORBIDDEN = [
     "FS STAT PATH BAD",
     "TCB REAP BAD",
     "PAGER2 BAD",
+    "PAGER EVICT BAD",
     "HARD LINK BAD",
     "SYMLINK BAD",
     "IRQ BAD",
@@ -185,7 +187,7 @@ ARCH_EXACT_ONE = {
 
 NUMERIC = {
     "riscv64": [
-        "6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000",
+        "7 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2",
         "ROOT SWITCH n > 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
@@ -194,7 +196,7 @@ NUMERIC = {
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "aarch64": [
-        "6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000",
+        "7 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2",
         "ROOT SWITCH n > 1",
         "T > 0, I >= 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
@@ -204,7 +206,7 @@ NUMERIC = {
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "x86_64": [
-        "6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000",
+        "7 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2",
         "ROOT SWITCH n > 1",
         "ACPI MADT cpus == 2",
         "T > 0, I >= 1",
@@ -316,9 +318,12 @@ def accept(
     if stack_size < 0x20000 or stack_used < 1 or stack_used * 2 > stack_size:
         return False
     faults = fault_addresses(output)
-    if len(faults) != 6:
+    # Pager v2 evict demo (vòng 34): PAGER2_VA fault 2 lần (lần đầu + sau evict).
+    if len(faults) != 7:
         return False
     if not all(address in faults for address in FAULT_ADDRESSES):
+        return False
+    if faults.count(0x1001001000) != 2:
         return False
     rate = RATE_RE.search(output)
     if not rate:

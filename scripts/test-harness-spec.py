@@ -60,6 +60,8 @@ def fixture(arch: str) -> str:
         ]
     for address in [0] + spec.FAULT_ADDRESSES:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")
+    # Pager v2 evict demo: PAGER2_VA faults twice.
+    lines.append("USER FAULT tcb=None cause=0x0 addr=0x1001001000")
     lines.append("BOOT STACK used=1000 size=196608")
     lines.append("ROOT SWITCH 2")
     return "\n".join(lines) + "\n"

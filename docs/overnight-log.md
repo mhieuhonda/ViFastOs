@@ -975,3 +975,13 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 462, host 203, 0 warning.
 - Xem `docs/agent2-report-33.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `92519e179d77cada3fa19455fab26a3578a6bbe80e07a8981e7254c60cae5aa2`.
+
+## 9.13 — Vòng 34: pager evict demo (pha 2 bước 1)
+
+- Server unmap `PAGER2_VA` sau lần đọc đầu; client đọc lại → fault lần 2 →
+  map lại cùng frame. Marker `PAGER EVICT OK` exact-one, `PAGER EVICT BAD`
+  forbidden. Fault 6→7 (`PAGER2_VA` ×2); harness 462→471 cases.
+- PAGER3 thử nhưng stash (hết slot root AArch64/x86); evict không tốn slot.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 471, host 203, 0 warning.
+- Xem `docs/agent2-report-34.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `172cbed0e2d7f6f1a9baf0653476a7f1011ccfd4b0ff2dcaf039b4ed89c0be0c`.
