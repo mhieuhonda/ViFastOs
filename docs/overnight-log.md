@@ -1335,3 +1335,11 @@ follow-up `62b31f4`.
 - `scripts/gate.sh` chạy build + QEMU 3/3×3 + persist + harness + fmt + docs,
   in PASS/FAIL từng bước và trả mã lỗi nếu có bước hỏng; `--quick` bỏ QEMU/persist.
 - Đã chạy full: all steps passed.
+
+## 9.54 — Vòng 75: virtio-rng (entropy)
+
+- Driver entropy device 4; guest đọc được byte ngẫu nhiên thật (hai lần đọc
+  khác nhau) — `VIRTIO RNG OK` trên riscv64/aarch64. Harness 501→504.
+- Cổng qua `scripts/gate.sh`: all steps passed.
+- Xem `docs/agent2-report-75.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `ad5ef32545916eadc267d15813883a80afdca4f33654eda85f4ed148d67af1ca`.

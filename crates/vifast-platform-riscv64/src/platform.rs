@@ -1312,6 +1312,32 @@ impl Platform for RiscvPlatform {
                 }
             }
         }
+        // Vòng 75: virtio-rng (entropy source, device id 4).
+        vifast_virtio::scan_devices(0x1000_1000, 0x1000_9000, 0x1000, |base, device| {
+            if device == vifast_virtio::DEVICE_RNG {
+                if vifast_virtio::rng_init(base) {
+                    let mut a = [0u8; 8];
+                    let mut b = [0u8; 8];
+                    let na = vifast_virtio::rng_read(&mut a);
+                    let nb = vifast_virtio::rng_read(&mut b);
+                    if na == 8 && nb == 8 && a != b {
+                        vifast_kernel::klog!(
+                            RiscvPlatform,
+                            "VIRTIO RNG OK {:02x}{:02x}{:02x}{:02x}",
+                            a[0],
+                            a[1],
+                            a[2],
+                            a[3]
+                        );
+                    } else {
+                        vifast_kernel::klog!(RiscvPlatform, "VIRTIO RNG BAD");
+                    }
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO RNG READY base={:#x}", base);
+                } else {
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO RNG INIT FAIL");
+                }
+            }
+        });
         if vifast_virtio::init_range(0x1000_1000, 0x1000_9000, 0x1000) {
             let (base, magic, version, device) = vifast_virtio::probe_info();
             vifast_kernel::klog!(

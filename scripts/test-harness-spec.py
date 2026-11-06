@@ -34,6 +34,7 @@ def fixture(arch: str) -> str:
             "DEMAND LOAD OK",
             "VIRTIO INPUT READY base=0x10005000",
             "DEMAND VFSLOAD OK",
+            "VIRTIO RNG READY base=0x10004000",
         ]
     elif arch == "aarch64":
         lines += [
@@ -54,6 +55,7 @@ def fixture(arch: str) -> str:
             "DEMAND LOAD OK",
             "VIRTIO INPUT READY base=0xa003800",
             "DEMAND VFSLOAD OK",
+            "VIRTIO RNG READY base=0xa003600",
         ]
     else:
         lines += [

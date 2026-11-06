@@ -1973,3 +1973,145 @@ pub fn input_key_ascii(event: InputEvent) -> Option<u8> {
 pub fn input_ready() -> bool {
     unsafe { INPUT_READY }
 }
+
+// ---------------------------------------------------------------------------
+// VirtIO-RNG tối thiểu (vòng 75, device id 4).
+// Một queue duy nhất: driver đăng buffer ghi, thiết bị điền byte ngẫu nhiên,
+// used ring báo hoàn tất. Dùng cho seed/giá trị ngẫu nhiên trong kernel.
+// ---------------------------------------------------------------------------
+
+/// Device id của virtio entropy source.
+pub const DEVICE_RNG: u32 = 4;
+const RNG_QUEUE_SIZE: usize = 4;
+const RNG_BUF_BYTES: usize = 64;
+
+#[repr(C, align(16))]
+struct RngQueue {
+    desc: [Descriptor; RNG_QUEUE_SIZE],
+    avail: Available,
+    used: Used,
+    buffer: [u8; RNG_BUF_BYTES],
+}
+
+static mut RNG_QUEUE: RngQueue = RngQueue {
+    desc: [const {
+        Descriptor {
+            addr: 0,
+            len: 0,
+            flags: 0,
+            next: 0,
+        }
+    }; RNG_QUEUE_SIZE],
+    avail: Available {
+        flags: 0,
+        idx: 0,
+        ring: [0; QUEUE_SIZE],
+        event: 0,
+    },
+    used: Used {
+        flags: 0,
+        idx: 0,
+        ring: [UsedElem { id: 0, len: 0 }; QUEUE_SIZE],
+        event: 0,
+    },
+    buffer: [0; RNG_BUF_BYTES],
+};
+
+static mut RNG_BASE: u64 = 0;
+static mut RNG_READY: bool = false;
+
+fn rng_write32(base: u64, offset: u64, value: u32) {
+    unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+}
+
+/// Khởi tạo virtio-rng tại `base`.
+pub fn rng_init(base: u64) -> bool {
+    unsafe {
+        RNG_READY = false;
+        RNG_BASE = 0;
+        (*core::ptr::addr_of_mut!(RNG_QUEUE)).avail.idx = 0;
+        (*core::ptr::addr_of_mut!(RNG_QUEUE)).used.idx = 0;
+    }
+    rng_write32(base, 0x70, 0);
+    rng_write32(base, 0x70, 1);
+    rng_write32(base, 0x70, 3);
+    rng_write32(base, 0x14, 1); // VERSION_1 ở word cao
+    rng_write32(base, 0x10, 1);
+    rng_write32(base, 0x70, 11);
+    if unsafe { core::ptr::read_volatile((base + 0x70) as *const u32) } & 8 == 0 {
+        return false;
+    }
+    rng_write32(base, 0x30, 0);
+    let qb = core::ptr::addr_of_mut!(RNG_QUEUE) as u64;
+    let q = unsafe { &mut *core::ptr::addr_of_mut!(RNG_QUEUE) };
+    let size = core::cmp::min(
+        unsafe { core::ptr::read_volatile((base + 0x34) as *const u32) },
+        RNG_QUEUE_SIZE as u32,
+    );
+    if size == 0 || !size.is_power_of_two() {
+        return false;
+    }
+    q.desc[0] = Descriptor {
+        addr: qb + core::mem::offset_of!(RngQueue, buffer) as u64,
+        len: RNG_BUF_BYTES as u32,
+        flags: DESC_WRITE,
+        next: 0,
+    };
+    q.avail.ring[0] = 0;
+    q.avail.idx = 1;
+    rng_write32(base, 0x38, size);
+    let desc_addr = qb + core::mem::offset_of!(RngQueue, desc) as u64;
+    let avail_addr = qb + core::mem::offset_of!(RngQueue, avail) as u64;
+    let used_addr = qb + core::mem::offset_of!(RngQueue, used) as u64;
+    rng_write32(base, 0x80, desc_addr as u32);
+    rng_write32(base, 0x84, (desc_addr >> 32) as u32);
+    rng_write32(base, 0x90, avail_addr as u32);
+    rng_write32(base, 0x94, (avail_addr >> 32) as u32);
+    rng_write32(base, 0xa0, used_addr as u32);
+    rng_write32(base, 0xa4, (used_addr >> 32) as u32);
+    rng_write32(base, 0x44, 1); // QueueReady
+    rng_write32(base, 0x70, 15);
+    unsafe {
+        RNG_BASE = base;
+        RNG_READY = true;
+    }
+    rng_write32(base, 0x50, 0);
+    true
+}
+
+/// Đọc tối đa 8 byte ngẫu nhiên vào `out` (trả về số byte đã đọc).
+pub fn rng_read(out: &mut [u8]) -> usize {
+    let base = unsafe { RNG_BASE };
+    if unsafe { !RNG_READY } || base == 0 || out.is_empty() {
+        return 0;
+    }
+    let want = core::cmp::min(out.len(), 8);
+    let q = unsafe { &mut *core::ptr::addr_of_mut!(RNG_QUEUE) };
+    unsafe {
+        let before = core::ptr::read_volatile(&q.used.idx);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let slot = (q.avail.idx as usize) % RNG_QUEUE_SIZE;
+        q.avail.ring[slot] = 0;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let next = q.avail.idx.wrapping_add(1);
+        core::ptr::write_volatile(&mut q.avail.idx, next);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        rng_write32(base, 0x50, 0);
+        let mut spins = 0u64;
+        while core::ptr::read_volatile(&q.used.idx) == before && spins < 4_000_000 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        if core::ptr::read_volatile(&q.used.idx) == before {
+            return 0;
+        }
+        out[..want].copy_from_slice(&q.buffer[..want]);
+        want
+    }
+}
+
+/// True khi driver đã sẵn sàng.
+pub fn rng_ready() -> bool {
+    unsafe { RNG_READY }
+}

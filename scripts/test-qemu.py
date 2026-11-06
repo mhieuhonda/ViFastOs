@@ -397,6 +397,7 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         *dump_rv,
         "-device", "virtio-gpu-device",
         "-device", "virtio-keyboard-device",
+        "-device", "virtio-rng-device",
         "-device", "ramfb",
         "-bios", "default",
         "-kernel", kernel,
@@ -452,6 +453,7 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         *dump_arm,
         "-device", "virtio-gpu-device",
         "-device", "virtio-keyboard-device",
+        "-device", "virtio-rng-device",
         "-device", "ramfb",
         "-kernel", kernel,
     ]
