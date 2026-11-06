@@ -43,3 +43,4 @@
 | 59 | Khóa NET READY vào harness riscv64+aarch64 | Exact-one, fixture đúng base; pha 3 có test bảo vệ | b795c2c |
 | 60 | Fmt 3 file + đánh giá M1-M3 trung thực | MVP đạt, mục mở có lý do, goal giữ active | 53a4dd6 |
 | 61 | SHELL READY exact-one cả 3 arch | Input task có test bảo vệ; input thật để sau | 6102104 |
+| 62 | `--interactive` gõ `help` qua chardev socket (opt-in) | riscv/arm 4/4; 3 lỗi AF_UNIX/-serial/PL011 LF đã sửa | 80e424c |
