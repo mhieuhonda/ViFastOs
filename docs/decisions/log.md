@@ -29,3 +29,4 @@
 | 45 | NetQueue static riêng ngoài Kernel, log addr/size | Khe hở AArch64 giữ 8B; .bss sau BKL còn chỗ | b7bb020 |
 | 46 | net_init_tx gắn queue TX, accept MAC/STATUS/VERSION_1 | Cả hai READY accepted=0x10020; RX để sau | e88bcdb |
 | 47 | net_send_arp gửi ARP who-has gateway qua TX | Cả hai sent len=0 (QEMU consumed); RX reply sau | 774130b |
+| 48 | Thêm RX API, hoãn gắn sau DRIVER_OK (QEMU kill rc=-9) | Giữ TX-only; vòng sau net_init_both | 33ef7a0 |
