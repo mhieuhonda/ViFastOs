@@ -5,7 +5,8 @@ Layout:
   1. docs/agent2-report-NN.md
   2. quick status (commits, tests, headroom, summary SHA)
   3. full ViFastOs-architecture-summary.txt in a text block
-  final line: SHA-256 of part 1 and part 3
+  4. docs/design/*.md (protocol/design docs included in this round)
+  final line: SHA-256 of part 1, part 3 and part 4
 """
 
 from __future__ import annotations
@@ -36,6 +37,22 @@ def git_value(*args: str, default: str = "unknown") -> str:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return default
 
+def latest_docs_commit() -> str:
+    try:
+        log = subprocess.check_output(
+            ["git", "log", "--format=%h %s", "-n", "80"],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        for line in log.splitlines():
+            subject = line.split(" ", 1)[1] if " " in line else ""
+            if subject.startswith("docs:"):
+                return line.split(" ", 1)[0]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return "unknown"
+
 def latest_code_commit() -> str:
     try:
         log = subprocess.check_output(
@@ -56,7 +73,11 @@ def latest_code_commit() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--round", required=True, help="round number, e.g. 06")
-    parser.add_argument("--docs-commit", default="included in this docs commit")
+    parser.add_argument(
+        "--docs-commit",
+        default="",
+        help="docs commit SHA; defaults to the latest docs: commit in git",
+    )
     parser.add_argument("--test-summary", default="")
     parser.add_argument("--headroom", default="")
     args = parser.parse_args()
@@ -95,6 +116,7 @@ def main() -> int:
         return 1
 
     code_commit = latest_code_commit()
+    docs_commit = args.docs_commit or latest_docs_commit()
     test_summary = args.test_summary or "see the report above"
     headroom = args.headroom or "see the report above"
 
@@ -107,7 +129,7 @@ def main() -> int:
     parts.append("\n## Part 2 - Quick status\n\n")
     parts.append("```text\n")
     parts.append(f"code commit: {code_commit}\n")
-    parts.append(f"docs commit: {args.docs_commit}\n")
+    parts.append(f"docs commit: {docs_commit}\n")
     parts.append(f"tests: {test_summary}\n")
     parts.append(f"RISC-V headroom: {headroom}\n")
     parts.append(f"summary SHA-256: {summary_hash}\n")
@@ -118,8 +140,24 @@ def main() -> int:
     if not parts[-1].endswith("\n"):
         parts[-1] += "\n"
     parts.append("```\n\n")
+    design_dir = REPORT_DIR / "design"
+    design_files = sorted(design_dir.glob("*.md")) if design_dir.is_dir() else []
+    design_hashes: list[tuple[str, str]] = []
+    if design_files:
+        parts.append("## Part 4 - Design documents\n\n")
+        for path in design_files:
+            data = path.read_bytes()
+            design_hashes.append((path.name, hashlib.sha256(data).hexdigest()))
+            parts.append(f"### docs/design/{path.name}\n\n")
+            parts.append(data.decode("utf-8"))
+            if not parts[-1].endswith("\n"):
+                parts[-1] += "\n"
+            parts.append("\n")
+    design_summary = " ".join(
+        f"{name}={digest}" for name, digest in design_hashes
+    ) or "none"
     parts.append(
-        f"SHA-256 part1={report_hash} part3={summary_hash}\n"
+        f"SHA-256 part1={report_hash} part3={summary_hash} part4={design_summary}\n"
     )
 
     BUNDLE_DIR.mkdir(parents=True, exist_ok=True)

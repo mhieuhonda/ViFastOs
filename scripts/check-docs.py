@@ -79,7 +79,18 @@ def main() -> int:
         "runqueue vẫn global",
         "hard link protocol",
         "Task 10 (per-hart runqueue) là stretch",
+        "chưa có free/destroy object/frame ngoài đường revoke Untyped",
+        'USER FAULT" ×4',
+        "TCB quota 16",
+        "vượt 128 object",
+        "chưa cần quá 128 object",
+        "x2APIC/per-hart runqueue",
+        "x86 25.296",
     ]
+    if "Busy, HasDependents" not in summary:
+        fail("summary error list is missing Busy/HasDependents")
+    if "RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B" not in summary:
+        fail("summary root ELF sizes are stale")
     for value in forbidden:
         needle = value.casefold()
         if needle in summary.casefold() or needle in handoff.casefold():

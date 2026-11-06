@@ -47,7 +47,7 @@
 | Persistence | 7 phase × 3 PASS |
 | Warning | **0** |
 | `Kernel` / `Object` / `Tcb` / `Cap` | 710.248 / 4.752 / 4.696 / 64 byte |
-| RISC-V headroom | **261.456 byte** (`kernel_end=0x803d02b0`) |
+| RISC-V headroom | **261.456 byte** (`kernel_end=0x803c02b0`) |
 | Object table | 147 object, 18 TCB, 96/64 cap, 64 mapping, 8 fd |
 | `SYSCALL_STATUS` | 51/51 implemented, 0 placeholder |
 | Root ELF stripped | RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B |

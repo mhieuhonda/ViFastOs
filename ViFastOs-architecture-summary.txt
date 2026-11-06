@@ -159,6 +159,11 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - ba2e753 feat: add ObjectDestroy syscall
 - d499677 feat: reclaim untyped memory on destroy
 - 4584536 feat: add object destroy demo and harness markers
+- 69c9a5d fix: bind platform context table size to kernel limits
+- e449b44 fix: invalidate asid on vspace destroy
+- 64ffef1 test: exercise object destroy while a secondary hart runs
+- 7964803 feat: measure boot stack high-water mark on all ports
+- 199ce90 fix: cascade untyped watermark and fuzz reclaim churn
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -205,7 +210,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-kernel`: 127/127 PASS
+- `cargo test -p vifast-kernel`: 131/131 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -216,12 +221,12 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 261456 byte (`kernel_end=0x803c02b0`)
+- RISC-V headroom: 253264 byte (`kernel_end=0x803c22b0`)
 - `Kernel = 710248`, `Object = 4752`, `Tcb = 4696`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
+- QEMU lần chạy gần nhất (`--repeat 5`): riscv64 5/5, aarch64 5/5, x86_64 5/5
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
-- root ELF stripped (đo 2026-11-06): RISC-V 22.808 B, AArch64 26.632 B, x86 25.296 B
+- root ELF stripped (đo 2026-11-06): RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -231,7 +236,7 @@ Output tiêu biểu:
 - SMP OK (harts=2, ipi=1) trên cả RISC-V/AArch64/x86_64
 - ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000), LAPIC OK (id=0) trên x86_64
 - "ROOT RUST", "BOOTINFO OK", "CLIENT VSPACE OK", "ROOT READY", "Fault",
-  "Fault4", "USER FAULT" ×4, "Isolation", "VFS SERVER OK",
+  "Fault4", "USER FAULT" ×6, "Isolation", "VFS SERVER OK",
   "Zero OK", "Server", "Mapped", "ViFastOs ramfs", "ViFastOs write",
   "Client", "Cap OK", "Reply OK", "VFS OK", "VFS STAT OK", "IOMMU OK",
   "SMP OK (... ipi=1)", "SMP IDLE OK (hart1_wakeups=K, idle_entries=I, wake_timer=Wt, wake_sgi=Ws)",
@@ -603,7 +608,9 @@ Untyped/retype:
 - Revoke cap Untyped xoá descendant, destroy object thật (Frame unmap, TCB detach,
   Endpoint/Notification wake lỗi).
 - Revoke cap không phải Untyped chỉ xoá descendant; object gốc vẫn sống.
-- Chưa có free/destroy object/frame ngoài đường revoke Untyped.
+- `ObjectDestroy` (50) free Frame/Endpoint/Notification/PageTable/VSpace/CNode/
+  SchedContext qua cap gốc; bộ nhớ trả về Untyped bằng watermark + free list 16
+  entry và bộ đếm `leaked` khi free list đầy. Frame phải unmap trước.
 
 8. IPC VÀ SCHEDULER
 -------------------
@@ -952,7 +959,7 @@ Error chính:
 Ok, InvalidCap, WrongType, NoRights, SlotOccupied, OutOfMemory,
 InvalidArg, Alignment, AlreadyMapped, NotMapped, NoCaller,
 ObjectDestroyed, MissingPageTable, IllegalOperation, NotImplemented,
-WouldBlock, NotFound.
+WouldBlock, NotFound, Busy, HasDependents.
 
 12. ROOT TASK VÀ USER DEMO
 ----------------------------
@@ -994,7 +1001,7 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
   USER FAULT thứ tư tại 0x1000301000.
 - Fault1 load 0x8000_0000; fault2 chạy lệnh đặc quyền; fault3 ghi vào stack
   server 0x1000002000; fault4 trong VSpace client ghi root stack 0x1000301000
-  -> cả bốn log USER FAULT.
+  -> cả sáu log USER FAULT.
 - Server VSpace riêng, code dùng chung Frame root, stack riêng +0x2000.
   Client dùng VSpace riêng và Untyped con 16 KiB/4 object từ 7.5; không còn cap
   tới root VSpace hay data Untyped của root.
@@ -1132,7 +1139,7 @@ Host test hiện có: xem vùng `tests` sinh tự động. Danh sách nhóm ki�
 - self-revoke Untyped bị từ chối khi TCB hiện tại là con
 - retype Frame/PageTable gọi zero_page qua PageTableOps
 - generic page-table walk xoá leaf trên bảng giả lập host
-- TCB quota 16 đầy trả OutOfMemory
+- TCB quota 18 đầy trả OutOfMemory
 - walk safety: user range/missing table/high leaf/valid PTE/snapshot
 - PageTableMap gán level 1/2/3, FrameMap qua bảng mới
 - PageTableMap từ chối bảng vượt user range, snapshot không đổi
@@ -1423,7 +1430,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - 6.4: runtime include root ELF, parse cửa sổ 1 MiB, map root ELF + stack Rust
   vào root VSpace, entry từ ELF, stack ROOT_ELF_STACK_TOP; bỏ root assembly;
   harness yêu cầu ROOT RUST/ROOT READY, không ROOT PANIC; từ 7.5 harness yêu cầu
-  đúng 4 USER FAULT, thêm địa chỉ root Rust stack.
+  đúng 6 USER FAULT, thêm địa chỉ root Rust stack và hai fault của fault4.
 - Boot Untyped tăng lên 128 KiB/32 object; data Untyped giảm còn 48 object;
   tổng quota 5 + 32 + 48 + 32 = 117 <= 128. Log in used/free pages và objects.
 - Không còn code_page()/build_page_tables()/bảng user tĩnh; init_platform chỉ
@@ -1567,8 +1574,8 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
 - Client nhận Untyped con riêng; root không còn CapCopy data Untyped cho client.
 - TCB/VSpace chưa tách pool riêng; TCB có quota 16 nhưng vẫn nằm trong object table.
-  Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 128 object hoặc trước SMP,
-  vì static Kernel đã giải quyết áp lực stack và 3b chưa cần quá 128 object.
+  Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 147 object hoặc trước SMP;
+  object table hiện là 147 slot và chưa cần tách pool.
 - `OBJ_TCB_BYTES=4096` chỉ là quota accounting, không phản ánh đúng `size_of::<Tcb>()`.
 - Server fault khi client BlockedReply sẽ làm client chờ vô hạn; fault endpoint sẽ xử lý.
 
@@ -1890,4 +1897,11 @@ task có VSpace riêng; client dùng Untyped con. Đã có FS v2 journal hóa tr
 user space, block cap, permission theo badge D6, persistence 7 phase cả 3 kiến
 trúc, BKL ticket per-hart, tick BSP/AP độc lập, ASID/PCID, IPI/TLB per-VA
 targeted + fallback full ASID, remote fence.i. Khoảng trống tiếp theo:
-hardware IOMMU, x2APIC/per-hart runqueue, network/input, compositor/ViFastKey.
+hardware IOMMU, multi-AP x86, network/input, framebuffer/compositor/ViFastKey.
+74. Vòng 24: CONTEXTS đủ 147 slot + assert; destroy VSpace flush ASID theo
+    harts_loaded; feature `test-destroy-smp` (demo 20 frame + 2 VSpace khi
+    hart phụ chạy, `DESTROY SMP OK`); đo boot stack 0xA5 (RISC-V 21.736/196.608,
+    AArch64 21.800/262.144, x86 21.760/196.608); fuzz reclaim trộn kích thước
+    100.000 bước leak=0, sửa cascade watermark; harness 462 case; còn 253.264 byte headroom
+    (`kernel_end=0x803c22b0`). Pager v2 hoãn vì ngân sách trang/TCB.
+

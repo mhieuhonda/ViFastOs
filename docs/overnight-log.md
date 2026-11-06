@@ -834,3 +834,37 @@ follow-up `62b31f4`.
   harness 435; QEMU 3/3 ×3; persistence 7×3; 0 warning; `Kernel=710248`,
   `Object=4752`, `Tcb=4696`, `Cap=64`; SYSCALL_STATUS 51/51.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `0cbf117fc7aa8f6f8a7e569ca79cbd5b1929983e36613b8cacb11b44de47cf66`.
+
+## 9.04 — Vòng 24: củng cố v23, boot stack, fuzz reclaim
+
+- A1 (R3): CONTEXTS cả 3 platform đủ `MAX_OBJECTS` (147) + const assert;
+  sửa `check_kernel_mappings` x86 (trước khai 32 frame).
+- A2 (R2): destroy VSpace flush `asid` theo `harts_loaded` trước khi trả bảng;
+  `take_asid` bỏ qua ASID đang sống; 2 host test.
+- A3 (R1): feature `test-destroy-smp` (root variant, build.sh 3 arch);
+  demo 20 frame + 2 VSpace chạy sau khi worker C chạy trên hart 1, thử
+  destroy Frame đang map → `Busy`; `DESTROY SMP OK (frames=20, vspaces=2)`;
+  5/5 × 3 kiến trúc.
+- A4 (R4): chênh 74/76 vs 69/76 là so sánh x86 với RISC-V; demo on/off giống
+  hệt từng kiến trúc (69/66, 72/68, 74/70) — không rò rỉ. Ngân sách pager v2
+  ~18 trang trong khi x86 trống 2, TCB 17/18 → pha B blocked.
+- A5 (R5): paint 0xA5 boot stack; `BOOT STACK used=21736/196608` (RISC-V),
+  `21800/262144` (AArch64), `21760/196608` (x86); harness bắt buộc U*2<=S +
+  12 case âm (462 case).
+- A6 (R8): fuzz Retype+ObjectDestroy+CapRevoke trộn kích thước, 4 object sống;
+  2.000 bước thường, 100.000 bước `--ignored` (4,8 s), leak=0. Sửa cascade
+  watermark; ghi nhận alignment padding là waste, không phải leak.
+- A7 (R6): sửa summary mục 2/7/11/16/20 + root ELF x86 29.440; `check-docs`
+  cấm 9 câu cũ và kiểm Busy/HasDependents. Chưa sinh bảng lỗi/giới hạn tự động.
+- A8 (R7): `kernel_end=0x803c22b0`; make-bundle tự lấy docs commit từ git và
+  thêm Part 4 (`docs/design/*.md` + SHA từng file).
+- Pha B: BLOCKED do ngân sách trang/TCB; đề xuất data 368 KiB, boot 96 KiB,
+  MAX_TCBS 22 cho vòng 25.
+- C1: BLOCKED (multi-AP x86 cần trampoline thứ 2).
+- C2: BLOCKED (refactor static mut cần vòng riêng).
+- C3: soak 10/10 × 3 (thường) và 10/10 × 3 (feature), 0 flaky.
+- C4: `docs/design/display-input-v1.md` (ramfb + virtio-keyboard + GOP).
+- Số liệu: kernel 131/131 (+2 ignored), tổng host 196; harness 462;
+  QEMU 3/3 × 3; persistence 7×3; 0 warning; headroom 253.264;
+  `Kernel=710248`, `Object=4752`, `Tcb=4696`, `Cap=64`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `aa8e7f550fcf95dd2fdf32a4f75b9d1de3a440f35af4b96a17c03c56fd0cc86e`.
