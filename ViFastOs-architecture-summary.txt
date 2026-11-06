@@ -193,6 +193,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d68f416 feat: log virtio-net offered features on both arches
 - b7bb020 feat: add dedicated net split-queue static outside Kernel
 - e88bcdb feat: negotiate virtio-net features and attach TX queue
+- 774130b feat: transmit first ARP request over virtio-net TX queue
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -2015,6 +2016,9 @@ E. Desktop / Space
 96. Vòng 47 (pha 3 bước 7): net_send_arp() build Ethernet broadcast + ARP
     who-has 10.0.2.2 tell 10.0.2.15, kick TX, poll used — cả 2 arch
     ARP sent len=0 (QEMU consumed); RX reply để vòng sau.
+97. Vòng 48 (pha 3 bước 8): thử RX sau DRIVER_OK → QEMU kill rc=-9; revert
+    TX-only, gate xanh. Bài học: gắn mọi queue TRƯỚC DRIVER_OK. Giữ
+    NET_RX_QUEUE/net_init_rx/net_recv_arp làm API cho vòng sau.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

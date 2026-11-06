@@ -130,6 +130,128 @@ pub fn net_queue_info() -> (u64, usize) {
     (base, core::mem::size_of::<NetQueue>())
 }
 
+/// Second dedicated split-queue for VirtIO-net RX (vòng 48). Same layout as
+/// the TX `NetQueue`; separate static so RX buffer posting never disturbs
+/// the TX path or the block `QUEUE`. Also in `.bss`, outside `Kernel`
+/// (AArch64 8-byte static gap untouched).
+static mut NET_RX_QUEUE: NetQueue = NetQueue {
+    desc: [EMPTY_DESC; QUEUE_SIZE],
+    avail: Available {
+        flags: 0,
+        idx: 0,
+        ring: [0; QUEUE_SIZE],
+        event: 0,
+    },
+    used: Used {
+        flags: 0,
+        idx: 0,
+        ring: [UsedElem { id: 0, len: 0 }; QUEUE_SIZE],
+        event: 0,
+    },
+    hdr: [0; NET_HDR_SIZE],
+    buf: [0; NET_BUF_SIZE],
+};
+
+pub fn net_rx_queue_info() -> (u64, usize) {
+    let base = core::ptr::addr_of!(NET_RX_QUEUE) as u64;
+    (base, core::mem::size_of::<NetQueue>())
+}
+
+/// Attach RX queue (index 0) to the dedicated `NET_RX_QUEUE` static and post
+/// one receive buffer (hdr + 2048B buf, WRITE descriptors). Call once after
+/// `net_init_tx` (device already DRIVER_OK). Mirrors the TX attach path.
+pub fn net_init_rx() -> bool {
+    fn write_at(base: u64, offset: u64, value: u32) {
+        unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+    }
+    fn write64_at(base: u64, offset: u64, value: u64) {
+        write_at(base, offset, value as u32);
+        write_at(base, offset + 4, (value >> 32) as u32);
+    }
+    let base = unsafe {
+        if !NET_READY || NET_BASE == 0 {
+            return false;
+        }
+        NET_BASE
+    };
+    let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
+    unsafe {
+        let q = &mut *queue;
+        q.avail.idx = 0;
+        q.used.idx = 0;
+        q.hdr = [0; NET_HDR_SIZE];
+        let qb = q as *const NetQueue as u64;
+        q.desc[0] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, hdr) as u64,
+            len: NET_HDR_SIZE as u32,
+            flags: DESC_WRITE | DESC_NEXT,
+            next: 1,
+        };
+        q.desc[1] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, buf) as u64,
+            len: NET_BUF_SIZE as u32,
+            flags: DESC_WRITE,
+            next: 0,
+        };
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        q.avail.ring[0] = 0;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        core::ptr::write_volatile(&mut q.avail.idx, 1);
+    }
+    write_at(base, 0x30, 0);
+    write_at(base, 0x38, QUEUE_SIZE as u32);
+    let qbase = queue as u64;
+    write64_at(
+        base,
+        0x80,
+        qbase + core::mem::offset_of!(NetQueue, desc) as u64,
+    );
+    write64_at(
+        base,
+        0x90,
+        qbase + core::mem::offset_of!(NetQueue, avail) as u64,
+    );
+    write64_at(
+        base,
+        0xa0,
+        qbase + core::mem::offset_of!(NetQueue, used) as u64,
+    );
+    write_at(base, 0x44, 0);
+    true
+}
+
+/// Poll the RX used ring for one packet; if it is an ARP reply, return the
+/// sender MAC (bytes 22..28 of the Ethernet+ARP frame, after the 12B
+/// virtio-net header). Bounded spin, read-only parse. Returns None on
+/// timeout or non-ARP-reply packet.
+pub fn net_recv_arp() -> Option<[u8; 6]> {
+    let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
+    unsafe {
+        let q = &mut *queue;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        let mut spins = 0u64;
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < 20_000_000 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        if core::ptr::read_volatile(&q.used.idx) != target {
+            return None;
+        }
+        // Frame layout: [hdr 12B][eth dst 6][eth src 6][type 2][arp 28].
+        // Need at least 12 + 42 bytes; buf holds hdr+frame contiguously.
+        let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
+        let oper = u16::from_be_bytes([q.buf[20], q.buf[21]]);
+        if ethertype != 0x0806 || oper != 2 {
+            return None;
+        }
+        let mut mac = [0u8; 6];
+        mac.copy_from_slice(&q.buf[22..28]);
+        Some(mac)
+    }
+}
+
 static mut NET_READY: bool = false;
 static mut NET_BASE: u64 = 0;
 

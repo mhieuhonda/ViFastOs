@@ -1099,3 +1099,12 @@ follow-up `62b31f4`.
   203, 0 warning.
 - Xem `docs/agent2-report-47.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `941152e9203a693e89ce3e508b2d34d68fa9b97fe2db413bb0ed3a038374e00a`.
+
+## 9.27 — Vòng 48: thử RX, hoãn sau DRIVER_OK (pha 3 bước 8)
+
+- Thêm `NET_RX_QUEUE` + `net_init_rx` + `net_recv_arp` (API giữ lại).
+- Gắn RX sau DRIVER_OK của TX → QEMU kill rc=-9 timeout; revert TX-only.
+- Bài học: gắn mọi queue trước DRIVER_OK (vòng sau `net_init_both`).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-48.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `f12d22651cf27963c7d5ff44a3e6133c3ef2f27589c166f994d5e6cb23621440`.

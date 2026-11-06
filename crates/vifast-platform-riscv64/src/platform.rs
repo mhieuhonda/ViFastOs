@@ -1113,6 +1113,10 @@ impl Platform for RiscvPlatform {
                         feats
                     );
                     // Vòng 46: init TX queue cho net (device riêng, chưa claim).
+                    // Vòng 48: HOÃN post RX sau DRIVER_OK — QEMU treo/timeout
+                    // khi gắn queue 0 sau khi TX đã DRIVER_OK (rc=-9 sau
+                    // SELFTEST). Giữ TX-only, RX chờ vòng sau (cấu hình cả 2
+                    // queue trước DRIVER_OK).
                     match vifast_virtio::net_init_tx(base) {
                         Some(acc) => {
                             vifast_kernel::klog!(

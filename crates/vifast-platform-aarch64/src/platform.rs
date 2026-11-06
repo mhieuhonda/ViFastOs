@@ -1351,6 +1351,8 @@ impl Platform for Aarch64Platform {
                         );
                         // Vòng 46: init TX queue cho net (device riêng, chưa claim).
                         // Vòng 47: gửi ARP request đầu tiên qua TX.
+                        // Vòng 48: HOÃN post RX sau DRIVER_OK (treo/timeout
+                        // QEMU, rc=-9). Giữ TX-only; RX chờ vòng sau.
                         match vifast_virtio::net_init_tx(base) {
                             Some(acc) => {
                                 vifast_kernel::klog!(
