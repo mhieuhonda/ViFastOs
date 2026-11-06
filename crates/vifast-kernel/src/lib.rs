@@ -573,7 +573,12 @@ impl Kernel {
         if self.tcb_count() >= MAX_TCBS {
             return None;
         }
-        self.alloc(Kind::Tcb(Tcb::new(name, priority)))
+        let slot = self.free_context_slot()?;
+        let object = self.alloc(Kind::Tcb(Tcb::new(name, priority)))?;
+        if let Some(tcb) = self.tcb_mut(object) {
+            tcb.context_slot = slot;
+        }
+        Some(object)
     }
 
     pub fn create_untyped(&mut self, base: usize, size: usize) -> Option<ObjRef> {
@@ -1245,6 +1250,24 @@ impl Kernel {
         }
     }
 
+    fn free_context_slot(&self) -> Option<u8> {
+        for slot in 0..MAX_TCBS {
+            let used = self.objs.iter().any(|object| {
+                matches!(&object.kind, Kind::Tcb(tcb) if tcb.context_slot as usize == slot)
+            });
+            if !used {
+                return Some(slot as u8);
+            }
+        }
+        None
+    }
+
+    /// Dense context slot for a live TCB, if assigned.
+    pub fn context_slot(&self, r: ObjRef) -> Option<u8> {
+        let slot = self.tcb(r)?.context_slot;
+        ((slot as usize) < MAX_TCBS).then_some(slot)
+    }
+
     pub fn endpoint(&self, r: ObjRef) -> Option<&Endpoint> {
         match self.get(r)?.kind {
             Kind::Endpoint(ref endpoint) => Some(endpoint),
@@ -1592,6 +1615,11 @@ impl Kernel {
             }
             None => None,
         };
+        let context_slot = if ty == ObjType::Tcb {
+            Some(self.free_context_slot().ok_or(KError::OutOfMemory)?)
+        } else {
+            None
+        };
         let (base, size, page, max_objects, objects, reserved) = {
             let region = self.untyped(untyped).ok_or(KError::WrongType)?;
             (
@@ -1720,6 +1748,9 @@ impl Kernel {
         if let Some(record) = self.get_mut(object) {
             record.alloc_offset = offset as u32;
             record.alloc_len = charge as u32;
+            if let (Kind::Tcb(tcb), Some(slot)) = (&mut record.kind, context_slot) {
+                tcb.context_slot = slot;
+            }
         }
         let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
         region.objects = objects + 1;
@@ -4091,6 +4122,9 @@ impl Kernel {
             }
         }
         if let Some(object) = self.get_mut(obj) {
+            if let Kind::Tcb(tcb) = &mut object.kind {
+                tcb.context_slot = 0xFF;
+            }
             object.kind = Kind::Free;
             object.owner = None;
             object.creator = None;
@@ -7622,6 +7656,28 @@ mod tests {
                 .unwrap();
             kernel.resume_tcb(*tcb).unwrap();
         }
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn tcb_context_slots_are_unique_and_reused() {
+        let mut kernel = Kernel::new();
+        let mut tcbs = std::vec::Vec::new();
+        while kernel.tcb_count() < MAX_TCBS {
+            tcbs.push(kernel.create_tcb("ctx", 1).unwrap());
+        }
+        assert!(kernel.create_tcb("overflow", 1).is_none());
+        let mut slots: std::vec::Vec<u8> = tcbs
+            .iter()
+            .map(|tcb| kernel.context_slot(*tcb).unwrap())
+            .collect();
+        let freed = slots[2];
+        slots.sort_unstable();
+        slots.dedup();
+        assert_eq!(slots.len(), MAX_TCBS - 1);
+        kernel.destroy_object(tcbs[2]).unwrap();
+        let replacement = kernel.create_tcb("reuse", 1).unwrap();
+        assert_eq!(kernel.context_slot(replacement), Some(freed));
         assert!(kernel.check_invariants().is_ok());
     }
 
