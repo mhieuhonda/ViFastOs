@@ -19,6 +19,7 @@ cargo test -p vifast-user
 cargo test -p vifast-acpi
 cargo test -p vifast-fs
 cargo test -p vifast-fsutil
+cargo test -p vifast-virtio
 cargo build -p vifast-fsutil
 python3 scripts/test-harness-spec.py
 

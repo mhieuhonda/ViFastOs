@@ -1118,3 +1118,37 @@ pub fn flush() -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::checksum;
+
+    /// RFC 1071 mẫu IPv4 header: checksum tính ra phải đúng 0xb861.
+    #[test]
+    fn checksum_matches_rfc1071_ipv4_header() {
+        let header_with_zero = [
+            0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0x00, 0x00, 0xc0, 0xa8,
+            0x00, 0x01, 0xc0, 0xa8, 0x00, 0xc7,
+        ];
+        assert_eq!(checksum(&header_with_zero), 0xb861);
+    }
+
+    /// Với checksum đã điền, tổng kiểm tra phải bằng 0 (bù một).
+    #[test]
+    fn checksum_of_valid_header_is_zero() {
+        let header = [
+            0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0xb8, 0x61, 0xc0, 0xa8,
+            0x00, 0x01, 0xc0, 0xa8, 0x00, 0xc7,
+        ];
+        assert_eq!(checksum(&header), 0);
+    }
+
+    /// Độ dài lẻ được đệm 0 ở byte cuối.
+    #[test]
+    fn checksum_handles_odd_length() {
+        assert_eq!(
+            checksum(&[0x12, 0x34, 0x56]),
+            checksum(&[0x12, 0x34, 0x56, 0x00])
+        );
+    }
+}

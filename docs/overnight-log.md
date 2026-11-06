@@ -1244,3 +1244,14 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 489, host 203, 0 warning.
 - Xem `docs/agent2-report-64.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `184612c9cee45493f9f05021c29268b46e8a8e78e891447b4a8ec6714bea420a`.
+
+## 9.44 — Vòng 65: fw_cfg âm có căn cứ + test checksum
+
+- Thử DMA / selector u16 / selector byte → đều treo; selector đúng +0x04
+  (vòng 53 ghi nhầm +0x08 = DMA addr). Kết luận: vùng fw_cfg chỉ đọc trong
+  cấu hình này → display phải đi virtio-gpu.
+- 3 unit test checksum RFC 1071, thêm `cargo test -p vifast-virtio` vào gate;
+  host test 204→207.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 489, 0 warning.
+- Xem `docs/agent2-report-65.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `503a84d2afcb72bb1bb9d99868b8e140fe89247a02e62589d9656f4f3a949523`.
