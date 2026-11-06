@@ -1940,6 +1940,12 @@ E. Desktop / Space
     `qemu-status-standard.json`; đo variant (Object 4.752, Kernel 710.248,
     TrapFrame 280/288/160); POOL HWM hoãn vì AArch64/x86 kernel exception.
 
+
+77. Vòng 28: M1.2a/b/c xong (context slot dense, runtime dùng slot, sửa
+    ROOT ERR 16); M1.1 HWM BLOCKED (AArch64 lỗi với 4 biến thể); M1.3 TCB pool
+    thử lần 1 đạt Object 4.152/Kernel 706.576 nhưng AArch64 0/3 nên revert;
+    headroom sau M1.2c là 290.128.
+
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
 README.md

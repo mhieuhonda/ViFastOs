@@ -908,3 +908,16 @@ follow-up `62b31f4`.
   persistence PASS 3/3, check-all lần 2 ALL CHECKS PASS.
 - Harness 462; host 201 (kernel 132, abi 4); 0 warning; headroom 253.264.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `6945f686b739f9296955dfdf5995b1d802d0bbb6ca45934b4b147c237dd01d0a`.
+
+## 9.07 — Vòng 28: M1.2 xong, thử M1.3
+
+- M1.2a/b/c: thêm context slot dense, cấp slot mọi đường tạo TCB, runtime +
+  platform dùng slot. Giải được ROOT ERR 16 (runtime còn index CONTEXTS theo
+  tcb.index). Headroom 253.264 → 290.128 (`kernel_end=0x803b92b0`).
+- M1.1 HWM: thử biến thể 4 (runtime read-only sampling) vẫn lỗi AArch64 →
+  BLOCKED 2 phiên, ghi inbox.
+- M1.3 TCB pool thử lần 1: `Kind::Tcb(TcbId)` + `Kernel.tcbs[22]`, host
+  134/134, Object 4.152, Kernel 706.576, headroom 286.032; QEMU RISC-V 3/3
+  nhưng AArch64 0/3 (KERNEL EXCEPTION vector=4) và x86 2/3 → revert.
+- Baseline sau revert: QEMU 3/3 ×3; host 203; harness 462; 0 warning.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `5c8acc6a410634a1b2e8bda644b28eb68c8a310d656dc2a13b5d12083c6bce58`.
