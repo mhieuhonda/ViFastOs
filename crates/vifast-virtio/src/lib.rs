@@ -2133,3 +2133,171 @@ pub fn rng_read(out: &mut [u8]) -> usize {
 pub fn rng_ready() -> bool {
     unsafe { RNG_READY }
 }
+
+// ---------------------------------------------------------------------------
+// TCP tối thiểu (vòng 77): đủ cho một echo server một kết nối.
+// Hỗ trợ: SYN → SYN-ACK, ACK + payload → ACK + echo, FIN → ACK+FIN.
+// Không xử lý retransmit/window scaling/options — đủ để chứng minh stack.
+// ---------------------------------------------------------------------------
+
+pub const TCP_FIN: u8 = 0x01;
+pub const TCP_SYN: u8 = 0x02;
+pub const TCP_RST: u8 = 0x04;
+pub const TCP_PSH: u8 = 0x08;
+pub const TCP_ACK: u8 = 0x10;
+
+/// Một segment TCP đã giải mã (payload đã copy ra ngoài).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TcpSegment {
+    pub src_ip: [u8; 4],
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub seq: u32,
+    pub ack: u32,
+    pub flags: u8,
+    pub payload_len: usize,
+}
+
+fn tcp_checksum(src: [u8; 4], dst: [u8; 4], segment: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    let mut i = 0;
+    while i + 1 < src.len() {
+        sum += u16::from_be_bytes([src[i], src[i + 1]]) as u32;
+        i += 2;
+    }
+    i = 0;
+    while i + 1 < dst.len() {
+        sum += u16::from_be_bytes([dst[i], dst[i + 1]]) as u32;
+        i += 2;
+    }
+    sum += 6u32; // protocol TCP
+    sum += segment.len() as u32;
+    let mut j = 0;
+    while j + 1 < segment.len() {
+        sum += u16::from_be_bytes([segment[j], segment[j + 1]]) as u32;
+        j += 2;
+    }
+    if j < segment.len() {
+        sum += (segment[j] as u32) << 8;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+/// Gửi một segment TCP tới `dst_ip:dst_port` từ cổng `src_port`.
+pub fn net_send_tcp(
+    dst_ip: [u8; 4],
+    dst_port: u16,
+    src_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    payload: &[u8],
+) -> Option<u32> {
+    let mac = unsafe { net_mac(NET_BASE)? };
+    const SRC_IP: [u8; 4] = [10, 0, 2, 15];
+    let tcp_len = 20 + payload.len();
+    let ip_len = 20 + tcp_len;
+    let total = 14 + ip_len;
+    if total > NET_BUF_SIZE {
+        return None;
+    }
+    let mut frame = [0u8; NET_BUF_SIZE];
+    frame[0..6].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, dst_ip[3]]);
+    frame[6..12].copy_from_slice(&mac);
+    frame[12..14].copy_from_slice(&[0x08, 0x00]);
+    let ip = &mut frame[14..34];
+    ip[0] = 0x45;
+    ip[1] = 0;
+    ip[2..4].copy_from_slice(&(ip_len as u16).to_be_bytes());
+    ip[4..6].copy_from_slice(&0x7a69u16.to_be_bytes());
+    ip[6..8].copy_from_slice(&0x4000u16.to_be_bytes());
+    ip[8] = 64;
+    ip[9] = 6; // TCP
+    ip[10..12].copy_from_slice(&[0, 0]);
+    ip[12..16].copy_from_slice(&SRC_IP);
+    ip[16..20].copy_from_slice(&dst_ip);
+    let ip_sum = checksum(&ip[..20]);
+    ip[10..12].copy_from_slice(&ip_sum.to_be_bytes());
+    let tcp = &mut frame[34..34 + tcp_len];
+    tcp[0..2].copy_from_slice(&src_port.to_be_bytes());
+    tcp[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    tcp[4..8].copy_from_slice(&seq.to_be_bytes());
+    tcp[8..12].copy_from_slice(&ack.to_be_bytes());
+    tcp[12] = 5 << 4; // data offset 5 (20 byte), reserved 0
+    tcp[13] = flags;
+    tcp[14..16].copy_from_slice(&64240u16.to_be_bytes()); // window
+    tcp[16..18].copy_from_slice(&[0, 0]); // checksum tạm
+    tcp[18..20].copy_from_slice(&[0, 0]); // urgent
+    tcp[20..].copy_from_slice(payload);
+    let tcp_sum = tcp_checksum(SRC_IP, dst_ip, tcp);
+    tcp[16..18].copy_from_slice(&tcp_sum.to_be_bytes());
+    net_tx_frame(&frame[..total])
+}
+
+/// Chờ một segment TCP gửi tới `dst_port` (payload copy vào `payload`).
+pub fn net_recv_tcp(dst_port: u16, payload: &mut [u8]) -> Option<TcpSegment> {
+    net_recv_tcp_bounded(dst_port, payload, 4_000_000)
+}
+
+/// Như `net_recv_tcp` nhưng chỉ định bound poll (dùng cho vòng chờ ngắn để
+/// không làm chậm boot khi không có kết nối TCP nào).
+pub fn net_recv_tcp_bounded(dst_port: u16, payload: &mut [u8], bound: u64) -> Option<TcpSegment> {
+    for _ in 0..4 {
+        if !net_rx_poll_bounded(bound) {
+            return None;
+        }
+        let mut segment = TcpSegment::default();
+        let mut matched = false;
+        unsafe {
+            let q = &mut *core::ptr::addr_of_mut!(NET_RX_QUEUE);
+            let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
+            if ethertype == 0x0800 {
+                let ihl = (q.buf[14] & 0x0f) as usize * 4;
+                let proto = q.buf[14 + 9];
+                let ip_total = u16::from_be_bytes([q.buf[16], q.buf[17]]) as usize;
+                if proto == 6 && ihl >= 20 && 14 + ip_total <= q.buf.len() {
+                    let tcp_off = 14 + ihl;
+                    let src_port = u16::from_be_bytes([q.buf[tcp_off], q.buf[tcp_off + 1]]);
+                    let dst_port_rx = u16::from_be_bytes([q.buf[tcp_off + 2], q.buf[tcp_off + 3]]);
+                    if dst_port_rx == dst_port {
+                        let doff = ((q.buf[tcp_off + 12] >> 4) as usize) * 4;
+                        let tcp_total = ip_total - ihl;
+                        if doff >= 20 && doff <= tcp_total {
+                            segment.src_ip.copy_from_slice(&q.buf[14 + 12..14 + 16]);
+                            segment.src_port = src_port;
+                            segment.dst_port = dst_port_rx;
+                            segment.seq = u32::from_be_bytes([
+                                q.buf[tcp_off + 4],
+                                q.buf[tcp_off + 5],
+                                q.buf[tcp_off + 6],
+                                q.buf[tcp_off + 7],
+                            ]);
+                            segment.ack = u32::from_be_bytes([
+                                q.buf[tcp_off + 8],
+                                q.buf[tcp_off + 9],
+                                q.buf[tcp_off + 10],
+                                q.buf[tcp_off + 11],
+                            ]);
+                            segment.flags = q.buf[tcp_off + 13];
+                            let data_len = tcp_total - doff;
+                            let copy = core::cmp::min(data_len, payload.len());
+                            let start = tcp_off + doff;
+                            payload[..copy].copy_from_slice(&q.buf[start..start + copy]);
+                            segment.payload_len = copy;
+                            matched = true;
+                        }
+                    }
+                }
+            }
+        }
+        if matched {
+            net_rx_post();
+            return Some(segment);
+        }
+        net_rx_post();
+    }
+    None
+}

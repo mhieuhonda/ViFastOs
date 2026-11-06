@@ -1351,3 +1351,12 @@ follow-up `62b31f4`.
 - Thêm `docs/11-hien-tai/13-virtio.md` (driver, thứ tự init, lỗi đã gặp, marker).
 - Xem `docs/agent2-report-76.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `03ec0f0518cb1087a2eeb718ea15645e20ae878480fc9ee20e18b960a3e87df8`.
+
+## 9.56 — Vòng 77: TCP echo server
+
+- `net_send_tcp`/`net_recv_tcp` + echo server cổng 8080; `--tcp-check` qua
+  hostfwd echo `ping-from-host` đúng trên riscv64/aarch64.
+- Harness khóa `VIRTIO TCP LISTEN OK` (504). Giới hạn: 1 kết nối, không
+  retransmit, chưa thường trú.
+- Xem `docs/agent2-report-77.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `5baa7ace06f15a199134934b5e99957cc6c297453e8ead2d9cec18ba5aff1603`.

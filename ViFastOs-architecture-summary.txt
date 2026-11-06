@@ -219,6 +219,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 88a4a29 feat: draw a ViFastOs boot splash with a 5x7 font
 - 6af1885 test: add a single gate script for continuous rounds
 - 5a09244 feat: add a virtio-rng entropy source
+- 277b287 fix: retry the virtio-gpu probe so aarch64 stops failing at init
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -2136,6 +2137,10 @@ E. Desktop / Space
 123. Vòng 76: soak 15 vòng lộ flake aarch64 GPU INIT FAIL (7/15) → `gpu_init`
     retry 4 lần bound ngắn; 10/10 và soak sạch 8/8 cả 3 arch. Thêm tài liệu
     `docs/11-hien-tai/13-virtio.md`.
+124. Vòng 77 (TCP): net_send_tcp/net_recv_tcp + echo server cổng 8080 trong
+    init_block; `--tcp-check` qua hostfwd echo đúng `ping-from-host` cả
+    riscv64/aarch64. Marker `VIRTIO TCP LISTEN OK`. Giới hạn: 1 kết nối,
+    không retransmit, chưa thường trú.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

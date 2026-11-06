@@ -910,6 +910,82 @@ unsafe impl Sync for KernelStorage {}
 static KERNEL_STORAGE: KernelStorage =
     KernelStorage(core::cell::UnsafeCell::new(Kernel::new_const()));
 
+/// TCP echo server tối giản (vòng 77): nghe cổng 8080, bắt tay SYN/SYN-ACK
+/// rồi echo từng segment dữ liệu. Chỉ chờ ngắn (~1.5s) để không làm chậm boot
+/// khi không có client; dùng bound nhỏ nên mỗi lần poll rất nhanh.
+fn tcp_echo_demo() {
+    const PORT: u16 = 8080;
+    let mut payload = [0u8; 512];
+    let mut have_conn = false;
+    let mut client_ip = [0u8; 4];
+    let mut client_port = 0u16;
+    let mut client_seq = 0u32;
+    let mut our_seq = 0x5150_0000u32;
+    let mut echoes = 0u32;
+    let mut polls = 0u32;
+    vifast_kernel::klog!(Aarch64Platform, "VIRTIO TCP LISTEN OK port={}", PORT);
+    while polls < 100 {
+        polls += 1;
+        let Some(seg) = vifast_virtio::net_recv_tcp_bounded(PORT, &mut payload, 100_000) else {
+            continue;
+        };
+        if !have_conn {
+            if seg.flags & vifast_virtio::TCP_SYN != 0 && seg.flags & vifast_virtio::TCP_ACK == 0 {
+                client_ip = seg.src_ip;
+                client_port = seg.src_port;
+                client_seq = seg.seq.wrapping_add(1);
+                have_conn = true;
+                let _ = vifast_virtio::net_send_tcp(
+                    client_ip,
+                    client_port,
+                    PORT,
+                    our_seq,
+                    client_seq,
+                    vifast_virtio::TCP_SYN | vifast_virtio::TCP_ACK,
+                    &[],
+                );
+                our_seq = our_seq.wrapping_add(1);
+                vifast_kernel::klog!(Aarch64Platform, "VIRTIO TCP ACCEPT");
+            }
+            continue;
+        }
+        if seg.flags & vifast_virtio::TCP_ACK != 0 {
+            let len = seg.payload_len as u32;
+            if len > 0 && seg.seq == client_seq {
+                client_seq = client_seq.wrapping_add(len);
+                let _ = vifast_virtio::net_send_tcp(
+                    client_ip,
+                    client_port,
+                    PORT,
+                    our_seq,
+                    client_seq,
+                    vifast_virtio::TCP_ACK | vifast_virtio::TCP_PSH,
+                    &payload[..len as usize],
+                );
+                our_seq = our_seq.wrapping_add(len);
+                echoes += 1;
+            }
+            if seg.flags & vifast_virtio::TCP_FIN != 0 {
+                client_seq = client_seq.wrapping_add(1);
+                let _ = vifast_virtio::net_send_tcp(
+                    client_ip,
+                    client_port,
+                    PORT,
+                    our_seq,
+                    client_seq,
+                    vifast_virtio::TCP_ACK | vifast_virtio::TCP_FIN,
+                    &[],
+                );
+                vifast_kernel::klog!(Aarch64Platform, "VIRTIO TCP CLOSE");
+                have_conn = false;
+            }
+        }
+    }
+    if echoes > 0 {
+        vifast_kernel::klog!(Aarch64Platform, "VIRTIO TCP ECHO OK segs={}", echoes);
+    }
+}
+
 impl Platform for Aarch64Platform {
     type Context = TrapFrame;
 
@@ -1546,6 +1622,9 @@ impl Platform for Aarch64Platform {
                 }
             }
         }
+        // Vòng 77: TCP echo server (hostfwd từ QEMU) — chờ ngắn, có client
+        // thì phục vụ, không thì thoát để không làm chậm boot.
+        tcp_echo_demo();
         // Vòng 75: virtio-rng (entropy source, device id 4).
         vifast_virtio::scan_devices(0x0a00_0000, 0x0a00_4000, 0x200, |base, device| {
             if device == vifast_virtio::DEVICE_RNG {

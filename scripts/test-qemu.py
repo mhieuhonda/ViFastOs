@@ -593,6 +593,87 @@ def test_interactive(name: str, index: int) -> bool:
     return ok
 
 
+def tcp_check(name: str) -> bool:
+    """Boot with hostfwd and run a TCP echo round trip from the host.
+
+    Vòng 77: QEMU user-net chuyển tiếp localhost:<port> vào cổng 8080 của
+    guest; client gửi payload và yêu cầu guest echo lại đúng nội dung.
+    """
+    if name not in ("riscv64", "aarch64"):
+        return True
+    port = 18080 if name == "riscv64" else 18081
+    serial = f"/tmp/vifast-tcp-{name}.log"
+    disk = make_disk(f"{name}-tcp")
+    if os.path.exists(serial):
+        os.unlink(serial)
+    if name == "riscv64":
+        kernel = os.path.join(
+            ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
+        )
+        cmd = [
+            QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "128M",
+            "-display", "none",
+            "-serial", f"file:{serial}",
+            "-global", "virtio-mmio.force-legacy=false",
+            "-drive", f"if=none,id=vd0,file={disk},format=raw",
+            "-device", "virtio-blk-device,drive=vd0",
+            "-device", "virtio-net-device,netdev=vn0",
+            "-netdev", f"user,id=vn0,hostfwd=tcp::{port}-:8080",
+            "-bios", "default", "-kernel", kernel,
+        ]
+    else:
+        kernel = os.path.join(
+            ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64"
+        )
+        cmd = [
+            QEMU_ARM, "-machine", "virt,gic-version=2", "-semihosting",
+            "-cpu", "max", "-smp", "2", "-m", "128M",
+            "-display", "none",
+            "-serial", f"file:{serial}",
+            "-global", "virtio-mmio.force-legacy=false",
+            "-drive", f"if=none,id=vd0,file={disk},format=raw",
+            "-device", "virtio-blk-device,drive=vd0",
+            "-device", "virtio-net-device,netdev=vn0",
+            "-netdev", f"user,id=vn0,hostfwd=tcp::{port}-:8080",
+            "-kernel", kernel,
+        ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        payload = b"ping-from-host"
+        echoed = b""
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            time.sleep(0.15)
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1.0)
+            except OSError:
+                continue
+            try:
+                client.settimeout(3.0)
+                client.sendall(payload)
+                echoed = client.recv(1024)
+            except OSError:
+                echoed = b""
+            finally:
+                client.close()
+            if echoed == payload:
+                break
+        if echoed != payload:
+            print(f"--- {name} tcp FAIL (echo {echoed!r}) ---")
+            return False
+        text = ""
+        if os.path.exists(serial):
+            text = open(serial, "rb").read().decode("utf-8", errors="replace")
+        if "VIRTIO TCP ACCEPT" not in text:
+            print(f"--- {name} tcp FAIL (no ACCEPT marker) ---")
+            return False
+        print(f"--- {name} tcp PASS (echo {payload!r}) ---")
+        return True
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def input_check(name: str) -> bool:
     """Boot with virtio-keyboard and type 'help' via QEMU monitor sendkey.
 
@@ -863,6 +944,11 @@ def main() -> int:
         help="run a test-only feature build",
     )
     parser.add_argument(
+        "--tcp-check",
+        action="store_true",
+        help="also run a TCP echo round trip through hostfwd (vòng 77; default off)",
+    )
+    parser.add_argument(
         "--input-check",
         action="store_true",
         help="also send keys through a virtio-keyboard and require the shell "
@@ -925,6 +1011,9 @@ def main() -> int:
                         results[name][-1] = False
                 if args.input_check and args.feature is None and results[name][-1]:
                     if not input_check(name):
+                        results[name][-1] = False
+                if args.tcp_check and args.feature is None and results[name][-1]:
+                    if not tcp_check(name):
                         results[name][-1] = False
     finally:
         cleanup_disks()
