@@ -1538,6 +1538,27 @@ impl Kernel {
         }
         if stop == region.bump {
             region.bump = start;
+            // Lowering the watermark can make a free region that was one
+            // slot below it adjacent; cascade so repeated frees always
+            // collapse back to the bump instead of fragmenting.
+            loop {
+                let mut lower: Option<(usize, usize)> = None;
+                for slot in 0..MAX_UNTYPED_FREE {
+                    let Some(free) = region.free[slot] else {
+                        continue;
+                    };
+                    let free_start = free.offset as usize;
+                    if free_start.saturating_add(free.len as usize) == region.bump {
+                        lower = Some((slot, free_start));
+                        break;
+                    }
+                }
+                let Some((slot, free_start)) = lower else {
+                    break;
+                };
+                region.free[slot] = None;
+                region.bump = free_start;
+            }
         } else if let Some(slot) = region.free.iter_mut().find(|entry| entry.is_none()) {
             *slot = Some(FreeRegion {
                 offset: start as u32,
@@ -6428,6 +6449,155 @@ mod tests {
         }
     }
 
+    fn reclaim_fuzz(steps: usize) {
+        let mut kernel = Kernel::new();
+        let untyped = kernel
+            .create_untyped_with_limit(0x700_0000, 0x8000, 4096, 8)
+            .unwrap();
+        let kinds = [
+            ObjType::Frame,
+            ObjType::PageTable,
+            ObjType::Endpoint,
+            ObjType::Notification,
+            ObjType::SchedContext,
+            ObjType::CNode,
+        ];
+        let mut seed = 0x5eed_1234_5678_9abcu64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as usize
+        };
+        let mut live: [Option<ObjRef>; 4] = [None; 4];
+        let mut allocations = 0usize;
+        let mut destroys = 0usize;
+        for step in 0..steps {
+            let free_slot = live.iter().position(|slot| slot.is_none());
+            if next() % 100 < 72 {
+                if let Some(slot) = free_slot {
+                    let ty = kinds[next() % kinds.len()];
+                    if let Ok(object) = kernel.retype(untyped, ty) {
+                        live[slot] = Some(object);
+                        allocations += 1;
+                    }
+                }
+            } else {
+                let mut index = next() % live.len();
+                for _ in 0..live.len() {
+                    if live[index].is_some() {
+                        break;
+                    }
+                    index = (index + 1) % live.len();
+                }
+                if let Some(object) = live[index].take() {
+                    kernel.destroy_object(object).unwrap();
+                    destroys += 1;
+                }
+            }
+            let region = kernel.untyped(untyped).unwrap();
+            let free_sum: usize = region.free.iter().flatten().map(|f| f.len as usize).sum();
+            let live_sum: usize = live
+                .iter()
+                .flatten()
+                .map(|object| kernel.get(*object).unwrap().alloc_len as usize)
+                .sum();
+            // `bump` may include alignment padding below aligned objects; all
+            // other bytes must be either live or on the free list.
+            assert!(
+                free_sum + live_sum <= region.bump,
+                "free/live overlap at step {step}: bump={} free={free_sum} live={live_sum}",
+                region.bump
+            );
+            assert!(kernel.check_invariants().is_ok(), "invariant after step");
+        }
+        // Free the remaining objects in LIFO order so the free list can
+        // coalesce them with the watermark instead of fragmenting.
+        let mut remaining: [Option<ObjRef>; 4] = [None; 4];
+        for (slot, object) in live.iter_mut().enumerate() {
+            remaining[slot] = object.take();
+        }
+        let mut ordered: [Option<ObjRef>; 4] = [None; 4];
+        for index in 0..remaining.len() {
+            let mut largest: Option<(usize, ObjRef)> = None;
+            for slot in remaining.iter() {
+                if let Some(object) = slot {
+                    let offset = kernel.get(*object).unwrap().alloc_offset as usize;
+                    if largest.is_none_or(|(best, _)| offset > best) {
+                        largest = Some((offset, *object));
+                    }
+                }
+            }
+            if let Some((_, object)) = largest {
+                ordered[index] = Some(object);
+                for slot in remaining.iter_mut() {
+                    if *slot == Some(object) {
+                        *slot = None;
+                    }
+                }
+            }
+        }
+        for object in ordered.iter_mut().filter_map(|slot| slot.take()) {
+            kernel.destroy_object(object).unwrap();
+        }
+        let (_, bump, objects, _) = kernel.untyped_usage(untyped).unwrap();
+        let region = kernel.untyped(untyped).unwrap();
+        assert!(bump <= 0x8000, "bump escaped the arena: bump={bump}");
+        assert_eq!(objects, 0);
+        assert_eq!(region.leaked, 0, "mixed-size fuzz leaked bytes");
+        assert!(kernel.check_invariants().is_ok());
+        assert!(allocations > 0 && destroys > 0);
+    }
+
+    #[test]
+    fn reclaim_fuzz_mixed_sizes_keeps_invariants_and_reclaims_all() {
+        reclaim_fuzz(2_000);
+    }
+
+    #[test]
+    #[ignore = "long seeded reclaim fuzz; run with --ignored"]
+    fn reclaim_fuzz_long_keeps_invariants_and_reclaims_all() {
+        reclaim_fuzz(100_000);
+    }
+
+    #[test]
+    fn cap_revoke_churn_reclaims_every_round() {
+        for round in 0..200u64 {
+            let mut kernel = Kernel::new();
+            let root = kernel.root().unwrap();
+            let untyped = kernel
+                .create_untyped_with_limit(0x800_0000 + round as usize * 0x20_0000, 0x2000, 4096, 4)
+                .unwrap();
+            kernel
+                .install_cap(root, 1, Cap::new(untyped, ObjType::Untyped, Rights::ALL))
+                .unwrap();
+            for (slot, ty) in [(2u64, ObjType::Frame), (3, ObjType::Endpoint)] {
+                let action = kernel.user_syscall(
+                    root,
+                    SyscallId::Retype as u64,
+                    1,
+                    ty as u64,
+                    slot,
+                    0,
+                    0,
+                    0,
+                );
+                assert!(matches!(
+                    action,
+                    UserAction::Return {
+                        error: KError::Ok,
+                        ..
+                    }
+                ));
+            }
+            kernel.revoke_cap(root, 1).unwrap();
+            let region = kernel.untyped(untyped).unwrap();
+            assert_eq!(region.objects, 0, "round {round}");
+            assert_eq!(region.leaked, 0, "round {round}");
+            assert!(kernel.check_invariants().is_ok());
+        }
+    }
+
     #[test]
     fn vspace_destroy_flushes_asid_on_loaded_harts() {
         let mut kernel = Kernel::new();
@@ -7264,6 +7434,7 @@ mod tests {
     struct ZeroOps;
 
     static ZERO_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static ZERO_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static ZERO_OPS: ZeroOps = ZeroOps;
 
     impl PageTableOps for ZeroOps {
@@ -7360,6 +7531,9 @@ mod tests {
 
     #[test]
     fn reused_frame_is_zeroed_and_keeps_pa() {
+        let _guard = ZERO_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut kernel = Kernel::new();
         kernel.set_page_table_ops(&ZERO_OPS);
         let root = test_root_with_untyped(&mut kernel, 0x840_0000, 16);
@@ -7386,6 +7560,9 @@ mod tests {
 
     #[test]
     fn retype_zeroes_frame_and_page_table_pages() {
+        let _guard = ZERO_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut kernel = Kernel::new();
         kernel.set_page_table_ops(&ZERO_OPS);
         let untyped = kernel
