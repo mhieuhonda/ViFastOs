@@ -1353,6 +1353,7 @@ impl Platform for Aarch64Platform {
                         // Vòng 47: gửi ARP request đầu tiên qua TX.
                         // Vòng 48: HOÃN post RX sau DRIVER_OK (treo/timeout
                         // QEMU, rc=-9). Giữ TX-only; RX chờ vòng sau.
+                        // Vòng 49: both gắn cả RX+TX trước DRIVER_OK; chờ reply.
                         match vifast_virtio::net_init_tx(base) {
                             Some(acc) => {
                                 vifast_kernel::klog!(
@@ -1370,6 +1371,22 @@ impl Platform for Aarch64Platform {
                                     None => vifast_kernel::klog!(
                                         Aarch64Platform,
                                         "VIRTIO NET ARP FAIL"
+                                    ),
+                                }
+                                match vifast_virtio::net_recv_arp() {
+                                    Some(rmac) => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET REPLY {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                                        rmac[0],
+                                        rmac[1],
+                                        rmac[2],
+                                        rmac[3],
+                                        rmac[4],
+                                        rmac[5]
+                                    ),
+                                    None => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET NO REPLY"
                                     ),
                                 }
                             }

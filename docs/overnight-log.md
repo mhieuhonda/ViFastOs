@@ -1108,3 +1108,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-48.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `f12d22651cf27963c7d5ff44a3e6133c3ef2f27589c166f994d5e6cb23621440`.
+
+## 9.28 — Vòng 49: gắn cả 2 queue trước DRIVER_OK (pha 3 bước 9)
+
+- `net_init_both`: gắn RX(0, post buffer) + TX(1) rồi mới DRIVER_OK;
+  `net_init_tx` thành wrapper. Rút bound RX 20M→2M (20M trên QEMU >20s).
+- Cả hai READY + ARP sent, NO REPLY trung thực; hạ tầng đúng.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-49.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `6fea44ff7fb81ff6f5cca79a0a3e54903c38922bdb434f3bd5976319b65af11a`.

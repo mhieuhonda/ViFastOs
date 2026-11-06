@@ -1117,6 +1117,8 @@ impl Platform for RiscvPlatform {
                     // khi gắn queue 0 sau khi TX đã DRIVER_OK (rc=-9 sau
                     // SELFTEST). Giữ TX-only, RX chờ vòng sau (cấu hình cả 2
                     // queue trước DRIVER_OK).
+                    // Vòng 49: net_init_tx giờ gắn cả RX+TX trước DRIVER_OK;
+                    // chờ reply trên RX đã post sẵn.
                     match vifast_virtio::net_init_tx(base) {
                         Some(acc) => {
                             vifast_kernel::klog!(
@@ -1135,6 +1137,22 @@ impl Platform for RiscvPlatform {
                                 None => vifast_kernel::klog!(
                                     RiscvPlatform,
                                     "VIRTIO NET ARP FAIL"
+                                ),
+                            }
+                            match vifast_virtio::net_recv_arp() {
+                                Some(rmac) => vifast_kernel::klog!(
+                                    RiscvPlatform,
+                                    "VIRTIO NET REPLY {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                                    rmac[0],
+                                    rmac[1],
+                                    rmac[2],
+                                    rmac[3],
+                                    rmac[4],
+                                    rmac[5]
+                                ),
+                                None => vifast_kernel::klog!(
+                                    RiscvPlatform,
+                                    "VIRTIO NET NO REPLY"
                                 ),
                             }
                         }

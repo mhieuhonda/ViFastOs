@@ -231,7 +231,9 @@ pub fn net_recv_arp() -> Option<[u8; 6]> {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
         let mut spins = 0u64;
-        while core::ptr::read_volatile(&q.used.idx) != target && spins < 20_000_000 {
+        // Short bound (2M): QEMU user-net answers ARP in ms when the TX is
+        // well-formed; a missing reply means TX needs work, not more wait.
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < 2_000_000 {
             core::hint::spin_loop();
             spins += 1;
         }
@@ -260,7 +262,12 @@ static mut NET_BASE: u64 = 0;
 /// attach queue 1 (TX) to the dedicated `NET_QUEUE` static, then DRIVER_OK.
 /// Queue 0 (RX) is left for the next round. Returns the accepted feature word.
 /// Mirrors `init_at` (block) but never touches the block queue or globals.
-pub fn net_init_tx(base: u64) -> Option<u64> {
+/// Negotiate a VirtIO-net device at `base` and attach BOTH queues before
+/// DRIVER_OK (vòng 49). Vòng 48 showed attaching RX after the TX DRIVER_OK
+/// kills the guest under QEMU, so queue 0 (RX, with one posted WRITE buffer)
+/// and queue 1 (TX) are wired while the device is still in FEATURES_OK.
+/// Returns the accepted feature word. Never touches the block queue.
+pub fn net_init_both(base: u64) -> Option<u64> {
     fn read_at(base: u64, offset: u64) -> u32 {
         unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
     }
@@ -271,13 +278,39 @@ pub fn net_init_tx(base: u64) -> Option<u64> {
         write_at(base, offset, value as u32);
         write_at(base, offset + 4, (value >> 32) as u32);
     }
+    fn attach(base: u64, index: u32, qbase: u64) {
+        fn write_at(base: u64, offset: u64, value: u32) {
+            unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+        }
+        fn write64_at(base: u64, offset: u64, value: u64) {
+            write_at(base, offset, value as u32);
+            write_at(base, offset + 4, (value >> 32) as u32);
+        }
+        write_at(base, 0x30, index);
+        write_at(base, 0x38, QUEUE_SIZE as u32);
+        write64_at(
+            base,
+            0x80,
+            qbase + core::mem::offset_of!(NetQueue, desc) as u64,
+        );
+        write64_at(
+            base,
+            0x90,
+            qbase + core::mem::offset_of!(NetQueue, avail) as u64,
+        );
+        write64_at(
+            base,
+            0xa0,
+            qbase + core::mem::offset_of!(NetQueue, used) as u64,
+        );
+        write_at(base, 0x44, index);
+    }
     let magic = read_at(base, 0);
     let version = read_at(base, 4);
     let device = read_at(base, 8);
     if magic != 0x7472_6976 || version != 2 || device != DEVICE_NET {
         return None;
     }
-    // We only need MAC + STATUS for the MVP; accept that subset.
     const WANT: u64 = (1 << 5) | (1 << 16) | (1 << 32);
     write_at(base, 0x70, 0);
     write_at(base, 0x70, 1 | 2);
@@ -289,32 +322,39 @@ pub fn net_init_tx(base: u64) -> Option<u64> {
     if read_at(base, 0x70) & 8 == 0 {
         return None;
     }
-    // Attach TX queue (index 1) to the dedicated static.
-    let queue = core::ptr::addr_of_mut!(NET_QUEUE);
+    // Queue 0 (RX): reset rings, post one WRITE buffer (hdr + buf).
+    let rx = core::ptr::addr_of_mut!(NET_RX_QUEUE);
     unsafe {
-        (*queue).avail.idx = 0;
-        (*queue).used.idx = 0;
-        (*queue).hdr = [0; NET_HDR_SIZE];
+        (*rx).avail.idx = 0;
+        (*rx).used.idx = 0;
+        (*rx).hdr = [0; NET_HDR_SIZE];
+        let qb = rx as *const NetQueue as u64;
+        (*rx).desc[0] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, hdr) as u64,
+            len: NET_HDR_SIZE as u32,
+            flags: DESC_WRITE | DESC_NEXT,
+            next: 1,
+        };
+        (*rx).desc[1] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, buf) as u64,
+            len: NET_BUF_SIZE as u32,
+            flags: DESC_WRITE,
+            next: 0,
+        };
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        (*rx).avail.ring[0] = 0;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        core::ptr::write_volatile(&mut (*rx).avail.idx, 1);
     }
-    write_at(base, 0x30, 1);
-    write_at(base, 0x38, QUEUE_SIZE as u32);
-    let qbase = queue as u64;
-    write64_at(
-        base,
-        0x80,
-        qbase + core::mem::offset_of!(NetQueue, desc) as u64,
-    );
-    write64_at(
-        base,
-        0x90,
-        qbase + core::mem::offset_of!(NetQueue, avail) as u64,
-    );
-    write64_at(
-        base,
-        0xa0,
-        qbase + core::mem::offset_of!(NetQueue, used) as u64,
-    );
-    write_at(base, 0x44, 1);
+    attach(base, 0, rx as u64);
+    // Queue 1 (TX): reset rings, no buffer yet (send posts per packet).
+    let tx = core::ptr::addr_of_mut!(NET_QUEUE);
+    unsafe {
+        (*tx).avail.idx = 0;
+        (*tx).used.idx = 0;
+        (*tx).hdr = [0; NET_HDR_SIZE];
+    }
+    attach(base, 1, tx as u64);
     write_at(base, 0x70, 1 | 2 | 8 | 4);
     if read_at(base, 0x70) & 4 == 0 {
         return None;
@@ -324,6 +364,10 @@ pub fn net_init_tx(base: u64) -> Option<u64> {
         NET_BASE = base;
     }
     Some(accepted)
+}
+
+pub fn net_init_tx(base: u64) -> Option<u64> {
+    net_init_both(base)
 }
 
 pub fn net_ready() -> bool {
