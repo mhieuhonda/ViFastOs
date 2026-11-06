@@ -1815,6 +1815,14 @@ E. Desktop / Space
 70. Vòng 20: per-hart ready queue + work stealing, invariant chống trùng queue;
     VFS READ chuyển sang IPC buffer, MAX_IO 24→128 byte; client ghi/đọc thật
     20 KiB; FS hard link + persist phase 7 hard-link readback. Task 9 vẫn để sau.
+71. Vòng 21: chuẩn hóa tên ViFastOs; VFS write-through cache; fsync/BlockFlush
+    thật; VF04 double-indirect; Sleep deadline + BSP idle TCB; TcbRestart/
+    TcbBindNotification; console input IRQ + shell; O_TRUNC/fsutil; tăng
+    object/data capacity. CI GitHub bỏ, dùng cổng cục bộ.
+72. Vòng 22: SchedContext budget/period; IRQ object + timer/UART IRQ; CNode
+    phẳng + CNodeInstall; O_APPEND; write-back data cache; pager demo rồi
+    user-space pager server hai client; TcbDestroy/reap; O_EXCL/O_DIRECTORY;
+    STAT_PATH. 50/50 syscall, hết placeholder.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
