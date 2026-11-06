@@ -241,8 +241,10 @@ pub fn net_recv_arp() -> Option<[u8; 6]> {
         if core::ptr::read_volatile(&q.used.idx) != target {
             return None;
         }
-        // Frame layout: [hdr 12B][eth dst 6][eth src 6][type 2][arp 28].
-        // Need at least 12 + 42 bytes; buf holds hdr+frame contiguously.
+        // RX dùng 2 descriptors riêng: 12B virtio-net header vào `hdr`,
+        // frame Ethernet vào `buf[0..]`. Parse từ buf[0]: [eth dst 6]
+        // [eth src 6][type 2][arp 28]. Sửa vòng 50: trước đây đọc lệch +12B
+        // (tưởng hdr+frame liền nhau) nên bỏ lỡ reply thật.
         let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
         let oper = u16::from_be_bytes([q.buf[20], q.buf[21]]);
         if ethertype != 0x0806 || oper != 2 {
@@ -251,6 +253,24 @@ pub fn net_recv_arp() -> Option<[u8; 6]> {
         let mut mac = [0u8; 6];
         mac.copy_from_slice(&q.buf[22..28]);
         Some(mac)
+    }
+}
+
+/// Snapshot RX khi có gói: trả về (used_len, ethertype, 6 byte đầu frame).
+/// Dùng để debug vòng 50: biết có gì đến dù không phải ARP reply.
+pub fn net_recv_peek() -> Option<(u32, u16, [u8; 6])> {
+    let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
+    unsafe {
+        let q = &mut *queue;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        if core::ptr::read_volatile(&q.used.idx) == 0 {
+            return None;
+        }
+        let elem = core::ptr::read_volatile(&q.used.ring[0]);
+        let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
+        let mut head = [0u8; 6];
+        head.copy_from_slice(&q.buf[0..6]);
+        Some((elem.len, ethertype, head))
     }
 }
 
@@ -396,7 +416,9 @@ pub fn net_send_arp() -> Option<u32> {
     // sha=our mac, spa=10.0.2.15, tha=00:00:00:00:00:00, tpa=10.0.2.2.
     const SPA: [u8; 4] = [10, 0, 2, 15];
     const TPA: [u8; 4] = [10, 0, 2, 2];
-    let mut frame = [0u8; 42];
+    // 42B ARP + 18B zero padding = 60B Ethernet minimum (không tính FCS).
+    // Vòng 50: một số backend bỏ qua frame runt; QEMU user-net cũng vậy.
+    let mut frame = [0u8; 60];
     frame[0..6].copy_from_slice(&[0xff; 6]);
     frame[6..12].copy_from_slice(&mac);
     frame[12..14].copy_from_slice(&[0x08, 0x06]);
@@ -413,7 +435,7 @@ pub fn net_send_arp() -> Option<u32> {
     unsafe {
         let q = &mut *queue;
         q.hdr = [0; NET_HDR_SIZE];
-        q.buf[..42].copy_from_slice(&frame);
+        q.buf[..60].copy_from_slice(&frame);
         let qb = q as *const NetQueue as u64;
         q.desc[0] = Descriptor {
             addr: qb + core::mem::offset_of!(NetQueue, hdr) as u64,
@@ -423,7 +445,7 @@ pub fn net_send_arp() -> Option<u32> {
         };
         q.desc[1] = Descriptor {
             addr: qb + core::mem::offset_of!(NetQueue, buf) as u64,
-            len: 42,
+            len: 60,
             flags: 0,
             next: 0,
         };
@@ -436,7 +458,8 @@ pub fn net_send_arp() -> Option<u32> {
         write_at(base, 0x50, 1);
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
         let mut spins = 0u64;
-        while core::ptr::read_volatile(&q.used.idx) != target && spins < 20_000_000 {
+        // Bound ngắn như RX (vòng 49): 20M spins mô phỏng vượt timeout QEMU.
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < 2_000_000 {
             core::hint::spin_loop();
             spins += 1;
         }

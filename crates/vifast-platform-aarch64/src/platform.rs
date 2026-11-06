@@ -1384,10 +1384,26 @@ impl Platform for Aarch64Platform {
                                         rmac[4],
                                         rmac[5]
                                     ),
-                                    None => vifast_kernel::klog!(
-                                        Aarch64Platform,
-                                        "VIRTIO NET NO REPLY"
-                                    ),
+                                    None => {
+                                        match vifast_virtio::net_recv_peek() {
+                                            Some((len, et, head)) => vifast_kernel::klog!(
+                                                Aarch64Platform,
+                                                "VIRTIO NET PEEK len={} et={:#x} {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                                                len,
+                                                et,
+                                                head[0],
+                                                head[1],
+                                                head[2],
+                                                head[3],
+                                                head[4],
+                                                head[5]
+                                            ),
+                                            None => vifast_kernel::klog!(
+                                                Aarch64Platform,
+                                                "VIRTIO NET NO REPLY"
+                                            ),
+                                        }
+                                    }
                                 }
                             }
                             None => vifast_kernel::klog!(

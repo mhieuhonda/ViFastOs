@@ -1150,10 +1150,27 @@ impl Platform for RiscvPlatform {
                                     rmac[4],
                                     rmac[5]
                                 ),
-                                None => vifast_kernel::klog!(
-                                    RiscvPlatform,
-                                    "VIRTIO NET NO REPLY"
-                                ),
+                                None => {
+                                    // Vòng 50: peek xem có gói nào đến không.
+                                    match vifast_virtio::net_recv_peek() {
+                                        Some((len, et, head)) => vifast_kernel::klog!(
+                                            RiscvPlatform,
+                                            "VIRTIO NET PEEK len={} et={:#x} {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                                            len,
+                                            et,
+                                            head[0],
+                                            head[1],
+                                            head[2],
+                                            head[3],
+                                            head[4],
+                                            head[5]
+                                        ),
+                                        None => vifast_kernel::klog!(
+                                            RiscvPlatform,
+                                            "VIRTIO NET NO REPLY"
+                                        ),
+                                    }
+                                }
                             }
                         }
                         None => vifast_kernel::klog!(

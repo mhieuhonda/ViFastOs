@@ -1117,3 +1117,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-49.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `6fea44ff7fb81ff6f5cca79a0a3e54903c38922bdb434f3bd5976319b65af11a`.
+
+## 9.29 — Vòng 50: ARP 60B + chẩn đoán RX (pha 3 bước 10)
+
+- Padding ARP 60B, rút TX poll 2M; sửa comment parse (hdr/buf riêng);
+  thêm `net_recv_peek` + log PEEK — xác minh không có gói nào đến.
+- Vòng sau kiểm tra backend user-net ngoài guest (monitor/host ping).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-50.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `5510e63083e5c1327925228ca51dca7e742d62b07aaca2e096de195398b09a6d`.
