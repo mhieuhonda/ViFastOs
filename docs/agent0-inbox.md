@@ -34,3 +34,13 @@
 - Giả thuyết: lỗi nền AArch64 với thay đổi layout bằng `.bss`/object table
   (VBAR/MMU/stack?), không phải logic pool (host test xanh).
 - Đang chặn: M1.3 | Nhánh tạm: M1.4 docs? hoặc debug AArch tối thiểu.
+
+## [vòng 29] CNode pool thử — cùng lỗi AArch64 layout (stash riêng)
+- Bối cảnh: tách `Kind::CNode(CNodeId)` + `Kernel.cnodes[8]` (stash@{0}).
+  Host 135/135, RISC-V QEMU 3/3, nhưng **AArch64 0/3**
+  (`KERNEL EXCEPTION vector=4 cur-spx-sync ELR=0x4009201c FAR=0xb4410`).
+- Phát hiện: tách CNode riêng **không giảm Object** (CNode 4.096 vẫn nằm
+  trong pool) mà phình Kernel 710.248 → 743.016 (+32.768). Đã stash riêng,
+  chỉ commit layout probe (`LAYOUT objs=0 root_cspace=698544 current=705552`).
+- QEMU 3/3×3 + persist 7×3 + harness 462 xanh với layout probe.
+- Đề xuất tiếp: giảm `MAX_CAPS_TASK` 64→48, hoặc tách `Tcb.cspace/fds` trước.
