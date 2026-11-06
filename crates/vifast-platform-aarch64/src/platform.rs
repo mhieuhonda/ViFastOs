@@ -1310,6 +1310,21 @@ impl Platform for Aarch64Platform {
     }
 
     fn init_block() {
+        // Pha 3 (vòng 42): probe 32 slot đầu TRƯỚC init — an toàn.
+        for i in 0..32u64 {
+            let base = 0x0a00_0000u64 + i * 0x200;
+            let magic = unsafe { core::ptr::read_volatile(base as *const u32) };
+            let device = unsafe { core::ptr::read_volatile((base + 8) as *const u32) };
+            if magic == 0x7472_6976 && device != 0 {
+                vifast_kernel::klog!(
+                    Aarch64Platform,
+                    "VIRTIO PRE base={:#x} magic={:#x} device={}",
+                    base,
+                    magic,
+                    device
+                );
+            }
+        }
         if vifast_virtio::init() {
             let (base, magic, version, device) = vifast_virtio::probe_info();
             vifast_kernel::klog!(
@@ -1331,8 +1346,6 @@ impl Platform for Aarch64Platform {
                 device
             );
         }
-        // Pha 3 (vòng 39-40): scan API sẵn sàng; chưa log từng slot vì MMIO
-        // sau init cần xác minh thêm. Giữ init blk.
     }
 
     fn block_read(lba: u64, out: &mut [u8; 512]) -> bool {

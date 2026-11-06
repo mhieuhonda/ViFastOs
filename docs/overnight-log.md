@@ -1047,3 +1047,12 @@ follow-up `62b31f4`.
 - Giữ nguyên code, gate xanh (làm mới status repeat 3).
 - Xem `docs/agent2-report-41.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `f15f4482c7082bbd92c5e80f803c74094a01c8e13b59bae04ab1f03c085511e2`.
+
+## 9.21 — Vòng 42: probe net trước init (pha 3 bước 2)
+
+- Serial test đúng ở `$TMPDIR` (đọc nhầm `/tmp` là nguyên nhân vòng 39–41).
+- RISC-V probe 3 slot: net device=1 ở 0x10007000; AArch64 quét 32 slot:
+  net ở 0xa003c00, blk ở 0xa003e00. QEMU gắn virtio-net cả 2 arch.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-42.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `f015d4ba5b09004a2a58aed1322b4799164c268a64f47d862fe5289ecf427091`.

@@ -264,6 +264,8 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         "-global", "virtio-mmio.force-legacy=false",
         "-drive", f"if=none,id=vd0,file={disk},format=raw",
         "-device", "virtio-blk-device,drive=vd0",
+        "-device", "virtio-net-device,netdev=vn0",
+        "-netdev", "user,id=vn0",
         "-bios", "default",
         "-kernel", kernel,
     ]
@@ -306,6 +308,8 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         "-global", "virtio-mmio.force-legacy=false",
         "-drive", f"if=none,id=vd0,file={disk},format=raw",
         "-device", "virtio-blk-device,drive=vd0",
+        "-device", "virtio-net-device,netdev=vn0",
+        "-netdev", "user,id=vn0",
         "-kernel", kernel,
     ]
     return run_qemu(

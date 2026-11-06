@@ -1075,6 +1075,19 @@ impl Platform for RiscvPlatform {
             );
             return;
         }
+        // Pha 3 (vòng 42): probe MMIO TRƯỚC init — an toàn vì chưa claim
+        // device nào. Đã xác minh chạy tốt trên serial đúng ($TMPDIR).
+        for base in [0x1000_1000u64, 0x1000_7000, 0x1000_8000] {
+            let magic = unsafe { core::ptr::read_volatile(base as *const u32) };
+            let device = unsafe { core::ptr::read_volatile((base + 8) as *const u32) };
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "VIRTIO PRE base={:#x} magic={:#x} device={}",
+                base,
+                magic,
+                device
+            );
+        }
         if vifast_virtio::init_range(0x1000_1000, 0x1000_9000, 0x1000) {
             let (base, magic, version, device) = vifast_virtio::probe_info();
             vifast_kernel::klog!(

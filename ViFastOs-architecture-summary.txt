@@ -1992,6 +1992,10 @@ E. Desktop / Space
     QEMU revert blk-only; gate xanh lại. Bài học: không đọc MMIO sau claim.
 90. Vòng 41: xác minh treo MMIO (net hiện một lần rồi treo; probe trước init
     không log do serial test khác đường đọc); giữ nguyên code, gate xanh.
+91. Vòng 42 (pha 3 bước 2): serial test đúng nằm ở $TMPDIR (đọc nhầm /tmp là
+    nguyên nhân vòng 39-41); probe TRƯỚC init an toàn — riscv64 thấy net
+    device=1 ở 0x10007000, aarch64 thấy net ở 0xa003c00; QEMU gắn
+    virtio-net-device cả 2 arch, gate xanh.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
