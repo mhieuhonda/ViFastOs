@@ -892,3 +892,19 @@ follow-up `62b31f4`.
 - Số liệu: host 200 (kernel 131, abi 4); harness 462; QEMU 3/3 ×3; feature
   5/5 ×3; persistence 7×3; 0 warning; headroom 253.264 (`kernel_end=0x803c22b0`).
 - SHA-256 `ViFastOs-architecture-summary.txt`: `e381d5a20a921c325a868d8ccef79630823e3db69a6308ee7e7e0e61c81e6444`.
+
+## 9.06 — Vòng 27: M0.2 sổ sách + đo M1.1
+
+- C1: khôi phục HISTORICAL "tổng 4 USER FAULT"; đính chính hai fault
+  0x1001000000/0x1001001000 là PAGER_VA/PAGER2_VA (xác minh từ
+  vifast-root); sửa boot Untyped 24/27/28 trang.
+- C2: khối limits về mục 7, ghi kèm crate; giải thích MAX_FDS/MAX_FD/MAX_FILES.
+- C3: status docs đọc `target/qemu-status-standard.json`, chặn file cũ hơn build.
+- M1.1 PARTIAL: host test in variant (Object 4.752, Tcb 4.696, CNode 4.096,
+  VSpace 3.136, Kernel 710.248) + `CTX SIZE` 280/288/160. POOL HWM BLOCKED:
+  thêm bộ đếm vào kernel làm AArch64/x86 in KERNEL EXCEPTION sau BOOTINFO OK
+  (3 biến thể đã thử, đều revert).
+- Baseline 3/3 ×3; check-all lần 1 timeout persistence x86 phase 7, chạy lại
+  persistence PASS 3/3, check-all lần 2 ALL CHECKS PASS.
+- Harness 462; host 201 (kernel 132, abi 4); 0 warning; headroom 253.264.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `6945f686b739f9296955dfdf5995b1d802d0bbb6ca45934b4b147c237dd01d0a`.
