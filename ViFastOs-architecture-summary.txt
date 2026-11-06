@@ -157,11 +157,12 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 21063cf fix: remove fn-to-int cast warnings in root
 ### END GENERATED commits
 
-Cập nhật code gần nhất (commit 925f633): per-hart ready queue + work stealing;
-VFS bulk read 128 byte qua IPC buffer; FS hard link; demo 20 KiB thật. Vòng 19
-giữ headroom, TLB mutation, fuzz 100k, CapDelete/suspend/tri-priority, FS v3
+[HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
+bulk read 128 byte qua IPC buffer; FS hard link; demo 20 KiB thật. Vòng 19 giữ
+headroom, TLB mutation, fuzz 100k, CapDelete/suspend/tri-priority, FS v3
 single-indirect và GetTime lock-free; QEMU 10/10 và 50/50 cả 3; persistence
-7 phase.
+7 phase. Các mốc vòng 21–22 xem mục 15; trạng thái hiện tại xem khối GENERATED
+và mục 16.
 FS v3 journal/indirect trên cả 3 kiến trúc,
 VirtIO-MMIO/ATA block, BKL ticket + per-CPU security + per-hart current, hermetic persistence test, SMP maintenance IPI/TLB shootdown, software IOMMU, VFS STAT, ASID/PCID, user-space VFS server, notification cap transfer, VSpace range allocator, runtime cấp Rust server/client ELF qua BootInfo, FrameWrite, current_root từ TCB,
 FrameUnmap cần Frame cap, ROOT SWITCH n>1, stack/slot constants trong ABI,
@@ -216,7 +217,7 @@ Test hiện tại:
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
-- root ELF stripped: RISC-V 12.880 B, AArch64 12.736 B, x86 16.744 B
+- root ELF stripped (đo 2026-11-06): RISC-V 22.808 B, AArch64 26.632 B, x86 25.296 B
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -1356,7 +1357,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 `scripts/test-persist.py` kiểm tra 2 lần boot với nonce duy nhất và test âm.
 
 
-15. CÁC THAY ĐỔI HARDENING GẦN NHẤT
+15. CÁC THAY ĐỔI HARDENING GẦN NHẤT [HISTORICAL — changelog theo từng mốc]
 -------------------------------------
 - Task 4 (lịch sử vòng 02): BigKernelLock trong `vifast-arch::bkl`, guard bọc
   trap/syscall/IRQ entry; hiện đã bật worker hart 1 RISC-V.
@@ -1497,7 +1498,8 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   `AP PIC IRQ` thay vì ack hộ BSP.
 - Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
   chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
-- Chưa có free/destroy object/frame ngoài đường revoke Untyped; object table cố định 128.
+- Chưa có đường user destroy từng object ngoài revoke Untyped/TcbDestroy;
+  object table cố định 147.
 - IOMMU mới có mô hình phần mềm (domain + reverse map + IoMap/IoUnmap);
   chưa có hardware IOMMU/VT-d/SMMU.
 - `CapDelete` (13) đã implemented: xóa cap lá, trả IllegalOperation nếu còn
@@ -1513,10 +1515,12 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   chung ngoài IPC buffer.
 - Chưa có Reply mang capability; ReplyRecv và fault endpoint tối giản đã có.
 - Kernel VFS fallback chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
-  Server dùng `vifast-fs` v3: journal 16 data block, 64 inode, file tối đa
-  69 KiB với single-indirect, thư mục 11 block, hard link hai tên; VFS bulk
-  read/write 128 byte qua IPC buffer; chưa có cache block, double indirect,
-  symlink. Chưa có flush/barrier block phần cứng.
+  Server dùng `vifast-fs` VF04: journal 16 data block, 64 inode, 10 direct +
+  single + double indirect (file logic tới ~8 MiB, bị chặn bởi ảnh 4 MiB),
+  thư mục, hard link, symlink, `O_APPEND`/`O_EXCL`/`O_DIRECTORY`, `STAT_PATH`;
+  VFS read/write 128 byte qua IPC buffer; block cache write-back 8 slot cho
+  data, write-through journal/metadata; `fsync` → `BlockFlush`. Chưa có
+  barrier phần cứng thật cho đĩa ngoài QEMU.
 - `GetTime` có fast path không lấy BKL: đọc atomic BSP tick trong trap trước
   khi lock; `BKL STATS` h1_acq giảm mạnh. Không thêm assertion tuyệt đối vì
   h1_spin phụ thuộc scheduling. Double-fetch audit: mọi syscall đọc user đúng
