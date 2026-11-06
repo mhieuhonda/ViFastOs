@@ -501,7 +501,7 @@ fn spawn_cnode_demo(
     ));
     check(vifast_user::tcb_configure(
         tcb,
-        cnode_worker as usize as u64,
+        cnode_worker as extern "C" fn() -> ! as u64,
         CNODE_STACK_TOP as u64,
         root_vspace,
         5,
@@ -604,7 +604,7 @@ fn spawn_pager_server(
     copy(pager2_frame, server_tcb, PAGER_SERVER_FRAME2, Rights::READ);
     check(vifast_user::tcb_configure(
         server_tcb,
-        pager_server as usize as u64,
+        pager_server as extern "C" fn() -> ! as u64,
         PAGER_SERVER_STACK_TOP as u64,
         root_vspace,
         5,
@@ -994,7 +994,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         PAGER_STACK_TOP,
         PAGER_VA,
         PAGER_VALUE,
-        pager_client as usize,
+        pager_client as extern "C" fn() -> ! as usize,
         &mut slots,
     );
     let (pager2_tcb, pager2_frame) = spawn_pager(
@@ -1006,7 +1006,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         PAGER2_STACK_TOP,
         PAGER2_VA,
         PAGER2_VALUE,
-        pager2_client as usize,
+        pager2_client as extern "C" fn() -> ! as usize,
         &mut slots,
     );
     spawn_pager_server(
