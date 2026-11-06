@@ -1331,16 +1331,8 @@ impl Platform for Aarch64Platform {
                 device
             );
         }
-        // Pha 3 bước 1 (vòng 39): liệt kê mọi VirtIO device để chuẩn bị net.
-        // Hiện QEMU chỉ gắn blk; net (device=1) sẽ hiện khi thêm -device.
-        vifast_virtio::scan_devices(0x0a00_0000, 0x0a00_4000, 0x200, |base, device| {
-            vifast_kernel::klog!(
-                Aarch64Platform,
-                "VIRTIO DEV base={:#x} device={}",
-                base,
-                device
-            );
-        });
+        // Pha 3 (vòng 39-40): scan API sẵn sàng; chưa log từng slot vì MMIO
+        // sau init cần xác minh thêm. Giữ init blk.
     }
 
     fn block_read(lba: u64, out: &mut [u8; 512]) -> bool {

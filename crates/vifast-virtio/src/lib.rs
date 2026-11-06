@@ -122,6 +122,21 @@ pub fn probe_info() -> (u64, u32, u32, u32) {
     unsafe { (LAST_BASE, LAST_MAGIC, LAST_VERSION, LAST_DEVICE) }
 }
 
+/// Read the 6-byte MAC from a VirtIO-net config space (offset 0x100).
+/// Returns None when the slot is not a net device.
+pub fn net_mac(base: u64) -> Option<[u8; 6]> {
+    let magic = unsafe { core::ptr::read_volatile(base as *const u32) };
+    let device = unsafe { core::ptr::read_volatile((base + 8) as *const u32) };
+    if magic != 0x7472_6976 || device != DEVICE_NET {
+        return None;
+    }
+    let mut mac = [0u8; 6];
+    for (i, byte) in mac.iter_mut().enumerate() {
+        *byte = unsafe { core::ptr::read_volatile((base + 0x100 + i as u64) as *const u8) };
+    }
+    Some(mac)
+}
+
 fn init_at(candidate: u64) -> bool {
     fn read_at(base: u64, offset: u64) -> u32 {
         unsafe { core::ptr::read_volatile((base + offset) as *const u32) }

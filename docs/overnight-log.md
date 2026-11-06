@@ -1030,3 +1030,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-39.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `1899e78bc39ebefb3c3ec64c37f2a1574d5cae15cf8fed1b044b04db5e21baaf`.
+
+## 9.19 — Vòng 40: giữ scan API, hoãn log MMIO (treo QEMU)
+
+- Giữ `DEVICE_NET/BLOCK` + `scan_devices` + `net_mac` (API sạch).
+- TẮT gọi scan trong `init_block` (đọc MMIO sau init treo cả khi không gắn
+  net); QEMU revert blk-only; gate xanh lại 3/3×3.
+- Bài học: probe net TRƯỚC init blk hoặc dùng monitor `info qdm`.
+- Xem `docs/agent2-report-40.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `55c171597dc3781b348309ecc0c411d652917e9d793dcac9f00d5e60ac1c5500`.
