@@ -1292,7 +1292,7 @@ Theo kiến trúc:
   - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - `TLB STATS (va_flush=V, ipi=I, skipped=K)` — per-VA TLB accounting
-  - 5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000
+  - 6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000
   - ROOT SWITCH n > 1
   - N > 1, M >= 100, W > 0, W <= S, S <= I
   - U >= 3, P >= 1, U <= T
@@ -1310,7 +1310,7 @@ Theo kiến trúc:
   - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - `TLB STATS (va_flush=V, ipi=I, skipped=K)` — per-VA TLB accounting
-  - 5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000
+  - 6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000
   - ROOT SWITCH n > 1
   - T > 0, I >= 1
   - N > 1, M >= 100, W > 0, W <= S, S <= I
@@ -1335,7 +1335,7 @@ Theo kiến trúc:
   - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker AP idle proof
   - `TLB STATS (va_flush=V, ipi=I, skipped=K)` — per-VA TLB accounting
-  - 5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000
+  - 6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000
   - ROOT SWITCH n > 1
   - ACPI MADT cpus == 2
   - T > 0, I >= 1

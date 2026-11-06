@@ -183,7 +183,7 @@ ARCH_EXACT_ONE = {
 
 NUMERIC = {
     "riscv64": [
-        "5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000",
+        "6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000",
         "ROOT SWITCH n > 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
         "U >= 3, P >= 1, U <= T",
@@ -192,7 +192,7 @@ NUMERIC = {
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "aarch64": [
-        "5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000",
+        "6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000",
         "ROOT SWITCH n > 1",
         "T > 0, I >= 1",
         "N > 1, M >= 100, W > 0, W <= S, S <= I",
@@ -202,7 +202,7 @@ NUMERIC = {
         "Tp >= 5, Wtp >= Tp - 2, Ip >= Tp - 2",
     ],
     "x86_64": [
-        "5 USER FAULT records with 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000",
+        "6 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000",
         "ROOT SWITCH n > 1",
         "ACPI MADT cpus == 2",
         "T > 0, I >= 1",
