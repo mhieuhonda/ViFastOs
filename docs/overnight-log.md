@@ -1168,3 +1168,10 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-55.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `7d555265f89b421cbe6ca113d5e1184193fa7fddd9dca6548a8472cbb2f7d8ed`.
+
+## 9.35 — Vòng 56: header FDT đầy đủ (pha 4 bước 5)
+
+- Log thêm strings_off=5716 + version=17 (FDT v17 chuẩn) trong vùng an toàn.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-56.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `cc76cc1be70ebe452d425c5e1ddeef7ea4f23eff10f4b56bc55ecc5d81c608d0`.
