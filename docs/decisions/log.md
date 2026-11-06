@@ -45,3 +45,4 @@
 | 61 | SHELL READY exact-one cả 3 arch | Input task có test bảo vệ; input thật để sau | 6102104 |
 | 62 | `--interactive` gõ `help` qua chardev socket (opt-in) | riscv/arm 4/4; 3 lỗi AF_UNIX/-serial/PL011 LF đã sửa | 80e424c |
 | 63 | Net TX+RX end-to-end: ping 10.0.2.2 nhận reply | 3 bug gốc: header 10B, QueueReady=1, RX kick/re-post | 55a2b0b |
+| 64 | UDP + DNS hai chiều; DNS sent thành exact-one | Reply best-effort để gate không phụ thuộc DNS host; sửa re-post RX | cd82b4a |
