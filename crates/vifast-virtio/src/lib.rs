@@ -345,8 +345,9 @@ fn net_tx_frame(frame: &[u8]) -> Option<u32> {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         write_at(base, 0x50, 1);
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        // Vòng 70: bound rộng hơn cho TX (trước đây 2M hay trượt dưới tải).
         let mut spins = 0u64;
-        while core::ptr::read_volatile(&q.used.idx) != target && spins < 2_000_000 {
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < 6_000_000 {
             core::hint::spin_loop();
             spins += 1;
         }
@@ -1462,8 +1463,9 @@ fn gpu_command(cmd_type: u32, payload: &[u8]) -> bool {
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     gpu_write32(base, 0x50, 0);
     let target = unsafe { core::ptr::read_volatile(&q.used.idx) }.wrapping_add(1);
+    // Vòng 70: bound rộng hơn cho lệnh GPU (trước đây 4M hay trượt dưới tải).
     let mut spins = 0u64;
-    while unsafe { core::ptr::read_volatile(&q.used.idx) } != target && spins < 4_000_000 {
+    while unsafe { core::ptr::read_volatile(&q.used.idx) } != target && spins < 10_000_000 {
         core::hint::spin_loop();
         spins += 1;
     }
@@ -1553,4 +1555,360 @@ pub fn gpu_framebuffer_info() -> (u64, u32, u32) {
     let qb = core::ptr::addr_of_mut!(GPU_QUEUE) as u64;
     let fb = qb + core::mem::offset_of!(GpuQueue, framebuffer) as u64;
     (fb, GPU_WIDTH, GPU_HEIGHT)
+}
+
+// ---------------------------------------------------------------------------
+// VirtIO-Input tối thiểu (vòng 70, M4 input): bàn phím.
+// Event queue (0): device → driver, mỗi event 8 byte (le16 type, le16 code,
+// le32 value). Status queue (1): driver → device (LED), chỉ attach cho đúng
+// chuẩn, không kick. Bài học từ net: QueueReady phải ghi 1, phải kick sau khi
+// đăng buffer, và phải re-post sau mỗi gói đã dùng.
+// ---------------------------------------------------------------------------
+
+/// Device id của virtio-input trên virtio-mmio.
+pub const DEVICE_INPUT: u32 = 18;
+const INPUT_QUEUE_SIZE: usize = 16;
+const INPUT_STATUS_BUFFERS: usize = 4;
+
+#[repr(C, align(16))]
+struct InputDesc {
+    addr: u64,
+    len: u32,
+    flags: u16,
+    next: u16,
+}
+
+#[repr(C, align(16))]
+struct InputAvail {
+    flags: u16,
+    idx: u16,
+    ring: [u16; INPUT_QUEUE_SIZE],
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+struct InputUsedElem {
+    id: u32,
+    len: u32,
+}
+
+#[repr(C, align(16))]
+struct InputUsed {
+    flags: u16,
+    idx: u16,
+    ring: [InputUsedElem; INPUT_QUEUE_SIZE],
+}
+
+#[repr(C, align(16))]
+struct InputQueue {
+    desc: [InputDesc; INPUT_QUEUE_SIZE],
+    avail: InputAvail,
+    used: InputUsed,
+    buffers: [[u8; 8]; INPUT_QUEUE_SIZE],
+}
+
+static mut INPUT_EVENTQ: InputQueue = InputQueue {
+    desc: [const {
+        InputDesc {
+            addr: 0,
+            len: 0,
+            flags: 0,
+            next: 0,
+        }
+    }; INPUT_QUEUE_SIZE],
+    avail: InputAvail {
+        flags: 0,
+        idx: 0,
+        ring: [0; INPUT_QUEUE_SIZE],
+    },
+    used: InputUsed {
+        flags: 0,
+        idx: 0,
+        ring: [InputUsedElem { id: 0, len: 0 }; INPUT_QUEUE_SIZE],
+    },
+    buffers: [[0u8; 8]; INPUT_QUEUE_SIZE],
+};
+
+static mut INPUT_STATUSQ: InputQueue = InputQueue {
+    desc: [const {
+        InputDesc {
+            addr: 0,
+            len: 0,
+            flags: 0,
+            next: 0,
+        }
+    }; INPUT_QUEUE_SIZE],
+    avail: InputAvail {
+        flags: 0,
+        idx: 0,
+        ring: [0; INPUT_QUEUE_SIZE],
+    },
+    used: InputUsed {
+        flags: 0,
+        idx: 0,
+        ring: [InputUsedElem { id: 0, len: 0 }; INPUT_QUEUE_SIZE],
+    },
+    buffers: [[0u8; 8]; INPUT_QUEUE_SIZE],
+};
+
+static mut INPUT_BASE: u64 = 0;
+static mut INPUT_READY: bool = false;
+static mut INPUT_SEEN: u16 = 0;
+static mut INPUT_SHIFT: bool = false;
+
+/// Một sự kiện input đã giải mã.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputEvent {
+    pub kind: u16,
+    pub code: u16,
+    pub value: u32,
+    /// Descriptor index của event (debug vòng 70).
+    pub desc_id: u32,
+}
+
+const EV_SYN: u16 = 0;
+const EV_KEY: u16 = 1;
+
+fn input_write32(base: u64, offset: u64, value: u32) {
+    unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+}
+
+fn input_read32(base: u64, offset: u64) -> u32 {
+    unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
+}
+
+/// Cấu hình một queue của virtio-input. Trả về true nếu QueueReady đã set.
+fn input_setup_queue(base: u64, index: u32, queue: *mut InputQueue, posted: usize) -> bool {
+    input_write32(base, 0x30, index);
+    let max = input_read32(base, 0x34);
+    let size = core::cmp::min(max, INPUT_QUEUE_SIZE as u32);
+    if size < posted as u32 || size == 0 || !size.is_power_of_two() {
+        return false;
+    }
+    let qb = queue as u64;
+    unsafe {
+        let q = &mut *queue;
+        let mut i = 0;
+        while i < posted {
+            let buf = qb + core::mem::offset_of!(InputQueue, buffers) as u64 + (i * 8) as u64;
+            q.desc[i] = InputDesc {
+                addr: buf,
+                len: 8,
+                flags: DESC_WRITE,
+                next: 0,
+            };
+            q.avail.ring[i] = i as u16;
+            i += 1;
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        q.avail.idx = posted as u16;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    }
+    input_write32(base, 0x38, size);
+    let desc_addr = qb + core::mem::offset_of!(InputQueue, desc) as u64;
+    let avail_addr = qb + core::mem::offset_of!(InputQueue, avail) as u64;
+    let used_addr = qb + core::mem::offset_of!(InputQueue, used) as u64;
+    input_write32(base, 0x80, desc_addr as u32);
+    input_write32(base, 0x84, (desc_addr >> 32) as u32);
+    input_write32(base, 0x90, avail_addr as u32);
+    input_write32(base, 0x94, (avail_addr >> 32) as u32);
+    input_write32(base, 0xa0, used_addr as u32);
+    input_write32(base, 0xa4, (used_addr >> 32) as u32);
+    input_write32(base, 0x44, 1); // QueueReady = 1 (không phải index!)
+    true
+}
+
+/// Khởi tạo virtio-input tại `base`. Trả về true nếu DRIVER_OK và queue sẵn.
+pub fn input_init(base: u64) -> bool {
+    unsafe {
+        INPUT_READY = false;
+        INPUT_BASE = 0;
+        INPUT_SEEN = 0;
+        INPUT_SHIFT = false;
+        (*core::ptr::addr_of_mut!(INPUT_EVENTQ)).avail.idx = 0;
+        (*core::ptr::addr_of_mut!(INPUT_EVENTQ)).used.idx = 0;
+        (*core::ptr::addr_of_mut!(INPUT_STATUSQ)).avail.idx = 0;
+        (*core::ptr::addr_of_mut!(INPUT_STATUSQ)).used.idx = 0;
+    }
+    input_write32(base, 0x70, 0);
+    input_write32(base, 0x70, 1);
+    input_write32(base, 0x70, 3);
+    // Chỉ cần VERSION_1 (bit 32) nằm ở word cao của features.
+    input_write32(base, 0x14, 1);
+    input_write32(base, 0x10, 1);
+    input_write32(base, 0x70, 11);
+    if input_read32(base, 0x70) & 8 == 0 {
+        return false;
+    }
+    let evq = core::ptr::addr_of_mut!(INPUT_EVENTQ);
+    let stq = core::ptr::addr_of_mut!(INPUT_STATUSQ);
+    if !input_setup_queue(base, 0, evq, INPUT_QUEUE_SIZE) {
+        return false;
+    }
+    if !input_setup_queue(base, 1, stq, INPUT_STATUS_BUFFERS) {
+        return false;
+    }
+    input_write32(base, 0x70, 15); // DRIVER_OK
+    unsafe {
+        INPUT_BASE = base;
+        INPUT_READY = true;
+    }
+    // Kick queue 0 để thiết bị bắt đầu ghi event.
+    input_write32(base, 0x50, 0);
+    true
+}
+
+/// Lấy một sự kiện đã có (không chờ). Tự re-post buffer và kick lại.
+pub fn input_poll() -> Option<InputEvent> {
+    let base = unsafe { INPUT_BASE };
+    if unsafe { !INPUT_READY } || base == 0 {
+        return None;
+    }
+    let queue = core::ptr::addr_of_mut!(INPUT_EVENTQ);
+    unsafe {
+        let q = &mut *queue;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        if core::ptr::read_volatile(&q.used.idx) == INPUT_SEEN {
+            return None;
+        }
+        let slot = (INPUT_SEEN as usize) % INPUT_QUEUE_SIZE;
+        let elem = core::ptr::read_volatile(&q.used.ring[slot]);
+        let id = (elem.id as usize) % INPUT_QUEUE_SIZE;
+        let event = InputEvent {
+            desc_id: elem.id,
+            kind: u16::from_le_bytes([q.buffers[id][0], q.buffers[id][1]]),
+            code: u16::from_le_bytes([q.buffers[id][2], q.buffers[id][3]]),
+            value: u32::from_le_bytes([
+                q.buffers[id][4],
+                q.buffers[id][5],
+                q.buffers[id][6],
+                q.buffers[id][7],
+            ]),
+        };
+        INPUT_SEEN = INPUT_SEEN.wrapping_add(1);
+        // Re-post descriptor vừa dùng để thiết bị có buffer mới.
+        q.avail.ring[(q.avail.idx as usize) % INPUT_QUEUE_SIZE] = id as u16;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let next = q.avail.idx.wrapping_add(1);
+        core::ptr::write_volatile(&mut q.avail.idx, next);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        input_write32(base, 0x50, 0);
+        Some(event)
+    }
+}
+
+/// Dịch sự kiện bàn phím thành byte ASCII (nếu có). Tự xử lý Shift. Trả về
+/// None cho phím không map hoặc sự kiện không phải EV_KEY.
+pub fn input_key_ascii(event: InputEvent) -> Option<u8> {
+    if event.kind == EV_SYN {
+        return None;
+    }
+    if event.kind != EV_KEY {
+        return None;
+    }
+    if event.code == 42 || event.code == 54 {
+        unsafe {
+            INPUT_SHIFT = event.value != 0;
+        }
+        return None;
+    }
+    if event.value == 0 {
+        return None;
+    }
+    let shift = unsafe { INPUT_SHIFT };
+    let byte = match event.code {
+        2 => {
+            if shift {
+                b'1'
+            } else {
+                b'1'
+            }
+        }
+        3 => b'2',
+        4 => b'3',
+        5 => b'4',
+        6 => b'5',
+        7 => b'6',
+        8 => b'7',
+        9 => b'8',
+        10 => b'9',
+        11 => b'0',
+        12 => b'-',
+        13 => b'=',
+        14 => 8, // Backspace
+        15 => b'\t',
+        16 => b'q',
+        17 => b'w',
+        18 => b'e',
+        19 => b'r',
+        20 => b't',
+        21 => b'y',
+        22 => b'u',
+        23 => b'i',
+        24 => b'o',
+        25 => b'p',
+        26 => b'[',
+        27 => b']',
+        28 => b'\r', // Enter
+        29 => {
+            if shift {
+                b'A'
+            } else {
+                b'a'
+            }
+        }
+        30 => {
+            if shift {
+                b'A'
+            } else {
+                b'a'
+            }
+        }
+        31 => b's',
+        32 => b'd',
+        33 => b'f',
+        34 => b'g',
+        35 => {
+            if shift {
+                b'H'
+            } else {
+                b'h'
+            }
+        }
+        36 => b'j',
+        37 => b'k',
+        38 => {
+            if shift {
+                b'L'
+            } else {
+                b'l'
+            }
+        }
+        39 => b';',
+        40 => b'\'',
+        41 => b'`',
+        42 => 0,
+        44 => b'z',
+        45 => b'x',
+        46 => b'c',
+        47 => b'v',
+        48 => b'b',
+        49 => b'n',
+        50 => b'm',
+        51 => b',',
+        52 => b'.',
+        53 => b'/',
+        54 => 0,
+        57 => b' ',
+        _ => return None,
+    };
+    if byte == 0 {
+        return None;
+    }
+    Some(byte)
+}
+
+/// True khi driver đã sẵn sàng.
+pub fn input_ready() -> bool {
+    unsafe { INPUT_READY }
 }

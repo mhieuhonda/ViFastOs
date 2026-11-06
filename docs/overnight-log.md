@@ -1293,3 +1293,13 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 495, 0 warning.
 - Xem `docs/agent2-report-69.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `9099e13df51d79247d1659524c8a62b3fe6756933403a87bd919d23a31f361f8`.
+
+## 9.49 — Vòng 70: virtio-input (bàn phím)
+
+- Driver virtio-input device 18; phím vào RxQueue UART từ timer IRQ nên shell
+  cũ dùng được. `--input-check` PASS 2/2 cả riscv64/aarch64.
+- Harness khóa `VIRTIO INPUT READY` (494→498). Tăng bound TX/GPU + đảo thứ tự
+  GPU trước net để hết flake.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 498, 0 warning.
+- Xem `docs/agent2-report-70.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `b5409d77ec304c05c25ca42045e733494179d80b99c437e2385bd38ca35ee299`.

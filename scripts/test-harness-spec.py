@@ -32,6 +32,7 @@ def fixture(arch: str) -> str:
             "VIRTIO GPU READY",
             "VIRTIO GPU DRAW OK fb=0x80368400 160x120",
             "DEMAND LOAD OK",
+            "VIRTIO INPUT READY base=0x10005000",
         ]
     elif arch == "aarch64":
         lines += [
@@ -50,6 +51,7 @@ def fixture(arch: str) -> str:
             "VIRTIO GPU READY",
             "VIRTIO GPU DRAW OK fb=0x80368400 160x120",
             "DEMAND LOAD OK",
+            "VIRTIO INPUT READY base=0xa003800",
         ]
     else:
         lines += [

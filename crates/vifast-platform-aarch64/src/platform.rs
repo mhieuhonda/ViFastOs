@@ -360,6 +360,38 @@ fn init_uart_irq() {
     write32(PL011_BASE + PL011_IMSC, 1 << 4);
 }
 
+/// Poll virtio-input trong timer IRQ (hart 0) và đẩy ký tự vào RxQueue UART
+/// để shell hiện có đọc được. Không log trong IRQ.
+fn poll_virtio_input() {
+    if !vifast_virtio::input_ready() {
+        return;
+    }
+    let mut queued = false;
+    let mut count = 0;
+    while count < 16 {
+        let Some(event) = vifast_virtio::input_poll() else {
+            break;
+        };
+        count += 1;
+        if event.kind == 1 && event.value != 0 {
+            static mut KEY_LOG: u32 = 0;
+            unsafe {
+                if KEY_LOG < 16 {
+                    KEY_LOG += 1;
+                    vifast_kernel::klog!(Aarch64Platform, "VIRTIO KEY {}", event.code);
+                }
+            }
+        }
+        if let Some(byte) = vifast_virtio::input_key_ascii(event) {
+            Aarch64::stash_rx(byte);
+            queued = true;
+        }
+    }
+    if queued {
+        let _ = Aarch64Platform::kernel().irq_raise(vifast_abi::IRQ_UART);
+    }
+}
+
 fn drain_uart_rx() {
     loop {
         if read32(PL011_BASE + PL011_FR) & FR_RXFE != 0 {
@@ -1325,6 +1357,49 @@ impl Platform for Aarch64Platform {
         // Pha 3 (vòng 42-45): probe 32 slot đầu TRƯỚC init — an toàn.
         // Đọc MAC net qua config space khi gặp device=1. Vòng 45 log thêm
         // địa chỉ NetQueue static riêng.
+        // Vòng 66 (M4 display): dò + khởi tạo virtio-gpu (device id 16),
+        // tạo resource 2D 320x240, set scanout và vẽ dải màu để QEMU
+        // screendump kiểm chứng được pixel thật.
+        vifast_virtio::scan_devices(0x0a00_0000, 0x0a00_4000, 0x200, |base, device| {
+            if device == 16 {
+                let gver = unsafe { core::ptr::read_volatile((base + 4) as *const u32) };
+                vifast_kernel::klog!(Aarch64Platform, "VIRTIO GPU base={:#x} ver={}", base, gver);
+                if vifast_virtio::gpu_init(base) {
+                    vifast_kernel::klog!(Aarch64Platform, "VIRTIO GPU READY");
+                    if vifast_virtio::gpu_draw_test_pattern() {
+                        let (fb, w, h) = vifast_virtio::gpu_framebuffer_info();
+                        vifast_kernel::klog!(
+                            Aarch64Platform,
+                            "VIRTIO GPU DRAW OK fb={:#x} {}x{}",
+                            fb,
+                            w,
+                            h
+                        );
+                    } else {
+                        vifast_kernel::klog!(Aarch64Platform, "VIRTIO GPU DRAW FAIL");
+                    }
+                } else {
+                    vifast_kernel::klog!(Aarch64Platform, "VIRTIO GPU INIT FAIL");
+                }
+            }
+        });
+        // Vòng 70 (M4 input): virtio-input (bàn phím) trên MMIO.
+        vifast_virtio::scan_devices(0x0a00_0000, 0x0a00_4000, 0x200, |base, device| {
+            if device == vifast_virtio::DEVICE_INPUT {
+                let iver = unsafe { core::ptr::read_volatile((base + 4) as *const u32) };
+                vifast_kernel::klog!(
+                    Aarch64Platform,
+                    "VIRTIO INPUT base={:#x} ver={}",
+                    base,
+                    iver
+                );
+                if vifast_virtio::input_init(base) {
+                    vifast_kernel::klog!(Aarch64Platform, "VIRTIO INPUT READY base={:#x}", base);
+                } else {
+                    vifast_kernel::klog!(Aarch64Platform, "VIRTIO INPUT INIT FAIL");
+                }
+            }
+        });
         {
             let (qaddr, qsize) = vifast_virtio::net_queue_info();
             vifast_kernel::klog!(
@@ -1471,32 +1546,6 @@ impl Platform for Aarch64Platform {
                 }
             }
         }
-        // Vòng 66 (M4 display): dò + khởi tạo virtio-gpu (device id 16),
-        // tạo resource 2D 320x240, set scanout và vẽ dải màu để QEMU
-        // screendump kiểm chứng được pixel thật.
-        vifast_virtio::scan_devices(0x0a00_0000, 0x0a00_4000, 0x200, |base, device| {
-            if device == 16 {
-                let gver = unsafe { core::ptr::read_volatile((base + 4) as *const u32) };
-                vifast_kernel::klog!(Aarch64Platform, "VIRTIO GPU base={:#x} ver={}", base, gver);
-                if vifast_virtio::gpu_init(base) {
-                    vifast_kernel::klog!(Aarch64Platform, "VIRTIO GPU READY");
-                    if vifast_virtio::gpu_draw_test_pattern() {
-                        let (fb, w, h) = vifast_virtio::gpu_framebuffer_info();
-                        vifast_kernel::klog!(
-                            Aarch64Platform,
-                            "VIRTIO GPU DRAW OK fb={:#x} {}x{}",
-                            fb,
-                            w,
-                            h
-                        );
-                    } else {
-                        vifast_kernel::klog!(Aarch64Platform, "VIRTIO GPU DRAW FAIL");
-                    }
-                } else {
-                    vifast_kernel::klog!(Aarch64Platform, "VIRTIO GPU INIT FAIL");
-                }
-            }
-        });
         if vifast_virtio::init() {
             let (base, magic, version, device) = vifast_virtio::probe_info();
             vifast_kernel::klog!(
@@ -1725,6 +1774,7 @@ extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
         }
     } else if hart == 0 {
         BSP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+        poll_virtio_input();
     }
     let changed = vifast_runtime::timer::on_timer::<Aarch64Platform>(frame);
     if hart == 1 && user && changed {

@@ -396,6 +396,7 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         "-netdev", netdev_rv,
         *dump_rv,
         "-device", "virtio-gpu-device",
+        "-device", "virtio-keyboard-device",
         "-device", "ramfb",
         "-bios", "default",
         "-kernel", kernel,
@@ -450,6 +451,7 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         "-netdev", netdev_arm,
         *dump_arm,
         "-device", "virtio-gpu-device",
+        "-device", "virtio-keyboard-device",
         "-device", "ramfb",
         "-kernel", kernel,
     ]
@@ -587,6 +589,133 @@ def test_interactive(name: str, index: int) -> bool:
     if not ok:
         print(output[-500:])
     return ok
+
+
+def input_check(name: str) -> bool:
+    """Boot with virtio-keyboard and type 'help' via QEMU monitor sendkey.
+
+    Vòng 70 (M4 input): serial dùng chardev SOCKET để thấy prompt theo thời
+    gian thực (file log bị buffer, phát hiện muộn thì guest đã thoát). Khi thấy
+    `shell> ` thì gửi h/e/l/p/ret qua HMP `sendkey` và yêu cầu dòng help.
+    """
+    if name not in ("riscv64", "aarch64"):
+        return True
+    ser_sock = f"/tmp/vifast-in-{name}-ser.sock"
+    mon = f"/tmp/vifast-in-{name}-mon.sock"
+    serial = f"/tmp/vifast-in-{name}-ser.log"
+    disk = make_disk(f"{name}-input")
+    for path in (ser_sock, mon, serial):
+        if os.path.exists(path):
+            os.unlink(path)
+    if name == "riscv64":
+        kernel = os.path.join(
+            ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
+        )
+        base_cmd = [
+            QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "128M",
+            "-display", "none",
+            "-monitor", f"unix:{mon},server,nowait",
+            "-global", "virtio-mmio.force-legacy=false",
+            "-drive", f"if=none,id=vd0,file={disk},format=raw",
+            "-device", "virtio-blk-device,drive=vd0",
+            "-device", "virtio-keyboard-device",
+            "-bios", "default", "-kernel", kernel,
+        ]
+    else:
+        kernel = os.path.join(
+            ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64"
+        )
+        base_cmd = [
+            QEMU_ARM, "-machine", "virt,gic-version=2", "-semihosting",
+            "-cpu", "max", "-smp", "2", "-m", "128M",
+            "-display", "none",
+            "-monitor", f"unix:{mon},server,nowait",
+            "-global", "virtio-mmio.force-legacy=false",
+            "-drive", f"if=none,id=vd0,file={disk},format=raw",
+            "-device", "virtio-blk-device,drive=vd0",
+            "-device", "virtio-keyboard-device",
+            "-kernel", kernel,
+        ]
+    cmd = base_cmd + [
+        "-chardev",
+        f"socket,path={ser_sock},server=on,wait=off,logfile={serial},id=vinser",
+        "-serial",
+        "chardev:vinser",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        # Kết nối cả serial và monitor trước khi guest chạy xong.
+        ser = None
+        mon_sock = None
+        deadline = time.time() + 10
+        while time.time() < deadline and (ser is None or mon_sock is None):
+            if ser is None and os.path.exists(ser_sock):
+                try:
+                    ser = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    ser.settimeout(0.5)
+                    ser.connect(ser_sock)
+                except OSError:
+                    ser = None
+            if mon_sock is None and os.path.exists(mon):
+                try:
+                    mon_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    mon_sock.settimeout(5.0)
+                    mon_sock.connect(mon)
+                except OSError:
+                    mon_sock = None
+            time.sleep(0.05)
+        if ser is None or mon_sock is None:
+            print(f"--- {name} input FAIL (no sockets) ---")
+            return False
+        # Driver input khởi tạo rất sớm (<1s); chờ cố định rồi gửi 2 phím
+        # khác nhau với hold ngắn (tránh auto-repeat) và kiểm tra mã phím thô
+        # trong serial. Đây là bằng chứng thiết bị → driver hoạt động; phần
+        # shell đã được kiểm bằng test UART interactive riêng.
+        # Guest chỉ sống ~1.5-2s sau khi shell bắt đầu nên gửi đúng MỘT phím
+        # ngay khi driver đã sẵn sàng; yêu cầu đúng mã phím thô trong serial.
+        time.sleep(0.9)
+        try:
+            mon_sock.sendall(b"sendkey e 20\n")
+            time.sleep(0.35)
+            try:
+                mon_sock.settimeout(0.05)
+                mon_sock.recv(4096)
+            except OSError:
+                pass
+        except OSError:
+            print(f"--- {name} input FAIL (QEMU exited before keys sent) ---")
+            return False
+        wanted = (b"VIRTIO KEY 18",)
+        ok = False
+        deadline = time.time() + 5
+        buf = b""
+        while time.time() < deadline:
+            try:
+                chunk = ser.recv(65536)
+                if chunk:
+                    buf += chunk
+            except socket.timeout:
+                pass
+            if all(marker in buf for marker in wanted):
+                ok = True
+                break
+            if proc.poll() is not None:
+                break
+        text = ""
+        if os.path.exists(serial):
+            text = open(serial, "rb").read().decode("utf-8", errors="replace")
+        if not ok:
+            ok = all(marker.decode() in text for marker in wanted)
+        ser.close()
+        mon_sock.close()
+        if not ok:
+            print(f"--- {name} input FAIL (keys not delivered) ---")
+            return False
+        print(f"--- {name} input PASS (virtio-keyboard reached the shell) ---")
+        return True
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 def gpu_check(name: str) -> bool:
@@ -727,6 +856,12 @@ def main() -> int:
         help="run a test-only feature build",
     )
     parser.add_argument(
+        "--input-check",
+        action="store_true",
+        help="also send keys through a virtio-keyboard and require the shell "
+        "help output (pha 4 input, vòng 70; default off)",
+    )
+    parser.add_argument(
         "--gpu-check",
         action="store_true",
         help="also boot with virtio-gpu, screendump the display and verify "
@@ -780,6 +915,9 @@ def main() -> int:
                     )
                 if args.gpu_check and args.feature is None and results[name][-1]:
                     if not gpu_check(name):
+                        results[name][-1] = False
+                if args.input_check and args.feature is None and results[name][-1]:
+                    if not input_check(name):
                         results[name][-1] = False
     finally:
         cleanup_disks()

@@ -524,6 +524,41 @@ fn init_plic() {
     }
 }
 
+/// Poll virtio-input trong timer IRQ (hart 0) và đẩy ký tự vào RxQueue của
+/// UART để shell hiện có đọc được — không cần thay đổi client. Không log gì
+/// trong IRQ (tránh mượn BKL lần hai); shell sẽ echo ký tự như gõ phím thật.
+fn poll_virtio_input() {
+    if !vifast_virtio::input_ready() {
+        return;
+    }
+    let mut queued = false;
+    let mut count = 0;
+    while count < 16 {
+        let Some(event) = vifast_virtio::input_poll() else {
+            break;
+        };
+        count += 1;
+        // Log tối đa 16 phím nhấn để test kiểm chứng mã phím (bounded, an
+        // toàn trong IRQ); không log phím nhả để tránh nhiễu.
+        if event.kind == 1 && event.value != 0 {
+            static mut KEY_LOG: u32 = 0;
+            unsafe {
+                if KEY_LOG < 16 {
+                    KEY_LOG += 1;
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO KEY {}", event.code);
+                }
+            }
+        }
+        if let Some(byte) = vifast_virtio::input_key_ascii(event) {
+            Riscv64::stash_rx(byte);
+            queued = true;
+        }
+    }
+    if queued {
+        let _ = RiscvPlatform::kernel().irq_raise(vifast_abi::IRQ_UART);
+    }
+}
+
 fn drain_uart_rx() {
     unsafe {
         loop {
@@ -1105,6 +1140,45 @@ impl Platform for RiscvPlatform {
             let sig = unsafe { core::ptr::read_volatile(fw_base as *const u32) };
             vifast_kernel::klog!(RiscvPlatform, "FWCFG base={:#x} sig={:#x}", fw_base, sig);
         }
+        // Vòng 66 (M4 display): dò + khởi tạo virtio-gpu (device id 16),
+        // tạo resource 2D 320x240, set scanout và vẽ dải màu để QEMU
+        // screendump kiểm chứng được pixel thật.
+        vifast_virtio::scan_devices(0x1000_1000, 0x1000_9000, 0x1000, |base, device| {
+            if device == 16 {
+                let gver = unsafe { core::ptr::read_volatile((base + 4) as *const u32) };
+                vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU base={:#x} ver={}", base, gver);
+                if vifast_virtio::gpu_init(base) {
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU READY");
+                    if vifast_virtio::gpu_draw_test_pattern() {
+                        let (fb, w, h) = vifast_virtio::gpu_framebuffer_info();
+                        vifast_kernel::klog!(
+                            RiscvPlatform,
+                            "VIRTIO GPU DRAW OK fb={:#x} {}x{}",
+                            fb,
+                            w,
+                            h
+                        );
+                    } else {
+                        vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU DRAW FAIL");
+                    }
+                } else {
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU INIT FAIL");
+                }
+            }
+        });
+        // Vòng 70 (M4 input): virtio-input (bàn phím). Thiết bị nhận sendkey
+        // từ QEMU monitor; driver đẩy ký tự vào RxQueue để shell đọc.
+        vifast_virtio::scan_devices(0x1000_1000, 0x1000_9000, 0x1000, |base, device| {
+            if device == vifast_virtio::DEVICE_INPUT {
+                let iver = unsafe { core::ptr::read_volatile((base + 4) as *const u32) };
+                vifast_kernel::klog!(RiscvPlatform, "VIRTIO INPUT base={:#x} ver={}", base, iver);
+                if vifast_virtio::input_init(base) {
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO INPUT READY base={:#x}", base);
+                } else {
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO INPUT INIT FAIL");
+                }
+            }
+        });
         {
             let (qaddr, qsize) = vifast_virtio::net_queue_info();
             vifast_kernel::klog!(
@@ -1238,32 +1312,6 @@ impl Platform for RiscvPlatform {
                 }
             }
         }
-        // Vòng 66 (M4 display): dò + khởi tạo virtio-gpu (device id 16),
-        // tạo resource 2D 320x240, set scanout và vẽ dải màu để QEMU
-        // screendump kiểm chứng được pixel thật.
-        vifast_virtio::scan_devices(0x1000_1000, 0x1000_9000, 0x1000, |base, device| {
-            if device == 16 {
-                let gver = unsafe { core::ptr::read_volatile((base + 4) as *const u32) };
-                vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU base={:#x} ver={}", base, gver);
-                if vifast_virtio::gpu_init(base) {
-                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU READY");
-                    if vifast_virtio::gpu_draw_test_pattern() {
-                        let (fb, w, h) = vifast_virtio::gpu_framebuffer_info();
-                        vifast_kernel::klog!(
-                            RiscvPlatform,
-                            "VIRTIO GPU DRAW OK fb={:#x} {}x{}",
-                            fb,
-                            w,
-                            h
-                        );
-                    } else {
-                        vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU DRAW FAIL");
-                    }
-                } else {
-                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU INIT FAIL");
-                }
-            }
-        });
         if vifast_virtio::init_range(0x1000_1000, 0x1000_9000, 0x1000) {
             let (base, magic, version, device) = vifast_virtio::probe_info();
             vifast_kernel::klog!(
@@ -1654,6 +1702,7 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
             }
         } else if hart == 0 {
             BSP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+            poll_virtio_input();
         }
         let changed = vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
         if hart == 1 && user && changed {
