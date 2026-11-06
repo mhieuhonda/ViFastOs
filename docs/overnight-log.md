@@ -1226,3 +1226,12 @@ follow-up `62b31f4`.
 - Cổng chuẩn không đổi: QEMU 3/3 ×3, persist 7×3, harness 489, host 203.
 - Xem `docs/agent2-report-62.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `0dd7f62ae3f804db9e062a33d2d2ba070df6439d83570ec8538333367b61ce7d`.
+
+## 9.42 — Vòng 63: net TX+RX end-to-end, ping gateway (ĐỘT PHÁ)
+
+- Tìm 3 bug gốc: header 10B (không 12), QueueReady=1 (không index), RX kick
+  + re-post. Giờ guest nhận `PING REPLY from 10.0.2.2` cả riscv64/aarch64.
+- Harness khóa `VIRTIO NET PING REPLY`; pcap 6 gói khớp log.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 489, host 203, 0 warning.
+- Xem `docs/agent2-report-63.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `e5c41d8646f5040c9533b32ec5cfaa9034f2681416d95051ea0a4a0f92ab68c5`.

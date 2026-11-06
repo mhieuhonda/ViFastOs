@@ -1155,45 +1155,46 @@ impl Platform for RiscvPlatform {
                                 acc
                             );
                             // Vòng 47: gửi ARP request đầu tiên qua TX.
-                            match vifast_virtio::net_send_arp() {
+                            // Vòng 63: gửi ARP cho gateway 10.0.2.2 và DNS
+                            // 10.0.2.3 để xem slirp đáp địa chỉ nào.
+                            for (label, tpa) in [("GW", [10u8, 0, 2, 2]), ("DNS", [10u8, 0, 2, 3])]
+                            {
+                                match vifast_virtio::net_send_arp_to(tpa) {
+                                    Some(len) => vifast_kernel::klog!(
+                                        RiscvPlatform,
+                                        "VIRTIO NET ARP {} sent len={}",
+                                        label,
+                                        len
+                                    ),
+                                    None => vifast_kernel::klog!(
+                                        RiscvPlatform,
+                                        "VIRTIO NET ARP {} FAIL",
+                                        label
+                                    ),
+                                }
+                            }
+                            // Vòng 63: ICMP echo tới gateway — slirp xử lý IP trực tiếp.
+                            // Đây là bằng chứng TX+RX end-to-end của stack tối thiểu.
+                            vifast_virtio::net_rx_rearm();
+                            match vifast_virtio::net_ping([10u8, 0, 2, 2]) {
                                 Some(len) => vifast_kernel::klog!(
                                     RiscvPlatform,
-                                    "VIRTIO NET ARP sent len={}",
+                                    "VIRTIO NET PING sent len={}",
                                     len
                                 ),
-                                None => vifast_kernel::klog!(RiscvPlatform, "VIRTIO NET ARP FAIL"),
+                                None => vifast_kernel::klog!(RiscvPlatform, "VIRTIO NET PING FAIL"),
                             }
-                            match vifast_virtio::net_recv_arp() {
-                                Some(rmac) => vifast_kernel::klog!(
+                            match vifast_virtio::net_recv_icmp() {
+                                Some(src) => vifast_kernel::klog!(
                                     RiscvPlatform,
-                                    "VIRTIO NET REPLY {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                                    rmac[0],
-                                    rmac[1],
-                                    rmac[2],
-                                    rmac[3],
-                                    rmac[4],
-                                    rmac[5]
+                                    "VIRTIO NET PING REPLY from {}.{}.{}.{}",
+                                    src[0],
+                                    src[1],
+                                    src[2],
+                                    src[3]
                                 ),
                                 None => {
-                                    // Vòng 50: peek xem có gói nào đến không.
-                                    match vifast_virtio::net_recv_peek() {
-                                        Some((len, et, head)) => vifast_kernel::klog!(
-                                            RiscvPlatform,
-                                            "VIRTIO NET PEEK len={} et={:#x} {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                                            len,
-                                            et,
-                                            head[0],
-                                            head[1],
-                                            head[2],
-                                            head[3],
-                                            head[4],
-                                            head[5]
-                                        ),
-                                        None => vifast_kernel::klog!(
-                                            RiscvPlatform,
-                                            "VIRTIO NET NO REPLY"
-                                        ),
-                                    }
+                                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO NET PING NO REPLY")
                                 }
                             }
                         }

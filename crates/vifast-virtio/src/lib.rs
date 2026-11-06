@@ -88,8 +88,10 @@ static mut QUEUE: Queue = Queue {
 /// Maximum Ethernet frame QEMU user-net delivers (1514) plus headroom.
 pub const NET_BUF_SIZE: usize = 2048;
 /// VirtIO-net header: flags(1) + gso_type(1) + hdr_len(2) + gso_size(2) +
-/// csum_start(2) + csum_offset(2) + num_buffers(2).
-pub const NET_HDR_SIZE: usize = 12;
+/// csum_start(2) + csum_offset(2) = 10 byte. CHỈ thêm num_buffers(2) khi
+/// VIRTIO_NET_F_MRG_RXBUF được thoả thuận — ta không bật, nên 12 byte sẽ
+/// làm QEMU lệch frame 2 byte và slirp bỏ qua mọi gói (vòng 63).
+pub const NET_HDR_SIZE: usize = 10;
 
 /// Dedicated split-queue for VirtIO-net (vòng 45). Separate static from the
 /// block `QUEUE` so net bring-up never disturbs the disk path; both live in
@@ -225,35 +227,105 @@ pub fn net_init_rx() -> bool {
 /// virtio-net header). Bounded spin, read-only parse. Returns None on
 /// timeout or non-ARP-reply packet.
 pub fn net_recv_arp() -> Option<[u8; 6]> {
+    // Slirp có thể gửi probe ARP trước reply; bỏ qua gói không khớp và chờ
+    // gói kế tiếp (tối đa 4 gói) — vòng 63.
+    for _ in 0..4 {
+        if !net_rx_poll() {
+            return None;
+        }
+        let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
+        let mac = unsafe {
+            let q = &mut *queue;
+            // RX: header 10B vào `hdr`, frame Ethernet vào `buf[0..]`.
+            let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
+            let oper = u16::from_be_bytes([q.buf[20], q.buf[21]]);
+            if ethertype == 0x0806 && oper == 2 {
+                let mut mac = [0u8; 6];
+                mac.copy_from_slice(&q.buf[22..28]);
+                Some(mac)
+            } else {
+                None
+            }
+        };
+        if mac.is_some() {
+            return mac;
+        }
+        net_rx_post();
+    }
+    None
+}
+
+/// Đẩy một buffer RX mới vào avail ring và kick queue 0 (vòng 63). VirtIO
+/// yêu cầu driver thông báo device sau khi thêm buffer; thiếu kick thì device
+/// không bao giờ ghi gói vào RX (nguyên nhân "NO REPLY" trước đó).
+fn net_rx_post() {
+    let base = unsafe { NET_BASE };
+    if base == 0 {
+        return;
+    }
+    let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
+    unsafe {
+        let q = &mut *queue;
+        let slot = (q.avail.idx as usize) % QUEUE_SIZE;
+        q.avail.ring[slot] = 0;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let next = q.avail.idx.wrapping_add(1);
+        core::ptr::write_volatile(&mut q.avail.idx, next);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    }
+    unsafe { core::ptr::write_volatile((base + 0x50) as *mut u32, 0) };
+}
+
+/// Chờ một gói RX mới (used.idx tiến). Bounded 2M spins.
+fn net_rx_poll() -> bool {
     let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
     unsafe {
         let q = &mut *queue;
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
         let mut spins = 0u64;
-        // Short bound (2M): QEMU user-net answers ARP in ms when the TX is
-        // well-formed; a missing reply means TX needs work, not more wait.
-        while core::ptr::read_volatile(&q.used.idx) != target && spins < 2_000_000 {
+        while core::ptr::read_volatile(&q.used.idx) == RX_SEEN && spins < 2_000_000 {
             core::hint::spin_loop();
             spins += 1;
         }
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        if core::ptr::read_volatile(&q.used.idx) != target {
-            return None;
+        if core::ptr::read_volatile(&q.used.idx) == RX_SEEN {
+            return false;
         }
-        // RX dùng 2 descriptors riêng: 12B virtio-net header vào `hdr`,
-        // frame Ethernet vào `buf[0..]`. Parse từ buf[0]: [eth dst 6]
-        // [eth src 6][type 2][arp 28]. Sửa vòng 50: trước đây đọc lệch +12B
-        // (tưởng hdr+frame liền nhau) nên bỏ lỡ reply thật.
-        let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
-        let oper = u16::from_be_bytes([q.buf[20], q.buf[21]]);
-        if ethertype != 0x0806 || oper != 2 {
-            return None;
-        }
-        let mut mac = [0u8; 6];
-        mac.copy_from_slice(&q.buf[22..28]);
-        Some(mac)
+        RX_SEEN = core::ptr::read_volatile(&q.used.idx);
+        true
     }
+}
+
+/// Cấp lại buffer RX sau khi tiêu thụ một gói (vòng 63).
+pub fn net_rx_rearm() {
+    net_rx_post();
+}
+
+/// Poll RX chờ ICMP echo reply (vòng 63). Trả về IP nguồn nếu thấy reply.
+/// Bounded 2M spins như các poll khác; parse từ buf[0] (frame Ethernet).
+pub fn net_recv_icmp() -> Option<[u8; 4]> {
+    for _ in 0..4 {
+        if !net_rx_poll() {
+            return None;
+        }
+        let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
+        let src = unsafe {
+            let q = &mut *queue;
+            let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
+            if ethertype == 0x0800 && q.buf[14 + 9] == 1 && q.buf[14 + 20] == 0 {
+                let mut src = [0u8; 4];
+                src.copy_from_slice(&q.buf[14 + 12..14 + 16]);
+                Some(src)
+            } else {
+                None
+            }
+        };
+        if src.is_some() {
+            return src;
+        }
+        net_rx_post();
+    }
+    None
 }
 
 /// Snapshot RX khi có gói: trả về (used_len, ethertype, 6 byte đầu frame).
@@ -266,7 +338,10 @@ pub fn net_recv_peek() -> Option<(u32, u16, [u8; 6])> {
         if core::ptr::read_volatile(&q.used.idx) == 0 {
             return None;
         }
-        let elem = core::ptr::read_volatile(&q.used.ring[0]);
+        // Phần tử vừa hoàn tất là ring[(used.idx - 1) % QUEUE_SIZE], không
+        // phải ring[0] — quan trọng khi gửi nhiều gói (vòng 63).
+        let done = q.used.idx.wrapping_sub(1) as usize % QUEUE_SIZE;
+        let elem = core::ptr::read_volatile(&q.used.ring[done]);
         let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
         let mut head = [0u8; 6];
         head.copy_from_slice(&q.buf[0..6]);
@@ -274,7 +349,114 @@ pub fn net_recv_peek() -> Option<(u32, u16, [u8; 6])> {
     }
 }
 
+/// One's-complement checksum (RFC 1071) over a byte slice.
+fn checksum(bytes: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        sum += u16::from_be_bytes([bytes[i], bytes[i + 1]]) as u32;
+        i += 2;
+    }
+    if i < bytes.len() {
+        sum += (bytes[i] as u32) << 8;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+/// Build an ICMP echo request to `dst_ip` in `NET_QUEUE.buf` and transmit it
+/// (vòng 63). Không cần ARP: slirp xử lý gói IP trực tiếp. Ethernet dst dùng
+/// broadcast vì chưa biết MAC gateway. Trả về Some(len) khi used ring chạy.
+pub fn net_ping(dst_ip: [u8; 4]) -> Option<u32> {
+    let (base, mac) = unsafe {
+        if !NET_READY || NET_BASE == 0 {
+            return None;
+        }
+        (NET_BASE, net_mac(NET_BASE)?)
+    };
+    fn write_at(base: u64, offset: u64, value: u32) {
+        unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+    }
+    const SRC: [u8; 4] = [10, 0, 2, 15];
+    const PAYLOAD: [u8; 4] = *b"VIFA";
+    let icmp_len = 8 + PAYLOAD.len();
+    let ip_len = 20 + icmp_len;
+    let mut frame = [0u8; 60];
+    // Slirp nhận gói IP khi Ethernet dst là MAC ảo của nó (52:55:0a:00:02:02
+    // cho 10.0.2.2); broadcast bị bỏ qua cho gói IP (thử nghiệm vòng 63).
+    frame[0..6].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, 0x02]);
+    frame[6..12].copy_from_slice(&mac);
+    frame[12..14].copy_from_slice(&[0x08, 0x00]);
+    // IPv4 header at frame[14..34].
+    let ip = &mut frame[14..34];
+    ip[0] = 0x45;
+    ip[1] = 0;
+    ip[2..4].copy_from_slice(&(ip_len as u16).to_be_bytes());
+    ip[4..6].copy_from_slice(&0x1234u16.to_be_bytes());
+    ip[6..8].copy_from_slice(&0x4000u16.to_be_bytes());
+    ip[8] = 64;
+    ip[9] = 1; // ICMP
+    ip[10..12].copy_from_slice(&[0, 0]);
+    ip[12..16].copy_from_slice(&SRC);
+    ip[16..20].copy_from_slice(&dst_ip);
+    let ip_sum = checksum(&ip[..20]);
+    ip[10..12].copy_from_slice(&ip_sum.to_be_bytes());
+    // ICMP echo request at frame[34..].
+    let icmp = &mut frame[34..34 + icmp_len];
+    icmp[0] = 8;
+    icmp[1] = 0;
+    icmp[2..4].copy_from_slice(&[0, 0]);
+    icmp[4..6].copy_from_slice(&1u16.to_be_bytes());
+    icmp[6..8].copy_from_slice(&1u16.to_be_bytes());
+    icmp[8..].copy_from_slice(&PAYLOAD);
+    let icmp_sum = checksum(&icmp[..icmp_len]);
+    icmp[2..4].copy_from_slice(&icmp_sum.to_be_bytes());
+    let queue = core::ptr::addr_of_mut!(NET_QUEUE);
+    unsafe {
+        let q = &mut *queue;
+        q.hdr = [0; NET_HDR_SIZE];
+        q.buf[..60].copy_from_slice(&frame);
+        let qb = q as *const NetQueue as u64;
+        q.desc[0] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, hdr) as u64,
+            len: NET_HDR_SIZE as u32,
+            flags: DESC_NEXT,
+            next: 1,
+        };
+        q.desc[1] = Descriptor {
+            addr: qb + core::mem::offset_of!(NetQueue, buf) as u64,
+            len: 60,
+            flags: 0,
+            next: 0,
+        };
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let next_avail = q.avail.idx.wrapping_add(1);
+        q.avail.ring[(q.avail.idx as usize) % QUEUE_SIZE] = 0;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        core::ptr::write_volatile(&mut q.avail.idx, next_avail);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        write_at(base, 0x50, 1);
+        let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        let mut spins = 0u64;
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < 2_000_000 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        if core::ptr::read_volatile(&q.used.idx) != target {
+            return None;
+        }
+        let done = q.used.idx.wrapping_sub(1) as usize % QUEUE_SIZE;
+        let elem = core::ptr::read_volatile(&q.used.ring[done]);
+        Some(elem.len)
+    }
+}
+
 static mut NET_READY: bool = false;
+/// Số phần tử used ring đã thấy trên RX (dùng để biết gói mới).
+static mut RX_SEEN: u16 = 0;
 static mut NET_BASE: u64 = 0;
 
 /// Negotiate a VirtIO-net device at `base`: reset, ACK+DRIVER, read features,
@@ -323,7 +505,9 @@ pub fn net_init_both(base: u64) -> Option<u64> {
             0xa0,
             qbase + core::mem::offset_of!(NetQueue, used) as u64,
         );
-        write_at(base, 0x44, index);
+        // QueueReady luôn ghi 1 (không phải index): ghi 0 cho queue 0 khiến
+        // RX không bao giờ ready — nguyên nhân RX im lặng ở vòng 63.
+        write_at(base, 0x44, 1);
     }
     let magic = read_at(base, 0);
     let version = read_at(base, 4);
@@ -367,6 +551,9 @@ pub fn net_init_both(base: u64) -> Option<u64> {
         core::ptr::write_volatile(&mut (*rx).avail.idx, 1);
     }
     attach(base, 0, rx as u64);
+    // Kick queue 0: VirtIO yêu cầu notify sau khi thêm buffer RX, nếu không
+    // device không ghi gói nào vào RX (vòng 63).
+    write_at(base, 0x50, 0);
     // Queue 1 (TX): reset rings, no buffer yet (send posts per packet).
     let tx = core::ptr::addr_of_mut!(NET_QUEUE);
     unsafe {
@@ -402,6 +589,12 @@ pub fn net_ready() -> bool {
 /// bounded spin; returns the device-reported length on success.
 /// Never touches the block queue. Safe to call once after `net_init_tx`.
 pub fn net_send_arp() -> Option<u32> {
+    net_send_arp_to([10, 0, 2, 2])
+}
+
+/// Như `net_send_arp` nhưng chỉ định target IP (vòng 63: gửi thử cả gateway
+/// 10.0.2.2 và DNS 10.0.2.3 để biết slirp đáp địa chỉ nào).
+pub fn net_send_arp_to(tpa: [u8; 4]) -> Option<u32> {
     let (base, mac) = unsafe {
         if !NET_READY || NET_BASE == 0 {
             return None;
@@ -415,7 +608,6 @@ pub fn net_send_arp() -> Option<u32> {
     // ARP: htype=1, ptype=0x0800, hlen=6, plen=4, oper=1 (request),
     // sha=our mac, spa=10.0.2.15, tha=00:00:00:00:00:00, tpa=10.0.2.2.
     const SPA: [u8; 4] = [10, 0, 2, 15];
-    const TPA: [u8; 4] = [10, 0, 2, 2];
     // 42B ARP + 18B zero padding = 60B Ethernet minimum (không tính FCS).
     // Vòng 50: một số backend bỏ qua frame runt; QEMU user-net cũng vậy.
     let mut frame = [0u8; 60];
@@ -430,7 +622,7 @@ pub fn net_send_arp() -> Option<u32> {
     frame[22..28].copy_from_slice(&mac);
     frame[28..32].copy_from_slice(&SPA);
     frame[32..38].copy_from_slice(&[0; 6]);
-    frame[38..42].copy_from_slice(&TPA);
+    frame[38..42].copy_from_slice(&tpa);
     let queue = core::ptr::addr_of_mut!(NET_QUEUE);
     unsafe {
         let q = &mut *queue;
@@ -467,7 +659,10 @@ pub fn net_send_arp() -> Option<u32> {
         if core::ptr::read_volatile(&q.used.idx) != target {
             return None;
         }
-        let elem = core::ptr::read_volatile(&q.used.ring[0]);
+        // Phần tử vừa hoàn tất là ring[(used.idx - 1) % QUEUE_SIZE], không
+        // phải ring[0] — quan trọng khi gửi nhiều gói (vòng 63).
+        let done = q.used.idx.wrapping_sub(1) as usize % QUEUE_SIZE;
+        let elem = core::ptr::read_volatile(&q.used.ring[done]);
         Some(elem.len)
     }
 }

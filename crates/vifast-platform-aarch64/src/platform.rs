@@ -1374,47 +1374,51 @@ impl Platform for Aarch64Platform {
                                     base,
                                     acc
                                 );
-                                match vifast_virtio::net_send_arp() {
-                                    Some(len) => vifast_kernel::klog!(
-                                        Aarch64Platform,
-                                        "VIRTIO NET ARP sent len={}",
-                                        len
-                                    ),
-                                    None => {
-                                        vifast_kernel::klog!(Aarch64Platform, "VIRTIO NET ARP FAIL")
+                                // Vòng 63: ARP cho gateway và DNS.
+                                for (label, tpa) in
+                                    [("GW", [10u8, 0, 2, 2]), ("DNS", [10u8, 0, 2, 3])]
+                                {
+                                    match vifast_virtio::net_send_arp_to(tpa) {
+                                        Some(len) => vifast_kernel::klog!(
+                                            Aarch64Platform,
+                                            "VIRTIO NET ARP {} sent len={}",
+                                            label,
+                                            len
+                                        ),
+                                        None => vifast_kernel::klog!(
+                                            Aarch64Platform,
+                                            "VIRTIO NET ARP {} FAIL",
+                                            label
+                                        ),
                                     }
                                 }
-                                match vifast_virtio::net_recv_arp() {
-                                    Some(rmac) => vifast_kernel::klog!(
+                                // Vòng 63: ICMP echo tới gateway — slirp xử lý IP trực tiếp.
+                                // Đây là bằng chứng TX+RX end-to-end của stack tối thiểu.
+                                vifast_virtio::net_rx_rearm();
+                                match vifast_virtio::net_ping([10u8, 0, 2, 2]) {
+                                    Some(len) => vifast_kernel::klog!(
                                         Aarch64Platform,
-                                        "VIRTIO NET REPLY {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                                        rmac[0],
-                                        rmac[1],
-                                        rmac[2],
-                                        rmac[3],
-                                        rmac[4],
-                                        rmac[5]
+                                        "VIRTIO NET PING sent len={}",
+                                        len
                                     ),
-                                    None => {
-                                        match vifast_virtio::net_recv_peek() {
-                                            Some((len, et, head)) => vifast_kernel::klog!(
-                                                Aarch64Platform,
-                                                "VIRTIO NET PEEK len={} et={:#x} {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                                                len,
-                                                et,
-                                                head[0],
-                                                head[1],
-                                                head[2],
-                                                head[3],
-                                                head[4],
-                                                head[5]
-                                            ),
-                                            None => vifast_kernel::klog!(
-                                                Aarch64Platform,
-                                                "VIRTIO NET NO REPLY"
-                                            ),
-                                        }
-                                    }
+                                    None => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET PING FAIL"
+                                    ),
+                                }
+                                match vifast_virtio::net_recv_icmp() {
+                                    Some(src) => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET PING REPLY from {}.{}.{}.{}",
+                                        src[0],
+                                        src[1],
+                                        src[2],
+                                        src[3]
+                                    ),
+                                    None => vifast_kernel::klog!(
+                                        Aarch64Platform,
+                                        "VIRTIO NET PING NO REPLY"
+                                    ),
                                 }
                             }
                             None => vifast_kernel::klog!(
