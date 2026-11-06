@@ -1275,3 +1275,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3 (2 lần), persist 7×3, harness 494, host 207, 0 warning.
 - Xem `docs/agent2-report-67.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `2f7437bb0b34f002729d44810026e5452dff8ccab9592f0c5bf4ab375ae8da1a`.
+
+## 9.47 — Vòng 68: DNS A record (resolve tên miền thật)
+
+- `parse_dns_a` + `net_recv_dns_a`; guest nhận `DNS A 104.20.23.154` (riscv)
+  và `172.66.147.243` (aarch64) cho example.com.
+- 2 unit test DNS; host 207→209. Marker best-effort (phụ thuộc DNS host).
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 494, 0 warning.
+- Xem `docs/agent2-report-68.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `e05c22484dec8e3be673d5112a5b80f5867e3bc024685ea027a783fbd7ada488`.

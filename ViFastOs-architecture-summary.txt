@@ -2102,6 +2102,9 @@ E. Desktop / Space
     vào frame đúng lúc fault rồi map + resume → `DEMAND LOAD OK` trên
     riscv64/aarch64. x86_64 hết Untyped nên dùng client rút gọn. Harness nới
     luật fault (kiểm tra hiện diện thay vì tổng số) vì evict có race.
+117. Vòng 68 (DNS A): parse_dns_a + net_recv_dns_a; guest resolve example.com
+    ra IP thật (104.20.23.154 / 172.66.147.243) trên riscv64/aarch64. Marker
+    DNS A best-effort (phụ thuộc DNS host), DNS sent vẫn là marker cứng.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

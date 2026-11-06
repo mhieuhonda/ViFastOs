@@ -1446,11 +1446,14 @@ impl Platform for Aarch64Platform {
                                         vifast_kernel::klog!(Aarch64Platform, "VIRTIO NET DNS FAIL")
                                     }
                                 }
-                                match vifast_virtio::net_recv_udp([10, 0, 2, 3], 53) {
-                                    Some(len) => vifast_kernel::klog!(
+                                match vifast_virtio::net_recv_dns_a([10, 0, 2, 3]) {
+                                    Some(ip) => vifast_kernel::klog!(
                                         Aarch64Platform,
-                                        "VIRTIO NET DNS REPLY len={}",
-                                        len
+                                        "VIRTIO NET DNS A {}.{}.{}.{}",
+                                        ip[0],
+                                        ip[1],
+                                        ip[2],
+                                        ip[3]
                                     ),
                                     None => vifast_kernel::klog!(
                                         Aarch64Platform,

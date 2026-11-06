@@ -430,6 +430,115 @@ pub fn net_recv_udp(src_ip: [u8; 4], src_port: u16) -> Option<usize> {
     None
 }
 
+/// Parse câu trả lời DNS và lấy bản ghi A đầu tiên (vòng 68).
+/// Bỏ qua header 12 byte và question, duyệt answer section; hỗ trợ tên nén
+/// (pointer 0xC0) và bỏ qua bản ghi không phải A. Trả về IPv4 4 byte.
+fn parse_dns_a(payload: &[u8]) -> Option<[u8; 4]> {
+    if payload.len() < 12 {
+        return None;
+    }
+    let qdcount = u16::from_be_bytes([payload[4], payload[5]]) as usize;
+    let ancount = u16::from_be_bytes([payload[6], payload[7]]) as usize;
+    let mut pos = 12usize;
+    // Bỏ qua các question: QNAME (label stream) + QTYPE + QCLASS.
+    let mut q = 0;
+    while q < qdcount {
+        loop {
+            if pos >= payload.len() {
+                return None;
+            }
+            let len = payload[pos];
+            if len == 0 {
+                pos += 1;
+                break;
+            }
+            if len & 0xC0 == 0xC0 {
+                pos += 2;
+                break;
+            }
+            pos += 1 + len as usize;
+        }
+        pos += 4;
+        q += 1;
+    }
+    let mut a = 0;
+    while a < ancount {
+        // NAME: label stream hoặc pointer nén.
+        loop {
+            if pos >= payload.len() {
+                return None;
+            }
+            let len = payload[pos];
+            if len == 0 {
+                pos += 1;
+                break;
+            }
+            if len & 0xC0 == 0xC0 {
+                pos += 2;
+                break;
+            }
+            pos += 1 + len as usize;
+        }
+        if pos + 10 > payload.len() {
+            return None;
+        }
+        let rtype = u16::from_be_bytes([payload[pos], payload[pos + 1]]);
+        let rdlen = u16::from_be_bytes([payload[pos + 8], payload[pos + 9]]) as usize;
+        pos += 10;
+        if pos + rdlen > payload.len() {
+            return None;
+        }
+        if rtype == 1 && rdlen == 4 {
+            return Some([
+                payload[pos],
+                payload[pos + 1],
+                payload[pos + 2],
+                payload[pos + 3],
+            ]);
+        }
+        pos += rdlen;
+        a += 1;
+    }
+    None
+}
+
+/// Chờ DNS response từ `src_ip:53` và trả về bản ghi A đầu tiên (vòng 68).
+/// Kết hợp poll + parse để không tiêu thụ gói trước khi kịp đọc payload.
+pub fn net_recv_dns_a(src_ip: [u8; 4]) -> Option<[u8; 4]> {
+    for _ in 0..4 {
+        if !net_rx_poll_bounded(8_000_000) {
+            return None;
+        }
+        let result = unsafe {
+            let q = &mut *core::ptr::addr_of_mut!(NET_RX_QUEUE);
+            let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
+            let ok = ethertype == 0x0800
+                && q.buf[14 + 9] == 17
+                && q.buf[14 + 12..14 + 16] == src_ip
+                && u16::from_be_bytes([q.buf[34], q.buf[35]]) == 53;
+            if ok {
+                let udp_len = u16::from_be_bytes([q.buf[38], q.buf[39]]) as usize;
+                let payload_len = udp_len.saturating_sub(8);
+                let start = 14 + 20 + 8;
+                let end = (start + payload_len).min(q.buf.len());
+                if end > start {
+                    parse_dns_a(&q.buf[start..end])
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if result.is_some() {
+            net_rx_post();
+            return result;
+        }
+        net_rx_post();
+    }
+    None
+}
+
 /// Poll RX chờ ICMP echo reply (vòng 63). Trả về IP nguồn nếu thấy reply.
 /// Bounded 2M spins như các poll khác; parse từ buf[0] (frame Ethernet).
 pub fn net_recv_icmp() -> Option<[u8; 4]> {
@@ -1141,6 +1250,42 @@ mod tests {
             0x00, 0x01, 0xc0, 0xa8, 0x00, 0xc7,
         ];
         assert_eq!(checksum(&header), 0);
+    }
+
+    /// DNS response tối giản: 1 question (a.example) + 1 answer A 93.184.216.34.
+    #[test]
+    fn dns_a_record_parsed() {
+        let mut p = [0u8; 48];
+        let bytes: [u8; 43] = [
+            0x12, 0x34, 0x81, 0x80, // id, flags
+            0x00, 0x01, 0x00, 0x01, // qd=1 an=1
+            0x00, 0x00, 0x00, 0x00, // ns, ar
+            0x01, b'a', 0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x00, 0x00, 0x01, 0x00,
+            0x01, // QTYPE A, QCLASS IN
+            0xc0, 0x0c, // pointer tới question name
+            0x00, 0x01, 0x00, 0x01, // TYPE A, CLASS IN
+            0x00, 0x00, 0x00, 0x3c, // TTL 60
+            0x00, 0x04, // RDLENGTH
+            93, 184, 216, 34,
+        ];
+        p[..bytes.len()].copy_from_slice(&bytes);
+        assert_eq!(
+            super::parse_dns_a(&p[..bytes.len()]),
+            Some([93, 184, 216, 34])
+        );
+    }
+
+    /// Không có answer A thì trả None.
+    #[test]
+    fn dns_without_a_record_is_none() {
+        let bytes: [u8; 19] = [
+            0x12, 0x34, 0x81, 0x80, // id, flags
+            0x00, 0x01, 0x00, 0x00, // qd=1 an=0
+            0x00, 0x00, 0x00, 0x00, // ns, ar
+            0x01, b'a', 0x00, // QNAME
+            0x00, 0x01, 0x00, 0x01, // QTYPE A, QCLASS IN
+        ];
+        assert_eq!(super::parse_dns_a(&bytes), None);
     }
 
     /// Độ dài lẻ được đệm 0 ở byte cuối.
