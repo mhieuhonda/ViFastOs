@@ -1310,8 +1310,18 @@ impl Platform for Aarch64Platform {
     }
 
     fn init_block() {
-        // Pha 3 (vòng 42-43): probe 32 slot đầu TRƯỚC init — an toàn.
-        // Đọc MAC net qua config space khi gặp device=1.
+        // Pha 3 (vòng 42-45): probe 32 slot đầu TRƯỚC init — an toàn.
+        // Đọc MAC net qua config space khi gặp device=1. Vòng 45 log thêm
+        // địa chỉ NetQueue static riêng.
+        {
+            let (qaddr, qsize) = vifast_virtio::net_queue_info();
+            vifast_kernel::klog!(
+                Aarch64Platform,
+                "VIRTIO NETQ addr={:#x} size={}",
+                qaddr,
+                qsize
+            );
+        }
         for i in 0..32u64 {
             let base = 0x0a00_0000u64 + i * 0x200;
             let magic = unsafe { core::ptr::read_volatile(base as *const u32) };

@@ -1072,3 +1072,12 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
 - Xem `docs/agent2-report-44.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `ebb4936c8aa9af5583942306c3d4bf18b98254a5283c52263ebaa06c44cef1de`.
+
+## 9.24 — Vòng 45: NetQueue static riêng (pha 3 bước 5)
+
+- Đo trước: Kernel 561.768/budget 716.800 nhưng khe hở AArch64 chỉ 8B →
+  NetQueue ~4 KiB đặt ngoài Kernel (vùng .bss sau BKL).
+- `net_queue_info` + log `VIRTIO NETQ addr/size` cả 2 arch; khe hở giữ 8B.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 483, host 203, 0 warning.
+- Xem `docs/agent2-report-45.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `9c8b26bbd682d5e90b46601bd95d475251111eacbd948445a3647519d613d0f4`.

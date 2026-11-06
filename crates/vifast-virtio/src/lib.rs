@@ -85,6 +85,51 @@ static mut QUEUE: Queue = Queue {
     pad: [0; 7],
 };
 
+/// Maximum Ethernet frame QEMU user-net delivers (1514) plus headroom.
+pub const NET_BUF_SIZE: usize = 2048;
+/// VirtIO-net header: flags(1) + gso_type(1) + hdr_len(2) + gso_size(2) +
+/// csum_start(2) + csum_offset(2) + num_buffers(2).
+pub const NET_HDR_SIZE: usize = 12;
+
+/// Dedicated split-queue for VirtIO-net (vòng 45). Separate static from the
+/// block `QUEUE` so net bring-up never disturbs the disk path; both live in
+/// `.bss` after `KERNEL_STORAGE`/BKL (nm-confirmed 4 KiB block QUEUE at
+/// 0x401ee000 with room to spare), not inside `Kernel`, so the 8-byte
+/// AArch64 static gap is untouched.
+#[repr(C, align(4096))]
+struct NetQueue {
+    desc: [Descriptor; QUEUE_SIZE],
+    avail: Available,
+    used: Used,
+    hdr: [u8; NET_HDR_SIZE],
+    buf: [u8; NET_BUF_SIZE],
+}
+
+static mut NET_QUEUE: NetQueue = NetQueue {
+    desc: [EMPTY_DESC; QUEUE_SIZE],
+    avail: Available {
+        flags: 0,
+        idx: 0,
+        ring: [0; QUEUE_SIZE],
+        event: 0,
+    },
+    used: Used {
+        flags: 0,
+        idx: 0,
+        ring: [UsedElem { id: 0, len: 0 }; QUEUE_SIZE],
+        event: 0,
+    },
+    hdr: [0; NET_HDR_SIZE],
+    buf: [0; NET_BUF_SIZE],
+};
+
+/// Address and size of the dedicated net queue (for platform logging and
+/// future TX/RX wiring). Read-only w.r.t. device state.
+pub fn net_queue_info() -> (u64, usize) {
+    let base = core::ptr::addr_of!(NET_QUEUE) as u64;
+    (base, core::mem::size_of::<NetQueue>())
+}
+
 static mut BASE: u64 = 0;
 static mut READY: bool = false;
 static mut LAST_BASE: u64 = 0;

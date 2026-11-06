@@ -1075,8 +1075,18 @@ impl Platform for RiscvPlatform {
             );
             return;
         }
-        // Pha 3 (vòng 42-43): probe MMIO TRƯỚC init — an toàn vì chưa claim
+        // Pha 3 (vòng 42-45): probe MMIO TRƯỚC init — an toàn vì chưa claim
         // device nào. Đọc MAC net qua config space (offset 0x100).
+        // Vòng 45: log thêm địa chỉ NetQueue static riêng (ngoài Kernel).
+        {
+            let (qaddr, qsize) = vifast_virtio::net_queue_info();
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "VIRTIO NETQ addr={:#x} size={}",
+                qaddr,
+                qsize
+            );
+        }
         for base in [0x1000_1000u64, 0x1000_7000, 0x1000_8000] {
             let magic = unsafe { core::ptr::read_volatile(base as *const u32) };
             let device = unsafe { core::ptr::read_volatile((base + 8) as *const u32) };
