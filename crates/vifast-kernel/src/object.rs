@@ -26,6 +26,12 @@ pub const MAX_FDS: usize = 8;
 pub const MAX_PRIORITY: u8 = 15;
 const _: () = assert!(MAX_OBJECTS <= 256);
 const _: () = assert!(MAX_CAPS <= u8::MAX as usize);
+/// Static-storage budget for `Kernel` (bytes). `Kernel` lives in a platform
+/// `.data`/`.bss` static next to BKL, trap stacks and pointer cells; growing
+/// past this budget silently clobbers neighbors (vòng 30: AArch64 DABT
+/// FAR=0xb4410 sau BOOTINFO). Runtime refuses to boot past it; platforms
+/// should also `const`-assert their layout against it.
+pub const KERNEL_STATIC_BUDGET: usize = 716_800;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ObjRef {

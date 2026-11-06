@@ -958,3 +958,12 @@ follow-up `62b31f4`.
 - Docs: `00-hien-trang`, `11-hien-tai/02`, `README` (2 chỗ) 64→48.
 - Xem `docs/agent2-report-31.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `b20a8d12514acb51509132ae1094529cf442a578698293717b15f66fdea82785`.
+
+## 9.11 — Vòng 32: budget dùng chung, mở mục tiêu dài hạn
+
+- Thêm `vifast_kernel::KERNEL_STATIC_BUDGET=716.800`; runtime dùng chung,
+  bỏ const cục bộ. Không đổi hành vi.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 462, host 203, 0 warning.
+- Mở goal dài hạn M1→M3: static an toàn → pager v2 → net → display/input.
+- Xem `docs/agent2-report-32.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `46350433f8736abeeae093c695b63f1400ad948ad6249d0bb5f7c9a685c63867`.

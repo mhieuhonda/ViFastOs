@@ -415,15 +415,14 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     // Guard against static-storage overflow: `Kernel` lives in a platform
     // `.data`/`.bss` static. If it grows past its neighbors (e.g. a pool
     // array added to `Kernel`), `reset()` silently clobbers them — on AArch64
-    // this zeroes KERNEL_PTR/BKL and faults after BOOTINFO (vòng 29).
-    // Keep this budget in sync with the linker layout of each platform.
-    const KERNEL_STATIC_BUDGET: usize = 716_800;
-    if core::mem::size_of::<Kernel>() > KERNEL_STATIC_BUDGET {
+    // this zeroes KERNEL_PTR/BKL and faults after BOOTINFO (vòng 30).
+    // Budget is defined once in `vifast_kernel::KERNEL_STATIC_BUDGET`.
+    if core::mem::size_of::<Kernel>() > vifast_kernel::KERNEL_STATIC_BUDGET {
         vifast_kernel::klog!(
             A,
             "KERNEL STATIC OVERFLOW size={} budget={}",
             core::mem::size_of::<Kernel>(),
-            KERNEL_STATIC_BUDGET
+            vifast_kernel::KERNEL_STATIC_BUDGET
         );
         A::exit(1);
     }
