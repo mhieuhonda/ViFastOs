@@ -3,13 +3,19 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SUMMARY = ROOT / "ViFastOs-architecture-summary.txt"
+SUMMARY = Path(
+    os.environ.get(
+        "VIFAST_SUMMARY_OVERRIDE", ROOT / "ViFastOs-architecture-summary.txt"
+    )
+)
 HANDOFF = ROOT / "docs" / "ViFastOs-agent-handoff.md"
 
 
@@ -82,6 +88,7 @@ def main() -> int:
         "hard link protocol",
         "Task 10 (per-hart runqueue) là stretch",
         "chưa có free/destroy object/frame ngoài đường revoke Untyped",
+        "Chưa có đường user destroy từng object ngoài revoke Untyped/TcbDestroy",
         'USER FAULT" ×4',
         "TCB quota 16",
         "vượt 128 object",
@@ -89,8 +96,8 @@ def main() -> int:
         "x2APIC/per-hart runqueue",
         "x86 25.296",
     ]
-    if "Busy, HasDependents" not in summary:
-        fail("summary error list is missing Busy/HasDependents")
+    if "KError::Busy = 20" not in summary or "KError::HasDependents = 21" not in summary:
+        fail("generated error table is missing Busy/HasDependents")
     if "RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B" not in summary:
         fail("summary root ELF sizes are stale")
     for value in forbidden:
@@ -176,6 +183,39 @@ def main() -> int:
             fail(f"section 19 missing crate: {package}")
         if f"cargo test -p {package}" not in summary:
             fail(f"section 14 missing cargo test for: {package}")
+
+    if "--self-test" in sys.argv:
+        failures = 0
+        forbidden = [
+            "chưa có free/destroy object/frame ngoài đường revoke Untyped",
+            "Chưa có đường user destroy từng object ngoài revoke Untyped/TcbDestroy",
+        "Chưa có đường user destroy từng object ngoài revoke Untyped/TcbDestroy",
+            'USER FAULT" ×4',
+            "TCB quota 16",
+            "vượt 128 object",
+            "x2APIC/per-hart runqueue",
+            "x86 25.296",
+        ]
+        base = SUMMARY.read_text()
+        for phrase in forbidden:
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+                handle.write(base + "\n" + phrase + "\n")
+                probe = Path(handle.name)
+            env = dict(os.environ, VIFAST_SUMMARY_OVERRIDE=str(probe))
+            result = subprocess.run(
+                [sys.executable, __file__],
+                cwd=ROOT,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            probe.unlink()
+            if result.returncode == 0:
+                failures += 1
+                print(f"docs self-test: stale phrase not rejected: {phrase}", file=sys.stderr)
+        if failures:
+            return 1
+        print(f"docs self-test: PASS ({len(forbidden)} stale phrases rejected)")
 
     print("docs check: PASS")
     return 0

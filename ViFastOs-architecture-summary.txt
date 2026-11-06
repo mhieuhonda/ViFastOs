@@ -225,7 +225,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 253264 byte (`kernel_end=0x803c22b0`)
 - `Kernel = 710248`, `Object = 4752`, `Tcb = 4696`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 1`): riscv64 1/1, aarch64 1/1, x86_64 1/1
+- QEMU lần chạy gần nhất (`--repeat 3`): aarch64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped (đo 2026-11-06): RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B
@@ -957,11 +957,7 @@ x86_64:
 - return rax=error, rdi=value, rsi=label, rdx/rcx/r8/r9=data
 - int 0x80
 
-Error chính:
-Ok, InvalidCap, WrongType, NoRights, SlotOccupied, OutOfMemory,
-InvalidArg, Alignment, AlreadyMapped, NotMapped, NoCaller,
-ObjectDestroyed, MissingPageTable, IllegalOperation, NotImplemented,
-WouldBlock, NotFound, Busy, HasDependents.
+Error chính (sinh từ `KError` trong `vifast-abi`):
 
 ### BEGIN GENERATED errors
 - `KError::Ok = 0`
@@ -1028,7 +1024,7 @@ Root task dùng syscall, cấp slot tuần tự từ `free_slot_start`:
   USER FAULT thứ tư tại 0x1000301000.
 - Fault1 load 0x8000_0000; fault2 chạy lệnh đặc quyền; fault3 ghi vào stack
   server 0x1000002000; fault4 trong VSpace client ghi root stack 0x1000301000
-  -> cả sáu log USER FAULT.
+  -> cả sáu log USER FAULT (bốn fault trên và hai fault pager/fault4 của vòng 22.2).
 - Server VSpace riêng, code dùng chung Frame root, stack riêng +0x2000.
   Client dùng VSpace riêng và Untyped con 16 KiB/4 object từ 7.5; không còn cap
   tới root VSpace hay data Untyped của root.
@@ -1457,7 +1453,9 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - 6.4: runtime include root ELF, parse cửa sổ 1 MiB, map root ELF + stack Rust
   vào root VSpace, entry từ ELF, stack ROOT_ELF_STACK_TOP; bỏ root assembly;
   harness yêu cầu ROOT RUST/ROOT READY, không ROOT PANIC; từ 7.5 harness yêu cầu
-  đúng 6 USER FAULT, thêm địa chỉ root Rust stack và hai fault của fault4.
+  đúng 4 USER FAULT, thêm địa chỉ root Rust stack.
+- Vòng 22.2 nâng lên 6 USER FAULT: thêm hai fault của fault4 (0x1001000000,
+  0x1001001000).
 - Boot Untyped tăng lên 128 KiB/32 object; data Untyped giảm còn 48 object;
   tổng quota 5 + 32 + 48 + 32 = 117 <= 128. Log in used/free pages và objects.
 - Không còn code_page()/build_page_tables()/bảng user tĩnh; init_platform chỉ
@@ -1519,7 +1517,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
 - #DF/NMI/#MC dùng IST1 và luôn panic, kể cả khi CS là user.
 - Fault origin: RISC-V SPP, AArch64 vector current/lower, x86 error U/S.
 - Fault1/2/3 (kernel VA, illegal instruction, stack server) và fault4 (root
-  Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 4 USER FAULT.
+  Rust stack từ VSpace client) có USER FAULT trên cả 3 arch; tổng 6 USER FAULT.
 - Kernel/cspace limits lấy từ hằng trong `object.rs`; `Kernel` dùng static
   storage. Test harness cần stack 8 MiB (`.cargo/config.toml`).
 - Host test hiện có: xem vùng `tests` sinh tự động.
@@ -1539,7 +1537,8 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   `AP PIC IRQ` thay vì ack hộ BSP.
 - Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
   chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
-- Chưa có đường user destroy từng object ngoài revoke Untyped/TcbDestroy;
+- `ObjectDestroy` (50) destroy từng Frame/Endpoint/Notification/PageTable/
+  VSpace/CNode/SchedContext qua cap gốc; bộ nhớ trả về Untyped;
   object table cố định 147.
 - IOMMU mới có mô hình phần mềm (domain + reverse map + IoMap/IoUnmap);
   chưa có hardware IOMMU/VT-d/SMMU.
@@ -1600,7 +1599,7 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   nó sẽ cần destroy-xong-rồi-pick sau này.
 - Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
 - Client nhận Untyped con riêng; root không còn CapCopy data Untyped cho client.
-- TCB/VSpace chưa tách pool riêng; TCB có quota 16 nhưng vẫn nằm trong object table.
+- TCB/VSpace chưa tách pool riêng; TCB có quota 18 nhưng vẫn nằm trong object table.
   Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 147 object hoặc trước SMP;
   object table hiện là 147 slot và chưa cần tách pool.
 - `OBJ_TCB_BYTES=4096` chỉ là quota accounting, không phản ánh đúng `size_of::<Tcb>()`.
@@ -1890,6 +1889,15 @@ E. Desktop / Space
     `leaked`; demo `DESTROY OK (frames=100, vspaces=10, reused=100, leaked=0)`;
     boot stack RISC-V 192 KiB; `-smp 4` thử nghiệm; thiết kế pager v2.
 
+
+
+74. Vòng 24: CONTEXTS đủ 147 slot + assert; destroy VSpace flush ASID theo
+    harts_loaded; feature `test-destroy-smp` (demo 20 frame + 2 VSpace khi
+    hart phụ chạy, `DESTROY SMP OK`); đo boot stack 0xA5 (RISC-V 21.736/196.608,
+    AArch64 21.800/262.144, x86 21.760/196.608); fuzz reclaim trộn kích thước
+    100.000 bước leak=0, sửa cascade watermark; harness 462 case; còn 253.264 byte headroom
+    (`kernel_end=0x803c22b0`). Pager v2 hoãn vì ngân sách trang/TCB.
+
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
 README.md
@@ -1944,10 +1952,3 @@ user space, block cap, permission theo badge D6, persistence 7 phase cả 3 ki�
 trúc, BKL ticket per-hart, tick BSP/AP độc lập, ASID/PCID, IPI/TLB per-VA
 targeted + fallback full ASID, remote fence.i. Khoảng trống tiếp theo:
 hardware IOMMU, multi-AP x86, network/input, framebuffer/compositor/ViFastKey.
-74. Vòng 24: CONTEXTS đủ 147 slot + assert; destroy VSpace flush ASID theo
-    harts_loaded; feature `test-destroy-smp` (demo 20 frame + 2 VSpace khi
-    hart phụ chạy, `DESTROY SMP OK`); đo boot stack 0xA5 (RISC-V 21.736/196.608,
-    AArch64 21.800/262.144, x86 21.760/196.608); fuzz reclaim trộn kích thước
-    100.000 bước leak=0, sửa cascade watermark; harness 462 case; còn 253.264 byte headroom
-    (`kernel_end=0x803c22b0`). Pager v2 hoãn vì ngân sách trang/TCB.
-
