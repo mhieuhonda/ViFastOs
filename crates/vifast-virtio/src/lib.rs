@@ -1152,3 +1152,260 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// VirtIO-GPU tối thiểu (vòng 66, M4 display).
+// Chỉ dùng control queue (queue 0): GET_DISPLAY_INFO, RESOURCE_CREATE_2D,
+// RESOURCE_ATTACH_BACKING, SET_SCANOUT, TRANSFER_TO_HOST_2D, RESOURCE_FLUSH.
+// ---------------------------------------------------------------------------
+
+pub const GPU_DEVICE_ID: u32 = 16;
+/// Chiều rộng/cao khung hình ta tạo (đủ nhỏ để static buffer vừa).
+pub const GPU_WIDTH: u32 = 160;
+pub const GPU_HEIGHT: u32 = 120;
+const GPU_FMT_B8G8R8X8: u32 = 2;
+const GPU_RESP_OK_NODATA: u32 = 0x1100;
+const GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+const GPU_MAX_DESC: usize = 8;
+
+#[repr(C, align(16))]
+struct GpuDesc {
+    addr: u64,
+    len: u32,
+    flags: u16,
+    next: u16,
+}
+
+#[repr(C, align(16))]
+struct GpuAvail {
+    flags: u16,
+    idx: u16,
+    ring: [u16; GPU_MAX_DESC],
+}
+
+#[repr(C, align(16))]
+struct GpuUsed {
+    flags: u16,
+    idx: u16,
+    ring: [GpuUsedElem; GPU_MAX_DESC],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GpuUsedElem {
+    id: u32,
+    len: u32,
+}
+
+#[repr(C, align(16))]
+struct GpuQueue {
+    desc: [GpuDesc; GPU_MAX_DESC],
+    avail: GpuAvail,
+    used: GpuUsed,
+    cmd: [u8; 256],
+    resp: [u8; 512],
+    framebuffer: [u32; (GPU_WIDTH * GPU_HEIGHT) as usize],
+}
+
+static mut GPU_QUEUE: GpuQueue = GpuQueue {
+    desc: [const {
+        GpuDesc {
+            addr: 0,
+            len: 0,
+            flags: 0,
+            next: 0,
+        }
+    }; GPU_MAX_DESC],
+    avail: GpuAvail {
+        flags: 0,
+        idx: 0,
+        ring: [0; GPU_MAX_DESC],
+    },
+    used: GpuUsed {
+        flags: 0,
+        idx: 0,
+        ring: [GpuUsedElem { id: 0, len: 0 }; GPU_MAX_DESC],
+    },
+    cmd: [0; 256],
+    resp: [0; 512],
+    framebuffer: [const { 0u32 }; (GPU_WIDTH * GPU_HEIGHT) as usize],
+};
+
+static mut GPU_BASE: u64 = 0;
+static mut GPU_READY: bool = false;
+
+fn gpu_write32(base: u64, offset: u64, value: u32) {
+    unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+}
+
+/// Khởi tạo virtio-gpu tại `base`: reset, ACK/DRIVER, queue 0, DRIVER_OK.
+pub fn gpu_init(base: u64) -> bool {
+    unsafe {
+        GPU_READY = false;
+        GPU_BASE = 0;
+        let q = &mut *core::ptr::addr_of_mut!(GPU_QUEUE);
+        q.avail.idx = 0;
+        q.used.idx = 0;
+    }
+    gpu_write32(base, 0x70, 0); // reset
+    gpu_write32(base, 0x70, 1); // ACK
+    gpu_write32(base, 0x70, 3); // ACK | DRIVER
+                                // Không cần feature nào (không virgl, không resource uuid).
+    gpu_write32(base, 0x14, 0);
+    gpu_write32(base, 0x10, 0);
+    gpu_write32(base, 0x70, 11); // ACK|DRIVER|FEATURES_OK
+    gpu_write32(base, 0x30, 0); // control queue
+    let qb = core::ptr::addr_of_mut!(GPU_QUEUE) as u64;
+    let desc_addr = qb + core::mem::offset_of!(GpuQueue, desc) as u64;
+    let avail_addr = qb + core::mem::offset_of!(GpuQueue, avail) as u64;
+    let used_addr = qb + core::mem::offset_of!(GpuQueue, used) as u64;
+    gpu_write32(base, 0x38, GPU_MAX_DESC as u32);
+    gpu_write32(base, 0x80, desc_addr as u32);
+    gpu_write32(base, 0x84, (desc_addr >> 32) as u32);
+    gpu_write32(base, 0x90, avail_addr as u32);
+    gpu_write32(base, 0x94, (avail_addr >> 32) as u32);
+    gpu_write32(base, 0xa0, used_addr as u32);
+    gpu_write32(base, 0xa4, (used_addr >> 32) as u32);
+    gpu_write32(base, 0x44, 1); // QueueReady
+    gpu_write32(base, 0x70, 15); // DRIVER_OK
+    unsafe {
+        GPU_BASE = base;
+        GPU_READY = true;
+    }
+    // GET_DISPLAY_INFO để xác nhận kênh điều khiển sống.
+    gpu_command(0x0100, &[])
+}
+
+/// Gửi một lệnh điều khiển: `cmd_type` + payload; chờ response. Trả về true
+/// khi response là OK (0x1100/0x1101). Payload chép ngay sau header 24 byte.
+fn gpu_command(cmd_type: u32, payload: &[u8]) -> bool {
+    let base = unsafe { GPU_BASE };
+    if unsafe { !GPU_READY } || base == 0 {
+        return false;
+    }
+    let qb = core::ptr::addr_of_mut!(GPU_QUEUE) as u64;
+    let q = unsafe { &mut *core::ptr::addr_of_mut!(GPU_QUEUE) };
+    let cmd_len = 24 + payload.len();
+    if cmd_len > q.cmd.len() {
+        return false;
+    }
+    q.cmd[0..4].copy_from_slice(&cmd_type.to_le_bytes());
+    for byte in q.cmd[4..24].iter_mut() {
+        *byte = 0;
+    }
+    q.cmd[24..cmd_len].copy_from_slice(payload);
+    for byte in q.resp.iter_mut() {
+        *byte = 0;
+    }
+    q.desc[0] = GpuDesc {
+        addr: qb + core::mem::offset_of!(GpuQueue, cmd) as u64,
+        len: cmd_len as u32,
+        flags: DESC_NEXT,
+        next: 1,
+    };
+    q.desc[1] = GpuDesc {
+        addr: qb + core::mem::offset_of!(GpuQueue, resp) as u64,
+        len: q.resp.len() as u32,
+        flags: DESC_WRITE,
+        next: 0,
+    };
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    let next = q.avail.idx.wrapping_add(1);
+    q.avail.ring[(q.avail.idx as usize) % GPU_MAX_DESC] = 0;
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    unsafe { core::ptr::write_volatile(&mut q.avail.idx, next) };
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    gpu_write32(base, 0x50, 0);
+    let target = unsafe { core::ptr::read_volatile(&q.used.idx) }.wrapping_add(1);
+    let mut spins = 0u64;
+    while unsafe { core::ptr::read_volatile(&q.used.idx) } != target && spins < 4_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    if unsafe { core::ptr::read_volatile(&q.used.idx) } != target {
+        return false;
+    }
+    let resp_type = u32::from_le_bytes([q.resp[0], q.resp[1], q.resp[2], q.resp[3]]);
+    resp_type == GPU_RESP_OK_NODATA || resp_type == GPU_RESP_OK_DISPLAY_INFO
+}
+
+/// Dựng khung hình: tạo resource 2D, attach backing, set scanout, tô màu và
+/// flush. Trả về true nếu mọi lệnh thành công.
+pub fn gpu_draw_test_pattern() -> bool {
+    if unsafe { !GPU_READY } {
+        return false;
+    }
+    // RESOURCE_CREATE_2D: resource_id=1, format, w, h.
+    let mut create = [0u8; 16];
+    create[0..4].copy_from_slice(&1u32.to_le_bytes());
+    create[4..8].copy_from_slice(&GPU_FMT_B8G8R8X8.to_le_bytes());
+    create[8..12].copy_from_slice(&GPU_WIDTH.to_le_bytes());
+    create[12..16].copy_from_slice(&GPU_HEIGHT.to_le_bytes());
+    if !gpu_command(0x0101, &create) {
+        return false;
+    }
+    // RESOURCE_ATTACH_BACKING: resource 1, 1 entry {addr, length, pad}.
+    let qb = core::ptr::addr_of_mut!(GPU_QUEUE) as u64;
+    let fb_addr = qb + core::mem::offset_of!(GpuQueue, framebuffer) as u64;
+    let mut attach = [0u8; 24];
+    attach[0..4].copy_from_slice(&1u32.to_le_bytes());
+    attach[4..8].copy_from_slice(&1u32.to_le_bytes());
+    attach[8..16].copy_from_slice(&fb_addr.to_le_bytes());
+    attach[16..20].copy_from_slice(&(GPU_WIDTH * GPU_HEIGHT * 4).to_le_bytes());
+    if !gpu_command(0x0106, &attach) {
+        return false;
+    }
+    // SET_SCANOUT: rect(0,0,w,h), scanout_id=0, resource_id=1.
+    let mut scanout = [0u8; 24];
+    scanout[0..4].copy_from_slice(&0u32.to_le_bytes());
+    scanout[4..8].copy_from_slice(&0u32.to_le_bytes());
+    scanout[8..12].copy_from_slice(&GPU_WIDTH.to_le_bytes());
+    scanout[12..16].copy_from_slice(&GPU_HEIGHT.to_le_bytes());
+    scanout[16..20].copy_from_slice(&0u32.to_le_bytes());
+    scanout[20..24].copy_from_slice(&1u32.to_le_bytes());
+    if !gpu_command(0x0103, &scanout) {
+        return false;
+    }
+    // Tô màu: dải màu RGB để screendump dễ nhận biết (X8R8G8B8 little-endian
+    // nên word = 0x00RRGGBB).
+    let q = unsafe { &mut *core::ptr::addr_of_mut!(GPU_QUEUE) };
+    let mut y = 0u32;
+    while y < GPU_HEIGHT {
+        let mut x = 0u32;
+        while x < GPU_WIDTH {
+            let r = (x * 255 / GPU_WIDTH) & 0xff;
+            let g = (y * 255 / GPU_HEIGHT) & 0xff;
+            let b = 0x40u32;
+            q.framebuffer[(y * GPU_WIDTH + x) as usize] = (r << 16) | (g << 8) | b;
+            x += 1;
+        }
+        y += 1;
+    }
+    // TRANSFER_TO_HOST_2D: rect + offset + resource_id.
+    let mut transfer = [0u8; 32];
+    transfer[0..4].copy_from_slice(&0u32.to_le_bytes());
+    transfer[4..8].copy_from_slice(&0u32.to_le_bytes());
+    transfer[8..12].copy_from_slice(&GPU_WIDTH.to_le_bytes());
+    transfer[12..16].copy_from_slice(&GPU_HEIGHT.to_le_bytes());
+    transfer[16..24].copy_from_slice(&0u64.to_le_bytes());
+    transfer[24..28].copy_from_slice(&1u32.to_le_bytes());
+    if !gpu_command(0x0105, &transfer) {
+        return false;
+    }
+    // RESOURCE_FLUSH: rect + resource_id.
+    let mut flush = [0u8; 24];
+    flush[0..4].copy_from_slice(&0u32.to_le_bytes());
+    flush[4..8].copy_from_slice(&0u32.to_le_bytes());
+    flush[8..12].copy_from_slice(&GPU_WIDTH.to_le_bytes());
+    flush[12..16].copy_from_slice(&GPU_HEIGHT.to_le_bytes());
+    flush[16..20].copy_from_slice(&1u32.to_le_bytes());
+    gpu_command(0x0104, &flush)
+}
+
+/// Địa chỉ (và độ dài) framebuffer để test có thể kiểm tra.
+pub fn gpu_framebuffer_info() -> (u64, u32, u32) {
+    let qb = core::ptr::addr_of_mut!(GPU_QUEUE) as u64;
+    let fb = qb + core::mem::offset_of!(GpuQueue, framebuffer) as u64;
+    (fb, GPU_WIDTH, GPU_HEIGHT)
+}

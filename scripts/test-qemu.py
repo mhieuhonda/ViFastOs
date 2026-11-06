@@ -390,6 +390,7 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         "-device", "virtio-net-device,netdev=vn0",
         "-netdev", netdev_rv,
         *dump_rv,
+        "-device", "virtio-gpu-device",
         "-device", "ramfb",
         "-bios", "default",
         "-kernel", kernel,
@@ -443,6 +444,7 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         "-device", "virtio-net-device,netdev=vn0",
         "-netdev", netdev_arm,
         *dump_arm,
+        "-device", "virtio-gpu-device",
         "-device", "ramfb",
         "-kernel", kernel,
     ]
@@ -582,6 +584,120 @@ def test_interactive(name: str, index: int) -> bool:
     return ok
 
 
+def gpu_check(name: str) -> bool:
+    """Boot with virtio-gpu, screendump the display and verify real pixels.
+
+    Vòng 66 (M4 display MVP): chờ serial tới `VIRTIO GPU DRAW OK`, gửi
+    `screendump` qua monitor socket, đọc PPM và so màu gradient tại vài điểm.
+    Opt-in (cờ --gpu-check) để gate chuẩn không phụ thuộc display backend.
+    """
+    if name not in ("riscv64", "aarch64"):
+        return True
+    serial = f"/tmp/vifast-gpu-{name}-ser.log"
+    mon = f"/tmp/vifast-gpu-{name}-mon.sock"
+    ppm = f"/tmp/vifast-gpu-{name}.ppm"
+    disk = make_disk(f"{name}-gpu")
+    for path in (serial, mon, ppm):
+        if os.path.exists(path):
+            os.unlink(path)
+    if name == "riscv64":
+        kernel = os.path.join(
+            ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
+        )
+        cmd = [
+            QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "128M",
+            "-display", "none",
+            "-monitor", f"unix:{mon},server,nowait",
+            "-serial", f"file:{serial}",
+            "-global", "virtio-mmio.force-legacy=false",
+            "-drive", f"if=none,id=vd0,file={disk},format=raw",
+            "-device", "virtio-blk-device,drive=vd0",
+            "-device", "virtio-gpu-device",
+            "-device", "ramfb",
+            "-bios", "default", "-kernel", kernel,
+        ]
+    else:
+        kernel = os.path.join(
+            ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64"
+        )
+        cmd = [
+            QEMU_ARM, "-machine", "virt,gic-version=2", "-semihosting",
+            "-cpu", "max", "-smp", "2", "-m", "128M",
+            "-display", "none",
+            "-monitor", f"unix:{mon},server,nowait",
+            "-serial", f"file:{serial}",
+            "-global", "virtio-mmio.force-legacy=false",
+            "-drive", f"if=none,id=vd0,file={disk},format=raw",
+            "-device", "virtio-blk-device,drive=vd0",
+            "-device", "virtio-gpu-device",
+            "-device", "ramfb",
+            "-kernel", kernel,
+        ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        deadline = time.time() + 25
+        drawn = False
+        while time.time() < deadline:
+            time.sleep(0.3)
+            if os.path.exists(serial):
+                text = open(serial, "rb").read().decode("utf-8", errors="replace")
+                if "VIRTIO GPU DRAW OK" in text:
+                    drawn = True
+                    break
+                if "VIRTIO GPU" in text and "FAIL" in text.split("VIRTIO GPU", 1)[1][:200]:
+                    print(f"--- {name} gpu FAIL (draw error in serial) ---")
+                    return False
+        if not drawn:
+            print(f"--- {name} gpu FAIL (no DRAW OK) ---")
+            return False
+        sock = None
+        for _ in range(20):
+            if os.path.exists(mon):
+                try:
+                    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    sock.settimeout(5.0)
+                    sock.connect(mon)
+                    break
+                except OSError:
+                    sock = None
+            time.sleep(0.2)
+        if sock is None:
+            print(f"--- {name} gpu FAIL (no monitor) ---")
+            return False
+        sock.sendall(f"screendump {ppm}\n".encode())
+        time.sleep(1.5)
+        sock.close()
+        if not os.path.exists(ppm):
+            print(f"--- {name} gpu FAIL (no screendump) ---")
+            return False
+        data = open(ppm, "rb").read()
+        parts = data.split(b"\n", 3)
+        if len(parts) < 4 or parts[0] != b"P6":
+            print(f"--- {name} gpu FAIL (bad ppm) ---")
+            return False
+        width, height = map(int, parts[1].split())
+        body = parts[3]
+        if width != 160 or height != 120:
+            print(f"--- {name} gpu FAIL (size {width}x{height}) ---")
+            return False
+        expected = {
+            (0, 0): (0, 0, 64),
+            (80, 60): (127, 127, 64),
+            (159, 119): (253, 252, 64),
+        }
+        for (x, y), want in expected.items():
+            i = (y * width + x) * 3
+            got = (body[i], body[i + 1], body[i + 2])
+            if got != want:
+                print(f"--- {name} gpu FAIL pixel({x},{y}) got={got} want={want} ---")
+                return False
+        print(f"--- {name} gpu PASS (160x120 pixels verified) ---")
+        return True
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -604,6 +720,12 @@ def main() -> int:
             "test-destroy-smp",
         ),
         help="run a test-only feature build",
+    )
+    parser.add_argument(
+        "--gpu-check",
+        action="store_true",
+        help="also boot with virtio-gpu, screendump the display and verify "
+        "real pixels (pha 4 display MVP, vòng 66; default off)",
     )
     parser.add_argument(
         "--interactive",
@@ -651,6 +773,9 @@ def main() -> int:
                     interactive_results[name].append(
                         test_interactive(name, index)
                     )
+                if args.gpu_check and args.feature is None and results[name][-1]:
+                    if not gpu_check(name):
+                        results[name][-1] = False
     finally:
         cleanup_disks()
     print("\n=== summary ===")

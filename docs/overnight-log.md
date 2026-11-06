@@ -1255,3 +1255,13 @@ follow-up `62b31f4`.
 - Cổng: QEMU 3/3 ×3, persist 7×3, harness 489, 0 warning.
 - Xem `docs/agent2-report-65.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `503a84d2afcb72bb1bb9d99868b8e140fe89247a02e62589d9656f4f3a949523`.
+
+## 9.45 — Vòng 66: M4 display MVP (virtio-gpu + pixel thật)
+
+- Driver virtio-gpu tối thiểu; gradient 160x120; screendump xác nhận pixel
+  đúng cả riscv64/aarch64. Framebuffer 320x240 vượt headroom nên giảm còn
+  160x120.
+- Harness khóa `VIRTIO GPU READY` + `VIRTIO GPU DRAW OK`; `--gpu-check` opt-in.
+- Cổng: QEMU 3/3 ×3, persist 7×3, harness 489, host 207, 0 warning.
+- Xem `docs/agent2-report-66.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `5089e083d5553519e3ec51cfc6d1ed9fc935b70ef4edb44275a33b7b122a26a6`.

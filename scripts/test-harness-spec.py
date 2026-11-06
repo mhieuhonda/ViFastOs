@@ -29,6 +29,8 @@ def fixture(arch: str) -> str:
             "VIRTIO NET READY base=0x10007000 accepted=0x10020",
             "VIRTIO NET PING REPLY from 10.0.2.2",
             "VIRTIO NET DNS sent len=0",
+            "VIRTIO GPU READY",
+            "VIRTIO GPU DRAW OK fb=0x80368400 160x120",
         ]
     elif arch == "aarch64":
         lines += [
@@ -44,6 +46,8 @@ def fixture(arch: str) -> str:
             "VIRTIO NET READY base=0xa003c00 accepted=0x10020",
             "VIRTIO NET PING REPLY from 10.0.2.2",
             "VIRTIO NET DNS sent len=0",
+            "VIRTIO GPU READY",
+            "VIRTIO GPU DRAW OK fb=0x80368400 160x120",
         ]
     else:
         lines += [

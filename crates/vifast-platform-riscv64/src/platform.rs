@@ -1235,6 +1235,32 @@ impl Platform for RiscvPlatform {
                 }
             }
         }
+        // Vòng 66 (M4 display): dò + khởi tạo virtio-gpu (device id 16),
+        // tạo resource 2D 320x240, set scanout và vẽ dải màu để QEMU
+        // screendump kiểm chứng được pixel thật.
+        vifast_virtio::scan_devices(0x1000_1000, 0x1000_9000, 0x1000, |base, device| {
+            if device == 16 {
+                let gver = unsafe { core::ptr::read_volatile((base + 4) as *const u32) };
+                vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU base={:#x} ver={}", base, gver);
+                if vifast_virtio::gpu_init(base) {
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU READY");
+                    if vifast_virtio::gpu_draw_test_pattern() {
+                        let (fb, w, h) = vifast_virtio::gpu_framebuffer_info();
+                        vifast_kernel::klog!(
+                            RiscvPlatform,
+                            "VIRTIO GPU DRAW OK fb={:#x} {}x{}",
+                            fb,
+                            w,
+                            h
+                        );
+                    } else {
+                        vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU DRAW FAIL");
+                    }
+                } else {
+                    vifast_kernel::klog!(RiscvPlatform, "VIRTIO GPU INIT FAIL");
+                }
+            }
+        });
         if vifast_virtio::init_range(0x1000_1000, 0x1000_9000, 0x1000) {
             let (base, magic, version, device) = vifast_virtio::probe_info();
             vifast_kernel::klog!(
