@@ -11,6 +11,24 @@ docs check PASS, fmt PASS.
 **Mức trưởng thành:** microkernel bring-up/nghiên cứu/giáo dục; **không phải**
 hệ điều hành production.
 
+> **CẬP NHẬT 2026-11-07 (vòng 79) — đọc mục này trước, phần dưới là lịch sử**
+>
+> - HEAD hiện tại: `69fe809` (xem `git log --oneline`); báo cáo từng vòng ở
+>   `docs/agent2-report-<N>.md`, nhật ký ở `docs/overnight-log.md`.
+> - Đã có thêm từ vòng 23: VirtIO-MMIO **net** (ARP/ICMP/UDP/DNS A, TCP echo
+>   một kết nối), **gpu** (160x120, gradient + font 5x7 "ViFastOs"),
+>   **input** (bàn phím → RxQueue UART → shell), **rng** (entropy thật),
+>   demand-load pager nạp `/page.bin` từ VFS trên riscv64/aarch64.
+> - Tài liệu driver mới: `docs/11-hien-tai/13-virtio.md`.
+> - Cổng hiện tại (chạy bằng một lệnh `./scripts/gate.sh`): build 0 warning,
+>   QEMU 3/3 × 3 kiến trúc, persist 7 × 3, harness 504 case, fmt, docs.
+>   Thêm `--with-tcp` để chạy thêm kiểm tra TCP echo qua hostfwd.
+> - Chốt chặn đã biết: x86_64 không có VFS demand-load vì root ELF/stack map
+>   bằng trang 2 MiB (cần tách PMD) và data/meta Untyped đã cạn 76/76.
+> - Việc nên làm tiếp: giải phóng Untyped cho x86 (staging frame hoặc tách
+>   huge page), đưa TCP thành service thường trú, mở rộng thời gian sống của
+>   guest để test gõ lệnh đầy đủ.
+
 > **Cách đọc tài liệu này**
 >
 > 1. Mục 0 là tóm tắt đủ để ra quyết định trong 3 phút.
