@@ -1102,8 +1102,10 @@ impl Kernel {
                         }
                         Kind::Notification(_) => {
                             if let Some(notification) = self.notification_mut(r) {
-                                if notification.waiter == Some(target) {
-                                    notification.waiter = None;
+                                for slot in notification.waiters.iter_mut() {
+                                    if *slot == Some(target) {
+                                        *slot = None;
+                                    }
                                 }
                             }
                         }
@@ -2711,7 +2713,7 @@ impl Kernel {
                 }
                 Kind::Endpoint(_) => {}
                 Kind::Notification(ref notification) => {
-                    if let Some(waiter) = notification.waiter {
+                    for waiter in notification.waiters.into_iter().flatten() {
                         if self.tcb(waiter).is_none() {
                             return Err(KError::ObjectDestroyed);
                         }
@@ -3376,13 +3378,11 @@ impl Kernel {
                 }
             }
             if let Some(notification) = self.notification_mut(r) {
-                if notification.waiter == Some(obj) {
-                    notification.waiter = None;
-                }
-                // Vòng 86 (audit #3 P0-1): slot waiter thứ hai cũng phải được
-                // gỡ khi TCB bị destroy.
-                if notification.waiter2 == Some(obj) {
-                    notification.waiter2 = None;
+                // Vòng 88: gỡ TCB khỏi mọi slot waiter khi nó bị destroy.
+                for slot in notification.waiters.iter_mut() {
+                    if *slot == Some(obj) {
+                        *slot = None;
+                    }
                 }
             }
         }
@@ -3465,13 +3465,15 @@ impl Kernel {
     }
 
     fn destroy_notification(&mut self, obj: ObjRef) {
-        let waiter = if let Some(notification) = self.notification_mut(obj) {
+        let waiters = if let Some(notification) = self.notification_mut(obj) {
             notification.word = 0;
-            notification.waiter.take()
+            let pending = notification.waiters;
+            notification.waiters = [None; NOTIFICATION_WAITERS];
+            pending
         } else {
-            None
+            [None; NOTIFICATION_WAITERS]
         };
-        if let Some(waiter) = waiter {
+        for waiter in waiters.into_iter().flatten() {
             self.wake_error(waiter, KError::ObjectDestroyed);
         }
     }
@@ -3981,7 +3983,7 @@ impl Kernel {
     fn notification_in_use(&self, object: ObjRef) -> bool {
         if self
             .notification(object)
-            .is_some_and(|notification| notification.waiter.is_some())
+            .is_some_and(|notification| notification.waiters.iter().any(Option::is_some))
         {
             return true;
         }
@@ -6737,28 +6739,45 @@ mod tests {
     }
 
     #[test]
-    fn notification_serves_two_waiters_and_rejects_a_third() {
-        // Vòng 86 (audit #3 P0-1): waiter thứ hai từng ghi đè waiter đầu,
-        // khiến task đầu BlockedNotification vĩnh viễn. Nay có hai slot.
+    fn notification_wakes_every_waiter_in_the_queue() {
+        // Vòng 88 (audit #4 P0): một slot duy nhất từng khiến waiter thứ hai
+        // ghi đè waiter đầu (task đầu kẹt BlockedNotification vĩnh viễn).
+        // Root cố ý park 4 worker trên cùng notification, nên hàng đợi 6 slot
+        // và signal phải đánh thức TẤT CẢ.
         let mut kernel = Kernel::new();
-        let first = kernel.create_tcb("first", 5).unwrap();
-        let second = kernel.create_tcb("second", 5).unwrap();
-        let third = kernel.create_tcb("third", 5).unwrap();
+        let names = ["w0", "w1", "w2", "w3"];
+        let mut waiters = [None; 4];
+        for (index, name) in names.iter().enumerate() {
+            waiters[index] = Some(kernel.create_tcb(name, 5).unwrap());
+        }
+        // Dùng chung một notification cho cả bốn (như root park worker).
         let ntfn = kernel.create_notification().unwrap();
-        assert_eq!(kernel.wait_as(first, ntfn), Ok(None));
-        assert_eq!(kernel.wait_as(second, ntfn), Ok(None));
-        assert_eq!(
-            kernel.tcb(first).unwrap().state,
-            ThreadState::BlockedNotification
-        );
-        assert_eq!(
-            kernel.tcb(second).unwrap().state,
-            ThreadState::BlockedNotification
-        );
-        assert_eq!(kernel.wait_as(third, ntfn), Err(KError::WouldBlock));
+        for tcb in waiters.into_iter().flatten() {
+            assert_eq!(kernel.wait_as(tcb, ntfn), Ok(None));
+            assert_eq!(
+                kernel.tcb(tcb).unwrap().state,
+                ThreadState::BlockedNotification
+            );
+        }
         assert_eq!(kernel.signal(ntfn, 0b10), Ok(()));
-        assert_eq!(kernel.tcb(first).unwrap().state, ThreadState::Ready);
-        assert_eq!(kernel.tcb(second).unwrap().state, ThreadState::Ready);
+        for tcb in waiters.into_iter().flatten() {
+            assert_eq!(kernel.tcb(tcb).unwrap().state, ThreadState::Ready);
+        }
+    }
+
+    #[test]
+    fn signal_skips_waiters_that_are_not_blocked() {
+        // Vòng 88 (audit #4): nếu waiter đã được đánh thức bởi đường khác
+        // (state khác BlockedNotification) thì signal không được đưa nó vào
+        // runqueue lần nữa, và không được nuốt bit.
+        let mut kernel = Kernel::new();
+        let waiter = kernel.create_tcb("waiter", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(waiter, ntfn), Ok(None));
+        kernel.tcb_mut(waiter).unwrap().state = ThreadState::Suspended;
+        assert_eq!(kernel.signal(ntfn, 0b1000), Ok(()));
+        assert_eq!(kernel.tcb(waiter).unwrap().state, ThreadState::Suspended);
+        assert_eq!(kernel.poll(ntfn), Ok(0b1000));
     }
 
     #[test]

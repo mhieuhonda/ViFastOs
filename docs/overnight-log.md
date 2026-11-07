@@ -1452,3 +1452,15 @@ follow-up `62b31f4`.
   FP/SIMD, nên chặn an toàn; lưu trữ per-task sẽ vượt ngân sách static.
 - `soak.py` coi `(0,0)` là hỏng thay vì PASS.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `d5bfd9b420576780c615275aaddf0d963ad35de241328f27c5b678daf87f33ef`.
+
+## 9.67 — Vòng 88: P0 notification (hàng đợi waiter)
+
+- Audit #4 chỉ ra P0 trong chính bản vá vòng 86: `wait_as` đặt state trước khi
+  kiểm slot, `WouldBlock` để task kẹt Blocked vĩnh viễn.
+- Gốc rễ các lần sửa hỏng boot: root park 4 worker trên cùng notification
+  (`vifast-root/src/main.rs:420,455,469,511`) — mọi thiết kế "WouldBlock" hay
+  "2 slot" đều đổi timing SMP. Nay dùng hàng đợi 6 slot, `signal` đánh thức
+  tất cả; 140 test kernel.
+- FS `read_dir_entry` giữ index khi gặp entry hỏng (25 test); x86 có IDT[0xFF]
+  cho vector spurious; `Platform::send_ipi` gửi thật.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `2252cbd595d3bb479a43b5d4df8411841c78043bb3f99cfeab3e588a8c1c8243`.

@@ -683,7 +683,12 @@ impl Arch for Aarch64Platform {
         Aarch64::irq_enable();
     }
     fn send_ipi(hart: usize) {
-        Aarch64::send_ipi(hart);
+        // Vòng 88 (audit #3 P2): Arch::send_ipi là stub; platform có GICD nên
+        // gửi SGI 1 thật tới hart đích (cùng SGI mà reschedule dùng).
+        if hart >= MAX_HARTS {
+            return;
+        }
+        write32(GICD + 0xF00, (1 << (16 + hart)) | 1);
     }
     fn halt() -> ! {
         Aarch64::halt()

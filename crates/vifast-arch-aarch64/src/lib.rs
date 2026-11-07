@@ -92,7 +92,8 @@ impl Arch for Aarch64 {
     }
 
     fn send_ipi(_hart: usize) {
-        // GIC SGI will be added with SMP support.
+        // Stub: crate arch không biết địa chỉ GICD. Platform gửi SGI thật
+        // trong `Platform::send_ipi` (xem platform-aarch64).
     }
 
     fn halt() -> ! {

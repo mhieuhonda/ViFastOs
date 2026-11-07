@@ -52,6 +52,13 @@ int80_entry:
     RESTORE_REGS
     iretq
 
+    // Vector 0xFF (spurious LAPIC): handler chỉ cần iretq vì CPU không đẩy
+    // frame nào. Vòng 88 (audit #4 P1-3): SVR trỏ 0xFF nhưng IDT chưa có entry
+    // nên một lần spurious sẽ #NP và kernel exit(1).
+    .globl spurious_entry
+spurious_entry:
+    iretq
+
     .globl pf_entry
 .globl exc0
 exc0:

@@ -1521,6 +1521,16 @@ unsafe fn setup_gdt_tss_idt() {
         offset_high: (handler >> 32) as u32,
         zero: 0,
     };
+    let spurious = spurious_entry as *const () as u64;
+    (*idt)[0xFF] = IdtEntry {
+        offset_low: spurious as u16,
+        selector: 0x08,
+        ist: 0,
+        type_attr: 0xEE,
+        offset_mid: (spurious >> 16) as u16,
+        offset_high: (spurious >> 32) as u32,
+        zero: 0,
+    };
     for (vector, handler) in x86_exception_table.iter().enumerate() {
         if vector == 0x0E {
             continue;
@@ -1633,7 +1643,15 @@ impl Arch for X86Platform {
         X86_64::irq_enable();
     }
     fn send_ipi(hart: usize) {
-        X86_64::send_ipi(hart);
+        // Vòng 88: LAPIC ICR tới AP (hart 1). Hart 0 là BSP, không tự gửi.
+        if hart != 1 || !AP_ONLINE.load(Ordering::SeqCst) {
+            return;
+        }
+        unsafe {
+            let base = lapic_base();
+            core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
+            send_icr(base, APIC_MAINT_VECTOR);
+        }
     }
     fn halt() -> ! {
         X86_64::halt()
@@ -2457,6 +2475,7 @@ impl Platform for X86Platform {
 // UEFI x86 uses the Win64 ABI: Rust entry points are `efiapi`, and trap.S
 // passes the first three arguments in rcx/rdx/r8.
 extern "efiapi" {
+    fn spurious_entry();
     fn int80_entry();
     fn irq0_entry();
     fn irq4_entry();

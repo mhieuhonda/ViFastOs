@@ -1881,13 +1881,17 @@ impl<D: BlockDev> Fs<D> {
                 if ino == 0 {
                     continue;
                 }
+                // Vòng 88 (audit #4): entry hỏng vẫn chiếm một index. Trước
+                // đây `continue` không tăng `seen` nên entry hỏng ở index N
+                // khiến entry hợp lệ ngay sau nó được trả cho cả N và N+1
+                // ([A,corrupt,B,C] -> A,B,B,C).
+                let len = block[off + 2] as usize;
+                let corrupt = len == 0 || len > MAX_NAME || off + 3 + len > BLOCK_SIZE;
                 if seen == index {
-                    let mut name = [0u8; MAX_NAME];
-                    let len = block[off + 2] as usize;
-                    // Vòng 83: cùng lý do như trên — len rác không được cắt.
-                    if len == 0 || len > MAX_NAME || off + 3 + len > BLOCK_SIZE {
-                        continue;
+                    if corrupt {
+                        return Err(FsError::Corrupt);
                     }
+                    let mut name = [0u8; MAX_NAME];
                     name[..len].copy_from_slice(&block[off + 3..off + 3 + len]);
                     return Ok(Some((ino, name, len)));
                 }
@@ -2827,6 +2831,32 @@ mod tests {
         // Không được panic; entry hỏng bị bỏ qua.
         let _ = fs.lookup(b"/d/a", 0);
         let _ = fs.read_dir_entry(dir, 0);
+    }
+
+    #[test]
+    fn corrupt_dir_entry_keeps_readdir_indices_aligned() {
+        // Vòng 88 (audit #4 P2): entry hỏng phải chiếm một index. Trước đây
+        // [a, corrupt, c] đọc index 1 trả c và index 2 cũng trả c.
+        let mut fs = fresh();
+        let dir = fs.create(b"/d", 1, INODE_DIR).unwrap();
+        fs.create(b"/d/a", 1, INODE_FILE).unwrap();
+        fs.create(b"/d/b", 1, INODE_FILE).unwrap();
+        fs.create(b"/d/c", 1, INODE_FILE).unwrap();
+        let block_no = fs.inodes[dir as usize - 1].blocks[0];
+        assert!(block_no != 0);
+        let mut dev = fs.dev.clone();
+        let off = block_no as usize * BLOCK_SIZE;
+        // Slot 0 = "a"; làm hỏng trường độ dài của slot 1 ("b").
+        dev.data[off + DIR_ENTRY_SIZE + 2] = 200;
+        let mut fs = Fs::mount(dev).unwrap();
+        let first = fs.read_dir_entry(dir, 0).unwrap().unwrap();
+        assert_eq!(&first.1[..first.2], b"a");
+        // Index 1 là entry hỏng: báo lỗi thay vì trả lại entry kế tiếp.
+        assert_eq!(fs.read_dir_entry(dir, 1), Err(FsError::Corrupt));
+        // Index 2 là "c", không phải "c" lặp lại.
+        let third = fs.read_dir_entry(dir, 2).unwrap().unwrap();
+        assert_eq!(&third.1[..third.2], b"c");
+        assert!(fs.read_dir_entry(dir, 3).unwrap().is_none());
     }
 
     #[test]

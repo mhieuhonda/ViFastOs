@@ -91,7 +91,8 @@ impl Arch for X86_64 {
     }
 
     fn send_ipi(_hart: usize) {
-        // LAPIC ICR will be added with SMP support.
+        // Stub: crate arch không biết LAPIC base/APIC ID của hart đích.
+        // Platform gửi ICR thật trong `Platform::send_ipi`.
     }
 
     fn halt() -> ! {

@@ -273,18 +273,24 @@ impl Kernel {
 
     pub fn signal(&mut self, notification: ObjRef, bits: u64) -> KResult<()> {
         let bits = if bits == 0 { 1 } else { bits };
-        // Vòng 86 (audit #3 P0-1): đánh thức CẢ HAI slot waiter còn sống; nếu
-        // slot nào đã chết (stale) thì bỏ qua và tích luỹ bit vào word.
-        let (live, value) = {
+        // Vòng 88 (audit #4 P0): đánh thức TẤT CẢ waiter còn sống trong hàng
+        // đợi, chỉ những task đang thật sự BlockedNotification. Bit không bị
+        // mất khi không có waiter nào.
+        let pending = {
             let ntfn = self.notification(notification).ok_or(KError::InvalidCap)?;
+            ntfn.waiters
+        };
+        let value = {
+            let ntfn = self
+                .notification_mut(notification)
+                .ok_or(KError::InvalidCap)?;
             let value = ntfn.word | bits;
-            let live: [Option<ObjRef>; 2] = [ntfn.waiter, ntfn.waiter2];
-            (live, value)
+            ntfn.waiters = [None; NOTIFICATION_WAITERS];
+            ntfn.word = 0;
+            value
         };
         let mut delivered = false;
-        for waiter in live.into_iter().flatten() {
-            // Chỉ đánh thức waiter còn thật sự block; TCB đã chết hoặc đã được
-            // đánh thức bởi đường khác không được đưa vào runqueue.
+        for waiter in pending.into_iter().flatten() {
             let blocked = self
                 .tcb(waiter)
                 .map(|table| table.state == ThreadState::BlockedNotification)
@@ -301,13 +307,10 @@ impl Kernel {
             self.make_ready(waiter);
             delivered = true;
         }
-        {
-            let ntfn = self
-                .notification_mut(notification)
-                .ok_or(KError::InvalidCap)?;
-            ntfn.waiter = None;
-            ntfn.waiter2 = None;
-            ntfn.word = if delivered { 0 } else { value };
+        if !delivered {
+            if let Some(ntfn) = self.notification_mut(notification) {
+                ntfn.word = value;
+            }
         }
         self.stats.notifications += 1;
         Ok(())
@@ -329,21 +332,39 @@ impl Kernel {
         if let Some(word) = word {
             return Ok(Some(word));
         }
+        // Vòng 88 (audit #4 P0): giành một slot TRƯỚC khi đổi state. Đăng ký
+        // lại (cùng tcb) chỉ refresh. Hàng đợi đầy -> WouldBlock và state giữ
+        // nguyên (không kẹt BlockedNotification như bản một-slot trước đây).
+        {
+            let ntfn = self
+                .notification_mut(notification)
+                .ok_or(KError::InvalidCap)?;
+            let mut slot = None;
+            let mut occupied = 0;
+            for (index, entry) in ntfn.waiters.iter().enumerate() {
+                if *entry == Some(tcb) {
+                    slot = Some(index);
+                    break;
+                }
+                if entry.is_some() {
+                    occupied += 1;
+                } else if slot.is_none() {
+                    slot = Some(index);
+                }
+            }
+            match slot {
+                Some(index) => {
+                    ntfn.waiters[index] = Some(tcb);
+                }
+                None => {
+                    let _ = occupied;
+                    return Err(KError::WouldBlock);
+                }
+            }
+        }
         {
             let table = self.tcb_mut(tcb).ok_or(KError::InvalidCap)?;
             table.state = ThreadState::BlockedNotification;
-        }
-        let ntfn = self
-            .notification_mut(notification)
-            .ok_or(KError::InvalidCap)?;
-        if ntfn.waiter.is_none() {
-            ntfn.waiter = Some(tcb);
-        } else if ntfn.waiter2.is_none() {
-            ntfn.waiter2 = Some(tcb);
-        } else {
-            // Cả hai slot đã có waiter đang chờ: trả WouldBlock thay vì ghi đè.
-            // KHÔNG đụng state của caller ở đây — nó vẫn Running, chỉ nhận lỗi.
-            return Err(KError::WouldBlock);
         }
         Ok(None)
     }
@@ -363,8 +384,7 @@ impl Kernel {
         }
         if self
             .notification(notification)
-            .and_then(|n| n.waiter)
-            .is_some()
+            .is_some_and(|n| n.waiters.iter().any(Option::is_some))
         {
             return Err(KError::AlreadyMapped);
         }

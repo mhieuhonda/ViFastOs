@@ -200,13 +200,14 @@ pub struct Endpoint {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Notification {
     pub word: u64,
-    /// Waiter chính (một slot như cũ).
-    pub waiter: Option<ObjRef>,
-    /// Slot thứ hai (vòng 86, audit #3 P0-1): trước đây waiter thứ hai ghi đè
-    /// waiter đầu khiến task đầu BlockedNotification vĩnh viễn. Hai slot đủ
-    /// cho mọi trường hợp thực tế; waiter thứ ba nhận WouldBlock.
-    pub waiter2: Option<ObjRef>,
+    /// Hàng đợi waiter (vòng 88, audit #4 P0). Trước đây chỉ một slot nên
+    /// waiter thứ hai ghi đè waiter đầu và bỏ mặc nó BlockedNotification vĩnh
+    /// viễn. Root cố ý park 4 worker trên cùng một notification không bao giờ
+    /// được signal, nên cần ít nhất 4 slot; 6 để dư. `signal` đánh thức TẤT CẢ.
+    pub waiters: [Option<ObjRef>; NOTIFICATION_WAITERS],
 }
+
+pub const NOTIFICATION_WAITERS: usize = 6;
 
 /// A physical memory frame that can be mapped into a virtual address space.
 /// The portable core only records the physical address and size; the
