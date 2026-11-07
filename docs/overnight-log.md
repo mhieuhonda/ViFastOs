@@ -1556,4 +1556,4 @@ follow-up `62b31f4`.
   (soak-20 x86 fail 2/20 harness oan) — soak-verify lại 20/20 cả 3 arch.
 - Kernel 156 test; QEMU 3/3×3; persist 7×3; harness 508; gate full
   --with-tcp --with-input xanh.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `708844338d662a306a1a9ef6a5686e80607986800f83ae4468ba26a6d3ea5f43`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `8eb5a24612eb494f763a8087a8afef3ef7e4ef26d7f6fddbd75de8780702ca30`.

@@ -33,10 +33,10 @@ xác nhận fix triệt tiêu flake.
 
 ```text
 code commit: 7a45f30
-docs commit: ea9c011
+docs commit: 57a394d
 tests: see the report above
 RISC-V headroom: see the report above
-summary SHA-256: 708844338d662a306a1a9ef6a5686e80607986800f83ae4468ba26a6d3ea5f43
+summary SHA-256: 8eb5a24612eb494f763a8087a8afef3ef7e4ef26d7f6fddbd75de8780702ca30
 ```
 
 ## Part 3 - Full ViFastOs-architecture-summary.txt
@@ -2291,6 +2291,14 @@ E. Desktop / Space
     thật (`PS2 KEY 18` + `shell> e`). `image_pages_nx()` chạy sau IDT; trang
     trampoline AP được miễn NX nếu nằm trong ảnh. `make_ready` chỉ đánh thức
     từ Inactive/Ready/Blocked*.
+145. Vòng 99: vá phần lớn lỗi soi chay K32–K75 (nhóm TCB/IPC/TLB/IOMMU/
+    cap/ABI) kèm test hồi quy theo từng nhóm. Bài học: resume phải cho
+    BlockedFault (pager flow), siết bừa gãy PAGER. Soak 30 lộ flake hạ tầng
+    (mất byte đầu serial, GPU timing aarch64, boot hang khi quá tải);
+    thêm cờ settle cho soak.
+146. Vòng 100: `console::log` spinlock chống dính ký tự SMP (soak-20 x86
+    fail 2/20 harness oan) — soak-verify lại **20/20 cả 3 arch**. Gate full
+    `--with-tcp --with-input` xanh (input/display end-to-end).
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
@@ -2644,4 +2652,4 @@ QEMU:
    đều coi là dirty ở MVP.)
 3. Giới hạn số client đồng thời có nên là 4 hay theo MAX_TCBS?
 
-SHA-256 part1=404f0a640ee484e51b0addfd7dc2eeeb675da1c5033f61b1ca5f9db2ff8768b7 part3=708844338d662a306a1a9ef6a5686e80607986800f83ae4468ba26a6d3ea5f43 part4=display-input-v1.md=b313298f7b6d78c440449fbc8897e3bb7ba08ba39d4cab437500607e4a706b3a memory-budget-v1.md=6ec697a600c319337ad268ef6d6c8e5579dc099f5eabee29e8fc913a47e7f002 pager-v2.md=79cdd56930f6ce7e5400886aa0f012a1f87596216908e4c9a7c5da7d160beba2
+SHA-256 part1=404f0a640ee484e51b0addfd7dc2eeeb675da1c5033f61b1ca5f9db2ff8768b7 part3=8eb5a24612eb494f763a8087a8afef3ef7e4ef26d7f6fddbd75de8780702ca30 part4=display-input-v1.md=b313298f7b6d78c440449fbc8897e3bb7ba08ba39d4cab437500607e4a706b3a memory-budget-v1.md=6ec697a600c319337ad268ef6d6c8e5579dc099f5eabee29e8fc913a47e7f002 pager-v2.md=79cdd56930f6ce7e5400886aa0f012a1f87596216908e4c9a7c5da7d160beba2
