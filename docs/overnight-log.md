@@ -1491,3 +1491,13 @@ follow-up `62b31f4`.
   → 508 case; `AP_HART` + assert cho AP.
 - Soak 12 vòng: 12/12 cả ba kiến trúc.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `05b0f380b725f1ec1031924ea335c30ef399b54098bf61b543512f0fadbc8fd4`.
+
+## 9.71 — Vòng 93: NX static + input end-to-end
+
+- `kernel_data_ranges()` thêm `AP_GDT`, `GDT_PTR`, `IDT_PTR`, `AP_GDT_PTR`,
+  `CPU_STATES` → 19 vùng, hết executable dưới NX.
+- `--input-check` yêu cầu cả `VIRTIO KEY 18` và echo `shell> e`: phím phải tới
+  user shell, không chỉ driver. riscv 1/1, aarch64 2/2.
+- Display tương tác hoãn: gọi `gpu_command` trong IRQ giữ BKL có nguy cơ deadlock,
+  cần display service/deferred work.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `2f9809319ed47728e46ac5d530321426ef7319ae662d8868979ae7a1146e6ea5`.

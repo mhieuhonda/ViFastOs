@@ -2210,6 +2210,10 @@ E. Desktop / Space
     exc có vector+error trước rip, pf chỉ có error) nên
     `fault_frame_complete() = true` và pager cứu được task đang fault; const
     assert chốt `size == 160`, `rip@120`, `cs@128`.
+139. Vòng 93: `kernel_data_ranges()` phủ thêm `AP_GDT`, `GDT_PTR`, `IDT_PTR`,
+    `AP_GDT_PTR`, `CPU_STATES` (19 vùng) nên các static này không còn
+    executable dưới NX; `--input-check` đòi thêm echo `shell> e`, chứng minh
+    phím đi hết device → driver → kernel → user shell.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

@@ -864,7 +864,10 @@ def input_check(name: str) -> bool:
                     buf += chunk
             except socket.timeout:
                 pass
-            if b"VIRTIO KEY 18" in buf:
+            # Vòng 93: không chỉ dừng ở driver — phím phải tới user shell và
+            # được echo (shell> e), chứng minh đường device → driver → kernel
+            # → user console_read hoạt động end-to-end.
+            if b"VIRTIO KEY 18" in buf and b"shell> e" in buf:
                 ok = True
                 break
             if proc.poll() is not None:
@@ -873,11 +876,15 @@ def input_check(name: str) -> bool:
         if os.path.exists(serial):
             text = open(serial, "rb").read().decode("utf-8", errors="replace")
         if not ok:
-            ok = "VIRTIO KEY 18" in text
+            ok = "VIRTIO KEY 18" in text and "shell> e" in text
         ser.close()
         mon_sock.close()
         if not ok:
-            print(f"--- {name} input FAIL (key not delivered) ---")
+            print(
+                f"--- {name} input FAIL (key chưa tới shell; "
+                f"driver={'ok' if 'VIRTIO KEY 18' in text else 'missing'}, "
+                f"echo={'ok' if 'shell> e' in text else 'missing'}) ---"
+            )
             return False
         print(f"--- {name} input PASS (virtio-keyboard reached the shell) ---")
         return True

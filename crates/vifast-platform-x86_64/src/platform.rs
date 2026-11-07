@@ -696,7 +696,7 @@ unsafe fn mark_nx_range(start: u64, len: usize) -> bool {
     true
 }
 
-fn kernel_data_ranges() -> [(u64, usize); 14] {
+fn kernel_data_ranges() -> [(u64, usize); 19] {
     [
         (
             core::ptr::addr_of!(TRAP_STACKS) as u64,
@@ -753,6 +753,28 @@ fn kernel_data_ranges() -> [(u64, usize); 14] {
         (
             core::ptr::addr_of!(SPLIT_TABLES) as u64,
             core::mem::size_of::<SplitTables>(),
+        ),
+        // Vòng 93 (audit #6): các static dưới đây từng bị bỏ khỏi danh sách
+        // NX nên vẫn executable trong kernel space.
+        (
+            core::ptr::addr_of!(AP_GDT) as u64,
+            core::mem::size_of::<[u64; 7]>(),
+        ),
+        (
+            core::ptr::addr_of!(GDT_PTR) as u64,
+            core::mem::size_of::<DescriptorTablePtr>(),
+        ),
+        (
+            core::ptr::addr_of!(IDT_PTR) as u64,
+            core::mem::size_of::<DescriptorTablePtr>(),
+        ),
+        (
+            core::ptr::addr_of!(AP_GDT_PTR) as u64,
+            core::mem::size_of::<DescriptorTablePtr>(),
+        ),
+        (
+            core::ptr::addr_of!(CPU_STATES) as u64,
+            core::mem::size_of::<[CpuState; MAX_HARTS]>(),
         ),
     ]
 }
