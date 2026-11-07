@@ -274,6 +274,24 @@ irq4_entry:
     RESTORE_REGS
     iretq
 
+    // IRQ1 (bàn phím PS/2): cùng khuôn với irq4_entry.
+    .globl irq1_entry
+irq1_entry:
+    cld
+    SAVE_REGS
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
+    mov rcx, rsp          # efiapi arg1: *mut TrapFrame
+    call x86_keyboard_irq_handler
+    test byte ptr [rsp + 128], 3
+    jz 1f
+    swapgs
+1:
+    RESTORE_REGS
+    iretq
+
     .globl ap_ipi_entry
 ap_ipi_entry:
     mov rdx, 0x30

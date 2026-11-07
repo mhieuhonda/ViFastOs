@@ -290,7 +290,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 145/145 PASS
+- `cargo test -p vifast-kernel`: 146/146 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -2237,6 +2237,12 @@ E. Desktop / Space
     không tự đồng bộ TLB; `kernel_wx_ok()` kiểm hai chiều; `split_identity_2m`
     có bounds check. `wake_error` không enqueue task đang Running; `enqueue`
     chọn hart ít việc nhất; DNS/ICMP kẹp theo frame thật.
+144. Vòng 98: x86_64 có **bàn phím PS/2** (IDT 0x21, PIC IMR 0xEC, i8042 theo
+    thứ tự AD→flush→CCB→AE→F4→ACK→unmask, chặn auto-repeat bằng bitmap DOWN,
+    bỏ tiền tố 0xE0, đọc hết byte mỗi IRQ); `--input-check` x86 giờ là test
+    thật (`PS2 KEY 18` + `shell> e`). `image_pages_nx()` chạy sau IDT; trang
+    trampoline AP được miễn NX nếu nằm trong ảnh. `make_ready` chỉ đánh thức
+    từ Inactive/Ready/Blocked*.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

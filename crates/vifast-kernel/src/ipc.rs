@@ -7,6 +7,33 @@ use crate::Kernel;
 
 impl Kernel {
     pub(crate) fn make_ready(&mut self, tcb: ObjRef) {
+        let Some(state) = self.tcb(tcb).map(|table| table.state) else {
+            return;
+        };
+        // Vòng 99 (soi chay K4): chỉ đánh thức task đang thật sự chờ. Trước đây
+        // set Ready mù quáng nên có thể:
+        //  - đặt Ready cho task đang Running trên hart khác (vừa Running vừa
+        //    queued → có thể chạy hai lần, cùng bệnh K1),
+        //  - tự gỡ treo một task Suspended khi có send tới,
+        //  - cho task BlockedBudget chạy lố budget.
+        // `Inactive` vẫn được phép (enqueue sẽ chuyển Ready) để không đổi hành
+        // vi khởi động.
+        let wakeable = matches!(
+            state,
+            ThreadState::Inactive
+                // `reply()` set Ready trước khi gọi make_ready; vẫn phải
+                // enqueue (enqueue bỏ qua nếu đã queued).
+                | ThreadState::Ready
+                | ThreadState::BlockedSend
+                | ThreadState::BlockedRecv
+                | ThreadState::BlockedReply
+                | ThreadState::BlockedNotification
+                | ThreadState::BlockedSleep
+                | ThreadState::BlockedFault
+        );
+        if !wakeable {
+            return;
+        }
         if let Some(table) = self.tcb_mut(tcb) {
             table.state = ThreadState::Ready;
         }

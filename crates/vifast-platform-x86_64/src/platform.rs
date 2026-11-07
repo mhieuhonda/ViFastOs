@@ -790,6 +790,17 @@ fn kernel_text_ranges(out: &mut [(u64, u64); 8]) -> usize {
         }
         index += 1;
     }
+    // Vòng 98 (audit #9): nếu ảnh được nạp thấp tới mức chứa cả trang
+    // trampoline AP (0x9F000) thì trang đó PHẢI giữ executable — AP chạy
+    // 16-bit real mode từ chính trang này.
+    let tramp = unsafe { AP_TRAMPOLINE };
+    if tramp != 0 && tramp >= base && tramp < end {
+        if count == out.len() {
+            return 0;
+        }
+        out[count] = (tramp, tramp.saturating_add(4096).min(end));
+        count += 1;
+    }
     count
 }
 
@@ -963,29 +974,6 @@ unsafe fn build_kernel_page_tables() {
                 );
                 X86_64::exit(1);
             }
-        }
-        // Vòng 97 (audit #8): NX toàn bộ ảnh trừ dải text đọc từ PE section
-        // table — thay vì chỉ 20 vùng tĩnh, nhờ đó boot stack và các static
-        // nhỏ không còn executable.
-        if !image_pages_nx() {
-            vifast_kernel::klog!(
-                X86Platform,
-                "NX FAIL: không đánh NX được toàn ảnh (image={:#x}..{:#x})",
-                image_range().0,
-                image_range().1
-            );
-            X86_64::exit(1);
-        }
-        {
-            let mut text = [(0u64, 0u64); 8];
-            let count = kernel_text_ranges(&mut text);
-            vifast_kernel::klog!(
-                X86Platform,
-                "IMAGE TEXT NX OK ranges={} image={:#x}..{:#x}",
-                count,
-                image_range().0,
-                image_range().1
-            );
         }
     }
 }
@@ -1803,6 +1791,17 @@ unsafe fn setup_gdt_tss_idt() {
         offset_high: (timer >> 32) as u32,
         zero: 0,
     };
+    // IRQ1: bàn phím PS/2 (vòng 98, x86 parity với virtio-input).
+    let keyboard = irq1_entry as *const () as u64;
+    (*idt)[0x21] = IdtEntry {
+        offset_low: keyboard as u16,
+        selector: 0x08,
+        ist: 0,
+        type_attr: 0x8E,
+        offset_mid: (keyboard >> 16) as u16,
+        offset_high: (keyboard >> 32) as u32,
+        zero: 0,
+    };
     let uart = irq4_entry as *const () as u64;
     (*idt)[0x24] = IdtEntry {
         offset_low: uart as u16,
@@ -1847,9 +1846,62 @@ unsafe fn setup_pic_pit() {
     outb(0xA1, 0x02);
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
-    outb(0x21, 0xEE);
+    outb(0x21, 0xEC);
     outb(0xA1, 0xFF);
     outb(0x3F9, 0x01); // COM1 RX interrupt
+                       // i8042 (vòng 98, gia cố theo audit #10): OVMF để controller ở trạng thái
+                       // tuỳ ý. Thứ tự an toàn:
+                       //   AD (disable port 1) -> xả OBF -> đọc CCB (đã xả) -> sửa CCB
+                       //   -> ghi CCB -> AE -> xả -> F4 và chờ ACK -> cuối cùng mới unmask IRQ1.
+    unsafe fn wait_write() {
+        let mut spins = 0u32;
+        while spins < 100_000 && inb(0x64) & 0x02 != 0 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+    }
+    unsafe fn wait_read() -> bool {
+        let mut spins = 0u32;
+        while spins < 100_000 && inb(0x64) & 0x01 == 0 {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        inb(0x64) & 0x01 != 0
+    }
+    unsafe fn flush_out() {
+        let mut drain = 0;
+        while drain < 32 && inb(0x64) & 0x01 != 0 {
+            let _ = inb(0x60);
+            drain += 1;
+        }
+    }
+    wait_write();
+    outb(0x64, 0xAD); // disable first port
+    flush_out();
+    wait_write();
+    outb(0x64, 0x20); // read CCB
+    let mut config = 0u8;
+    if wait_read() {
+        config = inb(0x60);
+    }
+    // bit0 IRQ1 enable; bit6 translation (set 2 -> set 1); xoá bit1/bit3/bit4
+    // (clock inhibit) để keyboard không bị "điếc" mà không báo lỗi.
+    config = (config & !0x02 & !0x08 & !0x10) | 0x01 | 0x40;
+    wait_write();
+    outb(0x64, 0x60);
+    wait_write();
+    outb(0x60, config);
+    wait_write();
+    outb(0x64, 0xAE); // enable first port
+    flush_out();
+    wait_write();
+    outb(0x60, 0xF4); // enable scanning
+    if wait_read() {
+        let _ = inb(0x60); // ACK 0xFA
+    }
+    flush_out();
+    // Unmask IRQ1 SAU cùng: trước đó IF=0 nên chưa có ngắt nào tới.
+    outb(0x21, 0xEC);
     let divisor: u16 = 11932;
     outb(0x43, 0x36);
     outb(0x40, divisor as u8);
@@ -2226,6 +2278,32 @@ impl Platform for X86Platform {
             // APs start before prepare_user(); install the shared IDT first so
             // their D4 idle window never runs with an empty IDT.
             setup_gdt_tss_idt();
+            // Vòng 98 (audit #9): áp NX toàn ảnh SAU khi IDT đã sẵn sàng — nếu có lỗi
+            // mapping thì fault còn in được thay vì triple fault trước khi có IDT.
+            // Vòng 97 (audit #8): NX toàn bộ ảnh trừ dải text đọc từ PE section
+            // table — thay vì chỉ 20 vùng tĩnh, nhờ đó boot stack và các static
+            // nhỏ không còn executable.
+            if !image_pages_nx() {
+                vifast_kernel::klog!(
+                    X86Platform,
+                    "NX FAIL: không đánh NX được toàn ảnh (image={:#x}..{:#x})",
+                    image_range().0,
+                    image_range().1
+                );
+                X86_64::exit(1);
+            }
+            {
+                let mut text = [(0u64, 0u64); 8];
+                let count = kernel_text_ranges(&mut text);
+                vifast_kernel::klog!(
+                    X86Platform,
+                    "IMAGE TEXT NX OK ranges={} image={:#x}..{:#x}",
+                    count,
+                    image_range().0,
+                    image_range().1
+                );
+            }
+
             let trampoline = AP_TRAMPOLINE;
             if trampoline != 0 {
                 vifast_kernel::klog!(X86Platform, "AP TRAMPOLINE OK (page={:#x})", trampoline);
@@ -2790,6 +2868,7 @@ extern "efiapi" {
     fn spurious_entry();
     fn int80_entry();
     fn irq0_entry();
+    fn irq1_entry();
     fn irq4_entry();
     fn ap_ipi_entry();
     fn ap_timer_entry();
@@ -2933,6 +3012,142 @@ extern "efiapi" fn x86_uart_irq_handler(_frame: *mut TrapFrame) {
     let woke = X86Platform::kernel().irq_raise(vifast_abi::IRQ_UART);
     if woke && X86Platform::kernel().has_ready_on(1) {
         X86Platform::wake_hart(1);
+    }
+    drop(bkl);
+    assert_bkl_released();
+}
+
+/// Bảng scancode set 1 (bit 7 = phím nhả) → ASCII, không tính shift cho
+/// các phím đã hỗ trợ; trả None cho phím không in được.
+fn ps2_scancode_ascii(code: u8, shift: bool) -> Option<u8> {
+    let byte = match code {
+        0x02 => b'1',
+        0x03 => b'2',
+        0x04 => b'3',
+        0x05 => b'4',
+        0x06 => b'5',
+        0x07 => b'6',
+        0x08 => b'7',
+        0x09 => b'8',
+        0x0A => b'9',
+        0x0B => b'0',
+        0x0C => b'-',
+        0x0D => b'=',
+        0x10 => b'q',
+        0x11 => b'w',
+        0x12 => b'e',
+        0x13 => b'r',
+        0x14 => b't',
+        0x15 => b'y',
+        0x16 => b'u',
+        0x17 => b'i',
+        0x18 => b'o',
+        0x19 => b'p',
+        0x1A => b'[',
+        0x1B => b']',
+        0x1E => b'a',
+        0x1F => b's',
+        0x20 => b'd',
+        0x21 => b'f',
+        0x22 => b'g',
+        0x23 => b'h',
+        0x24 => b'j',
+        0x25 => b'k',
+        0x26 => b'l',
+        0x27 => b';',
+        0x28 => b'\'',
+        0x29 => b'`',
+        0x2B => b'\\',
+        0x2C => b'z',
+        0x2D => b'x',
+        0x2E => b'c',
+        0x2F => b'v',
+        0x30 => b'b',
+        0x31 => b'n',
+        0x32 => b'm',
+        0x33 => b',',
+        0x34 => b'.',
+        0x35 => b'/',
+        0x39 => b' ',
+        0x1C => b'\r',
+        0x0E => 8, // backspace
+        _ => return None,
+    };
+    if shift && byte.is_ascii_lowercase() {
+        return Some(byte.to_ascii_uppercase());
+    }
+    Some(byte)
+}
+
+#[no_mangle]
+extern "efiapi" fn x86_keyboard_irq_handler(_frame: *mut TrapFrame) {
+    if vifast_arch::panic::is_panicking() {
+        X86_64::halt();
+    }
+    if X86Platform::hart_id() != 0 {
+        // Bàn phím chỉ phục vụ trên BSP; AP không đọc port 0x60.
+        return;
+    }
+    assert_irqs_disabled();
+    let bkl = bkl_lock();
+    assert_current_tcb("irq1");
+    static mut SHIFT: bool = false;
+    static mut KEY_LOGGED: u32 = 0;
+    static mut DOWN: u128 = 0;
+    static mut EXTENDED: bool = false;
+    let mut queued = false;
+    unsafe {
+        // 8259 là edge-triggered: một IRQ có thể mang nhiều scancode đang chờ,
+        // nên phải đọc hết (bounded) trong một lần.
+        let mut processed = 0;
+        while processed < 16 && inb(0x64) & 0x01 != 0 {
+            processed += 1;
+            let scancode = inb(0x60);
+            // 0xE0 mở đầu phím mở rộng (keypad, mũi tên); bỏ cả scancode kế.
+            if scancode == 0xE0 {
+                EXTENDED = true;
+                continue;
+            }
+            if EXTENDED {
+                EXTENDED = false;
+                continue;
+            }
+            let released = scancode & 0x80 != 0;
+            let code = (scancode & 0x7f) as usize;
+            let bit = 1u128 << code;
+            if released {
+                DOWN &= !bit;
+                if code == 0x2A || code == 0x36 {
+                    SHIFT = false;
+                }
+                continue;
+            }
+            let first_press = DOWN & bit == 0;
+            DOWN |= bit;
+            if code == 0x2A || code == 0x36 {
+                SHIFT = true;
+                continue;
+            }
+            // Auto-repeat (set 1 không có cờ như virtio): chỉ nhận lần nhấn đầu.
+            if !first_press {
+                continue;
+            }
+            if KEY_LOGGED < 16 {
+                KEY_LOGGED += 1;
+                vifast_kernel::klog!(X86Platform, "PS2 KEY {}", scancode & 0x7f);
+            }
+            if let Some(byte) = ps2_scancode_ascii(scancode & 0x7f, SHIFT) {
+                X86_64::stash_rx(byte);
+                queued = true;
+            }
+        }
+        outb(0x20, 0x20);
+    }
+    if queued {
+        let woke = X86Platform::kernel().irq_raise(vifast_abi::IRQ_UART);
+        if woke && X86Platform::kernel().has_ready_on(1) {
+            X86Platform::wake_hart(1);
+        }
     }
     drop(bkl);
     assert_bkl_released();

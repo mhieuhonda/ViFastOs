@@ -636,13 +636,6 @@ def tcp_check(name: str) -> bool:
     phục vụ và bị drop.
     """
     if name not in ("riscv64", "aarch64"):
-        # Vòng 94 (audit #7): x86_64 KHÔNG có driver bàn phím (không virtio-input,
-        # IRQ1 bị mask, không đọc port 0x60) nên trước đây trả True là
-        # false-green. Nay nói rõ là SKIP để không ai tưởng đã kiểm.
-        print(
-            f"--- {name} input SKIP (chưa có driver bàn phím: "
-            "không virtio-input, IRQ1 bị mask) ---"
-        )
         return True
     port = 18080 if name == "riscv64" else 18081
     serial_path = f"/tmp/vifast-tcp-{name}.sock"
@@ -766,6 +759,125 @@ def tcp_check(name: str) -> bool:
             pass
 
 
+def input_check_x86() -> bool:
+    """PS/2 keyboard end-to-end on x86_64 (vòng 98).
+
+    Guest x86 thoát rất nhanh sau SHELL READY, nên gửi phím **sớm và lặp**
+    ngay từ đầu: i8042 đệm scancode, handler stash byte vào UART RX, shell đọc
+    khi khởi động và echo ra serial. Yêu cầu cả `PS2 KEY 18` (driver) và
+    `shell> e` (user shell).
+    """
+    code = find_ovmf_code()
+    if not code:
+        print("--- x86_64 input SKIP (OVMF not found) ---")
+        return True
+    vars_src = None
+    for candidate in [
+        "/opt/homebrew/Cellar/qemu/11.1.3/share/qemu/edk2-i386-vars.fd",
+        "/opt/homebrew/share/qemu/edk2-i386-vars.fd",
+        "/usr/share/OVMF/OVMF_VARS.fd",
+    ] + sorted(glob.glob("/opt/homebrew/Cellar/qemu/*/share/qemu/edk2-i386-vars.fd")):
+        if os.path.exists(candidate):
+            vars_src = candidate
+            break
+    if not vars_src:
+        print("--- x86_64 input SKIP (OVMF vars not found) ---")
+        return True
+    efi = os.path.join(
+        ROOT, "target", "x86_64-unknown-uefi", "release", "vifast-kernel-x86_64-uefi.efi"
+    )
+    tmp = tempfile.mkdtemp(prefix="vifast-in-x86-")
+    esp = os.path.join(tmp, "esp")
+    os.makedirs(os.path.join(esp, "EFI", "BOOT"), exist_ok=True)
+    shutil.copyfile(efi, os.path.join(esp, "EFI", "BOOT", "BOOTX64.EFI"))
+    vars_path = os.path.join(tmp, "vars.fd")
+    shutil.copyfile(vars_src, vars_path)
+    disk = os.path.join(tmp, "disk.img")
+    with open(disk, "wb") as handle:
+        handle.truncate(64 * 1024 * 1024)
+    serial = os.path.join(tmp, "serial.txt")
+    mon = "/tmp/vifast-in-x86-mon.sock"
+    if os.path.exists(mon):
+        os.unlink(mon)
+    cmd = [
+        QEMU_X86,
+        "-machine", "q35",
+        "-cpu", "max",
+        "-smp", "2",
+        "-m", "256M",
+        "-display", "none",
+        "-monitor", f"unix:{mon},server,nowait",
+        "-serial", f"file:{serial}",
+        "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
+        "-drive", f"if=pflash,format=raw,file={vars_path}",
+        "-drive", f"format=raw,file=fat:rw:{esp}",
+        "-device", "isa-ide",
+        "-drive", f"id=vd1,if=none,format=raw,file={disk}",
+        "-device", "ide-hd,drive=vd1,bus=ide.6,unit=0",
+        "-device", "isa-debug-exit,iobase=0x501,iosize=0x03",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    mon_sock = None
+    deadline = time.time() + 12
+    while time.time() < deadline and mon_sock is None:
+        if os.path.exists(mon):
+            try:
+                mon_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                mon_sock.settimeout(2.0)
+                mon_sock.connect(mon)
+            except OSError:
+                mon_sock = None
+        time.sleep(0.05)
+
+    def serial_text() -> str:
+        try:
+            if os.path.exists(serial):
+                return open(serial, "rb").read().decode("utf-8", errors="replace")
+        except OSError:
+            pass
+        return ""
+
+    ok = False
+    sent = 0
+    try:
+        for _ in range(16):
+            text = serial_text()
+            if "SHELL READY" in text and ("PS2 KEY 18" in text or "shell> e" in text):
+                break
+            if mon_sock is not None:
+                mon_sock.sendall(b"sendkey e 40\n")
+                sent += 1
+            time.sleep(0.3)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            text = serial_text()
+            if "PS2 KEY 18" in text and "shell> e" in text:
+                ok = True
+                break
+            time.sleep(0.05)
+    except OSError:
+        pass
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    proc.wait(timeout=5)
+    text = serial_text()
+    if not ok:
+        ok = "PS2 KEY 18" in text and "shell> e" in text
+    if mon_sock is not None:
+        mon_sock.close()
+    if not ok:
+        print(
+            f"--- x86_64 input FAIL (keys sent={sent}; "
+            f"driver={'ok' if 'PS2 KEY 18' in text else 'missing'}, "
+            f"echo={'ok' if 'shell> e' in text else 'missing'}) ---"
+        )
+        return False
+    print("--- x86_64 input PASS (PS/2 keyboard reached the shell) ---")
+    return True
+
+
 def input_check(name: str) -> bool:
     """Boot with virtio-keyboard and type 'help' via QEMU monitor sendkey.
 
@@ -773,6 +885,8 @@ def input_check(name: str) -> bool:
     gian thực (file log bị buffer, phát hiện muộn thì guest đã thoát). Khi thấy
     `shell> ` thì gửi h/e/l/p/ret qua HMP `sendkey` và yêu cầu dòng help.
     """
+    if name == "x86_64":
+        return input_check_x86()
     if name not in ("riscv64", "aarch64"):
         return True
     ser_sock = f"/tmp/vifast-in-{name}-ser.sock"

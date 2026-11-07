@@ -1538,3 +1538,12 @@ follow-up `62b31f4`.
   việc nhất. N1: DNS/ICMP kẹp theo frame thật. K2: test chuỗi A→B→C.
 - Kernel 145 test; QEMU 3/3 ×3 arch; gate đầy đủ xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `99d677e205d00b9b9f4a6b86889c97f2040e66b5006f9f9a114fbd86e328e803`.
+
+## 9.76 — Vòng 98: x86 có bàn phím PS/2
+
+- Thêm `irq1_entry`, IDT 0x21, PIC IMR 0xEC, i8042 theo thứ tự an toàn
+  (AD→flush→CCB→AE→F4+ACK→unmask), chặn auto-repeat, bỏ 0xE0, đọc hết byte.
+- `--input-check` x86 chạy thật: `PS2 KEY 18` + `shell> e` (2/2 PASS).
+- NX: `image_pages_nx()` sau IDT, miễn trampoline AP; `make_ready` chỉ đánh thức
+  từ Inactive/Ready/Blocked* (K4, +2 test).
+- SHA-256 `ViFastOs-architecture-summary.txt`: `eb1e085e210400cee6fb8edce817947b7811c198894754b3835b47144d6ea23c`.

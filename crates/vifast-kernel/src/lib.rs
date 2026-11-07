@@ -6771,6 +6771,25 @@ mod tests {
 
     #[test]
     #[test]
+    fn make_ready_ignores_running_and_suspended_tasks() {
+        // Vòng 99 (soi chay K4): make_ready từng set Ready mù quáng nên có thể
+        // đặt Ready cho task đang Running (chạy hai lần) hoặc tự gỡ treo task
+        // Suspended khi có send tới.
+        let mut kernel = Kernel::new();
+        let running = kernel.create_tcb("run", 5).unwrap();
+        kernel.tcb_mut(running).unwrap().state = ThreadState::Running;
+        kernel.make_ready(running);
+        assert_eq!(kernel.tcb(running).unwrap().state, ThreadState::Running);
+        assert!(!kernel.tcb(running).unwrap().queued);
+
+        let suspended = kernel.create_tcb("susp", 5).unwrap();
+        kernel.tcb_mut(suspended).unwrap().state = ThreadState::Suspended;
+        kernel.make_ready(suspended);
+        assert_eq!(kernel.tcb(suspended).unwrap().state, ThreadState::Suspended);
+        assert!(!kernel.tcb(suspended).unwrap().queued);
+    }
+
+    #[test]
     fn wake_error_does_not_queue_a_running_task() {
         // Vòng 98 (soi chay K1): task đang Running trên hart khác mà bị
         // wake_error sẽ vừa Running vừa queued -> có thể chạy hai lần.
