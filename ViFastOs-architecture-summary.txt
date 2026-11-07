@@ -233,6 +233,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - cf9d72e fix: reject invalid syscall slots, drop dead RX code and gate Kernel size at compile time
 - 50747d7 feat: scan PCI config space on x86_64
 - 8d06b16 fix: give notifications two waiter slots and clear DF on x86 trap entry
+- 02163be fix: stop leaking FP/SIMD register state between tasks
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
