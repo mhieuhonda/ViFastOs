@@ -76,4 +76,4 @@
 | 92 | x86 dựng TrapFrame đầy đủ từ stack thô, bật fault_frame_complete | Pager cứu được task trên x86; const assert chốt layout | d2f78b2 |
 | 93 | NX thêm 5 static; `--input-check` đòi echo từ user shell | Input end-to-end; display tương tác hoãn vì rủi ro IRQ+BKL | 9e0cad7 |
 | 94 | `PD_HIGH` vào NX; NX fail ồn ào; input x86 SKIP; lọc auto-repeat; ack sớm | Audit #7: self-check NX từng xanh giả khi NX tắt | a0c0872 |
-| 95 | `gpu_echo_key` vẽ mã phím + flush vùng nhỏ; `--input-check` đòi `INPUT ECHO` | Mốc display tương tác; x86 vẫn SKIP vì thiếu driver bàn phím | 5d2c9a3 |
+| 95 | `gpu_echo_key` vẽ mã phím + flush vùng nhỏ; `--input-check` đòi `INPUT ECHO` | Mốc display tương tác; x86 vẫn SKIP vì thiếu driver bàn phím | 847a763 |
