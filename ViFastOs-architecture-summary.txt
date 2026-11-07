@@ -276,6 +276,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 15dacda moc 2 (vong 36): quan sat duoc untyped leak tich luy
 - 96f93e9 moc 11 (vong 37): runbook van hanh 11.16
 - 6cec474 moc 9 (vong 38): shell run nhan path + kiem tra VFS
+- 1530734 moc 1 (vong 42): host test restart tu Ready (run don dap)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -323,7 +324,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 167/167 PASS
+- `cargo test -p vifast-kernel`: 168/168 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS

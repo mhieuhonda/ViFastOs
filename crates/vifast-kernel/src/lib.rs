@@ -12411,6 +12411,35 @@ mod tests {
     }
 
     #[test]
+    fn round44_restart_running_is_rejected_and_current_untouched() {
+        // Mốc 1 (vòng 44): restart TCB đang Running phải IllegalOperation
+        // (kẻ tấn công không thể cướp context hart khác), `current` giữ
+        // nguyên, invariants giữ.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("runner", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.resume_tcb(t).unwrap();
+        assert_eq!(kernel.pick_on(0), Some(t));
+        kernel.tcb_mut(t).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(t);
+        assert_eq!(kernel.restart_tcb(t, root), Err(KError::IllegalOperation));
+        assert_eq!(kernel.current[0], Some(t));
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Running);
+        // Restart chính caller cũng bị cấm (tự sát qua restart).
+        assert_eq!(
+            kernel.restart_tcb(root, root),
+            Err(KError::IllegalOperation)
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn round103_failed_syscalls_return_zero_value() {
         // Mốc 7: syscall lỗi không được rò rỉ dữ liệu kernel qua `value`
         // (userspace nhận cả error lẫn value). Quét các họ syscall với
