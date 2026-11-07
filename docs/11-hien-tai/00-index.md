@@ -30,6 +30,8 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
     pager server và bài học resume-BlockedFault (vòng 101).
 15. [15-iommu-audit101.md](15-iommu-audit101.md) — software IOMMU, W^X chéo
     CPU/DMA và danh mục audit K32–K75.
+16. [16-van-hanh.md](16-van-hanh.md) — runbook vận hành: build, gate, soak,
+    shell `run`, đọc serial, xử lý flake, mở rộng arena, backup image.
 14. `vifast-elf` — parser ELF64 PT_LOAD và host test. Nạp root ELF là Bước 6.
 
 ## Bản đồ crate

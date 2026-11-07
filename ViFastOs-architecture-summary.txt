@@ -273,6 +273,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - cdb87aa moc 9 (vong 32): exec MVP + mo rong boot pool
 - 8ff206d moc 9 (vong 33): shell run -> root exec (end-to-end)
 - ae4ff9d moc 9 (vong 34+35): run lap an toan bang restart + don debug
+- 15dacda moc 2 (vong 36): quan sat duoc untyped leak tich luy
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

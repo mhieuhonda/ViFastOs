@@ -1,0 +1,92 @@
+# 11.16. Vận hành ViFastOs (runbook)
+
+Cập nhật: vòng 37. Dành cho người trực tiếp build, chạy gate và gỡ lỗi
+hàng ngày. Mọi lệnh chạy từ thư mục gốc repo.
+
+## 1. Build và cổng kiểm tra
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+./scripts/build.sh                    # build 3 arch + kernel/host tests
+python3 scripts/test-qemu.py --repeat 3   # QEMU 3/3×3 (riscv64, aarch64, x86_64)
+python3 scripts/test-persist.py       # FS bền 7×3 (replay + corrupt)
+python3 scripts/test-harness-spec.py  # 514 ca harness
+python3 scripts/gen-docs.py && python3 scripts/check-docs.py
+cargo fmt --all -- --check            # 0 warning
+```
+
+`./scripts/check-all.sh` chạy toàn bộ cổng trên trong một lệnh.
+
+## 2. Soak (ổn định dài)
+
+```bash
+python3 scripts/soak.py --iterations 20            # 3 arch, giữ serial lần hỏng
+python3 scripts/soak.py --iterations 50 --archs riscv64,aarch64
+```
+
+Kết quả mẫu (vòng 36): 5/5×3 PASS trong 88.8s. Serial lần hỏng nằm dưới
+`artifacts/soak/`. Soak không thay thế gate chuẩn.
+
+## 3. Shell lệnh `run` (exec demo)
+
+Trong shell QEMU (interactive):
+
+```text
+shell> run
+run sent
+...
+RUN OK
+```
+
+Luồng: shell gửi `LABEL_RUN` qua cap lệnh (slot 12, badge 7) tới
+fault_endpoint của root → root `spawn_elf_copy` ELF minimal (exit ngay)
+vào VSpace mới, hoặc `tcb_restart` TCB cũ nếu đã có. `RUN SKIP` =
+hết tài nguyên (fail-êm, không panic). Chạy `run` liên tiếp nhiều lần
+an toàn: VSpace setup một lần, mỗi lần chỉ restart TCB.
+
+## 4. Đọc serial và chỉ số sức khỏe
+
+Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
+
+- `DATA LEAKED 0` — bytes leak tích lũy của data Untyped (kỳ vọng 0;
+  >0 nghĩa là free list đầy khi reclaim, cần dọn).
+- `DATA UNTYPED pages=A/B objects=C/D` — mức dùng arena (B=86).
+- `BKL STATS (h0_acq=… spin=…)` — contention khóa kernel trên SMP.
+- `SMP SCHED OK`, `SMP WORKERS OK`, `SMP POST IDLE OK` — sức khỏe SMP.
+- `WAIT REAP OK`, `EXEC OK`/`EXEC SKIP`, `RUN OK`/`RUN SKIP`.
+
+## 5. Xử lý flake thường gặp
+
+| Triệu chứng | Nguyên nhân hay gặp | Cách xử lý |
+|---|---|---|
+| QEMU timeout (rc=-9) dưới tải cao | load máy >4 làm guest chậm quá 20s | `pkill -f qemu-system`, đợi load <2, rerun |
+| Mất byte UART (`run sent` không thấy) | FIFO PL011 16 byte, gửi dồn | rerun; interactive gửi dồn + `\r` |
+| `ROOT ERR 5` sau fault3 | data Untyped cạn (arena sát trần) | tăng DataPool + `DATA_MAX_OBJECTS` (đồng bộ 3 arch) |
+| `BOOT UNTYPED TOO SMALL` | root ELF to ra, boot arena cạn | tăng BootPool + `BOOT_MAX_OBJECTS` (đồng bộ 3 arch, giữ `MAX_OBJECTS` ≤ budget) |
+| PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
+| `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
+
+## 6. Mở rộng arena (quy trình)
+
+Arena nằm ở `platform-*/src/platform.rs` (`DataPool`, `BootPool`,
+`METADATA`/`USER_DATA`), quota ở `vifast-runtime/src/lib.rs`
+(`DATA_MAX_OBJECTS`, `BOOT_MAX_OBJECTS`, `META_MAX_OBJECTS`) và tổng
+bị chặn bởi `MAX_OBJECTS` trong `vifast-kernel/src/object.rs` cùng
+`KERNEL_STATIC_BUDGET` (aarch64 còn kiểm tra gap BKL trong `build.sh`).
+
+1. Tăng pool cả 3 arch đồng bộ (riscv, aarch64, x86_64).
+2. Tăng quota tương ứng, giữ `RUNTIME+META+DATA+BOOT ≤ MAX_OBJECTS`.
+3. `./scripts/build.sh` phải qua `AArch64 static check` (gap >0).
+4. Chạy gate đầy đủ + soak ngắn trước khi commit.
+
+## 7. Backup/restore FS image
+
+Disk test do `test-qemu.py` tự tạo (`make_disk`, 64 MiB, raw). Giữ bản
+tốt khi cần đối chiếu:
+
+```bash
+cp /tmp/vifast-riscv64.disk ~/vifast-backup-riscv64.disk
+```
+
+Corrupt test có chủ đích nằm trong `test-persist.py` phase 6 (superblock),
+không chạy tay lên disk thật.
