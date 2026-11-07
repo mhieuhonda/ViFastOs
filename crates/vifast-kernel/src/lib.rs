@@ -12270,6 +12270,40 @@ mod tests {
     }
 
     #[test]
+    fn round55_destroy_busy_server_wakes_client_clean() {
+        // Mốc 1 (vòng 55): destroy server đang giữ caller (client call chờ
+        // reply) — client phải wake lỗi ObjectDestroyed + Ready, không treo
+        // BlockedReply với caller ma; server biến mất khỏi mọi hàng chờ.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let server = kernel.create_tcb("server", 5).unwrap();
+        let client = kernel.create_tcb("client", 5).unwrap();
+        kernel
+            .configure_tcb(server, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel
+            .configure_tcb(client, 0x4000_1000, 0x4000_4000, space, 5)
+            .unwrap();
+        let ep = kernel.create_endpoint().unwrap();
+        assert_eq!(kernel.recv(server, ep, 0), Ok(None));
+        let call = Message::new(0x1234, &[7]).unwrap();
+        assert_eq!(kernel.send(client, ep, 0, call, true), Ok(true));
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::BlockedReply);
+        // Destroy server đang BlockedRecv giữ caller=client.
+        assert_eq!(kernel.destroy_object(server), Ok(()));
+        // Client wake lỗi + Ready, caller đã gỡ.
+        let table = kernel.tcb(client).unwrap();
+        assert_eq!(table.state, ThreadState::Ready);
+        assert_eq!(table.resume_error, Some(KError::ObjectDestroyed));
+        assert!(table.caller.is_none());
+        // Server không còn trong hàng recv; client có thể recv lại sạch.
+        assert_eq!(kernel.recv(client, ep, 0), Ok(None));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn round103_reply_carries_grant_cap() {
         // Mốc 5: server reply mang cap GRANT cho client qua recv_slot.
         let mut kernel = Kernel::new();
