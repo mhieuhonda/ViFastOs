@@ -246,6 +246,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - c1cd90b feat: give x86_64 a working PS/2 keyboard and wake only waiting tasks
 - 7fe404c vong 101: va 37/44 loi K32-K75 (TCB/IPC/TLB/IOMMU/cap/ABI) + 12 test hoi quy
 - 74fe5c3 soak: them --settle giua cac iter (vong 102, giam flake ha tang)
+- 7a45f30 vong 105: spinlock console Tx chong dinh ky tu SMP (soak-20 x86 fail 2/20)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

@@ -1547,3 +1547,13 @@ follow-up `62b31f4`.
 - NX: `image_pages_nx()` sau IDT, miễn trampoline AP; `make_ready` chỉ đánh thức
   từ Inactive/Ready/Blocked* (K4, +2 test).
 - SHA-256 `ViFastOs-architecture-summary.txt`: `eb1e085e210400cee6fb8edce817947b7811c198894754b3835b47144d6ea23c`.
+
+## 9.77 — Vòng 99–100: K32–K75, console lock, soak-verify 20/20
+
+- Vòng 101 (commit 7fe404c): vá 37/44 lỗi K32–K75 + 12 test hồi quy.
+  Bài học resume-BlockedFault (pager flow gãy khi siết bừa, đã sửa).
+- Vòng 105 (commit 7a45f30): spinlock console Tx chống dính ký tự SMP
+  (soak-20 x86 fail 2/20 harness oan) — soak-verify lại 20/20 cả 3 arch.
+- Kernel 156 test; QEMU 3/3×3; persist 7×3; harness 508; gate full
+  --with-tcp --with-input xanh.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `708844338d662a306a1a9ef6a5686e80607986800f83ae4468ba26a6d3ea5f43`.
