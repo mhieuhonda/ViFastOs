@@ -12400,6 +12400,54 @@ mod tests {
     }
 
     #[test]
+    fn round58_destroy_sleeping_tcb_never_revives() {
+        // Mốc 1 (vòng 58): destroy TCB đang BlockedSleep — object free
+        // luôn, wake_sleepers sau này không thể đánh thức (gen đã tăng,
+        // không còn TCB ở slot đó); không rò rỉ vào runqueue.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let sleeper = kernel.create_tcb("sleeper", 5).unwrap();
+        kernel
+            .configure_tcb(sleeper, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        let other = kernel.create_tcb("other", 5).unwrap();
+        kernel
+            .configure_tcb(other, 0x4000_1000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.enqueue(sleeper);
+        kernel.enqueue(other);
+        assert_eq!(kernel.pick_on(0), Some(sleeper));
+        assert_eq!(
+            kernel.user_syscall(sleeper, SyscallId::Sleep as u64, 100, 0, 0, 0, 0, 0),
+            UserAction::Sleep
+        );
+        assert_eq!(
+            kernel.tcb(sleeper).unwrap().state,
+            ThreadState::BlockedSleep
+        );
+        // Destroy thẳng sleeper đang ngủ (không phải current): pick
+        // other ra khỏi runq rồi mới đánh dấu Running (tránh vừa
+        // Running vừa queued — luật K1).
+        assert_eq!(kernel.pick_on(0), Some(other));
+        kernel.tcb_mut(other).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(other);
+        let gen_before = sleeper.gen;
+        assert_eq!(kernel.destroy_object(sleeper), Ok(()));
+        // Quay thời gian qua deadline: slot cũ đã free, không revive.
+        for _ in 0..200 {
+            let _ = kernel.tick(0);
+        }
+        assert!(kernel.tcb(sleeper).is_none());
+        // Retype slot đó cho TCB mới: gen tăng, state sạch Inactive.
+        let fresh = kernel.create_tcb("fresh", 5).unwrap();
+        assert!(fresh.gen != gen_before);
+        assert_eq!(kernel.tcb(fresh).unwrap().state, ThreadState::Inactive);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn round103_destroy_tcb_cleans_all_binds_and_queues() {
         // Mốc 1/2: destroy TCB đang park BlockedRecv + bound notification +
         // ôm caller của client + giữ sched_context bound — mọi phía đều
