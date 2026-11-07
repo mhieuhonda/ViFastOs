@@ -67,4 +67,4 @@
 | 83b | Gỡ TCB Faulted khỏi runqueue khi VSpace bị destroy | Test mới, `pick_on` không còn trả TCB mất VSpace | cd0ec59 |
 | 84 | Xoá `net_recv_udp`; assert ngân sách static lúc biên dịch; slot sai trả `InvalidArg` | 53 chỗ đổi sang `slot_or_invalid!`; kernel 136 test | cf9d72e |
 | 85 | x86_64 quét PCI config space, marker `PCI SCAN OK` | Nền tảng virtio-pci; Q35 cho 4 thiết bị, host bridge 8086:29c0 | 50747d7 |
-| 86 | Notification 2 slot waiter + signal chỉ đánh thức waiter đang block; `cld` ở entry x86; gate chạy kernel test | Sửa P0 audit #3; 139 test kernel | (commit sau) |
+| 86 | Notification 2 slot waiter + signal chỉ đánh thức waiter đang block; `cld` ở entry x86; gate chạy kernel test | Sửa P0 audit #3; 139 test kernel | 6f2c9a1 |
