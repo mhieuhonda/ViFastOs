@@ -12370,6 +12370,47 @@ mod tests {
     }
 
     #[test]
+    fn round103_failed_syscalls_return_zero_value() {
+        // Mốc 7: syscall lỗi không được rò rỉ dữ liệu kernel qua `value`
+        // (userspace nhận cả error lẫn value). Quét các họ syscall với
+        // cap/slot sai: mọi lỗi phải đi kèm value = 0.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let bad_slot = 200u64; // vượt cspace
+        let cases: &[(SyscallId, [u64; 6])] = &[
+            (SyscallId::Send, [bad_slot, 0, 0, 0, 0, 0]),
+            (SyscallId::Call, [bad_slot, 0, 0, 0, 0, 0]),
+            (SyscallId::Recv, [bad_slot, 0, 0, 0, 0, 0]),
+            (SyscallId::Reply, [0, 0, 0, 0, 0, 0]),
+            (SyscallId::Wait, [bad_slot, 0, 0, 0, 0, 0]),
+            (SyscallId::TcbResume, [bad_slot, 0, 0, 0, 0, 0]),
+            (SyscallId::TcbSuspend, [bad_slot, 0, 0, 0, 0, 0]),
+            (SyscallId::TcbDestroy, [bad_slot, 0, 0, 0, 0, 0]),
+            (SyscallId::TcbWait, [bad_slot, 0, 0, 0, 0, 0]),
+            (SyscallId::CapCopy, [bad_slot, 1, 1, 0, 0, 0]),
+            (SyscallId::FrameMap, [bad_slot, bad_slot, 0, 0, 0, 0]),
+            (SyscallId::BlockRead, [0, bad_slot, 0, 0, 0, 0]),
+            (SyscallId::Open, [bad_slot, 0, 0, 0, 0, 0]),
+        ];
+        for (id, args) in cases {
+            let action = kernel.user_syscall(
+                root, *id as u64, args[0], args[1], args[2], args[3], args[4], args[5],
+            );
+            match action {
+                UserAction::Return { value, error } => {
+                    assert!(
+                        error == KError::Ok || value == 0,
+                        "{id:?}: error {error:?} leaks value {value:#x}"
+                    );
+                }
+                // Blocked/Sleep/...: không trả value, miễn kiểm.
+                _ => {}
+            }
+        }
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn set_cap_badge_cannot_be_cleared_or_changed() {
         // Vòng 100 (K16): cho badge -> 0 rồi mint lại badge khác là đường rửa
         // danh tính (CapMint chỉ chặn mint từ nguồn đã có badge).

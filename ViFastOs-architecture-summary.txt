@@ -256,6 +256,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - c863085 moc 1/2: hoi quy destroy TCB don sach moi phia
 - 65ef1e2 moc 1: hoi quy restart-tu-Exited tai sinh sach
 - 386078a moc 3: hoi quy gioi han journal txn (16 block)
+- 949b577 moc 1: demo exit/wait/reap tren QEMU (worker F + WAIT REAP OK)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -303,7 +304,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 163/163 PASS
+- `cargo test -p vifast-kernel`: 164/164 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
