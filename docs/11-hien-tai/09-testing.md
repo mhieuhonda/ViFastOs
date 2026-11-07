@@ -190,8 +190,37 @@ SMP counter, thứ tự marker, exit code, feature mode.
   `registers.txt` (qua QEMU monitor), `tail.txt`, `status.txt`.
 - Nếu x86 treo trước banner: kiểm tra OVMF code/vars và ESP.
 - Nếu RISC-V/AArch64 thiếu `SMP OK`: kiểm tra `-smp 2` và HSM/PSCI.
+- `VIFAST_KEEP_SERIAL=1` giữ serial từng lần chạy (`vifast-keep-<arch>-<n>.serial).
 
-## 8. Chưa có
+## 8. Runbook sự cố thật (mốc 1-9, vòng 9-16)
+
+1. **Client treo sau `shell>` (không PREEMPT): stack tràn.** Client stack chỉ
+   4 KiB; buffer lớn để trên stack (vd. lịch sử shell 2 KiB) làm tràn xuống
+   dưới `STACK_BASE` → fault không có fault_ep → treo. Dấu hiệu: serial dừng
+   ở `shell>`, fault addr trong vùng stack. Chữa: chuyển buffer ra `static`
+   hoặc thu nhỏ; đã ghi TODO cấp từ Untyped riêng (mốc 2).
+2. **Static `.bss` client to ra treo timer phase (bisect xác nhận).** Thêm
+   2 KiB static vào client làm ELF to ra và treo sau boot — nguyên nhân sâu
+   chưa rõ, workaround là giữ `.bss` client nhỏ. Nghi ngờ va chạm layout
+   với Untyped/data region trên QEMU.
+3. **x86 OOM (`ROOT ERR 5`) khi spawn task mới cuối boot.** x86 cạn data
+   pages (76/76) vì fault task reap chỉ destroy TCB, stack frame/mapping còn
+   đó. Chữa: spawn tối giản (chỉ retype TCB, tái dùng stack mapping cũ của
+   task đã reap), hoặc spawn sớm ngay sau reap. Đừng cấp frame/page-table mới
+   cuối boot trên x86.
+4. **`WAIT REAP BAD` do race đúng.** `TcbWait` trả `Ok` khi target đã exit
+   trước (xong ngay), `ObjectDestroyed` khi exit sau (wake lỗi) — cả hai đều
+   là rendezvous đúng. Test phải chấp nhận cả hai, không chỉ một.
+5. **Interactive test: một lệnh chắc chắn mỗi lần chạy.** Guest tự thoát sau
+   PREEMPT nên cửa sổ gõ lệnh hẹp; UART FIFO cứng chỉ 16 byte (gửi dồn mất
+   byte). Cách làm: gửi lệnh TRƯỚC (khi shell rỗi, UART đã đọc hết), kiểm tra
+   output bắt buộc; lệnh sau là bonus best-effort.
+6. **Phân biệt flake hạ tầng và bug thật.** Bisect bằng `git stash`/`checkout`
+   + rebuild + chạy đơn lẻ từng arch; flake hạ tầng (vd. x86 2/3 rồi rerun
+   3/3) không liên quan thay đổi mã. Tải máy cao (load ~2) làm QEMU chậm và
+   timeout giả — `pkill qemu` dọn tiến trình sót trước khi kết luận.
+
+## 9. Chưa có
 
 - Stress SMP > 2 hart trong harness (`-smp 4` mới chỉ chạy thủ công).
 - Kani/Verus; soak dài nhiều giờ tự động.
