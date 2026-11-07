@@ -257,6 +257,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 65ef1e2 moc 1: hoi quy restart-tu-Exited tai sinh sach
 - 386078a moc 3: hoi quy gioi han journal txn (16 block)
 - 949b577 moc 1: demo exit/wait/reap tren QEMU (worker F + WAIT REAP OK)
+- d31575a moc 7: hoi quy syscall-loi-khong-ro-value
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -311,7 +312,7 @@ Test hiện tại:
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
-- `cargo test -p vifast-fs`: 26/26 PASS
+- `cargo test -p vifast-fs`: 27/27 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status

@@ -3097,4 +3097,58 @@ mod tests {
         fs.commit().unwrap();
         fs.fsck().unwrap();
     }
+
+    #[test]
+    fn exec_reads_elf_from_fs_and_parses() {
+        // Mốc 9 (vòng 18, bước 1): exec tương lai cần FS -> ELF bytes ->
+        // parse. Viết 1 ELF64 tối giản vào FS, đọc ra qua read(), parse
+        // bằng vifast-elf, kiểm tra entry + segment.
+        let mut fs = fresh();
+        // ELF64 LE exec, machine riscv (243), 1 PT_LOAD R+X.
+        let mut elf = vec![0u8; 0x1000 + 64];
+        elf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        elf[4] = 2; // 64-bit
+        elf[5] = 1; // LE
+        elf[6] = 1; // version
+        elf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        elf[18..20].copy_from_slice(&243u16.to_le_bytes()); // EM_RISCV
+        elf[20..24].copy_from_slice(&1u32.to_le_bytes());
+        elf[24..32].copy_from_slice(&0x10000u64.to_le_bytes()); // entry
+        elf[32..40].copy_from_slice(&64u64.to_le_bytes()); // phoff
+        elf[52..54].copy_from_slice(&64u16.to_le_bytes()); // ehsize
+        elf[54..56].copy_from_slice(&56u16.to_le_bytes()); // phentsize
+        elf[56..58].copy_from_slice(&1u16.to_le_bytes()); // phnum
+        let ph = 64usize;
+        elf[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD
+        elf[ph + 4..ph + 8].copy_from_slice(&5u32.to_le_bytes()); // R+X
+        elf[ph + 8..ph + 16].copy_from_slice(&0x1000u64.to_le_bytes()); // offset
+        elf[ph + 16..ph + 24].copy_from_slice(&0x10000u64.to_le_bytes()); // vaddr
+        elf[ph + 24..ph + 32].copy_from_slice(&0x10000u64.to_le_bytes());
+        elf[ph + 32..ph + 40].copy_from_slice(&64u64.to_le_bytes()); // filesz
+        elf[ph + 40..ph + 48].copy_from_slice(&64u64.to_le_bytes()); // memsz
+        elf[ph + 48..ph + 56].copy_from_slice(&0x1000u64.to_le_bytes()); // align
+        for (i, byte) in elf.iter_mut().enumerate().skip(0x1000) {
+            *byte = (i & 0xff) as u8;
+        }
+        let ino = fs.create(b"/init", 1, INODE_FILE).unwrap();
+        fs.write(ino, 0, &elf, 1).unwrap();
+        fs.fsck().unwrap();
+        // Đọc lại qua FS read (nhiều chunk, qua biên block).
+        let mut back = vec![0u8; elf.len()];
+        let mut done = 0usize;
+        while done < back.len() {
+            let mut out = [0u8; BLOCK_SIZE];
+            let n = fs.read(ino, done, &mut out, 1).unwrap();
+            assert!(n > 0);
+            back[done..done + n].copy_from_slice(&out[..n]);
+            done += n;
+        }
+        assert_eq!(back, elf);
+        // Parse bằng vifast-elf trong cửa sổ user riscv.
+        let image = vifast_elf::parse(&back, 243, 0x10000, 0x10000 + 0x1000000).unwrap();
+        assert_eq!(image.entry, 0x10000);
+        assert_eq!(image.segment_count(), 1);
+        let seg = image.segment(0).unwrap();
+        assert!(seg.executable() && !seg.writable());
+    }
 }
