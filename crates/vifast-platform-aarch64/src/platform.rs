@@ -1411,8 +1411,8 @@ impl Platform for Aarch64Platform {
         RESCHED_WAKE.load(Ordering::Relaxed)
     }
 
-    fn bkl_stats() -> [(usize, usize); 2] {
-        [BKL.stats(0), BKL.stats(1)]
+    fn bkl_stats() -> [(usize, usize); vifast_arch::MAX_HARTS] {
+        [BKL.stats(0), BKL.stats(1), BKL.stats(2), BKL.stats(3)]
     }
 
     fn idle_entries() -> usize {

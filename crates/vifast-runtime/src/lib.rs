@@ -237,8 +237,8 @@ pub trait Platform: Arch + Console {
     }
 
     /// `(acquisitions, spin iterations)` for each BKL hart.
-    fn bkl_stats() -> [(usize, usize); 2] {
-        [(0, 0), (0, 0)]
+    fn bkl_stats() -> [(usize, usize); vifast_arch::MAX_HARTS] {
+        [(0, 0); vifast_arch::MAX_HARTS]
     }
 
     /// Harts that can schedule ordinary user tasks.
@@ -1434,11 +1434,15 @@ pub mod timer {
             let bkl = A::bkl_stats();
             vifast_kernel::klog!(
                 A,
-                "BKL STATS (h0_acq={}, h0_spin={}, h1_acq={}, h1_spin={})",
+                "BKL STATS (h0_acq={}, h0_spin={}, h1_acq={}, h1_spin={}, h2_acq={}, h2_spin={}, h3_acq={}, h3_spin={})",
                 bkl[0].0,
                 bkl[0].1,
                 bkl[1].0,
-                bkl[1].1
+                bkl[1].1,
+                bkl[2].0,
+                bkl[2].1,
+                bkl[3].0,
+                bkl[3].1
             );
             if let Some((va_flush, ipi, skipped)) = A::tlb_stats() {
                 vifast_kernel::klog!(
