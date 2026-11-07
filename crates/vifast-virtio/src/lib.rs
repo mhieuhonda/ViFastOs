@@ -1531,6 +1531,18 @@ fn gpu_glyph(ch: u8) -> Option<[u8; 5]> {
         b's' => [0x26, 0x49, 0x49, 0x32, 0x00],
         b't' => [0x04, 0x3F, 0x44, 0x40, 0x00],
         b'O' => [0x3E, 0x41, 0x41, 0x3E, 0x00],
+        // Vòng 95: chữ số để hiển thị mã phím vừa bấm (màn hình tương tác).
+        b'0' => [0x3E, 0x51, 0x49, 0x45, 0x3E],
+        b'1' => [0x00, 0x42, 0x7F, 0x40, 0x00],
+        b'2' => [0x42, 0x61, 0x51, 0x49, 0x46],
+        b'3' => [0x21, 0x41, 0x45, 0x4B, 0x31],
+        b'4' => [0x18, 0x14, 0x12, 0x7F, 0x10],
+        b'5' => [0x27, 0x45, 0x45, 0x45, 0x39],
+        b'6' => [0x3C, 0x4A, 0x49, 0x49, 0x30],
+        b'7' => [0x01, 0x71, 0x09, 0x05, 0x03],
+        b'8' => [0x36, 0x49, 0x49, 0x49, 0x36],
+        b'9' => [0x06, 0x49, 0x49, 0x29, 0x1E],
+        b'K' => [0x7F, 0x08, 0x14, 0x22, 0x41],
         _ => return None,
     };
     Some(glyph)
@@ -1652,6 +1664,59 @@ pub fn gpu_draw_test_pattern() -> bool {
     flush[12..16].copy_from_slice(&GPU_HEIGHT.to_le_bytes());
     flush[16..20].copy_from_slice(&1u32.to_le_bytes());
     gpu_command(0x0104, &flush)
+}
+
+/// Đẩy một vùng nhỏ của framebuffer lên màn hình (TRANSFER_TO_HOST_2D +
+/// RESOURCE_FLUSH). Dùng cho cập nhật tương tác thay vì flush cả khung hình.
+fn gpu_flush_region(x: u32, y: u32, w: u32, h: u32) -> bool {
+    let mut transfer = [0u8; 32];
+    transfer[0..4].copy_from_slice(&x.to_le_bytes());
+    transfer[4..8].copy_from_slice(&y.to_le_bytes());
+    transfer[8..12].copy_from_slice(&w.to_le_bytes());
+    transfer[12..16].copy_from_slice(&h.to_le_bytes());
+    transfer[16..24].copy_from_slice(&0u64.to_le_bytes());
+    transfer[24..28].copy_from_slice(&1u32.to_le_bytes());
+    if !gpu_command(0x0105, &transfer) {
+        return false;
+    }
+    let mut flush = [0u8; 24];
+    flush[0..4].copy_from_slice(&x.to_le_bytes());
+    flush[4..8].copy_from_slice(&y.to_le_bytes());
+    flush[8..12].copy_from_slice(&w.to_le_bytes());
+    flush[12..16].copy_from_slice(&h.to_le_bytes());
+    flush[16..20].copy_from_slice(&1u32.to_le_bytes());
+    gpu_command(0x0104, &flush)
+}
+
+/// Vẽ mã phím vừa bấm lên khung hình và flush đúng vùng đó (vòng 95).
+///
+/// Gọi từ IRQ handler của virtio-input: `gpu_command` là poll đồng bộ với bound
+/// 10M vòng nên không treo; vùng cập nhật chỉ 78x18 pixel nên chi phí nhỏ.
+/// Trả về true nếu cả transfer và flush thành công.
+pub fn gpu_echo_key(code: u16) -> bool {
+    if unsafe { !GPU_READY } {
+        return false;
+    }
+    // Nền tối + "K" + mã phím dạng thập phân (tối đa 3 chữ số).
+    gpu_fill_rect(6, 34, 78, 18, 0x10_10_28);
+    let mut digits = [0u8; 3];
+    let mut value = code;
+    let mut count = 0;
+    while count < 3 {
+        digits[count] = b'0' + (value % 10) as u8;
+        value /= 10;
+        count += 1;
+    }
+    let mut text = [0u8; 4];
+    text[0] = b'K';
+    let mut index = 1;
+    while count > 0 {
+        count -= 1;
+        text[index] = digits[count];
+        index += 1;
+    }
+    gpu_draw_text(&text[..index], 10, 38, 2, 0xFF_D0_60);
+    gpu_flush_region(6, 34, 78, 18)
 }
 
 /// Địa chỉ (và độ dài) framebuffer để test có thể kiểm tra.

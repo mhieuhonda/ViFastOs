@@ -1510,3 +1510,12 @@ follow-up `62b31f4`.
   client ack IRQ ngay sau khi đọc byte (tránh coalesce).
 - QEMU 3 arch 2/2; input check aarch64 2/2, riscv 1/1.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `3c70ac64c9c2b1f731980beca3c8f86be0c7aba8def3612c4d40e42ed5e5f475`.
+
+## 9.73 — Vòng 95: màn hình tương tác
+
+- `gpu_echo_key(code)` + font chữ số + flush vùng nhỏ; hook IRQ virtio-input
+  (aarch64/riscv) log `INPUT ECHO <code>`.
+- `--input-check` đòi `VIRTIO KEY 18` + `shell> e` + `INPUT ECHO 18`, và thêm
+  `-device virtio-gpu-device` (trước đây không có GPU nên không thể vẽ).
+- aarch64 2/2, riscv64 2/2; gate đầy đủ xanh.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `87b8c1137c31e3abe327473d97f906d8fbda30b3b720e7d657c9344122ddd72e`.

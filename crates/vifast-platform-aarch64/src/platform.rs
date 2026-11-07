@@ -387,6 +387,15 @@ fn poll_virtio_input() {
         if let Some(byte) = vifast_virtio::input_key_ascii(event) {
             Aarch64::stash_rx(byte);
             queued = true;
+            // Vòng 95: cập nhật màn hình bằng mã phím vừa bấm (chỉ vài phím
+            // đầu để bound công việc trong IRQ) — mốc "display tương tác".
+            static mut ECHO_DONE: u32 = 0;
+            unsafe {
+                if ECHO_DONE < 4 && vifast_virtio::gpu_echo_key(event.code) {
+                    ECHO_DONE += 1;
+                    vifast_kernel::klog!(Aarch64Platform, "INPUT ECHO {}", event.code);
+                }
+            }
         }
     }
     if queued {
