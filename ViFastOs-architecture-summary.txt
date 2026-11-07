@@ -278,6 +278,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6cec474 moc 9 (vong 38): shell run nhan path + kiem tra VFS
 - 1530734 moc 1 (vong 42): host test restart tu Ready (run don dap)
 - 1fdedb3 moc 1 (vong 44): host test restart Running bi cam
+- ad3710d moc 9 (vong 46): root tu goi VFS + STAT-gated run
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

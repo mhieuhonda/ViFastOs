@@ -11825,6 +11825,43 @@ mod tests {
     }
 
     #[test]
+    fn round50_suspend_blocked_reply_is_rejected() {
+        // Mốc 1 (vòng 50): suspend client đang BlockedReply phải
+        // IllegalOperation — nếu không server ôm caller ma: client bị treo
+        // mà `reply` đòi BlockedReply+epoch nên server treo theo, còn
+        // client thật thì kẹt Suspended không ai đánh thức.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let server = kernel.create_tcb("server", 5).unwrap();
+        let client = kernel.create_tcb("client", 5).unwrap();
+        kernel
+            .configure_tcb(server, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel
+            .configure_tcb(client, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        let ep = kernel.create_endpoint().unwrap();
+        assert_eq!(kernel.recv(server, ep, 0), Ok(None));
+        let call = Message::new(0x1234, &[7]).unwrap();
+        assert_eq!(kernel.send(client, ep, 0, call, true), Ok(true));
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::BlockedReply);
+        // Suspend client BlockedReply bị cấm thẳng (kẻ tấn công không treo
+        // được rendezvous đang bay).
+        assert_eq!(
+            kernel.suspend_tcb(client, root),
+            Err(KError::IllegalOperation)
+        );
+        // Rendezvous còn nguyên: server reply xong client nhận đúng.
+        let reply = Message::new(0x1111, &[1]).unwrap();
+        assert_eq!(kernel.reply(server, reply), Ok(()));
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::Ready);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn round101_restart_detaches_queues_and_clears_stale_caller() {
         // Vòng 101 (K35/K36): restart từng chỉ remove_from_runq mà không
         // gỡ endpoint.send/recv hay waiters (K35), và restart client
