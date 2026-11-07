@@ -1119,7 +1119,9 @@ def main() -> int:
         json.dump(payload, handle, indent=2)
     # The docs status block may only consume the standard configuration
     # (no feature build, exactly three runs per architecture).
-    if args.feature is None and args.repeat == 3:
+    # Vòng 84: chỉ ghi status chuẩn khi chạy ĐỦ ba kiến trúc; trước đây một
+    # lần `--arch x86_64 --repeat 3` cũng ghi đè, làm gen-docs thấy thiếu arch.
+    if args.feature is None and args.repeat == 3 and args.arch is None:
         standard = os.path.join(ROOT, "target", "qemu-status-standard.json")
         with open(standard, "w") as handle:
             json.dump(payload, handle, indent=2)

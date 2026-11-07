@@ -446,36 +446,6 @@ pub fn net_send_udp(dst_ip: [u8; 4], dst_port: u16, payload: &[u8]) -> Option<u3
 
 /// Chờ một UDP datagram từ `src_ip:src_port` (vòng 64). Trả về độ dài
 /// payload nếu khớp (bỏ qua gói khác, tối đa 4 gói).
-pub fn net_recv_udp(src_ip: [u8; 4], src_port: u16) -> Option<usize> {
-    for _ in 0..4 {
-        // DNS đi qua slirp forward ra host nên chậm hơn ICMP nội bộ; dùng
-        // bound lớn hơn (8M spins) để không bỏ lỡ reply.
-        if !net_rx_poll_bounded(8_000_000) {
-            return None;
-        }
-        let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
-        let found = unsafe {
-            let q = &mut *queue;
-            let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
-            let ok = ethertype == 0x0800
-                && q.buf[14 + 9] == 17
-                && q.buf[14 + 12..14 + 16] == src_ip
-                && u16::from_be_bytes([q.buf[34], q.buf[35]]) == src_port;
-            if ok {
-                Some(u16::from_be_bytes([q.buf[38], q.buf[39]]) as usize)
-            } else {
-                None
-            }
-        };
-        if found.is_some() {
-            net_rx_post();
-            return found;
-        }
-        net_rx_post();
-    }
-    None
-}
-
 /// Parse câu trả lời DNS và lấy bản ghi A đầu tiên (vòng 68).
 /// Bỏ qua header 12 byte và question, duyệt answer section; hỗ trợ tên nén
 /// (pointer 0xC0) và bỏ qua bản ghi không phải A. Trả về IPv4 4 byte.

@@ -22,6 +22,18 @@ use vifast_abi::*;
 
 pub use object::*;
 
+/// Lấy slot từ tham số syscall; slot không hợp lệ (> 255) trả `InvalidArg`
+/// thay vì lặng lẽ rơi về slot 0 (vòng 84, audit: 53 chỗ `unwrap_or(0)` trước
+/// đây biến một lời gọi sai thành thao tác trên self-TCB của caller).
+macro_rules! slot_or_invalid {
+    ($value:expr) => {
+        match slot_arg($value) {
+            Ok(slot) => slot,
+            Err(error) => return UserAction::Return { value: 0, error },
+        }
+    };
+}
+
 /// Number of hardware threads whose current TCB is tracked by the scheduler.
 pub const MAX_HARTS: usize = 4;
 
@@ -254,6 +266,16 @@ pub struct Kernel {
     pub(crate) next_cap_id: u64,
     pub(crate) next_asid: u16,
 }
+
+// Vòng 84 (audit #3): biến "ngân sách static" thành ràng buộc lúc biên dịch
+// thay vì chỉ kiểm tra ở runtime. Trên AArch64 `Kernel` nằm sát `BKL` (khe
+// 8 byte), nên mọi thay đổi làm nó phình quá ngân sách phải fail ngay khi
+// build chứ không phải lúc boot trên một kiến trúc.
+const _: () = assert!(
+    core::mem::size_of::<Kernel>() <= KERNEL_STATIC_BUDGET,
+    "Kernel vượt KERNEL_STATIC_BUDGET: tăng ngân sách chỉ khi đã kiểm tra khe \
+     tĩnh của AArch64 (build.sh in gap=)"
+);
 
 impl Default for Kernel {
     fn default() -> Self {
@@ -4890,7 +4912,7 @@ impl Kernel {
             if self
                 .lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::BlockDevice),
                     rights,
                 )
@@ -4921,7 +4943,7 @@ impl Kernel {
             n if n == SyscallId::Send as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Endpoint),
                     Rights::WRITE,
                 ) {
@@ -4945,7 +4967,7 @@ impl Kernel {
             n if n == SyscallId::Call as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Endpoint),
                     Rights::WRITE,
                 ) {
@@ -4965,7 +4987,7 @@ impl Kernel {
             n if n == SyscallId::Recv as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Endpoint),
                     Rights::READ,
                 ) {
@@ -4973,7 +4995,7 @@ impl Kernel {
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
                 let endpoint = cap.obj;
-                let recv_slot = slot_arg(a1).unwrap_or(0);
+                let recv_slot = slot_or_invalid!(a1);
                 match self.recv(tcb, endpoint, recv_slot) {
                     Ok(Some(msg)) => message_action(KError::Ok, 0, &msg),
                     Ok(None) => UserAction::Blocked,
@@ -4983,7 +5005,7 @@ impl Kernel {
             n if n == SyscallId::ReplyRecv as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Endpoint),
                     Rights::READ,
                 ) {
@@ -4991,7 +5013,7 @@ impl Kernel {
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
                 let endpoint = cap.obj;
-                let recv_slot = slot_arg(a1).unwrap_or(0);
+                let recv_slot = slot_or_invalid!(a1);
                 let msg = match Message::new(a2, &[a3, a4, a5]) {
                     Ok(msg) => msg,
                     Err(error) => return UserAction::Return { value: 0, error },
@@ -5018,7 +5040,7 @@ impl Kernel {
             n if n == SyscallId::Signal as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Notification),
                     Rights::WRITE,
                 ) {
@@ -5044,7 +5066,7 @@ impl Kernel {
             n if n == SyscallId::Wait as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Notification),
                     Rights::READ,
                 ) {
@@ -5064,7 +5086,7 @@ impl Kernel {
             n if n == SyscallId::Poll as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Notification),
                     Rights::READ,
                 ) {
@@ -5083,7 +5105,7 @@ impl Kernel {
             n if n == SyscallId::IoMap as u64 => {
                 let domain = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Iommu),
                     Rights::WRITE,
                 ) {
@@ -5092,7 +5114,7 @@ impl Kernel {
                 };
                 let frame = match self.lookup_cap(
                     tcb,
-                    slot_arg(a2).unwrap_or(0),
+                    slot_or_invalid!(a2),
                     Some(ObjType::Frame),
                     Rights::READ,
                 ) {
@@ -5111,7 +5133,7 @@ impl Kernel {
             n if n == SyscallId::IoUnmap as u64 => {
                 let domain = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Iommu),
                     Rights::WRITE,
                 ) {
@@ -5200,7 +5222,7 @@ impl Kernel {
             n if n == SyscallId::IrqSetNotification as u64 => {
                 let irq = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Irq),
                     Rights::WRITE,
                 ) {
@@ -5209,7 +5231,7 @@ impl Kernel {
                 };
                 let notification = match self.lookup_cap(
                     tcb,
-                    slot_arg(a1).unwrap_or(0),
+                    slot_or_invalid!(a1),
                     Some(ObjType::Notification),
                     Rights::WRITE,
                 ) {
@@ -5227,7 +5249,7 @@ impl Kernel {
             n if n == SyscallId::IrqAck as u64 => {
                 let irq = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Irq),
                     Rights::WRITE,
                 ) {
@@ -5243,7 +5265,7 @@ impl Kernel {
                 }
             }
             n if n == SyscallId::Retype as u64 => {
-                let untyped_slot = slot_arg(a0).unwrap_or(0);
+                let untyped_slot = slot_or_invalid!(a0);
                 let untyped =
                     match self.lookup_cap(tcb, untyped_slot, Some(ObjType::Untyped), Rights::WRITE)
                     {
@@ -5328,9 +5350,9 @@ impl Kernel {
                 }
             }
             n if n == SyscallId::CapCopy as u64 => {
-                let src_slot = slot_arg(a0).unwrap_or(0);
-                let dst_tcb_slot = slot_arg(a1).unwrap_or(0);
-                let dst_slot = slot_arg(a2).unwrap_or(0);
+                let src_slot = slot_or_invalid!(a0);
+                let dst_tcb_slot = slot_or_invalid!(a1);
+                let dst_slot = slot_or_invalid!(a2);
                 if dst_slot == 0 {
                     return UserAction::Return {
                         value: 0,
@@ -5352,9 +5374,9 @@ impl Kernel {
                 }
             }
             n if n == SyscallId::CapMint as u64 => {
-                let src_slot = slot_arg(a0).unwrap_or(0);
-                let dst_tcb_slot = slot_arg(a1).unwrap_or(0);
-                let dst_slot = slot_arg(a2).unwrap_or(0);
+                let src_slot = slot_or_invalid!(a0);
+                let dst_tcb_slot = slot_or_invalid!(a1);
+                let dst_slot = slot_or_invalid!(a2);
                 if dst_slot == 0 {
                     return UserAction::Return {
                         value: 0,
@@ -5396,14 +5418,14 @@ impl Kernel {
             n if n == SyscallId::CNodeMint as u64 => {
                 let destination = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::CNode),
                     Rights::WRITE,
                 ) {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
-                let source_slot = slot_arg(a2).unwrap_or(0);
+                let source_slot = slot_or_invalid!(a2);
                 let dest_index = match slot_arg(a1) {
                     Ok(index) => index,
                     Err(error) => return UserAction::Return { value: 0, error },
@@ -5420,7 +5442,7 @@ impl Kernel {
             n if n == SyscallId::CNodeInstall as u64 => {
                 let target = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5432,7 +5454,7 @@ impl Kernel {
                 } else {
                     match self.lookup_cap(
                         tcb,
-                        slot_arg(a1).unwrap_or(0),
+                        slot_or_invalid!(a1),
                         Some(ObjType::CNode),
                         Rights::WRITE,
                     ) {
@@ -5451,7 +5473,7 @@ impl Kernel {
             n if n == SyscallId::TcbDestroy as u64 => {
                 let target = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5467,7 +5489,7 @@ impl Kernel {
                 }
             }
             n if n == SyscallId::ObjectDestroy as u64 => {
-                let slot = slot_arg(a0).unwrap_or(0);
+                let slot = slot_or_invalid!(a0);
                 match self.destroy_cap_object(tcb, slot) {
                     Ok(()) => UserAction::Return {
                         value: 0,
@@ -5479,7 +5501,7 @@ impl Kernel {
             n if n == SyscallId::SchedContextConfigure as u64 => {
                 let context = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::SchedContext),
                     Rights::WRITE,
                 ) {
@@ -5497,7 +5519,7 @@ impl Kernel {
             n if n == SyscallId::SchedContextBind as u64 => {
                 let target = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5506,7 +5528,7 @@ impl Kernel {
                 };
                 let context = match self.lookup_cap(
                     tcb,
-                    slot_arg(a1).unwrap_or(0),
+                    slot_or_invalid!(a1),
                     Some(ObjType::SchedContext),
                     Rights::WRITE,
                 ) {
@@ -5524,7 +5546,7 @@ impl Kernel {
             n if n == SyscallId::TcbConfigure as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5533,14 +5555,14 @@ impl Kernel {
                 };
                 let vspace = match self.lookup_cap(
                     tcb,
-                    slot_arg(a3).unwrap_or(0),
+                    slot_or_invalid!(a3),
                     Some(ObjType::VSpace),
                     Rights::READ,
                 ) {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
-                let fault_slot = slot_arg(a5).unwrap_or(0);
+                let fault_slot = slot_or_invalid!(a5);
                 let fault = if fault_slot != 0 {
                     let Some(fault_cap) = self.cap_at(SlotAddr {
                         tcb: cap.obj,
@@ -5584,7 +5606,7 @@ impl Kernel {
             n if n == SyscallId::TcbRestart as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5603,7 +5625,7 @@ impl Kernel {
             n if n == SyscallId::TcbBindNotification as u64 => {
                 let target = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5612,7 +5634,7 @@ impl Kernel {
                 };
                 let notification = match self.lookup_cap(
                     tcb,
-                    slot_arg(a1).unwrap_or(0),
+                    slot_or_invalid!(a1),
                     Some(ObjType::Notification),
                     Rights::WRITE,
                 ) {
@@ -5630,7 +5652,7 @@ impl Kernel {
             n if n == SyscallId::TcbSetAffinity as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5648,7 +5670,7 @@ impl Kernel {
             n if n == SyscallId::TcbSuspend as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5663,7 +5685,7 @@ impl Kernel {
             n if n == SyscallId::TcbSetPriority as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5681,7 +5703,7 @@ impl Kernel {
             n if n == SyscallId::TcbResume as u64 => {
                 let cap = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5699,7 +5721,7 @@ impl Kernel {
             n if n == SyscallId::TcbSetIpcBuffer as u64 => {
                 let target = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Tcb),
                     Rights::WRITE,
                 ) {
@@ -5708,7 +5730,7 @@ impl Kernel {
                 };
                 let frame = match self.lookup_cap(
                     tcb,
-                    slot_arg(a1).unwrap_or(0),
+                    slot_or_invalid!(a1),
                     Some(ObjType::Frame),
                     Rights::READ,
                 ) {
@@ -5724,7 +5746,7 @@ impl Kernel {
                 }
             }
             n if n == SyscallId::CapDelete as u64 => {
-                let slot = slot_arg(a0).unwrap_or(0);
+                let slot = slot_or_invalid!(a0);
                 match self.delete_cap(tcb, slot) {
                     Ok(_) => UserAction::Return {
                         value: 0,
@@ -5734,7 +5756,7 @@ impl Kernel {
                 }
             }
             n if n == SyscallId::CapRevoke as u64 => {
-                let slot = slot_arg(a0).unwrap_or(0);
+                let slot = slot_or_invalid!(a0);
                 match self.revoke_cap(tcb, slot) {
                     Ok(count) => UserAction::Return {
                         value: count as u64,
@@ -5746,7 +5768,7 @@ impl Kernel {
             n if n == SyscallId::PageTableMap as u64 => {
                 let table = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::PageTable),
                     Rights::WRITE,
                 ) {
@@ -5755,7 +5777,7 @@ impl Kernel {
                 };
                 let space = match self.lookup_cap(
                     tcb,
-                    slot_arg(a1).unwrap_or(0),
+                    slot_or_invalid!(a1),
                     Some(ObjType::VSpace),
                     Rights::WRITE,
                 ) {
@@ -5773,7 +5795,7 @@ impl Kernel {
             n if n == SyscallId::FrameWrite as u64 => {
                 let frame = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::Frame),
                     Rights::WRITE,
                 ) {
@@ -5801,7 +5823,7 @@ impl Kernel {
             n if n == SyscallId::FrameMap as u64 => {
                 let space = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::VSpace),
                     Rights::WRITE,
                 ) {
@@ -5810,7 +5832,7 @@ impl Kernel {
                 };
                 let frame = match self.lookup_cap(
                     tcb,
-                    slot_arg(a1).unwrap_or(0),
+                    slot_or_invalid!(a1),
                     Some(ObjType::Frame),
                     Rights::READ,
                 ) {
@@ -5843,7 +5865,7 @@ impl Kernel {
             n if n == SyscallId::FrameUnmap as u64 => {
                 let space = match self.lookup_cap(
                     tcb,
-                    slot_arg(a0).unwrap_or(0),
+                    slot_or_invalid!(a0),
                     Some(ObjType::VSpace),
                     Rights::WRITE,
                 ) {
@@ -5855,7 +5877,7 @@ impl Kernel {
                 // also present a Frame cap for the exact PA being unmapped.
                 let frame = match self.lookup_cap(
                     tcb,
-                    slot_arg(a2).unwrap_or(0),
+                    slot_or_invalid!(a2),
                     Some(ObjType::Frame),
                     Rights::NONE,
                 ) {
@@ -7265,6 +7287,15 @@ mod tests {
             UserAction::Debug {
                 ptr: 0x10_0000_0000,
                 len: 8
+            }
+        );
+        // Vòng 84: slot không hợp lệ (> 255) phải trả InvalidArg thay vì
+        // lặng lẽ rơi về slot 0.
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::CapDelete as u64, 300, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
             }
         );
         // Vòng 80 (audit P0-1): FrameWrite phải kiểm tra con trỏ như mọi

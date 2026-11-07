@@ -2170,6 +2170,9 @@ E. Desktop / Space
     thư mục, `mark_free/mark_used` kiểm biên bitmap (có test ảnh hỏng);
     `RX_OUTSTANDING=1` sau hand-post của net init; TCP kẹp `ip_total` theo
     `used.ring[].len`; gỡ `service_window` (chạy với IRQ mask, không được gọi).
+130. Vòng 84: xoá `net_recv_udp` (dead code không validate); assert
+    `size_of::<Kernel>() <= KERNEL_STATIC_BUDGET` ngay lúc biên dịch; thay 53
+    chỗ `slot_arg(..).unwrap_or(0)` bằng `slot_or_invalid!` trả `InvalidArg`.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

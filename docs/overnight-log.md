@@ -833,7 +833,7 @@ follow-up `62b31f4`.
 - Số liệu cuối: kernel 127/127 (+1 fuzz ignored), tổng host test 192;
   harness 435; QEMU 3/3 ×3; persistence 7×3; 0 warning; `Kernel=710248`,
   `Object=4752`, `Tcb=4696`, `Cap=64`; SYSCALL_STATUS 51/51.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `0cbf117fc7aa8f6f8a7e569ca79cbd5b1929983e36613b8cacb11b44de47cf66`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `b9d474384dc9e1e2304063ce40cb95bdd22d4ff507315292ad787cea3c2c52e8`.
 
 ## 9.04 — Vòng 24: củng cố v23, boot stack, fuzz reclaim
 
@@ -1420,3 +1420,11 @@ follow-up `62b31f4`.
 - Client kẹp readdir; fingerprint docs phủ thêm script test/harness.
 - Gate `--with-tcp --with-input` xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `0110dd90b36117a83fe66ae7051e39c7d4eee5426c8594ebccceb2deba699bb6`.
+
+## 9.63 — Vòng 84: P2 (dead code, assert biên dịch, slot)
+
+- Xoá `net_recv_udp`; `Kernel` vượt ngân sách giờ fail lúc biên dịch.
+- 53 chỗ slot không hợp lệ trả `InvalidArg` thay vì rơi về slot 0; test mới.
+- Kernel 136 test; QEMU: riscv64 3/3, aarch64 3/3, x86_64 3/3 sau khi sửa
+  điều kiện ghi status chuẩn (chỉ ghi khi chạy đủ ba arch).
+- SHA-256 `ViFastOs-architecture-summary.txt`: `b9d474384dc9e1e2304063ce40cb95bdd22d4ff507315292ad787cea3c2c52e8`.
