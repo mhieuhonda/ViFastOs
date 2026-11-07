@@ -268,6 +268,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 61495c1 moc 5 (buoc 1): SMP riscv san sang 4 hart (chua bat gate)
 - db7b48f moc 5 (buoc 2): SMP riscv 4 hart hoat dong (harts=4, rc=0)
 - 76841ef moc 5 (buoc 3): BKL STATS mo rong 4 hart (do contention SMP4)
+- 83a8db7 moc 5 (vong 31): SMP riscv 4 hart co task that (worker G/H) + mo rong DATA arena
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -315,7 +316,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 166/166 PASS
+- `cargo test -p vifast-kernel`: 167/167 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS

@@ -13430,4 +13430,30 @@ mod tests {
         assert_eq!(moved.pick_on(0), Some(task));
         assert!(moved.check_invariants().is_ok());
     }
+
+    #[test]
+    fn per_hart_runqueue_serves_hart2_and_hart3() {
+        // Mốc 5 (vòng 31): scheduler generic theo MAX_HARTS — task affinity
+        // hart 2/3 được enqueue đúng hàng, pick_on/steal hoạt động, hart
+        // không tồn tại (>= MAX_HARTS) trả None.
+        let mut kernel = Kernel::new();
+        let g = kernel.create_tcb("g", 1).unwrap();
+        let h = kernel.create_tcb("h", 1).unwrap();
+        let floater = kernel.create_tcb("floater", 1).unwrap();
+        kernel.tcb_mut(g).unwrap().affinity = 0b0100;
+        kernel.tcb_mut(h).unwrap().affinity = 0b1000;
+        kernel.tcb_mut(floater).unwrap().affinity = 0b1111;
+        kernel.enqueue(g);
+        kernel.enqueue(h);
+        kernel.enqueue(floater);
+        assert_eq!(kernel.runq_depth(2), 1);
+        assert_eq!(kernel.runq_depth(3), 1);
+        assert_eq!(kernel.pick_on(2), Some(g));
+        assert_eq!(kernel.pick_on(3), Some(h));
+        // Hart 2 rảnh, steal task floater (affinity gồm bit 2).
+        assert_eq!(kernel.pick_on(2), Some(floater));
+        assert_eq!(kernel.scheduler_stats(2), (1, 1));
+        assert_eq!(kernel.pick_on(99), None);
+        assert!(kernel.check_invariants().is_ok());
+    }
 }
