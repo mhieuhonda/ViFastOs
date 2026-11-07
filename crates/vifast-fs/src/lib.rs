@@ -3078,4 +3078,23 @@ mod tests {
         assert_eq!(fs.link(b"/d", b"/e", 1), Err(FsError::IsDir));
         fs.fsck().unwrap();
     }
+
+    #[test]
+    fn journal_txn_limit_coalesces_and_rejects_overflow() {
+        // Mốc 3: txn journal tối đa 16 block — stage trùng LBA gộp (không
+        // tốn slot), LBA thứ 17 bị TooManyWrites thay vì tràn journal.
+        let mut fs = fresh();
+        let filler = [0x5au8; BLOCK_SIZE];
+        for lba in 30..30 + 16 {
+            fs.stage(lba, &filler).unwrap();
+        }
+        // Stage lại LBA cũ: gộp, không tốn slot mới.
+        fs.stage(30, &filler).unwrap();
+        fs.stage(45, &filler).unwrap();
+        // LBA mới thứ 17: từ chối.
+        assert_eq!(fs.stage(100, &filler), Err(FsError::TooManyWrites));
+        // Commit + fsck vẫn sạch (journal không hỏng).
+        fs.commit().unwrap();
+        fs.fsck().unwrap();
+    }
 }
