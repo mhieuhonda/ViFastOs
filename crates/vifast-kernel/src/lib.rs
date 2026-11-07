@@ -7396,6 +7396,23 @@ mod tests {
     }
 
     #[test]
+    fn round70_make_ready_wakes_blocked_budget() {
+        // Mốc 2 (vòng 70): make_ready phải đánh thức task BlockedBudget
+        // (hết ngân sách) như mọi Blocked* khác — cùng họ lỗi vòng 65.
+        // Nếu không send tới task hết budget không đánh thức, message kẹt
+        // trong hàng dù receiver đã có việc.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("budgeted", 5).unwrap();
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::BlockedBudget;
+        kernel.make_ready(tcb);
+        let table = kernel.tcb(tcb).unwrap();
+        assert_eq!(table.state, ThreadState::Ready);
+        assert!(table.queued, "BlockedBudget phải vào runqueue khi wake");
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn wake_error_does_not_queue_a_running_task() {
         // Vòng 98 (soi chay K1): task đang Running trên hart khác mà bị
         // wake_error sẽ vừa Running vừa queued -> có thể chạy hai lần.

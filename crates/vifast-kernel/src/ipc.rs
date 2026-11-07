@@ -18,6 +18,9 @@ impl Kernel {
         //  - cho task BlockedBudget chạy lố budget.
         // `Inactive` vẫn được phép (enqueue sẽ chuyển Ready) để không đổi hành
         // vi khởi động.
+        // Vòng 70: BlockedBudget (hết ngân sách sched_context) cũng wakeable
+        // như mọi Blocked* khác — cùng họ lỗi vòng 65 (wake_error bỏ sót).
+        // Nếu không, send tới task hết budget không đánh thức, message kẹt.
         let wakeable = matches!(
             state,
             ThreadState::Inactive
@@ -30,6 +33,7 @@ impl Kernel {
                 | ThreadState::BlockedNotification
                 | ThreadState::BlockedSleep
                 | ThreadState::BlockedFault
+                | ThreadState::BlockedBudget
         );
         if !wakeable {
             return;

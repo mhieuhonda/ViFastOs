@@ -289,6 +289,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 74a8d3d moc 1 (vong 65): wake_error danh thuc BlockedBudget + host test
 - 24d4343 moc 1 (vong 66): host test exit go waiter khoi notification + sua format sot
 - 99739e9 moc 3 (vong 67): host test reclaim ke bump ha watermark
+- 130892d moc 2 (vong 69): host test steal ton trong affinity + dem stats
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
