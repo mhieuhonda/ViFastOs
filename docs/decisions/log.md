@@ -69,4 +69,4 @@
 | 85 | x86_64 quét PCI config space, marker `PCI SCAN OK` | Nền tảng virtio-pci; Q35 cho 4 thiết bị, host bridge 8086:29c0 | 50747d7 |
 | 86 | Notification 2 slot waiter + signal chỉ đánh thức waiter đang block; `cld` ở entry x86; gate chạy kernel test | Sửa P0 audit #3; 139 test kernel | 8d06b16 |
 | 87 | Chặn FP/SIMD của EL0 (aarch64 CPACR, x86 CR4) thay vì lưu per-task | Không vừa ngân sách static; ELF user không dùng FP/SIMD | 02163be |
-| 88 | Notification dùng hàng đợi 6 waiter; signal đánh thức tất cả | Root park 4 worker trên một notification; mọi thiết kế WouldBlock/2-slot đều hỏng boot | (commit sau) |
+| 88 | Notification dùng hàng đợi 6 waiter; signal đánh thức tất cả | Root park 4 worker trên một notification; mọi thiết kế WouldBlock/2-slot đều hỏng boot | 74b7a30 |
