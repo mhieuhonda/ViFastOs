@@ -527,8 +527,17 @@ pub fn net_recv_dns_a(src_ip: [u8; 4]) -> Option<[u8; 4]> {
         }
         let result = unsafe {
             let q = &mut *core::ptr::addr_of_mut!(NET_RX_QUEUE);
+            // Vòng 98 (soi chay N1): không tin độ dài khai trong header. Gói có
+            // thể khai udp_len lớn hơn số byte thiết bị ghi thật; nếu không kẹp
+            // theo frame thật thì `parse_dns_a` đọc rác cũ trong buffer và có
+            // thể "thấy" một bản ghi A không tồn tại.
+            let frame_len = net_rx_last_len().min(q.buf.len());
+            let ip_total = u16::from_be_bytes([q.buf[16], q.buf[17]]) as usize;
             let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
             let ok = ethertype == 0x0800
+                && frame_len >= 14 + 20
+                && ip_total >= 20
+                && ip_total <= frame_len - 14
                 && q.buf[14 + 9] == 17
                 && q.buf[14 + 12..14 + 16] == src_ip
                 && u16::from_be_bytes([q.buf[34], q.buf[35]]) == 53;
@@ -536,7 +545,9 @@ pub fn net_recv_dns_a(src_ip: [u8; 4]) -> Option<[u8; 4]> {
                 let udp_len = u16::from_be_bytes([q.buf[38], q.buf[39]]) as usize;
                 let payload_len = udp_len.saturating_sub(8);
                 let start = 14 + 20 + 8;
-                let end = (start + payload_len).min(q.buf.len());
+                // Kẹp cả theo UDP length khai báo lẫn frame thật.
+                let declared_end = (14 + 20 + udp_len).min(14 + ip_total);
+                let end = (start + payload_len).min(declared_end).min(frame_len);
                 if end > start {
                     parse_dns_a(&q.buf[start..end])
                 } else {
@@ -565,8 +576,17 @@ pub fn net_recv_icmp() -> Option<[u8; 4]> {
         let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
         let src = unsafe {
             let q = &mut *queue;
+            // Vòng 98: kẹp theo frame thật trước khi tin header ICMP.
+            let frame_len = net_rx_last_len().min(q.buf.len());
+            let ip_total = u16::from_be_bytes([q.buf[16], q.buf[17]]) as usize;
             let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
-            if ethertype == 0x0800 && q.buf[14 + 9] == 1 && q.buf[14 + 20] == 0 {
+            if ethertype == 0x0800
+                && frame_len >= 14 + 20 + 8
+                && ip_total >= 20 + 8
+                && ip_total <= frame_len - 14
+                && q.buf[14 + 9] == 1
+                && q.buf[14 + 20] == 0
+            {
                 let mut src = [0u8; 4];
                 src.copy_from_slice(&q.buf[14 + 12..14 + 16]);
                 Some(src)

@@ -289,7 +289,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 141/141 PASS
+- `cargo test -p vifast-kernel`: 145/145 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -2231,6 +2231,11 @@ E. Desktop / Space
     `check_loaded_image` siết 4 GiB → 1 GiB cho khớp identity map. Demo DNS
     (riscv/aarch64) thử lại 8 lần khi TX ring đang drain — hết flake soak
     (12/12 sau khi sửa, trước đó 19/20).
+143. Vòng 97 (audit #9 + 4 phát hiện soi chay): NX **toàn ảnh trừ text** đọc từ
+    PE section table (`IMAGE TEXT NX OK ranges=3`), kèm `reload_cr3()` vì x86
+    không tự đồng bộ TLB; `kernel_wx_ok()` kiểm hai chiều; `split_identity_2m`
+    có bounds check. `wake_error` không enqueue task đang Running; `enqueue`
+    chọn hart ít việc nhất; DNS/ICMP kẹp theo frame thật.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

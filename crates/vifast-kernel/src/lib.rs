@@ -3255,16 +3255,33 @@ impl Kernel {
     }
 
     fn wake_error(&mut self, tcb: ObjRef, error: KError) {
-        if self.tcb(tcb).is_none() {
+        let Some(state) = self.tcb(tcb).map(|table| table.state) else {
             return;
-        }
+        };
+        // Vòng 98 (soi chay K1): không được đặt Ready + enqueue một task đang
+        // Running trên hart khác — nó sẽ vừa Running vừa queued và có thể bị
+        // chọn chạy lần hai (vỡ loại trừ của BKL). Task đang chạy chỉ nhận
+        // `resume_error` và thấy lỗi ở lần trả syscall kế tiếp.
+        let was_blocked = matches!(
+            state,
+            ThreadState::BlockedSend
+                | ThreadState::BlockedRecv
+                | ThreadState::BlockedReply
+                | ThreadState::BlockedNotification
+                | ThreadState::BlockedSleep
+                | ThreadState::BlockedFault
+        );
         if let Some(table) = self.tcb_mut(tcb) {
-            table.state = ThreadState::Ready;
             table.pending = None;
             table.resume = Some(Message::empty(0));
             table.resume_error = Some(error);
+            if was_blocked {
+                table.state = ThreadState::Ready;
+            }
         }
-        self.enqueue(tcb);
+        if was_blocked {
+            self.enqueue(tcb);
+        }
     }
 
     fn survivor_for(&self, cap_ref: CapRef, dying: &[CapRef]) -> Option<CapRef> {
@@ -4416,11 +4433,19 @@ impl Kernel {
             return;
         }
         let affinity = table.affinity;
-        let mut target = None;
+        // Vòng 98 (soi chay K3): chọn hart **ít việc nhất** trong các hart hợp
+        // affinity. Trước đây luôn lấy hart chỉ số nhỏ nhất nên hart 0 đầy
+        // (18) trước khi tràn sang hart 1, làm mất cân bằng tải.
+        let mut target: Option<usize> = None;
+        let mut best_len = usize::MAX;
         for hart in 0..MAX_HARTS {
-            if affinity & (1u8 << hart) != 0 && self.runq_len[hart] < MAX_TCBS {
+            if affinity & (1u8 << hart) == 0 {
+                continue;
+            }
+            let len = self.runq_len[hart];
+            if len < MAX_TCBS && (target.is_none() || len < best_len) {
                 target = Some(hart);
-                break;
+                best_len = len;
             }
         }
         // Audit #4 P1-6 được xét ở vòng 89: "enqueue bỏ rơi TCB Ready" chỉ xảy
@@ -6745,6 +6770,79 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn wake_error_does_not_queue_a_running_task() {
+        // Vòng 98 (soi chay K1): task đang Running trên hart khác mà bị
+        // wake_error sẽ vừa Running vừa queued -> có thể chạy hai lần.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("runner", 5).unwrap();
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::Running;
+        kernel.wake_error(tcb, KError::WouldBlock);
+        let table = kernel.tcb(tcb).unwrap();
+        assert_eq!(table.state, ThreadState::Running);
+        assert!(!table.queued, "Running task must not be queued");
+        assert_eq!(table.resume_error, Some(KError::WouldBlock));
+    }
+
+    #[test]
+    fn wake_error_queues_a_blocked_task() {
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("blocked", 5).unwrap();
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::BlockedReply;
+        kernel.wake_error(tcb, KError::ObjectDestroyed);
+        let table = kernel.tcb(tcb).unwrap();
+        assert_eq!(table.state, ThreadState::Ready);
+        assert!(table.queued);
+        assert_eq!(table.resume_error, Some(KError::ObjectDestroyed));
+    }
+
+    #[test]
+    fn enqueue_prefers_the_least_loaded_eligible_hart() {
+        // Vòng 98 (soi chay K3): trước đây luôn chọn hart chỉ số nhỏ nhất nên
+        // hart 0 đầy trước khi tràn sang hart 1.
+        let mut kernel = Kernel::new();
+        let first = kernel.create_tcb("first", 3).unwrap();
+        kernel.tcb_mut(first).unwrap().affinity = 0b11;
+        kernel.enqueue(first);
+        let second = kernel.create_tcb("second", 3).unwrap();
+        kernel.tcb_mut(second).unwrap().affinity = 0b11;
+        kernel.enqueue(second);
+        assert_eq!(kernel.pick_on(1), Some(second));
+        assert_eq!(kernel.pick_on(0), Some(first));
+    }
+
+    #[test]
+    fn destroy_chain_wakes_every_waiting_client() {
+        // Vòng 98 (soi chay K2): chuỗi A->B->C; destroy C phải đánh thức B,
+        // sau đó destroy B phải đánh thức A.
+        let mut kernel = Kernel::new();
+        let a = kernel.create_tcb("a", 1).unwrap();
+        let b = kernel.create_tcb("b", 1).unwrap();
+        let c = kernel.create_tcb("c", 1).unwrap();
+        let ep_b = kernel.create_endpoint().unwrap();
+        let ep_c = kernel.create_endpoint().unwrap();
+        assert_eq!(kernel.recv(b, ep_b, 4), Ok(None));
+        assert_eq!(kernel.recv(c, ep_c, 4), Ok(None));
+        let call = Message::new(0x11, &[1]).unwrap();
+        assert_eq!(kernel.send(a, ep_b, 0, call, true), Ok(true));
+        assert_eq!(kernel.tcb(a).unwrap().state, ThreadState::BlockedReply);
+        let call = Message::new(0x22, &[2]).unwrap();
+        assert_eq!(kernel.send(b, ep_c, 0, call, true), Ok(true));
+        assert_eq!(kernel.tcb(b).unwrap().state, ThreadState::BlockedReply);
+        kernel.destroy_object(c).unwrap();
+        assert_eq!(kernel.tcb(b).unwrap().state, ThreadState::Ready);
+        assert_eq!(
+            kernel.tcb(b).unwrap().resume_error,
+            Some(KError::ObjectDestroyed)
+        );
+        kernel.destroy_object(b).unwrap();
+        assert_eq!(kernel.tcb(a).unwrap().state, ThreadState::Ready);
+        assert_eq!(
+            kernel.tcb(a).unwrap().resume_error,
+            Some(KError::ObjectDestroyed)
+        );
+    }
+
     #[test]
     fn notification_wakes_every_waiter_in_the_queue() {
         // Vòng 88 (audit #4 P0): một slot duy nhất từng khiến waiter thứ hai

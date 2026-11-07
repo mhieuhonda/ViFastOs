@@ -1529,3 +1529,12 @@ follow-up `62b31f4`.
 - Audit #8: kernel x86 dùng lld-link/COFF, không thể dùng linker script;
   hướng đúng là đọc PE section table + NX toàn ảnh trừ text.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `92ae61a482b93504fdf7e37e1c1b739dc30e9f5dc2dd5eb97858caefbf49acb3`.
+
+## 9.75 — Vòng 97: NX toàn ảnh + K1/K2/K3/N1
+
+- NX mọi trang ảnh trừ 3 dải text PE (`IMAGE TEXT NX OK ranges=3`), có
+  `reload_cr3()` sau khi sửa PTE; `kernel_wx_ok()` kiểm hai chiều.
+- K1: `wake_error` không enqueue task đang Running. K3: enqueue chọn hart ít
+  việc nhất. N1: DNS/ICMP kẹp theo frame thật. K2: test chuỗi A→B→C.
+- Kernel 145 test; QEMU 3/3 ×3 arch; gate đầy đủ xanh.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `99d677e205d00b9b9f4a6b86889c97f2040e66b5006f9f9a114fbd86e328e803`.

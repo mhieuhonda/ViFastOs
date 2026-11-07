@@ -680,8 +680,17 @@ unsafe fn enable_nx() -> bool {
 /// pages can be marked non-executable without affecting the text page.
 unsafe fn split_identity_2m(region: usize) -> *mut u64 {
     let identity = core::ptr::addr_of_mut!(PD_IDENTITY) as *mut Table;
+    // Vòng 97 (audit #9): PD_IDENTITY chỉ có 512 entry (0..1 GiB). Base ưu
+    // tiên của ảnh EFI là 0x1400_0000 (region 10240) nên thiếu check này là
+    // ghi ngoài mảng 4 KiB, không panic.
+    if region >= (*identity).0.len() {
+        return core::ptr::null_mut();
+    }
     let entry = &mut (*identity).0[region];
     if *entry & PAGE_LARGE == 0 {
+        if *entry & PAGE_PRESENT == 0 {
+            return core::ptr::null_mut();
+        }
         return (*entry & !0xfff) as *mut u64;
     }
     let slot = SPLIT_USED;
@@ -721,6 +730,97 @@ unsafe fn mark_nx_range(start: u64, len: usize) -> bool {
         }
         va += 4096;
     }
+    true
+}
+
+/// Quét section table của ảnh PE đang nạp và trả các dải **executable** đã
+/// căn trang (tối đa 4). Trả 0 khi chưa biết vùng ảnh hoặc header không hợp lệ
+/// — khi đó chính sách NX quay về danh sách tĩnh.
+///
+/// Vì sao đọc PE thay vì linker script: ảnh UEFI do lld-link (COFF) tạo và
+/// `rust-lld -flavor link -T` báo lỗi (audit #8), nên chỉ có thể lấy dải text
+/// từ chính header đã nạp.
+fn kernel_text_ranges(out: &mut [(u64, u64); 8]) -> usize {
+    let (base, end) = image_range();
+    if base == 0 || end <= base.saturating_add(0x40) {
+        return 0;
+    }
+    let limit = end - base;
+    let peek16 =
+        |off: u64| -> u16 { unsafe { core::ptr::read_unaligned((base + off) as *const u16) } };
+    let peek32 =
+        |off: u64| -> u32 { unsafe { core::ptr::read_unaligned((base + off) as *const u32) } };
+    if peek16(0) != 0x5a4d {
+        return 0; // "MZ"
+    }
+    let pe = u64::from(peek32(0x3c));
+    if pe.saturating_add(0x18) > limit || peek32(pe) != 0x0000_4550 {
+        return 0; // "PE\0\0"
+    }
+    let sections = u64::from(peek16(pe + 6));
+    let optional = u64::from(peek16(pe + 0x14));
+    let table = pe.saturating_add(0x18).saturating_add(optional);
+    let mut count = 0;
+    let mut index = 0;
+    while index < sections.min(16) && count < out.len() {
+        let entry = table.saturating_add(index * 40);
+        if entry.saturating_add(40) > limit {
+            break;
+        }
+        let characteristics = peek32(entry + 0x24);
+        if characteristics & 0x2000_0000 != 0 {
+            // IMAGE_SCN_MEM_EXECUTE; VirtualSize dùng được cho NOLOAD.
+            let size = u64::from(peek32(entry + 0x8));
+            let va = u64::from(peek32(entry + 0xc));
+            if size != 0 {
+                if count == out.len() {
+                    // > số dải cho phép: fail-closed thay vì bỏ qua section exec
+                    // (bỏ qua sẽ NX chính efi_main ⇒ triple fault trước khi có IDT).
+                    return 0;
+                }
+                let start = base.saturating_add(va);
+                let stop = start.saturating_add(size).min(end);
+                if stop > start {
+                    out[count] = (start, stop);
+                    count += 1;
+                } else {
+                    return 0;
+                }
+            }
+        }
+        index += 1;
+    }
+    count
+}
+
+/// Đánh NX cho **mọi trang của ảnh** trừ các dải executable (vòng 97).
+/// Trước đây chỉ 20 vùng tĩnh được NX nên phần lớn ảnh (boot stack 192 KiB và
+/// hàng chục static nhỏ) vẫn executable.
+fn image_pages_nx() -> bool {
+    let (base, end) = image_range();
+    if base == 0 || end <= base {
+        return false;
+    }
+    let mut text = [(0u64, 0u64); 8];
+    let count = kernel_text_ranges(&mut text);
+    if count == 0 {
+        return false;
+    }
+    let mut va = base & !0xfff;
+    while va < end {
+        let page_end = va.saturating_add(4096);
+        let is_text = text[..count]
+            .iter()
+            .any(|(start, stop)| va < *stop && page_end > *start);
+        if !is_text && !unsafe { mark_nx_range(va, 4096) } {
+            return false;
+        }
+        va = page_end;
+    }
+    // Vòng 97 (audit #9): x86 không tự đồng bộ TLB với PTE write; nếu không
+    // flush, mapping 2 MiB cũ (executable) vẫn nằm trong TLB và NX chỉ là
+    // "trên giấy" cho tới lần CR3 reload kế tiếp — đúng kiểu xanh giả.
+    unsafe { reload_cr3() };
     true
 }
 
@@ -863,6 +963,29 @@ unsafe fn build_kernel_page_tables() {
                 );
                 X86_64::exit(1);
             }
+        }
+        // Vòng 97 (audit #8): NX toàn bộ ảnh trừ dải text đọc từ PE section
+        // table — thay vì chỉ 20 vùng tĩnh, nhờ đó boot stack và các static
+        // nhỏ không còn executable.
+        if !image_pages_nx() {
+            vifast_kernel::klog!(
+                X86Platform,
+                "NX FAIL: không đánh NX được toàn ảnh (image={:#x}..{:#x})",
+                image_range().0,
+                image_range().1
+            );
+            X86_64::exit(1);
+        }
+        {
+            let mut text = [(0u64, 0u64); 8];
+            let count = kernel_text_ranges(&mut text);
+            vifast_kernel::klog!(
+                X86Platform,
+                "IMAGE TEXT NX OK ranges={} image={:#x}..{:#x}",
+                count,
+                image_range().0,
+                image_range().1
+            );
         }
     }
 }
@@ -1995,6 +2118,66 @@ fn kernel_range_nx(root_pa: u64, start: u64, len: usize) -> bool {
     true
 }
 
+/// W^X tự kiểm tra độc lập với danh sách tĩnh (vòng 97, audit #8): duyệt từng
+/// trang của ảnh kernel trong page table và fail nếu một trang **không thuộc
+/// dải text** mà leaf vẫn executable. Nhờ đọc từ chính page table, check này
+/// không thể "xanh giả" khi `image_pages_nx()` bỏ sót.
+fn kernel_wx_ok(root_pa: u64) -> bool {
+    if unsafe { !NX_ENABLED } {
+        return !cpu_has_nx();
+    }
+    let (base, end) = image_range();
+    if base == 0 || end <= base {
+        return false;
+    }
+    let mut text = [(0u64, 0u64); 8];
+    let count = kernel_text_ranges(&mut text);
+    if count == 0 {
+        return false;
+    }
+    let mut va = base & !0xfff;
+    while va < end {
+        let page_end = va.saturating_add(4096);
+        let is_text = text[..count]
+            .iter()
+            .any(|(start, stop)| va < *stop && page_end > *start);
+        if !is_text {
+            let mut table = root_pa;
+            let mut pte = 0u64;
+            let mut found = false;
+            for level in 0..vifast_pte::x86_64::LEVELS {
+                let idx = vifast_pte::x86_64::index(va, level);
+                let entry = PageOps.read_pte(table, idx);
+                match PageOps.decode_at(entry, level) {
+                    vifast_kernel::Pte::Table(next) => table = next,
+                    vifast_kernel::Pte::Leaf(_, _) => {
+                        pte = entry;
+                        found = true;
+                        break;
+                    }
+                    vifast_kernel::Pte::Invalid => break,
+                }
+            }
+            // Audit #9: phải kiểm cả hai chiều. Non-text còn exec = lỗi cần
+            // bắt; text bị NX = sẽ #PF ngay lệnh đầu (đặc biệt efi_main).
+            let exec = pte & PAGE_NX == 0;
+            let supervisor = !vifast_pte::x86_64::is_user(pte);
+            if !found || !supervisor {
+                return false;
+            }
+            if is_text {
+                if !exec {
+                    return false;
+                }
+            } else if exec {
+                return false;
+            }
+        }
+        va = page_end;
+    }
+    true
+}
+
 fn kernel_data_nx(root_pa: u64) -> bool {
     // NX tắt chỉ hợp lệ khi CPU không hỗ trợ (enable_nx trả false). Nếu CPU có
     // NX mà cờ bị tắt thì đó là lỗi, không được coi là "pass".
@@ -2160,6 +2343,7 @@ impl Platform for X86Platform {
 
     fn check_kernel_mappings(root_pa: u64) -> bool {
         kernel_range_ok(root_pa)
+            && kernel_wx_ok(root_pa)
             && kernel_leaf_ok(
                 root_pa,
                 if unsafe { ACPI_LAPIC_BASE == 0 } {
