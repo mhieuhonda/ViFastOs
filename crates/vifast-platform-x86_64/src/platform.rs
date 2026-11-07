@@ -588,6 +588,17 @@ unsafe fn enable_pcid() {
     PCID_ENABLED = true;
 }
 
+/// Tắt SSE/SSE2 cho cả ring 0 lẫn ring 3 (vòng 87, audit #3 P1-2).
+/// Kernel và toàn bộ ELF user hiện không có lệnh SSE (kiểm bằng llvm-objdump),
+/// nên thay vì phải fxsave/fxrstor 512 byte mỗi lần switch, ta chặn hẳn: một
+/// ELF tương lai dùng SSE sẽ #UD rõ ràng thay vì đọc xmm còn sót của task khác.
+unsafe fn disable_sse() {
+    let mut cr4: u64;
+    core::arch::asm!("mov {}, cr4", out(reg) cr4);
+    cr4 &= !((1u64 << 9) | (1u64 << 10)); // OSFXSR | OSXMMEXCPT
+    core::arch::asm!("mov cr4, {}", in(reg) cr4);
+}
+
 unsafe fn enable_nx() -> bool {
     let ext = core::arch::x86_64::__cpuid(0x8000_0000).eax;
     if ext < 0x8000_0001 || core::arch::x86_64::__cpuid(0x8000_0001).edx & (1 << 20) == 0 {
@@ -1279,6 +1290,10 @@ pub extern "C" fn ap_entry() -> ! {
         core::ptr::write_volatile((base + 0x350) as *mut u32, 1 << 16);
         core::ptr::write_volatile((base + 0x360) as *mut u32, 1 << 16);
         enable_smep_smap();
+
+        disable_sse();
+
+        vifast_kernel::klog!(X86Platform, "SSE USER OFF");
         core::ptr::write_volatile(stage_ptr, 4);
         AP_ONLINE.store(true, Ordering::SeqCst);
         AP_LONG_ONLINE = true;
@@ -1930,6 +1945,9 @@ impl Platform for X86Platform {
             init_cpu(0);
             enable_smep_smap();
             enable_pcid();
+            // Vòng 87: CR4 là per-hart nên BSP cũng phải tắt SSE cho user.
+            disable_sse();
+            vifast_kernel::klog!(X86Platform, "SSE USER OFF (bsp)");
             if NX_ENABLED {
                 vifast_kernel::klog!(X86Platform, "KERNEL DATA NX OK");
             }

@@ -126,7 +126,11 @@ def main() -> int:
             )
             output_all += f"\n===== iteration {iteration} {arch} =====\n{output}"
             summary = parse_summary(output)
+            # Vòng 87 (audit #3 P2): (0,0) từng được coi là PASS (passed==total).
+            # Không có lượt chạy nào nghĩa là bước đó không thực sự chạy.
             passed, total = summary.get(arch, (0, 1))
+            if total == 0:
+                passed, total = 0, 1
             prev_passed, prev_total = totals[arch]
             totals[arch] = (prev_passed + passed, prev_total + total)
             if code != 0 or passed != total:

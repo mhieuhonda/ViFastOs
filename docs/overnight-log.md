@@ -1444,3 +1444,11 @@ follow-up `62b31f4`.
 - Gate đầy đủ xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `e6bfcce0d8a91e868e203083e0b3b463613a219416386495f07c2c2bfcfc9abe`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `fb66a3619780ee3dc67f23242d0a799c3b116449e6c4cf6135a5aa2c19ff2d85`.
+
+## 9.66 — Vòng 87: đóng rò rỉ FP/SIMD
+
+- aarch64: CPACR FPEN=0b01 (EL0 trap); x86_64: tắt OSFXSR/OSXMMEXCPT cho BSP
+  và AP. Kiểm bằng llvm-objdump: mọi ELF user (và kernel x86) đều 0 lệnh
+  FP/SIMD, nên chặn an toàn; lưu trữ per-task sẽ vượt ngân sách static.
+- `soak.py` coi `(0,0)` là hỏng thay vì PASS.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `d5bfd9b420576780c615275aaddf0d963ad35de241328f27c5b678daf87f33ef`.

@@ -2182,6 +2182,10 @@ E. Desktop / Space
 132. Vòng 86 (audit #3): notification có hai slot waiter, `signal` chỉ đánh
     thức waiter đang block, `detach_tcb` gỡ cả hai; thêm `cld` ở 6 entry x86;
     gate chạy kernel test tường minh + `--quick` báo rõ bước bị bỏ.
+133. Vòng 87: đóng rò rỉ FP/SIMD giữa task — aarch64 đặt CPACR `FPEN=0b01`
+    (EL0 trap), x86_64 xoá CR4.OSFXSR/OSXMMEXCPT cho cả BSP và AP
+    (`SSE USER OFF`); đã kiểm ELF user không có lệnh FP/SIMD. `soak.py`
+    không còn coi `(0,0)` là PASS.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

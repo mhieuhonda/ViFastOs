@@ -27,13 +27,18 @@ impl Arch for Aarch64 {
         unsafe {
             core::arch::asm!("msr daifset, #0xf");
         }
-        // Enable FP/SIMD at EL1.  The compiler is allowed to use SIMD registers
-        // for bulk memory operations; without this, such an access traps and
-        // there is no vector handler yet.
+        // Enable FP/SIMD at EL1 only (vòng 87, audit #3 P1-2). Trước đây để
+        // FPEN=0b11, tức EL0 cũng dùng được FP/SIMD; kernel không lưu q0-q31
+        // khi switch task nên user sau đọc được thanh ghi còn sót của user
+        // trước (rò rỉ liên tiến trình). EL1 vẫn cần FP/SIMD vì compiler dùng
+        // cho bulk memory. User build softfloat và ELF client/server không có
+        // lệnh FP/SIMD nào (đã kiểm bằng llvm-objdump), nên chặn EL0 là an
+        // toàn; nếu sau này có ELF dùng FP, nó sẽ trap rõ ràng thay vì rò rỉ.
         unsafe {
             let mut cpacr: u64;
             core::arch::asm!("mrs {}, cpacr_el1", out(reg) cpacr);
-            cpacr |= 3 << 20;
+            cpacr &= !(3 << 20);
+            cpacr |= 1 << 20;
             core::arch::asm!("msr cpacr_el1, {}", in(reg) cpacr);
             core::arch::asm!("isb");
         }
