@@ -53,6 +53,9 @@ version = "0.1.0"
 [[package]]
 name = "vifast-fs"
 version = "0.1.0"
+dependencies = [
+ "vifast-elf",
+]
 
 [[package]]
 name = "vifast-fsutil"

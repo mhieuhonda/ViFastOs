@@ -258,6 +258,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 386078a moc 3: hoi quy gioi han journal txn (16 block)
 - 949b577 moc 1: demo exit/wait/reap tren QEMU (worker F + WAIT REAP OK)
 - d31575a moc 7: hoi quy syscall-loi-khong-ro-value
+- 17d8227 moc 9 (buoc 1): FS -> ELF bytes -> parse (nen exec)
+- f27adb4 docs moc 11: runbook 6 su co that (vong 9-16)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
