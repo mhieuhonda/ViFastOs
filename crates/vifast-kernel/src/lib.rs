@@ -7557,6 +7557,38 @@ mod tests {
     }
 
     #[test]
+    fn round73_suspend_waiter_keeps_signal_bits() {
+        // Mốc 1 (vòng 73): suspend task đang BlockedNotification phải gỡ
+        // khỏi waiters (đường suspend thật, không set tay) — signal sau đó
+        // không đánh thức task đã treo, bit giữ cho waiter còn lại.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let waiter = kernel.create_tcb("waiter", 5).unwrap();
+        let other = kernel.create_tcb("other", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(waiter, ntfn), Ok(None));
+        assert_eq!(kernel.wait_as(other, ntfn), Ok(None));
+        // Suspend waiter qua syscall path (suspend_tcb), không set tay.
+        kernel
+            .install_cap(root, 1, Cap::new(waiter, ObjType::Tcb, Rights::WRITE))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbSuspend as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::TcbSuspended { hart: None }
+        );
+        assert_eq!(kernel.tcb(waiter).unwrap().state, ThreadState::Suspended);
+        // Slot waiter đã sạch, other còn trong hàng.
+        let waiters = kernel.notification(ntfn).unwrap().waiters;
+        assert!(waiters.iter().all(|slot| *slot != Some(waiter)));
+        assert!(waiters.iter().any(|slot| *slot == Some(other)));
+        // Signal: other thức, waiter treo không bị động, bit không mất.
+        assert_eq!(kernel.signal(ntfn, 0b1), Ok(()));
+        assert_eq!(kernel.tcb(other).unwrap().state, ThreadState::Ready);
+        assert_eq!(kernel.tcb(waiter).unwrap().state, ThreadState::Suspended);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn destroy_chain_wakes_every_waiting_client() {
         // Vòng 98 (soi chay K2): chuỗi A->B->C; destroy C phải đánh thức B,
         // sau đó destroy B phải đánh thức A.

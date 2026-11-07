@@ -291,6 +291,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 99739e9 moc 3 (vong 67): host test reclaim ke bump ha watermark
 - 130892d moc 2 (vong 69): host test steal ton trong affinity + dem stats
 - 78b307a moc 5 (vong 70): make_ready danh thuc BlockedBudget + host test
+- 46bf1e5 moc 2 (vong 71): host test budget exhaust/wake chu ky day du
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
