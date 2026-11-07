@@ -7456,6 +7456,31 @@ mod tests {
     }
 
     #[test]
+    fn round69_steal_respects_affinity_and_counts_stats() {
+        // Mốc 2 (vòng 69): hart trống được steal task affinity-cho-phép từ
+        // hart khác (steal đếm riêng), nhưng không bao giờ cướp task cấm
+        // affinity (kẹt đúng hart của nó).
+        let mut kernel = Kernel::new();
+        let shared = kernel.create_tcb("shared", 5).unwrap();
+        kernel.tcb_mut(shared).unwrap().affinity = 0b11;
+        kernel.enqueue(shared);
+        // shared vào runq hart 0 (ít việc nhất, ngang nhau lấy hart nhỏ).
+        // Hart 1 trống: steal shared.
+        assert_eq!(kernel.pick_on(1), Some(shared));
+        assert_eq!(kernel.scheduler_stats(1), (0, 1));
+        assert_eq!(kernel.scheduler_stats(0), (0, 0));
+        // Task chỉ affinity hart 1: hart 0 không cướp được.
+        let pinned = kernel.create_tcb("pinned", 5).unwrap();
+        kernel.tcb_mut(pinned).unwrap().affinity = 0b10;
+        kernel.enqueue(pinned);
+        assert_eq!(kernel.pick_on(0), None);
+        // Hart 1 lấy local (không phải steal).
+        assert_eq!(kernel.pick_on(1), Some(pinned));
+        assert_eq!(kernel.scheduler_stats(1), (1, 1));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn destroy_chain_wakes_every_waiting_client() {
         // Vòng 98 (soi chay K2): chuỗi A->B->C; destroy C phải đánh thức B,
         // sau đó destroy B phải đánh thức A.
