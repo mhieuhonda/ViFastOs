@@ -63,3 +63,5 @@
 | 80 | Vá P0 audit: FrameWrite validate con trỏ, TCP RX chặn underflow, một RX chain; TCP thường trú + `service_window()` 2.5s | Audit lưu ở `docs/audits/`; aarch64 trước đó chưa gọi `tcp_pump` | 71d34a7 |
 | 81 | Siết `KERNEL_STATIC_BUDGET` về 566_272 + cảnh báo gap 4 KiB trong build.sh | Guard runtime cũ lỏng 155 KB trong khi AArch64 chỉ còn 8 byte | bb3a28f |
 | 82 | Trả byte Untyped khi retype hỏng; check-docs so hash nguồn thay mtime | Test host mới; rebuild không đổi mã vẫn xanh | 2d0ddcf |
+| 83 | FS kiểm tra tên/biên block (audit #2 P0); RX init set `RX_OUTSTANDING`; TCP kẹp theo used-ring len; gỡ `service_window` sai | 2 test ảnh hỏng (FS 24), kernel 136; gate xanh | f87124d |
+| 83b | Gỡ TCB Faulted khỏi runqueue khi VSpace bị destroy | Test mới, `pick_on` không còn trả TCB mất VSpace | cd0ec59 |
