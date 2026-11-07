@@ -912,13 +912,30 @@ fn tcp_echo_demo() {
     let mut client_ip = [0u8; 4];
     let mut client_port = 0u16;
     let mut client_seq = 0u32;
-    let mut our_seq = 0x5150_0000u32;
+    // ISN lấy từ virtio-rng nếu có (vòng 78); không có thì dùng hằng dự phòng.
+    let mut seed = [0u8; 8];
+    let mut our_seq = if vifast_virtio::rng_read(&mut seed) == 8 {
+        u32::from_le_bytes([seed[0], seed[1], seed[2], seed[3]])
+    } else {
+        0x5150_0000
+    };
     let mut echoes = 0u32;
     let mut polls = 0u32;
+    vifast_virtio::net_rx_refill(8);
     vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP LISTEN OK port={}", PORT);
-    while polls < 100 {
+    {
+        let (avail, used, seen) = vifast_virtio::net_rx_stats();
+        vifast_kernel::klog!(
+            RiscvPlatform,
+            "VIRTIO TCP RX avail={} used={} seen={}",
+            avail,
+            used,
+            seen
+        );
+    }
+    while polls < 400 {
         polls += 1;
-        let Some(seg) = vifast_virtio::net_recv_tcp_bounded(PORT, &mut payload, 100_000) else {
+        let Some(seg) = vifast_virtio::net_recv_tcp_bounded(PORT, &mut payload, 25_000) else {
             continue;
         };
         if !have_conn {
@@ -957,6 +974,11 @@ fn tcp_echo_demo() {
                 our_seq = our_seq.wrapping_add(len);
                 echoes += 1;
             }
+            if seg.flags & vifast_virtio::TCP_RST != 0 {
+                vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP RESET");
+                have_conn = false;
+                continue;
+            }
             if seg.flags & vifast_virtio::TCP_FIN != 0 {
                 client_seq = client_seq.wrapping_add(1);
                 let _ = vifast_virtio::net_send_tcp(
@@ -970,8 +992,20 @@ fn tcp_echo_demo() {
                 );
                 vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP CLOSE");
                 have_conn = false;
+                break;
             }
         }
+    }
+    {
+        let (avail, used, seen) = vifast_virtio::net_rx_stats();
+        vifast_kernel::klog!(
+            RiscvPlatform,
+            "VIRTIO TCP RXEND avail={} used={} seen={} echoes={}",
+            avail,
+            used,
+            seen,
+            echoes
+        );
     }
     if echoes > 0 {
         vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP ECHO OK segs={}", echoes);

@@ -277,6 +277,30 @@ fn net_rx_post() {
     unsafe { core::ptr::write_volatile((base + 0x50) as *mut u32, 0) };
 }
 
+/// Bổ sung buffer RX cho tới khi còn ít nhất `min_outstanding` gói chờ được
+/// thiết bị ghi (vòng 78). Trước một phiên TCP, ring có thể chỉ còn 2-3 buffer
+/// sau ARP/DNS; nạp đầy lại giúp không mất SYN khi client bắt tay dồn dập.
+pub fn net_rx_refill(min_outstanding: u16) {
+    let (avail, used, _) = net_rx_stats();
+    let mut outstanding = avail.wrapping_sub(used);
+    while outstanding < min_outstanding && outstanding < QUEUE_SIZE as u16 {
+        net_rx_post();
+        outstanding += 1;
+    }
+}
+
+/// Thống kê RX để chẩn đoán: (avail.idx, used.idx, RX_SEEN).
+pub fn net_rx_stats() -> (u16, u16, u16) {
+    unsafe {
+        let q = &*core::ptr::addr_of!(NET_RX_QUEUE);
+        (
+            core::ptr::read_volatile(&q.avail.idx),
+            core::ptr::read_volatile(&q.used.idx),
+            RX_SEEN,
+        )
+    }
+}
+
 /// Chờ một gói RX mới (used.idx tiến), bound tuỳ ý.
 fn net_rx_poll_bounded(bound: u64) -> bool {
     let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
@@ -292,7 +316,11 @@ fn net_rx_poll_bounded(bound: u64) -> bool {
         if core::ptr::read_volatile(&q.used.idx) == RX_SEEN {
             return false;
         }
-        RX_SEEN = core::ptr::read_volatile(&q.used.idx);
+        // Vòng 78: tiến từng gói một. Trước đây gán RX_SEEN = used.idx đã nhảy
+        // qua các gói còn lại trong ring, mỗi gói bị bỏ qua là một descriptor
+        // RX không được đăng lại → sau vài gói thiết bị hết buffer và "im"
+        // (thấy rõ trên aarch64: LISTEN nhưng không bao giờ ACCEPT).
+        RX_SEEN = RX_SEEN.wrapping_add(1);
         true
     }
 }

@@ -17,6 +17,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import glob
 
@@ -594,18 +595,22 @@ def test_interactive(name: str, index: int) -> bool:
 
 
 def tcp_check(name: str) -> bool:
-    """Boot with hostfwd and run a TCP echo round trip from the host.
+    """Boot with hostfwd + serial socket and run a TCP echo round trip.
 
-    Vòng 77: QEMU user-net chuyển tiếp localhost:<port> vào cổng 8080 của
-    guest; client gửi payload và yêu cầu guest echo lại đúng nội dung.
+    Vòng 78: dùng chardev socket (không buffer như file) để biết chính xác lúc
+    guest vào cửa sổ LISTEN, rồi mới nối TCP — tránh SYN rơi vào lúc chưa ai
+    phục vụ và bị drop.
     """
     if name not in ("riscv64", "aarch64"):
         return True
     port = 18080 if name == "riscv64" else 18081
-    serial = f"/tmp/vifast-tcp-{name}.log"
+    serial_path = f"/tmp/vifast-tcp-{name}.sock"
+    for path in (serial_path,):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
     disk = make_disk(f"{name}-tcp")
-    if os.path.exists(serial):
-        os.unlink(serial)
     if name == "riscv64":
         kernel = os.path.join(
             ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
@@ -613,7 +618,7 @@ def tcp_check(name: str) -> bool:
         cmd = [
             QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "128M",
             "-display", "none",
-            "-serial", f"file:{serial}",
+            "-serial", f"unix:{serial_path}",
             "-global", "virtio-mmio.force-legacy=false",
             "-drive", f"if=none,id=vd0,file={disk},format=raw",
             "-device", "virtio-blk-device,drive=vd0",
@@ -629,7 +634,7 @@ def tcp_check(name: str) -> bool:
             QEMU_ARM, "-machine", "virt,gic-version=2", "-semihosting",
             "-cpu", "max", "-smp", "2", "-m", "128M",
             "-display", "none",
-            "-serial", f"file:{serial}",
+            "-serial", f"unix:{serial_path}",
             "-global", "virtio-mmio.force-legacy=false",
             "-drive", f"if=none,id=vd0,file={disk},format=raw",
             "-device", "virtio-blk-device,drive=vd0",
@@ -637,19 +642,53 @@ def tcp_check(name: str) -> bool:
             "-netdev", f"user,id=vn0,hostfwd=tcp::{port}-:8080",
             "-kernel", kernel,
         ]
+    # Python giữ đầu "server" của chardev để không mất byte nào từ lúc guest
+    # bắt đầu in; QEMU kết nối vào (unix:path không có server=on).
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(serial_path)
+    listener.listen(1)
+    listener.settimeout(10)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    listen_seen = threading.Event()
+    serial_text = []
+    reader = None
     try:
+        deadline = time.time() + 15
+        try:
+            reader, _ = listener.accept()
+        except OSError:
+            print(f"--- {name} tcp FAIL (no serial connection) ---")
+            return False
+
+        def pump():
+            try:
+                while True:
+                    chunk = reader.recv(4096)
+                    if not chunk:
+                        return
+                    serial_text.append(chunk.decode("utf-8", errors="replace"))
+                    # Marker có thể bị chia qua nhiều lần đọc; soát toàn buffer.
+                    if "VIRTIO TCP LISTEN OK" in "".join(serial_text):
+                        listen_seen.set()
+            except OSError:
+                return
+
+        thread = threading.Thread(target=pump, daemon=True)
+        thread.start()
+        if not listen_seen.wait(timeout=15):
+            print(f"--- {name} tcp FAIL (no LISTEN marker) ---")
+            return False
+
         payload = b"ping-from-host"
         echoed = b""
-        deadline = time.time() + 12
         while time.time() < deadline:
-            time.sleep(0.15)
             try:
                 client = socket.create_connection(("127.0.0.1", port), timeout=1.0)
             except OSError:
+                time.sleep(0.05)
                 continue
             try:
-                client.settimeout(3.0)
+                client.settimeout(1.5)
                 client.sendall(payload)
                 echoed = client.recv(1024)
             except OSError:
@@ -658,12 +697,11 @@ def tcp_check(name: str) -> bool:
                 client.close()
             if echoed == payload:
                 break
+            time.sleep(0.05)
+        text = "".join(serial_text)
         if echoed != payload:
             print(f"--- {name} tcp FAIL (echo {echoed!r}) ---")
             return False
-        text = ""
-        if os.path.exists(serial):
-            text = open(serial, "rb").read().decode("utf-8", errors="replace")
         if "VIRTIO TCP ACCEPT" not in text:
             print(f"--- {name} tcp FAIL (no ACCEPT marker) ---")
             return False
@@ -672,6 +710,19 @@ def tcp_check(name: str) -> bool:
     finally:
         proc.kill()
         proc.wait()
+        try:
+            listener.close()
+        except OSError:
+            pass
+        if reader is not None:
+            try:
+                reader.close()
+            except OSError:
+                pass
+        try:
+            os.unlink(serial_path)
+        except OSError:
+            pass
 
 
 def input_check(name: str) -> bool:

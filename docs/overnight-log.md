@@ -1360,3 +1360,14 @@ follow-up `62b31f4`.
   retransmit, chưa thường trú.
 - Xem `docs/agent2-report-77.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `5baa7ace06f15a199134934b5e99957cc6c297453e8ead2d9cec18ba5aff1603`.
+
+## 9.57 — Vòng 78: rò rỉ RX + TCP tin cậy
+
+- Bug thật: `RX_SEEN = used.idx` làm mất buffer RX chưa đăng lại → aarch64
+  LISTEN mà không ACCEPT. Sửa tiến từng gói + `net_rx_refill(8)`.
+- TCP: ISN từ rng, xử lý RST, cửa sổ 400×25k thoát sớm sau FIN; `--tcp-check`
+  dùng chardev socket (không buffer) → aarch64 5/5, riscv 3/3.
+- x86 chốt chặn: huge page 2 MiB cần tách PMD; data/meta/boot Untyped đều
+  không đủ. `gate.sh --with-tcp`: all steps passed.
+- Xem `docs/agent2-report-78.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `17b418dc0bb683496485cbe1d230412b3d4add07f67c49ad4300ed0319cde999`.
