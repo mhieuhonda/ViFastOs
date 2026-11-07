@@ -244,6 +244,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - fb5081f fix: give x86 a real kernel image bound and retry the DNS demo send
 - c1d953a feat: make the whole UEFI image non-executable except its text sections
 - c1cd90b feat: give x86_64 a working PS/2 keyboard and wake only waiting tasks
+- 7fe404c vong 101: va 37/44 loi K32-K75 (TCB/IPC/TLB/IOMMU/cap/ABI) + 12 test hoi quy
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

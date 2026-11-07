@@ -26,6 +26,10 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
     BootInfo; root/server/client đã tách VSpace, client dùng Untyped con.
 12. [12-vifast-pte.md](12-vifast-pte.md) — encode/decode PTE an toàn cho 3 arch.
 13. [13-virtio.md](13-virtio.md) — driver VirtIO-MMIO: block, net, gpu, input, rng.
+14. [14-fault-pager.md](14-fault-pager.md) — fault endpoint, demand paging,
+    pager server và bài học resume-BlockedFault (vòng 101).
+15. [15-iommu-audit101.md](15-iommu-audit101.md) — software IOMMU, W^X chéo
+    CPU/DMA và danh mục audit K32–K75.
 14. `vifast-elf` — parser ELF64 PT_LOAD và host test. Nạp root ELF là Bước 6.
 
 ## Bản đồ crate
