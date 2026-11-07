@@ -1279,6 +1279,12 @@ impl Kernel {
         if target == caller {
             return Err(KError::IllegalOperation);
         }
+        // Mốc 1 (vòng 64): cấm restart task đang là current trên bất kỳ
+        // hart nào — nếu không hart đó quay lại user với entry/stack cũ
+        // trong khi TCB đã bị reset (giống K33 của resume, alias current).
+        if self.current.contains(&Some(target)) {
+            return Err(KError::IllegalOperation);
+        }
         let table = self.tcb(target).ok_or(KError::WrongType)?;
         if table.state == ThreadState::Running || table.caller.is_some() {
             return Err(KError::IllegalOperation);
@@ -12392,7 +12398,45 @@ mod tests {
         assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Running);
         assert!(kernel.tcb(t).unwrap().caller.is_none());
         let _ = root;
-        eprintln!("inv: {:?}", kernel.check_invariants());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round64_restart_current_is_rejected() {
+        // Mốc 1 (vòng 64): restart task đang là current trên bất kỳ hart
+        // nào phải IllegalOperation — nếu không hart đó quay lại user với
+        // context cũ trong khi TCB đã bị reset về Ready (alias current,
+        // cùng họ K33 của resume).
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("runner", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.resume_tcb(t).unwrap();
+        assert_eq!(kernel.pick_on(0), Some(t));
+        kernel.tcb_mut(t).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(t);
+        // Restart current qua mức kernel lẫn syscall đều cấm.
+        assert_eq!(kernel.restart_tcb(t, root), Err(KError::IllegalOperation));
+        kernel
+            .install_cap(root, 1, Cap::new(t, ObjType::Tcb, Rights::WRITE))
+            .unwrap();
+        // Restart trả UserAction::RestartTcb khi thành công; ở đây phải
+        // là Return + IllegalOperation.
+        assert!(matches!(
+            kernel.user_syscall(root, SyscallId::TcbRestart as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                error: KError::IllegalOperation,
+                ..
+            }
+        ));
+        // Task còn nguyên Running, current giữ nguyên.
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Running);
+        assert_eq!(kernel.current[0], Some(t));
         assert!(kernel.check_invariants().is_ok());
     }
 
