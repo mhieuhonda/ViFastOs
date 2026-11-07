@@ -984,6 +984,7 @@ fn spawn_pager(
     );
     check(vifast_user::frame_unmap(root_vspace, fault_va, page_frame));
     copy(endpoint_slot, pager_tcb, 1, Rights::WRITE);
+    // Vòng 101 (K75): truyền slot endpoint phía nạn nhân (slot 1 vừa copy).
     check(vifast_user::tcb_configure_fault(
         pager_tcb,
         entry as u64,
@@ -1245,6 +1246,9 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             fault_slot as u8,
             Rights::READ | Rights::WRITE,
         );
+        // Vòng 101 (K75): kernel đọc vé endpoint từ slot phía nạn nhân và
+        // đối chiếu caller cũng giữ vé tới cùng endpoint — root copy vé
+        // cho nạn nhân trước, rồi truyền fault_slot (slot phía nạn nhân).
         check(vifast_user::tcb_configure_fault(
             fault_tcb,
             entry as u64,
@@ -1322,7 +1326,11 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         server_buffer_frame,
         (Rights::READ | Rights::WRITE).0,
     ));
-    check(vifast_user::iommu_unmap(iommu, vifast_abi::IOMMU_IOVA_BASE));
+    check(vifast_user::iommu_unmap(
+        iommu,
+        vifast_abi::IOMMU_IOVA_BASE,
+        server_buffer_frame,
+    ));
     write(IOMMU_OK);
 
     let server_bytes = unsafe {
@@ -1461,6 +1469,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         6,
         Rights::READ | Rights::WRITE,
     );
+    // Vòng 101 (K75): truyền slot endpoint phía nạn nhân (slot 6 vừa copy).
     check(vifast_user::tcb_configure_fault(
         fault4_tcb,
         USER_ENTRY_FAULT4 as u64,

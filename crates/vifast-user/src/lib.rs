@@ -590,11 +590,11 @@ pub fn iommu_map(domain_slot: u8, iova: u64, frame_slot: u8, rights: u8) -> Sysc
     result(e, v)
 }
 
-pub fn iommu_unmap(domain_slot: u8, iova: u64) -> SyscallResult {
+pub fn iommu_unmap(domain_slot: u8, iova: u64, frame_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(
             SyscallId::IoUnmap as u64,
-            [domain_slot as u64, iova, 0, 0, 0, 0],
+            [domain_slot as u64, iova, frame_slot as u64, 0, 0, 0],
         )
     };
     result(e, v)

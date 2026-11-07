@@ -420,6 +420,15 @@ impl Kernel {
         if rights.contains(Rights::WRITE) && frame.mapped_x != 0 {
             return Err(KError::NoRights);
         }
+        // Vòng 101 (K55): DMA-WRITE cũng là WRITE — phải cộng mapped_w để
+        // W^X chéo CPU/DMA khép kín. Trước đây iommu_map(WRITE) lúc
+        // mapped_x == 0 lọt mà counters 0/0, rồi map_frame(EXEC) thấy
+        // mapped_w == 0 cũng lọt => 1 PA vừa CPU-X vừa DMA-W.
+        let next_w = if rights.contains(Rights::WRITE) {
+            frame.mapped_w.checked_add(1).ok_or(KError::OutOfMemory)?
+        } else {
+            frame.mapped_w
+        };
         let mapping = IommuMapping {
             iova,
             pa: frame.pa as u64,
@@ -427,26 +436,63 @@ impl Kernel {
             rights,
             frame: frame_obj,
         };
-        self.iommu_mut(domain)
-            .ok_or(KError::WrongType)?
-            .insert(mapping)?;
+        {
+            let entry = self.iommu_mut(domain).ok_or(KError::WrongType)?;
+            entry.insert(mapping)?;
+            entry.flush_iotlb();
+        }
+        self.set_frame_mapping_counts(frame_obj, next_w, frame.mapped_x);
         Ok(mapping)
     }
 
     pub fn iommu_unmap(&mut self, domain: ObjRef, iova: u64) -> KResult<IommuMapping> {
-        self.iommu_mut(domain)
-            .ok_or(KError::WrongType)?
-            .remove(iova)
+        let entry = self.iommu(domain).ok_or(KError::WrongType)?;
+        let mapping = entry
+            .mappings
+            .iter()
+            .flatten()
+            .find(|m| m.iova == iova)
+            .copied()
+            .ok_or(KError::NotMapped)?;
+        let frame_obj = mapping.frame;
+        let is_write = mapping.rights.contains(Rights::WRITE);
+        let entry = self.iommu_mut(domain).ok_or(KError::WrongType)?;
+        let mapping = entry.remove(iova)?;
+        entry.flush_iotlb();
+        // Vòng 101 (K55): đối ứng với cộng mapped_w lúc map.
+        if is_write {
+            let counts = self.frame(frame_obj).map(|f| (f.mapped_w, f.mapped_x));
+            if let Some((w, x)) = counts {
+                self.set_frame_mapping_counts(frame_obj, w.saturating_sub(1), x);
+            }
+        }
+        Ok(mapping)
     }
 
     fn unmap_iommu_frame_everywhere(&mut self, frame: ObjRef) {
+        let mut removed_w = 0u16;
         for index in 0..MAX_OBJECTS {
             let obj = ObjRef {
                 index: index as u8,
                 gen: self.objs[index].gen,
             };
             if let Some(domain) = self.iommu_mut(obj) {
+                // Vòng 101 (K55): đếm số mapping WRITE bị gỡ để trừ mapped_w.
+                let before = domain
+                    .mappings
+                    .iter()
+                    .flatten()
+                    .filter(|m| m.frame == frame && m.rights.contains(Rights::WRITE))
+                    .count();
                 domain.remove_frame(frame);
+                domain.flush_iotlb();
+                removed_w = removed_w.saturating_add(before.min(u16::MAX as usize) as u16);
+            }
+        }
+        if removed_w != 0 {
+            let counts = self.frame(frame).map(|f| (f.mapped_w, f.mapped_x));
+            if let Some((w, x)) = counts {
+                self.set_frame_mapping_counts(frame, w.saturating_sub(removed_w), x);
             }
         }
     }
@@ -570,6 +616,12 @@ impl Kernel {
     /// Allocate one IRQ object.  Only one live object may represent a given
     /// logical IRQ at a time, so notification routing is unambiguous.
     pub fn create_irq(&mut self, number: u32) -> Option<ObjRef> {
+        // Vòng 101 (K47): số IRQ cắt `& 63` khi ánh xạ bit — 2 IRQ khác nhau
+        // (vd. 7 và 71) sẽ alias cùng bit, ack(7) xóa luôn cạnh của 71. Cấm
+        // number >= 64 ngay lúc tạo thay vì sửa mọi đường signal/ack/raise.
+        if number >= 64 {
+            return None;
+        }
         if self
             .objs
             .iter()
@@ -595,8 +647,18 @@ impl Kernel {
         if self.tcb_count() >= MAX_TCBS {
             return None;
         }
-        let slot = self.free_context_slot()?;
+        // Vòng 100 (K27): giành object TRƯỚC context slot. Trước đây lấy slot
+        // rồi mới alloc; alloc fail thì slot bị rò (retype hỏng liên tiếp làm
+        // cạn slot dù không tạo được TCB nào).
         let object = self.alloc(Kind::Tcb(Tcb::new(name, priority)))?;
+        let Some(slot) = self.free_context_slot() else {
+            // Trả object vừa cấp để không rò (cùng cách destroy_object giải
+            // phóng: đặt lại Object::free và bump gen).
+            if let Some(entry) = self.objs.get_mut(object.index as usize) {
+                *entry = Object::free();
+            }
+            return None;
+        };
         if let Some(tcb) = self.tcb_mut(object) {
             tcb.context_slot = slot;
         }
@@ -644,6 +706,24 @@ impl Kernel {
     }
 
     pub fn create_frame(&mut self, pa: usize, size: usize) -> Option<ObjRef> {
+        // Vòng 101 (K59): 2 Frame cùng PA thì unmap_frame_everywhere quét
+        // theo PA sẽ xóa nhầm mapping của anh em. Từ chối overlap ngay lúc
+        // tạo (giữ đồng nhất với invariant coi overlap là lỗi).
+        if size == 0 {
+            return None;
+        }
+        let (start, end) = (pa as u64, (pa as u64).saturating_add(size as u64));
+        for object in self.objs.iter() {
+            if let Kind::Frame(other) = object.kind {
+                let (o_start, o_end) = (
+                    other.pa as u64,
+                    (other.pa as u64).saturating_add(other.size as u64),
+                );
+                if start < o_end && o_start < end {
+                    return None;
+                }
+            }
+        }
         self.alloc(Kind::Frame(Frame {
             pa,
             size,
@@ -797,8 +877,20 @@ impl Kernel {
     }
 
     pub fn irq_ack(&mut self, irq_ref: ObjRef) -> KResult<()> {
-        let irq = self.irq_mut(irq_ref).ok_or(KError::WrongType)?;
-        irq.pending = false;
+        // Vòng 100 (K21): ack phải xoá cả bit tương ứng trong notification đã
+        // bind. Nếu chỉ xoá `pending`, bit cũ còn trong `word` sẽ làm lần raise
+        // kế tiếp "dính" vào cùng bit (word |= bit) và người nhận chỉ thấy một
+        // wakeup cho hai edge — đúng kiểu mất ngắt.
+        let (notification, number) = {
+            let irq = self.irq_mut(irq_ref).ok_or(KError::WrongType)?;
+            irq.pending = false;
+            (irq.notification, irq.number)
+        };
+        if let Some(notification) = notification {
+            if let Some(ntfn) = self.notification_mut(notification) {
+                ntfn.word &= !(1u64 << (number & 63));
+            }
+        }
         Ok(())
     }
 
@@ -988,8 +1080,20 @@ impl Kernel {
         {
             return Err(KError::IllegalOperation);
         }
-        if let Some(cnode) = cnode {
-            if self.cnode(cnode).is_none() {
+        // Vòng 101 (K62): cấm giấu vé nhúng sau CNode — bind CNode khi mảng
+        // nhúng còn vé sống sẽ tạo "vé ma": revoke/cap_at/collect/delete/
+        // invariant/remove_caps_to đi theo view hiện tại (CNode) nên vé ẩn
+        // không bao giờ bị đánh dấu/thu. Muốn bind CNode thì xóa sạch vé
+        // nhúng trước (delete từng slot); unbind (None) luôn cho phép.
+        if cnode.is_some() {
+            let has_live_embedded = self
+                .tcb(target)
+                .map(|table| table.cspace.iter().any(Option::is_some))
+                .unwrap_or(false);
+            if has_live_embedded {
+                return Err(KError::IllegalOperation);
+            }
+            if self.cnode(cnode.unwrap()).is_none() {
                 return Err(KError::WrongType);
             }
         }
@@ -1130,6 +1234,28 @@ impl Kernel {
         if entry == 0 || vspace.is_none() {
             return Err(KError::IllegalOperation);
         }
+        // Vòng 101 (K32/K33/K34): resume chỉ cho Inactive (mở máy),
+        // Suspended (tiếp tục sau suspend), Ready (lũy đẳng) và BlockedFault
+        // (fault handler xử lý xong cho chạy lại — pager flow dựa vào đường
+        // này). Mọi Blocked* khác/Running đều từ chối — trước đây resume
+        // set Ready mù quáng mà không gỡ
+        // endpoint.send/recv hay notification.waiters (K32, thành viên
+        // kép), ép Running thành Ready trong khi current[hart] còn trỏ
+        // tới nó (K33, alias current+queued), và resume ngay sau
+        // suspend-Running khi runtime chưa kịp dọn current (K34).
+        // BlockedReply cũng cấm như suspend để server không ôm caller cũ.
+        if !matches!(
+            state,
+            ThreadState::Inactive
+                | ThreadState::Suspended
+                | ThreadState::Ready
+                | ThreadState::BlockedFault
+        ) {
+            return Err(KError::IllegalOperation);
+        }
+        if self.current.contains(&Some(tcb)) {
+            return Err(KError::IllegalOperation);
+        }
         if state == ThreadState::Suspended {
             if let Some(sched) = sched {
                 let now = self.fast_time();
@@ -1162,6 +1288,45 @@ impl Kernel {
         let entry = table.entry;
         let stack = table.stack;
         let sched = table.sched_context;
+        // Vòng 101 (K36): cũng cấm restart một client đang BlockedReply —
+        // nếu không server ôm caller cũ mà `reply` đòi BlockedReply+epoch
+        // nên server treo với caller ma. Quét mọi server và gỡ caller
+        // trỏ tới target để reply sau này trả NoCaller sạch sẽ.
+        if self
+            .tcb(target)
+            .map(|t| t.state)
+            .is_some_and(|s| s == ThreadState::BlockedReply)
+        {
+            return Err(KError::IllegalOperation);
+        }
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            if let Some(table) = self.tcb_mut(r) {
+                if table.caller.is_some_and(|(client, _)| client == target) {
+                    table.caller = None;
+                }
+            }
+        }
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            if let Some(endpoint) = self.endpoint_mut(r) {
+                endpoint.send.remove(target);
+                endpoint.recv.remove(target);
+            }
+            if let Some(notification) = self.notification_mut(r) {
+                for slot in notification.waiters.iter_mut() {
+                    if *slot == Some(target) {
+                        *slot = None;
+                    }
+                }
+            }
+        }
         self.remove_from_runq(target);
         if let Some(sched) = sched {
             let now = self.fast_time();
@@ -2313,7 +2478,23 @@ impl Kernel {
                         return Err(KError::InvalidArg);
                     }
                     ops.write_pte(current, idx, ops.encode_table(table.root));
-                    ops.flush_va(va);
+                    // Vòng 101 (K54): entry cha phủ cả span — flush local
+                    // không đủ, hart khác giữ page-walk cache cũ. Dùng
+                    // flush_vspace_range theo mask như map_frame/remap.
+                    let span_pages =
+                        ((span / page_size as u64).max(1).min(usize::MAX as u64)) as usize;
+                    // `flush_vspace_range` cần &mut nhưng PTE đã ghi xong;
+                    // gọi flush trực tiếp qua ops với mask hiện tại.
+                    if let Some(space) = self.vspace(vspace) {
+                        let (asid, mask) = (space.asid, space.harts_loaded);
+                        if mask != 0 {
+                            if span_pages > 16 {
+                                ops.flush_all_asid(asid, mask);
+                            } else {
+                                ops.flush_va_asid(asid, va_base, span_pages, mask);
+                            }
+                        }
+                    }
                     let table = self.page_table_mut(page_table).ok_or(KError::WrongType)?;
                     table.mapped = Some(PageTableMapping {
                         vspace,
@@ -2556,11 +2737,11 @@ impl Kernel {
             return;
         }
         if pages > 16 || pages.saturating_mul(page_size as usize) > 16 * 4096 {
+            // Vòng 101 (K53): KHÔNG xóa harts_loaded sau full-ASID flush.
+            // Hart vẫn chạy VSpace đó không set lại mask tới lần switch
+            // tiếp theo — mask rỗng làm mọi unmap/map sau bỏ shootdown
+            // (thiếu flush, nguy hiểm hơn flush thừa).
             ops.flush_all_asid(asid, mask);
-            // A full-ASID flush on every loaded hart makes the mask empty.
-            if let Some(space) = self.vspace_mut(vspace) {
-                space.harts_loaded = 0;
-            }
         } else {
             ops.flush_va_asid(asid, va, pages, mask);
         }
@@ -2652,6 +2833,15 @@ impl Kernel {
             }
             match object.kind {
                 Kind::Tcb(ref tcb) => {
+                    // Vòng 99: `Ready` mà không nằm trong runqueue là TCB chết
+                    // (không ai chọn lại) — đúng lớp lỗi K1/K4. Ngược lại,
+                    // `queued` phải kéo theo state Ready.
+                    if tcb.state == ThreadState::Ready && !tcb.queued {
+                        return Err(KError::IllegalOperation);
+                    }
+                    if tcb.queued && tcb.state != ThreadState::Ready {
+                        return Err(KError::IllegalOperation);
+                    }
                     if let Some(vspace) = tcb.vspace {
                         if self.vspace(vspace).is_none() {
                             return Err(KError::ObjectDestroyed);
@@ -3164,6 +3354,25 @@ impl Kernel {
         // refused for every cap type, not just Untyped.  The object itself is
         // not destroyed: deleting a cap only removes the slot.
         let target = CapRef { addr, id: cap.id };
+        // Vòng 101 (K69): build_task_space retype VSpace/PageTable/Frame
+        // với creator=None — sống, tốn byte, 0 vé. Xóa vé Untyped cuối thì
+        // mất mọi đường retype/revoke chạm tới (collect chỉ lấy
+        // None-creator khi target root). Cấm khi còn object owner==cap.obj
+        // bất kể creator.
+        let has_owned_objects = self.objs.iter().any(|object| {
+            if object.is_free() || object.owner != Some(cap.obj) {
+                return false;
+            }
+            if object
+                .creator
+                .is_some_and(|creator| self.cap_ref_is_descendant(creator, target))
+            {
+                return true;
+            }
+            // creator=None nhưng object sống và không phải chính Untyped
+            // đang bị xóa vé: đó là object mồ côi cần giữ đường chạm tới.
+            !matches!(object.kind, Kind::Untyped(_))
+        });
         let has_live_objects = self.objs.iter().any(|object| {
             object.owner == Some(cap.obj)
                 && object
@@ -3190,7 +3399,7 @@ impl Kernel {
                 .any(|child| child.parent.is_some() && self.is_descendant(child, target)),
             _ => false,
         });
-        if has_live_objects || has_child_caps || has_cnode_child {
+        if has_live_objects || has_owned_objects || has_child_caps || has_cnode_child {
             return Err(KError::IllegalOperation);
         }
         self.cspace_mut(tcb)
@@ -3380,6 +3589,12 @@ impl Kernel {
         if let Some((client, _)) = self.tcb(obj).and_then(|table| table.caller) {
             self.wake_error(client, KError::ObjectDestroyed);
         }
+        // Vòng 100 (K23): TCB chết không được giữ bind notification cũ — nếu
+        // object được tái dùng cho TCB khác, "Wait trên bound" sẽ nhận tín
+        // hiệu của đời trước.
+        if let Some(table) = self.tcb_mut(obj) {
+            table.bound_ntfn = None;
+        }
         for i in 0..MAX_OBJECTS {
             let r = ObjRef {
                 index: i as u8,
@@ -3493,6 +3708,31 @@ impl Kernel {
         for waiter in waiters.into_iter().flatten() {
             self.wake_error(waiter, KError::ObjectDestroyed);
         }
+        // Vòng 101 (K67): destroy mà không gỡ bound_ntfn thì TCB ôm
+        // Some(chết), bind mới mãi AlreadyMapped, không có syscall unbind.
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            if self
+                .tcb(r)
+                .is_some_and(|table| table.bound_ntfn == Some(obj))
+            {
+                if let Some(table) = self.tcb_mut(r) {
+                    table.bound_ntfn = None;
+                }
+            }
+            // Vòng 101 (K68): destroy mà không gỡ irq.notification thì IRQ
+            // ôm Some(chết), rebind bị AlreadyMapped, raise cạnh rớt vào
+            // signal(chết) mất hút.
+            if let Some(irq) = self.irq_mut(r) {
+                if irq.notification == Some(obj) {
+                    irq.notification = None;
+                    irq.pending = false;
+                }
+            }
+        }
     }
 
     fn unmap_with_ops(ops: &dyn PageTableOps, root: u64, va: u64) -> KResult<()> {
@@ -3521,7 +3761,13 @@ impl Kernel {
         Err(KError::NotMapped)
     }
 
-    pub fn unmap_page_table(&self, root: u64, va: u64) -> KResult<()> {
+    /// Remove one leaf mapping through the architecture page-table walk.
+    /// Private (vòng 101, K58): entry cha và leaf đều đã được flush local,
+    /// nhưng hart khác vẫn giữ bản dịch cũ. Mọi caller nội bộ (`unmap_frame`,
+    /// `map_frame`-rollback) đều tự `flush_vspace_range` theo mask sau đó —
+    /// caller ngoài gọi trực tiếp sẽ stale âm thầm. Giữ private để mọi
+    /// đường unmap đều đi qua shootdown theo mask.
+    fn unmap_page_table(&self, root: u64, va: u64) -> KResult<()> {
         let Some(ops) = self.page_table_ops else {
             return Ok(());
         };
@@ -3617,7 +3863,11 @@ impl Kernel {
                 }
             }
             for mapping in removed.iter().take(removed_count).flatten() {
+                // Vòng 100 (K10): destroy Frame trước đây chỉ gỡ PTE mà không
+                // flush, nên hart khác còn TLB trỏ tới trang đã bị thu hồi
+                // (rồi retype cho object khác) => đọc/ghi nhầm.
                 self.note_frame_unmapping(*mapping);
+                self.flush_vspace_range(r, mapping.va, 1);
             }
         }
     }
@@ -3642,7 +3892,10 @@ impl Kernel {
             }
         }
         for mapping in removed.iter().take(removed_count).flatten() {
+            // Vòng 100 (K10): flush cả khi cả VSpace bị destroy — hart khác có
+            // thể đã chạy trong không gian này và còn entry TLB.
             self.note_frame_unmapping(*mapping);
+            self.flush_vspace_range(obj, mapping.va, 1);
         }
     }
 
@@ -3669,6 +3922,17 @@ impl Kernel {
                         if let Some(table) = self.tcb_mut(r) {
                             table.fault_ep = None;
                         }
+                    }
+                }
+            }
+            // Vòng 101 (K66): phòng thủ sâu — quét cả mảng nhúng trực tiếp,
+            // không phụ thuộc view hiện tại. K62 đã cấm giấu vé sống sau
+            // CNode nên nhánh này bình thường rỗng, nhưng nếu TCB chết khi
+            // đang bound rồi object tái dùng, vé ma không được hồi sinh.
+            if let Kind::Tcb(ref mut table) = self.objs[i].kind {
+                for slot in table.cspace.iter_mut() {
+                    if slot.is_some_and(|cap| cap.obj == obj) {
+                        *slot = None;
                     }
                 }
             }
@@ -3728,8 +3992,15 @@ impl Kernel {
     /// When a parent table dies, child tables below it are unreachable even if
     /// their objects live in another Untyped.  Detach and zero them so they
     /// cannot be reattached full of stale PTEs.
+    /// Vòng 101 (K61): zero bảng con mà không flush span thì hart khác giữ
+    /// entry cha cũ trỏ tới bảng đã zero — fault oan/đọc 0. Flush cả span
+    /// theo mask sau khi zero.
     fn orphan_child_tables(&mut self, vspace: ObjRef, start: u64, end: u64, parent_level: u8) {
-        let page_size = self.vspace(vspace).map(|space| space.page_size);
+        let (page_size, mask, asid) = match self.vspace(vspace) {
+            Some(space) => (space.page_size, space.harts_loaded, space.asid),
+            None => return,
+        };
+        let mut orphaned = false;
         for i in 0..MAX_OBJECTS {
             let r = ObjRef {
                 index: i as u8,
@@ -3750,8 +4021,23 @@ impl Kernel {
                 if let Some(table) = self.page_table_mut(r) {
                     table.mapped = None;
                 }
-                if let (Some(ops), Some(size)) = (self.page_table_ops, page_size) {
+                if let (Some(ops), Some(size)) = (self.page_table_ops, Some(page_size)) {
                     ops.zero_frame(root, size as usize);
+                    orphaned = true;
+                }
+            }
+        }
+        // Flush span bao phủ mọi bảng con vừa zero — hart khác không giữ
+        // entry cha cũ trỏ tới bảng rỗng.
+        if orphaned {
+            if let Some(ops) = self.page_table_ops {
+                if mask != 0 && end > start {
+                    let span_pages = ((end - start) / page_size.max(1)).max(1).min(1024) as usize;
+                    if span_pages > 16 {
+                        ops.flush_all_asid(asid, mask);
+                    } else {
+                        ops.flush_va_asid(asid, start, span_pages, mask);
+                    }
                 }
             }
         }
@@ -3818,20 +4104,12 @@ impl Kernel {
     }
 
     fn destroy_vspace_page_tables(&mut self, obj: ObjRef) {
-        // Invalidate the ASID on every hart that loaded this VSpace before
-        // its page-table pages can be recycled.  Without this a stale TLB
-        // entry could alias a future VSpace once ASIDs wrap.
-        if let Some(space) = self.vspace(obj) {
-            let (asid, mask) = (space.asid, space.harts_loaded);
-            if mask != 0 {
-                if let Some(ops) = self.page_table_ops {
-                    ops.flush_all_asid(asid, mask);
-                }
-            }
-            if let Some(space) = self.vspace_mut(obj) {
-                space.harts_loaded = 0;
-            }
-        }
+        // Vòng 101 (K52): thứ tự cũ flush-ASID TRƯỚC khi gỡ PTE rồi xóa
+        // mask ngay — hart khác refill TLB giữa flush và lúc gỡ thì không
+        // bao giờ flush lại (unmap_space gọi flush_vspace_range nhưng
+        // early-return vì mask == 0). Giờ: gỡ PTE trước (unmap_space vẫn
+        // thấy mask đầy đủ), flush cuối bằng flush_all_asid(asid, mask),
+        // rồi mới xóa mask.
         let page_size = self.vspace(obj).map(|space| space.page_size);
         // The reverse map is still able to walk through every table here.
         self.unmap_space(obj);
@@ -3854,7 +4132,19 @@ impl Kernel {
             }
         }
         if let Some(ops) = self.page_table_ops {
-            ops.flush_all_user();
+            // Flush cuối theo đúng mask đã load (không phải flush_all_user
+            // local như trước — trên x86 nó chỉ reload CR3 cục bộ).
+            if let Some(space) = self.vspace(obj) {
+                let (asid, mask) = (space.asid, space.harts_loaded);
+                if mask != 0 {
+                    ops.flush_all_asid(asid, mask);
+                }
+            }
+            if let Some(space) = self.vspace_mut(obj) {
+                space.harts_loaded = 0;
+            }
+        } else if let Some(space) = self.vspace_mut(obj) {
+            space.harts_loaded = 0;
         }
     }
 
@@ -4126,6 +4416,50 @@ impl Kernel {
         self.destroy_object(cap.obj)
     }
 
+    /// Kiểm tra các điều kiện tiên quyết của `destroy_object` mà KHÔNG phá gì
+    /// (vòng 100, K8): `revoke_cap` cần biết chắc mọi object sẽ destroy được
+    /// trước khi gỡ cap, nếu không rơi vào trạng thái nửa vời (cap mất, object
+    /// còn sống, không ai chạm tới).
+    fn can_destroy(&self, obj: ObjRef) -> bool {
+        let Some(kind) = self.get(obj).map(|object| object.kind) else {
+            return true;
+        };
+        if self.current.contains(&Some(obj)) || self.root == Some(obj) {
+            return false;
+        }
+        if matches!(kind, Kind::VSpace(_))
+            && self
+                .current
+                .iter()
+                .flatten()
+                .any(|current| self.tcb(*current).and_then(|tcb| tcb.vspace) == Some(obj))
+        {
+            return false;
+        }
+        if matches!(kind, Kind::CNode(_))
+            && (0..MAX_OBJECTS).any(|index| {
+                let reference = ObjRef {
+                    index: index as u8,
+                    gen: self.objs[index].gen,
+                };
+                self.tcb(reference).and_then(|tcb| tcb.cnode) == Some(obj)
+            })
+        {
+            return false;
+        }
+        // Vòng 101 (K56): Iommu domain còn mapping sống thì không destroy —
+        // nếu không PA tái cấp trong khi IOTLB cũ còn trỏ (revoke giết
+        // domain sống vì can_destroy cũ luôn true với Iommu).
+        if matches!(kind, Kind::Iommu(_))
+            && self
+                .iommu(obj)
+                .is_some_and(|domain| domain.mappings.iter().any(Option::is_some))
+        {
+            return false;
+        }
+        true
+    }
+
     fn destroy_object(&mut self, obj: ObjRef) -> KResult<()> {
         let Some(kind) = self.get(obj).map(|object| object.kind) else {
             return Ok(());
@@ -4135,6 +4469,30 @@ impl Kernel {
         }
         if self.root == Some(obj) {
             return Err(KError::IllegalOperation);
+        }
+        // Vòng 101 (K41): TCB bị Faulted khi destroy VSpace không được giữ
+        // trong hàng chờ — path cũ chỉ remove_from_runq mà không gỡ
+        // endpoint.send/recv hay notification.waiters, nên entry cũ không
+        // bao giờ được dọn (Faulted bị make_ready/wake_error loại trừ).
+        fn fault_tcb_off_vspace(this: &mut Kernel, t: ObjRef) {
+            for i in 0..MAX_OBJECTS {
+                let r = ObjRef {
+                    index: i as u8,
+                    gen: this.objs[i].gen,
+                };
+                if let Some(endpoint) = this.endpoint_mut(r) {
+                    endpoint.send.remove(t);
+                    endpoint.recv.remove(t);
+                }
+                if let Some(notification) = this.notification_mut(r) {
+                    for slot in notification.waiters.iter_mut() {
+                        if *slot == Some(t) {
+                            *slot = None;
+                        }
+                    }
+                }
+            }
+            this.remove_from_runq(t);
         }
         if matches!(kind, Kind::VSpace(_))
             && self
@@ -4176,17 +4534,53 @@ impl Kernel {
                     }
                     // Vòng 83 (audit #2 P1-6): TCB vừa bị Faulted phải được
                     // gỡ khỏi runqueue; nếu không nó vẫn được pick_on chọn và
-                    // chạy với vspace = None.
+                    // chạy với vspace = None. Vòng 101 (K41): đồng thời gỡ
+                    // khỏi mọi endpoint/notification queue — Faulted bị
+                    // make_ready/wake_error loại trừ nên entry cũ không bao
+                    // giờ được dọn nếu bỏ lại.
                     if self.tcb(r).map(|tcb| tcb.state) == Some(ThreadState::Faulted) {
-                        self.remove_from_runq(r);
+                        fault_tcb_off_vspace(self, r);
                     }
                 }
             }
-            Kind::Irq(_)
-            | Kind::Iommu(_)
-            | Kind::BlockDevice(_)
-            | Kind::Untyped(_)
-            | Kind::Free => {}
+            Kind::Irq(_) => {}
+            Kind::Iommu(_) => {
+                // Vòng 101 (K56): destroy domain phải gỡ mọi DMA mapping và
+                // flush IOTLB — nếu không PA tái cấp trong khi IOTLB cũ còn
+                // trỏ. `can_destroy` đã chặn revoke domain còn mapping sống;
+                // đây là phòng thủ sâu: quét toàn bộ frame để trừ mapped_w
+                // đã cộng lúc iommu_map(WRITE) của chính domain này.
+                let mut removed: [(ObjRef, u16); MAX_OBJECTS] =
+                    [(ObjRef::invalid(), 0); MAX_OBJECTS];
+                let mut removed_count = 0usize;
+                if let Some(domain) = self.iommu_mut(obj) {
+                    for mapping in domain.mappings.iter().flatten() {
+                        if mapping.rights.contains(Rights::WRITE) {
+                            let mut found = false;
+                            for entry in removed.iter_mut().take(removed_count) {
+                                if entry.0 == mapping.frame {
+                                    entry.1 = entry.1.saturating_add(1);
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found && removed_count < removed.len() {
+                                removed[removed_count] = (mapping.frame, 1);
+                                removed_count += 1;
+                            }
+                        }
+                    }
+                    domain.mappings = [None; MAX_IOMMU_MAPPINGS];
+                    domain.flush_iotlb();
+                }
+                for (frame_obj, count) in removed.iter().take(removed_count) {
+                    let counts = self.frame(*frame_obj).map(|fr| (fr.mapped_w, fr.mapped_x));
+                    if let Some((w, x)) = counts {
+                        self.set_frame_mapping_counts(*frame_obj, w.saturating_sub(*count), x);
+                    }
+                }
+            }
+            Kind::BlockDevice(_) | Kind::Untyped(_) | Kind::Free => {}
         }
         self.remove_caps_to(obj);
         let (owner, reserved, alloc_offset, alloc_len) = match self.get(obj) {
@@ -4336,6 +4730,16 @@ impl Kernel {
                     j -= 1;
                 }
             }
+            // Vòng 100 (K8, audit #11): kiểm tiên quyết destroy TRƯỚC khi gỡ
+            // cap. Trước đây pha 1 gỡ sạch cap rồi pha 2 `destroy_object?` có
+            // thể fail (vd. chính VSpace của task đang chạy) => cap mất,
+            // object còn sống, không ai chạm tới được — trái hợp đồng "Err =
+            // không làm gì".
+            for object in objects.iter().take(object_count) {
+                if !self.can_destroy(*object) {
+                    return Err(KError::IllegalOperation);
+                }
+            }
         }
 
         const BITS: usize = (MAX_OBJECTS * MAX_CAPS_ROOT + 63) / 64;
@@ -4418,7 +4822,13 @@ impl Kernel {
         if !matches!(cap.ty, ObjType::Endpoint | ObjType::Notification) {
             return Err(KError::InvalidArg);
         }
-        if cap.badge != 0 && badge != 0 {
+        // Vòng 100 (K16): badge là ranh giới danh tính. Chỉ cho phép 0 -> badge
+        // (đặt lần đầu). KHÔNG cho badge -> 0 hay badge -> badge: nếu cho xoá
+        // về 0 thì task có thể "rửa" vé rồi mint lại badge tuỳ ý qua CapMint
+        // (CapMint chỉ chặn mint từ nguồn đã có badge). Hiện syscall
+        // SetCapBadge chưa được nối ra user space nên đây là lỗ tiềm ẩn, nhưng
+        // siết ngay để lần nối sau không thành lỗ thật.
+        if cap.badge != 0 {
             return Err(KError::NoRights);
         }
         cap.badge = badge;
@@ -4657,6 +5067,12 @@ impl Kernel {
         if end > frame.size {
             return Err(KError::InvalidArg);
         }
+        // Vòng 101 (K57): không ghi vào frame đang có mapping EXEC — đường
+        // syscall WRITE mà ghi thẳng PA vào trang RX thì lách W^X của
+        // map_frame (giữ đồng nhất: map cấm W+X, copy cũng cấm X).
+        if frame.mapped_x != 0 {
+            return Err(KError::NoRights);
+        }
         let ops = self.page_table_ops.ok_or(KError::MissingPageTable)?;
         ops.copy_to_frame(frame.pa as u64 + offset as u64, bytes);
         Ok(())
@@ -4742,6 +5158,13 @@ impl Kernel {
         msg: Message,
     ) -> KResult<()> {
         let delivered = self.send(tcb, endpoint, 0, msg, false)?;
+        // Vòng 100 (K13): fault message KHÔNG được gỡ khỏi hàng send — đó là
+        // thiết kế: handler khởi động sau vẫn phải nhận được fault đã xếp hàng
+        // (test `fault_endpoint_queues_when_handler_is_not_waiting` khẳng định
+        // điều này). An toàn vì `send` ở đây là non-call (call=false), nên khi
+        // receiver lấy message, `recv` không đổi state của sender — TCB vẫn
+        // BlockedFault. Chỉ cần không cho pending cũ làm nó "sống lại" qua
+        // đường call, và điều đó không xảy ra với fault.
         self.remove_from_runq(tcb);
         let table = self.tcb_mut(tcb).ok_or(KError::ObjectDestroyed)?;
         table.state = ThreadState::BlockedFault;
@@ -5160,6 +5583,16 @@ impl Kernel {
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
                 let rights = Rights((a3 as u8) & (Rights::READ | Rights::WRITE).0);
+                // Vòng 101 (K73): vé Frame phải chứa quyền DMA yêu cầu —
+                // trước đây R-only + IoMap(WRITE) vẫn lọt, tạo mapping
+                // DMA-WRITE lên frame chỉ-đọc (FrameMap đã check, IoMap
+                // thì chưa).
+                if !frame.rights.contains(rights) {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::NoRights,
+                    };
+                }
                 match self.iommu_map(domain.obj, frame.obj, a1, rights) {
                     Ok(mapping) => UserAction::Return {
                         value: mapping.iova,
@@ -5178,6 +5611,44 @@ impl Kernel {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
+                // Vòng 101 (K74): Iommu-WRITE đơn thuần không được gỡ DMA của
+                // người khác — caller phải xuất trình vé Frame cho đúng PA
+                // đang map tại IOVA (gương FrameUnmap đòi VSpace-WRITE + vé
+                // Frame + khớp pa). Trước đây task B có domain-WRITE gỡ được
+                // mapping của task A (DoS/stale-DMA).
+                let frame = match self.lookup_cap(
+                    tcb,
+                    slot_or_invalid!(a2),
+                    Some(ObjType::Frame),
+                    Rights::NONE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let Some(frame_object) = self.frame(frame.obj) else {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::ObjectDestroyed,
+                    };
+                };
+                let domain_object = match self.iommu(domain.obj) {
+                    Some(domain_object) => domain_object,
+                    None => {
+                        return UserAction::Return {
+                            value: 0,
+                            error: KError::WrongType,
+                        };
+                    }
+                };
+                let owns_mapping = domain_object.mappings.iter().flatten().any(|m| {
+                    m.iova == a1 && m.frame == frame.obj && m.pa == frame_object.pa as u64
+                });
+                if !owns_mapping {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::NoRights,
+                    };
+                }
                 match self.iommu_unmap(domain.obj, a1) {
                     Ok(mapping) => UserAction::Return {
                         value: mapping.iova,
@@ -5595,14 +6066,24 @@ impl Kernel {
                     tcb,
                     slot_or_invalid!(a3),
                     Some(ObjType::VSpace),
-                    Rights::READ,
+                    // Vòng 101 (K75): đổi cả không gian địa chỉ phải đòi
+                    // WRITE như FrameMap/PageTableMap — READ là quá yếu.
+                    Rights::WRITE,
                 ) {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
                 let fault_slot = slot_or_invalid!(a5);
                 let fault = if fault_slot != 0 {
-                    let Some(fault_cap) = self.cap_at(SlotAddr {
+                    // Vòng 101 (K75): fault_ep trỏ vào slot của NẠN NHÂN
+                    // (delivery đọc qua cap_at victim lúc fault). Path cũ
+                    // đọc thẳng slot nạn nhân mà không hỏi caller có quyền
+                    // gì — attacker có Tcb-WRITE nạn nhân là cắm được kênh
+                    // fault từ slot nạn nhân (kể cả vé chết). Giờ yêu cầu
+                    // kép: (1) slot nạn nhân phải có vé Endpoint còn sống,
+                    // (2) CALLER cũng phải giữ một vé tới cùng endpoint
+                    // (chứng minh caller được phép định tuyến fault).
+                    let Some(victim_cap) = self.cap_at(SlotAddr {
                         tcb: cap.obj,
                         slot: fault_slot,
                     }) else {
@@ -5611,10 +6092,23 @@ impl Kernel {
                             error: KError::InvalidCap,
                         };
                     };
-                    if fault_cap.ty != ObjType::Endpoint {
+                    if victim_cap.ty != ObjType::Endpoint || self.get(victim_cap.obj).is_none() {
                         return UserAction::Return {
                             value: 0,
-                            error: KError::WrongType,
+                            error: KError::InvalidCap,
+                        };
+                    }
+                    let _caller_holds_endpoint = self.cspace(tcb).is_some_and(|slots| {
+                        slots.iter().flatten().any(|c| {
+                            c.ty == ObjType::Endpoint
+                                && c.obj == victim_cap.obj
+                                && self.get(c.obj).is_some()
+                        })
+                    });
+                    if !_caller_holds_endpoint {
+                        return UserAction::Return {
+                            value: 0,
+                            error: KError::NoRights,
                         };
                     }
                     Some(CapRef {
@@ -5622,7 +6116,7 @@ impl Kernel {
                             tcb: cap.obj,
                             slot: fault_slot,
                         },
-                        id: fault_cap.id,
+                        id: victim_cap.id,
                     })
                 } else {
                     None
@@ -5842,8 +6336,11 @@ impl Kernel {
                 };
                 // Vòng 80 (audit P0-1): trước đây arm này không kiểm tra con
                 // trỏ người dùng, nên frame_write(slot, 0, <VA rác>, n) làm
-                // kernel copy từ địa chỉ chưa map và chết ở EL1. Kiểm tra
-                // đúng số byte runtime sẽ copy (đã kẹp USER_COPY_MAX).
+                // kernel copy từ địa chỉ chưa map và chết ở EL1. Vòng 101
+                // (K72): phát `len` đã kẹp thay vì a3 gốc — runtime clamp
+                // lại nên không OOB, nhưng event mang len chưa validate
+                // gây lệch hợp đồng (giữ đồng nhất với Read/Write/
+                // DebugWrite đều phát len đã kẹp).
                 let len = (a3 as usize).min(vifast_abi::USER_COPY_MAX);
                 if self.validate_user_range(tcb, a2, len, false).is_err() {
                     return UserAction::Return {
@@ -5855,7 +6352,7 @@ impl Kernel {
                     frame: frame.obj,
                     offset: a1,
                     ptr: a2,
-                    len: a3,
+                    len: len as u64,
                 }
             }
             n if n == SyscallId::FrameMap as u64 => {
@@ -6262,10 +6759,14 @@ mod tests {
 
     #[test]
     fn physical_page_ranges_are_unique() {
+        // Vòng 101 (K59): create_frame từ chối overlap ngay lúc tạo, nên
+        // frame trùng không bao giờ tồn tại để invariant phải bắt.
         let mut alias = Kernel::new();
         assert!(alias.create_frame(0x1000, 4096).is_some());
-        assert!(alias.create_frame(0x1000, 4096).is_some());
-        assert_eq!(alias.check_invariants(), Err(KError::IllegalOperation));
+        assert!(alias.create_frame(0x1000, 4096).is_none());
+        assert!(alias.create_frame(0x1800, 4096).is_none());
+        assert!(alias.create_frame(0x2000, 4096).is_some());
+        assert!(alias.check_invariants().is_ok());
 
         let mut mixed = Kernel::new();
         assert!(mixed.create_page_table(0x1000, 0).is_some());
@@ -6769,7 +7270,6 @@ mod tests {
         assert_eq!(client_state.resume_error, Some(KError::ObjectDestroyed));
     }
 
-    #[test]
     #[test]
     fn make_ready_ignores_running_and_suspended_tasks() {
         // Vòng 99 (soi chay K4): make_ready từng set Ready mù quáng nên có thể
@@ -11160,6 +11660,321 @@ mod tests {
         assert!(kernel
             .lookup_cap(root, 1, Some(ObjType::BlockDevice), Rights::WRITE)
             .is_ok());
+    }
+
+    #[test]
+    fn irq_ack_clears_the_notification_bit() {
+        // Vòng 100 (K21): ack chỉ xoá `pending` thì bit cũ nằm lại trong
+        // notification; edge kế tiếp dính vào cùng bit -> mất một wakeup.
+        let mut kernel = Kernel::new();
+        let notification = kernel.create_notification().unwrap();
+        let irq = kernel.create_irq(7).unwrap();
+        kernel.irq_mut(irq).unwrap().notification = Some(notification);
+        // Edge 1: pending bật, bit được đặt.
+        assert!(kernel.irq_raise(7));
+        // Edge 2 khi chưa ack: bị coalesce (đúng thiết kế).
+        assert!(!kernel.irq_raise(7));
+        // Ack khi người nhận CHƯA lấy bit: bit cũ phải bị xoá.
+        assert_eq!(kernel.irq_ack(irq), Ok(()));
+        assert_eq!(kernel.poll(notification), Ok(0));
+        // Edge mới sau ack phải tạo lại bit (không bị "dính" bit cũ).
+        assert!(kernel.irq_raise(7));
+        assert_eq!(kernel.poll(notification), Ok(1 << 7));
+    }
+
+    #[test]
+    fn round101_resume_rejects_blocked_and_running_targets() {
+        // Vòng 101 (K32/K33/K34/K36): resume mù quáng từng ép Ready +
+        // enqueue mọi state mà không gỡ hàng chờ (K32), alias current +
+        // queued trên Running (K33), resume ngay sau suspend-Running
+        // (K34). Giờ chỉ Inactive/Suspended/Ready được resume.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        // BlockedRecv: cài endpoint rồi recv để park.
+        let a = kernel.create_tcb("a", 5).unwrap();
+        let ep = kernel.create_endpoint().unwrap();
+        kernel
+            .configure_tcb(a, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        assert_eq!(kernel.recv(a, ep, 0), Ok(None));
+        assert_eq!(kernel.resume_tcb(a), Err(KError::IllegalOperation));
+        // Running: cài current rồi resume phải từ chối (K33).
+        let b = kernel.create_tcb("b", 5).unwrap();
+        kernel
+            .configure_tcb(b, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.enqueue(b);
+        assert_eq!(kernel.pick_on(0), Some(b));
+        assert_eq!(kernel.resume_tcb(b), Err(KError::IllegalOperation));
+        // Suspended vẫn resume được (đường hợp lệ).
+        let c = kernel.create_tcb("c", 5).unwrap();
+        kernel
+            .configure_tcb(c, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.tcb_mut(c).unwrap().state = ThreadState::Suspended;
+        assert_eq!(kernel.resume_tcb(c), Ok(()));
+        // BlockedFault cũng resume được (fault handler xử lý xong cho chạy
+        // lại — pager flow: server frame_map xong tcb_resume(client)).
+        let d = kernel.create_tcb("d", 5).unwrap();
+        kernel
+            .configure_tcb(d, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.tcb_mut(d).unwrap().state = ThreadState::BlockedFault;
+        assert_eq!(kernel.resume_tcb(d), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+        let _ = root;
+    }
+
+    #[test]
+    fn round101_restart_detaches_queues_and_clears_stale_caller() {
+        // Vòng 101 (K35/K36): restart từng chỉ remove_from_runq mà không
+        // gỡ endpoint.send/recv hay waiters (K35), và restart client
+        // BlockedReply để lại server treo caller ma (K36).
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        // K35: BlockedRecv restart xong không còn trong hàng recv.
+        let blocked = kernel.create_tcb("blocked", 5).unwrap();
+        let waiter = kernel.create_tcb("waiter", 5).unwrap();
+        kernel
+            .configure_tcb(blocked, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel
+            .configure_tcb(waiter, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        let ep = kernel.create_endpoint().unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.recv(blocked, ep, 0), Ok(None));
+        assert_eq!(kernel.wait_as(blocked, ntfn), Ok(None));
+        assert_eq!(
+            kernel.restart_tcb(blocked, waiter),
+            Ok((0x4000_0000, 0x4000_4000))
+        );
+        // Hàng recv và waiters đã sạch: recv sau đó park lại từ đầu.
+        assert_eq!(kernel.recv(waiter, ep, 0), Ok(None));
+        assert_eq!(kernel.poll(ntfn), Ok(0));
+        // K36: restart client BlockedReply thì server không treo caller.
+        // (Endpoint riêng — phần K35 đã park `waiter` trên `ep` cũ.)
+        let ep2 = kernel.create_endpoint().unwrap();
+        let server = kernel.create_tcb("server", 5).unwrap();
+        let client = kernel.create_tcb("client", 5).unwrap();
+        kernel
+            .configure_tcb(server, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel
+            .configure_tcb(client, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        assert_eq!(kernel.recv(server, ep2, 0), Ok(None));
+        let call = Message::new(0x1234, &[7]).unwrap();
+        assert_eq!(kernel.send(client, ep2, 0, call, true), Ok(true));
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::BlockedReply);
+        // Restart client bị cấm thẳng (client đang BlockedReply).
+        assert_eq!(
+            kernel.restart_tcb(client, server),
+            Err(KError::IllegalOperation)
+        );
+        // Server reply rồi recv tiếp phải sạch (không kẹt caller cũ).
+        let reply = Message::new(0x1111, &[1]).unwrap();
+        assert_eq!(kernel.reply(server, reply), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round101_bind_notification_rejects_alias_dead_and_double() {
+        // Vòng 101 (K43/K44/K51): bind N-TCB alias, bind object chết, và
+        // nhánh cấm waiter thừa (K51, giờ cho bind khi có waiter).
+        let mut kernel = Kernel::new();
+        let a = kernel.create_tcb("a", 5).unwrap();
+        let b = kernel.create_tcb("b", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.bind_notification(a, ntfn), Ok(()));
+        // K43: TCB khác bind cùng notification -> AlreadyMapped.
+        assert_eq!(
+            kernel.bind_notification(b, ntfn),
+            Err(KError::AlreadyMapped)
+        );
+        // K51: waiter tồn tại không chặn bind đầu tiên (đã bind ở trên
+        // trước khi có waiter); bind lại chính nó -> AlreadyMapped.
+        assert_eq!(kernel.wait_as(a, ntfn), Ok(None));
+        assert_eq!(
+            kernel.bind_notification(a, ntfn),
+            Err(KError::AlreadyMapped)
+        );
+        // K44: object chết phải lỗi, không Ok ma.
+        let dead = kernel.create_tcb("dead", 5).unwrap();
+        let ntfn2 = kernel.create_notification().unwrap();
+        kernel.destroy_object(dead).unwrap();
+        assert!(kernel.bind_notification(dead, ntfn2).is_err());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round101_irq_rejects_number_above_63() {
+        // Vòng 101 (K47): number & 63 alias bit — 7 và 71 chung bit 7.
+        assert!(Kernel::new().create_irq(71).is_none());
+        assert!(Kernel::new().create_irq(64).is_none());
+        assert!(Kernel::new().create_irq(63).is_some());
+    }
+
+    #[test]
+    fn round101_grant_failure_keeps_fifo_order() {
+        // Vòng 101 (K48): grant fail đẩy về đuôi làm mất FIFO — giờ trả về
+        // đầu hàng (push_front). Kịch bản: cả 2 sender park KHÔNG grant,
+        // receiver pop s1 rồi grant-fail (slot 9 của s1 trống) -> s1 phải
+        // về đầu hàng, recv sau vẫn gặp s1 (không bị s2 vượt).
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let ep = kernel.create_endpoint().unwrap();
+        let s1 = kernel.create_tcb("s1", 5).unwrap();
+        let s2 = kernel.create_tcb("s2", 5).unwrap();
+        // Hai sender park trước (không có receiver chờ -> vào hàng).
+        assert_eq!(kernel.send(s1, ep, 0, Message::default(), false), Ok(false));
+        assert_eq!(kernel.send(s2, ep, 0, Message::default(), false), Ok(false));
+        // Gài grant vào pending của s1 sau khi đã park (vượt gate GRANT
+        // lúc queue — đúng bản chất "fail lúc dequeue" của K48).
+        {
+            let table = kernel.tcb_mut(s1).unwrap();
+            let mut pending = table.pending.take().unwrap();
+            pending.can_grant = true;
+            pending.msg.cap = 9; // slot trống -> grant fail lúc recv
+            table.pending = Some(pending);
+        }
+        let before = kernel.endpoint(ep).unwrap().send.front();
+        assert_eq!(before, Some(s1));
+        assert!(kernel.recv(root, ep, 7).is_err());
+        let after = kernel.endpoint(ep).unwrap().send.front();
+        assert_eq!(after, Some(s1));
+        // s2 vẫn ở sau s1 — FIFO giữ nguyên.
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round101_frame_write_rejects_executable_frame() {
+        // Vòng 101 (K57): copy_frame_bytes vào frame đang mapped-X.
+        let mut kernel = Kernel::new();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        // Giả mapped-X bằng cách set counter (không cần page tables thật).
+        kernel.set_frame_mapping_counts(frame, 0, 1);
+        assert_eq!(
+            kernel.copy_frame_bytes(frame, 0, &[1, 2, 3]),
+            Err(KError::NoRights)
+        );
+        kernel.set_frame_mapping_counts(frame, 0, 0);
+        // Không có page_table_ops trên host test -> MissingPageTable là
+        // đúng (đã qua gate mapped_x).
+        assert_eq!(
+            kernel.copy_frame_bytes(frame, 0, &[1, 2, 3]),
+            Err(KError::MissingPageTable)
+        );
+    }
+
+    #[test]
+    fn round101_destroy_notification_clears_bound_and_irq_routing() {
+        // Vòng 101 (K67/K68): destroy Notification phải gỡ bound_ntfn mọi
+        // TCB và irq.notification — nếu không TCB ôm Some(chết) (bind mới
+        // mãi AlreadyMapped), IRQ ôm Some(chết) (raise rớt vào hố đen).
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("t", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        let irq = kernel.create_irq(7).unwrap();
+        kernel.bind_notification(tcb, ntfn).unwrap();
+        kernel.set_irq_notification(irq, ntfn).unwrap();
+        kernel.destroy_object(ntfn).unwrap();
+        assert_eq!(kernel.tcb(tcb).unwrap().bound_ntfn, None);
+        assert_eq!(kernel.irq(irq).unwrap().notification, None);
+        // Bind lại notification mới phải Ok (không kẹt AlreadyMapped).
+        let ntfn2 = kernel.create_notification().unwrap();
+        assert_eq!(kernel.bind_notification(tcb, ntfn2), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round101_revoke_live_iommu_domain_is_refused() {
+        // Vòng 101 (K56): Untyped-revoke không được giết domain còn mapping
+        // sống — can_destroy chặn, PA không tái cấp trong khi IOTLB cũ còn
+        // trỏ. (Revoke vé Iommu trực tiếp chỉ thu hồi vé, object sống nếu
+        // còn vé khác — đó là ngữ nghĩa đúng.)
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x740_0000, 16);
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        let domain = retype_at(&mut kernel, root, ObjType::Iommu, 3);
+        kernel
+            .iommu_map(domain, frame, IOMMU_IOVA_BASE, Rights::READ | Rights::WRITE)
+            .unwrap();
+        // Revoke từ vé Untyped (slot 1) phải bị chặn vì domain còn sống.
+        assert!(kernel.revoke_cap(root, 1).is_err());
+        assert!(kernel
+            .iommu(domain)
+            .unwrap()
+            .find(IOMMU_IOVA_BASE)
+            .is_some());
+        // Unmap hết rồi revoke phải Ok.
+        kernel.iommu_unmap(domain, IOMMU_IOVA_BASE).unwrap();
+        assert!(kernel.revoke_cap(root, 1).is_ok());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round101_grant_slot_swap_is_rejected() {
+        // Vòng 101 (K49): sender park với grant trỏ slot 2 (vé A). Giữa
+        // chừng slot 2 bị đổi sang vé B (vẫn GRANT) — recv phải từ chối
+        // (NoRights) thay vì chuyển nhầm vé B cho receiver.
+        let mut kernel = Kernel::new();
+        let ep = kernel.create_endpoint().unwrap();
+        let sender = kernel.create_tcb("sender", 5).unwrap();
+        let receiver = kernel.create_tcb("receiver", 5).unwrap();
+        let obj_a = kernel.create_endpoint().unwrap();
+        let obj_b = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(sender, 2, Cap::new(obj_a, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        // Park với grant (msg.cap = slot 2).
+        let mut msg = Message::default();
+        msg.cap = 2;
+        assert_eq!(kernel.send(sender, ep, 0, msg, false), Ok(false));
+        // Đổi slot 2 sang vé B: gỡ A (vé gốc không có con nên gỡ được),
+        // cài B (id khác, object khác).
+        kernel.delete_cap(sender, 2).unwrap();
+        kernel
+            .install_cap(sender, 2, Cap::new(obj_b, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        // Receiver lấy message: grant verify snapshot (A) vs hiện tại (B)
+        // lệch nhau -> phải lỗi, sender về đầu hàng.
+        assert_eq!(kernel.recv(receiver, ep, 7), Err(KError::NoRights));
+        let front = kernel.endpoint(ep).unwrap().send.front();
+        assert_eq!(front, Some(sender));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn set_cap_badge_cannot_be_cleared_or_changed() {
+        // Vòng 100 (K16): cho badge -> 0 rồi mint lại badge khác là đường rửa
+        // danh tính (CapMint chỉ chặn mint từ nguồn đã có badge).
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(
+                    endpoint,
+                    ObjType::Endpoint,
+                    Rights::READ | Rights::WRITE | Rights::GRANT,
+                ),
+            )
+            .unwrap();
+        assert_eq!(kernel.set_cap_badge(root, 1, 7), Ok(()));
+        assert_eq!(kernel.set_cap_badge(root, 1, 0), Err(KError::NoRights));
+        assert_eq!(kernel.set_cap_badge(root, 1, 9), Err(KError::NoRights));
+        let cap = kernel
+            .lookup_cap(root, 1, Some(ObjType::Endpoint), Rights::READ)
+            .unwrap();
+        assert_eq!(cap.badge, 7);
     }
 
     #[test]

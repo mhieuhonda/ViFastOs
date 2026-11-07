@@ -140,6 +140,16 @@ impl Queue {
         true
     }
 
+    pub fn push_front(&mut self, value: ObjRef) -> bool {
+        if self.len as usize >= MAX_QUEUE {
+            return false;
+        }
+        self.head = ((self.head as usize + MAX_QUEUE - 1) % MAX_QUEUE) as u8;
+        self.entries[self.head as usize] = Some(value);
+        self.len += 1;
+        true
+    }
+
     pub fn front(&self) -> Option<ObjRef> {
         if self.len == 0 {
             None
@@ -189,6 +199,27 @@ pub struct PendingSend {
     pub msg: Message,
     pub is_call: bool,
     pub can_grant: bool,
+    /// Vòng 101 (K49): snapshot vé GRANT lúc queue để verify lúc dequeue.
+    /// Trước đây chỉ lưu số slot — ai đó CapCopy/revoke slot của sender
+    /// đang BlockedSend thì receiver nhận nhầm object mới (vẫn GRANT) lúc
+    /// recv tra lại slot. Pack vừa 8 byte (slot đã nằm trong msg.cap):
+    /// id-thấp-32bit | obj.index-8bit | obj.gen-thấp-24bit. Va chạm cần 2^32
+    /// cap-id hoặc 2^24 gen-bump cùng slot — ngoài tầm đời máy (mỗi cap tốn
+    /// một install/copy có kiểm tra dung lượng cspace).
+    pub grant_key: u64,
+}
+
+impl PendingSend {
+    pub fn grant_key_for(slot: u8, id: u64, obj: ObjRef) -> u64 {
+        (slot as u64)
+            | ((id as u64 & 0xFF_FFFF) << 8)
+            | ((obj.index as u64) << 32)
+            | ((obj.gen as u64 & 0xFF_FFFF) << 40)
+    }
+
+    pub fn grant_key_matches(self, slot: u8, id: u64, obj: ObjRef) -> bool {
+        self.grant_key == Self::grant_key_for(slot, id, obj)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -377,6 +408,12 @@ impl IommuDomain {
             }
         }
     }
+
+    /// Hook xả IOTLB (vòng 100, K12). Hiện IOMMU chỉ là mô hình phần mềm nên
+    /// không có cache phần cứng để xoá; khi gắn VT-d/SMMU, hàm này PHẢI phát
+    /// lệnh invalidate thật, nếu không DMA có thể dùng mapping cũ sau khi
+    /// frame đã bị thu hồi/retype.
+    pub fn flush_iotlb(&mut self) {}
 }
 
 /// A user address space.  `root` is interpreted by the architecture port

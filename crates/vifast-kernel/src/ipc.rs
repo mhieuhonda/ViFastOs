@@ -49,6 +49,7 @@ impl Kernel {
         receiver: ObjRef,
         hint: u8,
         msg: &mut Message,
+        pending: &PendingSend,
     ) -> KResult<()> {
         let Some(raw_slot) = msg.cap_slot() else {
             return Ok(());
@@ -56,6 +57,12 @@ impl Kernel {
         let src_slot = u8::try_from(raw_slot).map_err(|_| KError::InvalidCap)?;
         let source = self.lookup_cap(sender, src_slot, None, Rights::NONE)?;
         if !source.rights.contains(Rights::GRANT) {
+            return Err(KError::NoRights);
+        }
+        // Vòng 101 (K49): verify snapshot GRANT lúc queue — slot của sender
+        // đang BlockedSend mà bị CapCopy/revoke đổi object/id thì từ chối
+        // thay vì chuyển nhầm vé mới cho receiver.
+        if !pending.grant_key_matches(src_slot, source.id, source.obj) {
             return Err(KError::NoRights);
         }
         if hint == 0 || (hint as usize) >= self.cspace_capacity(receiver) {
@@ -85,13 +92,19 @@ impl Kernel {
         msg: Message,
         is_call: bool,
     ) -> KResult<bool> {
-        let can_grant = if msg.cap_slot().is_some() {
+        // Vòng 101 (K49): snapshot vé GRANT (slot, id, object, rights) ngay
+        // lúc queue để recv verify lúc dequeue — chống TOCTOU đổi cspace
+        // giữa chừng.
+        let (can_grant, grant_key) = if msg.cap_slot().is_some() {
             let raw_slot = msg.cap_slot().ok_or(KError::InvalidCap)?;
             let slot = u8::try_from(raw_slot).map_err(|_| KError::InvalidCap)?;
-            self.lookup_cap(sender, slot, None, Rights::GRANT)?;
-            true
+            let source = self.lookup_cap(sender, slot, None, Rights::GRANT)?;
+            (
+                true,
+                PendingSend::grant_key_for(slot, source.id, source.obj),
+            )
         } else {
-            false
+            (false, 0)
         };
         if is_call {
             // A server that already holds a caller must reply before it can
@@ -113,11 +126,23 @@ impl Kernel {
             let hint = self.tcb(receiver).map(|table| table.recv_slot).unwrap_or(0);
             let mut msg = msg;
             if can_grant {
-                if let Err(error) = self.grant_message_cap(sender, receiver, hint, &mut msg) {
-                    /* Put the receiver back so a failed transfer does not
-                     * consume its receive. */
+                // Giao ngay (không qua hàng): snapshot vừa lấy ở trên chính
+                // là vé hiện tại — gói thành PendingSend tạm để tái dùng
+                // cùng đường verify.
+                let probe = PendingSend {
+                    badge,
+                    msg,
+                    is_call,
+                    can_grant,
+                    grant_key,
+                };
+                if let Err(error) = self.grant_message_cap(sender, receiver, hint, &mut msg, &probe)
+                {
+                    /* Vòng 101 (K48): grant fail phải trả receiver về ĐẦU hàng
+                     * (push_front) để giữ FIFO — receiver chưa nhận gì nên
+                     * không được tụt xuống cuối. */
                     if let Some(ep) = self.endpoint_mut(endpoint) {
-                        let _ = ep.recv.push(receiver);
+                        let _ = ep.recv.push_front(receiver);
                     }
                     return Err(error);
                 }
@@ -157,6 +182,7 @@ impl Kernel {
                 msg,
                 is_call,
                 can_grant,
+                grant_key,
             };
             {
                 let table = self.tcb_mut(sender).ok_or(KError::InvalidCap)?;
@@ -207,16 +233,21 @@ impl Kernel {
                 .ok_or(KError::InvalidArg)?;
             pending.msg.badge = pending.badge;
             if pending.can_grant {
+                // Copy snapshot ra trước vì grant_message_cap mượn &mut self
+                // trong khi pending.msg cũng mượn &mut.
+                let snapshot = pending;
                 if let Err(error) =
-                    self.grant_message_cap(sender, receiver, recv_slot, &mut pending.msg)
+                    self.grant_message_cap(sender, receiver, recv_slot, &mut pending.msg, &snapshot)
                 {
-                    /* Keep the sender queued so a transient cspace failure
-                     * does not strand it in BlockedSend forever. */
+                    /* Vòng 101 (K48): grant fail phải trả sender về ĐẦU hàng
+                     * (push_front) chứ không phải đuôi (push). Trước đây FIFO
+                     * bị đảo: đầu hàng lỗi SlotOccupied thì tụt xuống cuối,
+                     * người sau vượt lên; lặp lại thì đói. */
                     if let Some(table) = self.tcb_mut(sender) {
                         table.pending = Some(pending);
                     }
                     if let Some(ep) = self.endpoint_mut(endpoint) {
-                        let _ = ep.send.push(sender);
+                        let _ = ep.send.push_front(sender);
                     }
                     return Err(error);
                 }
@@ -406,15 +437,31 @@ impl Kernel {
     }
 
     pub fn bind_notification(&mut self, tcb: ObjRef, notification: ObjRef) -> KResult<()> {
+        // Vòng 101 (K44): liveness check ngay đầu — trước đây tcb/notification
+        // chết vẫn rơi qua Ok vì dạng `if let Some → set; Ok(())`.
+        self.tcb(tcb).ok_or(KError::WrongType)?;
+        self.notification(notification).ok_or(KError::WrongType)?;
         if self.tcb(tcb).and_then(|t| t.bound_ntfn).is_some() {
             return Err(KError::AlreadyMapped);
         }
-        if self
-            .notification(notification)
-            .is_some_and(|n| n.waiters.iter().any(Option::is_some))
-        {
-            return Err(KError::AlreadyMapped);
+        // Vòng 101 (K43): một Notification chỉ bind cho đúng một TCB —
+        // Notification không có back-pointer nên phải quét mọi TCB khác.
+        for i in 0..crate::MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            if r != tcb
+                && self
+                    .tcb(r)
+                    .is_some_and(|table| table.bound_ntfn == Some(notification))
+            {
+                return Err(KError::AlreadyMapped);
+            }
         }
+        // Vòng 101 (K51): bỏ nhánh cấm bind khi notification đang có waiter —
+        // cấm đó ngăn rebind hợp lệ từ task cũ sang mới; signal đã xử lý hỗn
+        // hợp word/waiter và destroy xóa cả hai, nên check waiter là thừa.
         if let Some(table) = self.tcb_mut(tcb) {
             table.bound_ntfn = Some(notification);
         }
