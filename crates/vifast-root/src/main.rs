@@ -19,7 +19,7 @@ use vifast_abi::user_layout::{
     USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE,
     WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE,
     WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE,
-    WORKER_E_STACK_TOP,
+    WORKER_E_STACK_TOP, WORKER_F_STACK_BASE, WORKER_F_STACK_TOP,
 };
 use vifast_abi::{
     BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
@@ -64,6 +64,8 @@ const SCHED_CTX_OK: &[u8] = b"SCHED CTX OK\n";
 const CNODE_OK: &[u8] = b"CNODE OK\n";
 const TCB_REAP_OK: &[u8] = b"TCB REAP OK\n";
 const TCB_REAP_BAD: &[u8] = b"TCB REAP BAD\n";
+const WAIT_REAP_OK: &[u8] = b"WAIT REAP OK\n";
+const WAIT_REAP_BAD: &[u8] = b"WAIT REAP BAD\n";
 const CNODE_LABEL: u64 = 0x434E_4F44;
 const PAGER_LABEL: u64 = 0x5041_4745;
 const PAGER_VA: u64 = CODE_VA as u64 + 0x100_0000;
@@ -456,6 +458,14 @@ pub extern "C" fn smp_worker_c() -> ! {
     loop {
         let _ = vifast_user::yield_now();
     }
+}
+
+/// Worker F (mốc 1, vòng 16): thoát ngay khi chạy lần đầu để root demo
+/// exit-theo-task + TcbWait + reap. Dòng này chứng minh một task exit không
+/// kill cả máy (USER EXIT chỉ còn khi cạn task).
+#[no_mangle]
+pub extern "C" fn exit_worker_entry() -> ! {
+    vifast_user::exit();
 }
 
 #[no_mangle]
@@ -1683,6 +1693,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
 
     let mut worker_bits = 0u8;
     let mut workers_ok = false;
+    let mut exit_demo_done = false;
     let mut tlb_remapped = false;
     let mut tlb_done = false;
     let mut suspend_done = false;
@@ -1815,6 +1826,46 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             if reaped == 5 && !reap_done {
                 reap_done = true;
                 write(if reap_ok { TCB_REAP_OK } else { TCB_REAP_BAD });
+                // Mốc 1 (vòng 16): demo exit-theo-task + TcbWait + reap.
+                // Spawn NGAY tại đây (5 fault TCB vừa destroy, quota/bump
+                // vừa hồi) — để tới workers_ok thì x86 đã cạn meta Untyped.
+                // Worker F thoát ngay khi chạy; root TcbWait (block có chủ
+                // đích — fault message vẫn queue) rồi destroy.
+                if !exit_demo_done {
+                    exit_demo_done = true;
+                    if info.sched_harts & 0b10 != 0 {
+                        // Spawn tối giản: chỉ retype TCB (meta quota vừa hồi
+                        // từ 5 fault TCB), tái dùng stack mapping cũ của
+                        // fault1 (frame object vẫn sống sau destroy TCB).
+                        // Không cấp frame/page-table mới — x86 đã cạn data.
+                        let worker_f = slots.alloc();
+                        retype(meta_untyped, ObjType::Tcb, worker_f);
+                        check(vifast_user::tcb_configure(
+                            worker_f,
+                            exit_worker_entry as *const () as usize as u64,
+                            FAULT1_STACK_TOP as u64,
+                            root_vspace,
+                            5,
+                        ));
+                        check(vifast_user::tcb_set_affinity(worker_f, 0b10));
+                        check(vifast_user::tcb_resume(worker_f));
+                        let waited = vifast_user::tcb_wait(worker_f);
+                        // F đã exit: wait hoặc xong ngay (Ok, F exit trước)
+                        // hoặc wake lỗi ObjectDestroyed (F exit sau) — cả
+                        // hai đều đúng rendezvous.
+                        let destroyed = vifast_user::tcb_destroy(worker_f);
+                        write(
+                            if (waited.error == KError::Ok
+                                || waited.error == KError::ObjectDestroyed)
+                                && destroyed.error == KError::Ok
+                            {
+                                WAIT_REAP_OK
+                            } else {
+                                WAIT_REAP_BAD
+                            },
+                        );
+                    }
+                }
             }
             if pending_worker_e && reaped >= 3 {
                 pending_worker_e = false;

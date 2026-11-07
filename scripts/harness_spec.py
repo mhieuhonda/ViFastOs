@@ -62,6 +62,7 @@ EXACT_ONE = [
     "IRQ OK",
     "CNODE OK",
     "TCB REAP OK",
+    "WAIT REAP OK",
     "PAGER OK",
     "PAGER2 OK",
     "PAGER EVICT OK",
