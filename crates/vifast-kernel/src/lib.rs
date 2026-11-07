@@ -12359,6 +12359,44 @@ mod tests {
     }
 
     #[test]
+    fn round62_wait_self_is_rejected() {
+        // Mốc 1 (vòng 62): TcbWait tự chờ chính mình phải IllegalOperation
+        // — nếu không task tự gán caller=(mình) + park BlockedReply, tự
+        // deadlock không ai wake được (exit cũng chỉ wake caller đã chết).
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("lonely", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.resume_tcb(t).unwrap();
+        assert_eq!(kernel.pick_on(0), Some(t));
+        // Mức kernel lẫn mức syscall đều cấm.
+        assert_eq!(kernel.wait_tcb(t, t), Err(KError::IllegalOperation));
+        kernel
+            .install_cap(t, 1, Cap::new(t, ObjType::Tcb, Rights::READ))
+            .unwrap();
+        kernel.tcb_mut(t).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(t);
+        assert_eq!(
+            kernel.user_syscall(t, SyscallId::TcbWait as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::IllegalOperation,
+            }
+        );
+        // Task còn nguyên, không dính caller tự thân.
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Running);
+        assert!(kernel.tcb(t).unwrap().caller.is_none());
+        let _ = root;
+        eprintln!("inv: {:?}", kernel.check_invariants());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn round103_reply_carries_grant_cap() {
         // Mốc 5: server reply mang cap GRANT cho client qua recv_slot.
         let mut kernel = Kernel::new();

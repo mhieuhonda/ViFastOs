@@ -370,6 +370,9 @@ impl Kernel {
     /// Chỉ một waiter tại một thời điểm (target đã có caller thì WouldBlock).
     /// Waiter đang BlockedReply (chờ IPC nơi khác) thì WouldBlock.
     pub fn wait_tcb(&mut self, waiter: ObjRef, target: ObjRef) -> KResult<bool> {
+        if waiter == target {
+            return Err(KError::IllegalOperation);
+        }
         let target_table = self.tcb(target).ok_or(KError::WrongType)?;
         if target_table.state == ThreadState::Exited {
             return Ok(true);

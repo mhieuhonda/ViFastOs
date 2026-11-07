@@ -283,6 +283,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 0529b61 moc 1 (vong 53): host test wait long nhau + target Inactive bi cam
 - 69dfb2a moc 1 (vong 55): host test destroy server dang phuc vu
 - 2c35c11 moc 1 (vong 58): host test destroy sleeper khong revive
+- 4e4d7b1 moc 1 (vong 60): host test TcbDestroy current/self bi cam
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
