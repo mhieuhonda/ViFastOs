@@ -1117,7 +1117,20 @@ unsafe fn ap_idle_loop() -> ! {
         if POST_STARTED.load(Ordering::Relaxed) {
             POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
         }
+        // Vòng 89 (audit #4 P1-5): đọc queue (1094) và set cờ (1120) không
+        // nguyên tử — task được make_ready ở giữa sẽ không có IPI. Kiểm lại
+        // sau khi set cờ; nếu đã có việc thì không ngủ.
         AP_IDLE_WINDOW.store(true, Ordering::SeqCst);
+        let raced = {
+            let bkl = bkl_lock();
+            let work = X86Platform::kernel().has_ready_on(1);
+            drop(bkl);
+            work
+        };
+        if raced {
+            AP_IDLE_WINDOW.store(false, Ordering::SeqCst);
+            continue;
+        }
         core::arch::asm!("sti", "hlt", "cli", options(nomem, nostack));
         AP_IDLE_WINDOW.store(false, Ordering::SeqCst);
     }
@@ -2279,6 +2292,12 @@ impl Platform for X86Platform {
     }
     fn reload_timer() {}
     fn ack_timer() {
+        // Vòng 89 (audit #4 P1-2): PIC thuộc BSP. Hart 1 chạy LAPIC timer và
+        // đã EOI LAPIC trong x86_ap_irq_handler; nếu nó cũng ghi 0x20 thì cờ
+        // in-service của BSP bị xoá -> mất tick PIT hoặc spurious IRQ7.
+        if Self::hart_id() != 0 {
+            return;
+        }
         unsafe {
             outb(0x20, 0x20);
         }

@@ -4423,8 +4423,14 @@ impl Kernel {
                 break;
             }
         }
-        let Some(hart) = target else {
-            return;
+        // Audit #4 P1-6 được xét ở vòng 89: "enqueue bỏ rơi TCB Ready" chỉ xảy
+        // ra khi mọi hàng ứng viên đầy, mà mỗi hàng chứa tới MAX_TCBS = 18 =
+        // tổng số TCB, nên với các hằng số hiện tại nó không thể xảy ra. Giữ
+        // nguyên `return` (không thêm đường chưa kiểm thử); nếu sau này tăng
+        // MAX_TCBS hoặc giảm dung lượng hàng, phải xem lại.
+        let (hart, _fell_back) = match target {
+            Some(hart) => (hart, false),
+            None => return,
         };
         let seq = self.seq;
         self.seq = self.seq.wrapping_add(1);
@@ -6738,6 +6744,7 @@ mod tests {
         assert_eq!(client_state.resume_error, Some(KError::ObjectDestroyed));
     }
 
+    #[test]
     #[test]
     fn notification_wakes_every_waiter_in_the_queue() {
         // Vòng 88 (audit #4 P0): một slot duy nhất từng khiến waiter thứ hai

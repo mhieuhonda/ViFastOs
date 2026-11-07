@@ -1464,3 +1464,11 @@ follow-up `62b31f4`.
 - FS `read_dir_entry` giữ index khi gặp entry hỏng (25 test); x86 có IDT[0xFF]
   cho vector spurious; `Platform::send_ipi` gửi thật.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `2252cbd595d3bb479a43b5d4df8411841c78043bb3f99cfeab3e588a8c1c8243`.
+
+## 9.68 — Vòng 89: P1 phần cứng (PIC EOI, SGI 2, idle race)
+
+- x86 `ack_timer` chỉ EOI PIC trên hart 0; aarch64 bật SGI 2 (panic halt không
+  còn là dead code); `ap_idle_loop` kiểm lại queue sau khi set cờ idle.
+- `enqueue` bỏ rơi TCB: xét lại — mỗi hàng chứa MAX_TCBS=18 = tổng TCB nên
+  không thể xảy ra; ghi chú tại chỗ.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `f141eb6c8e69737481ba364ed168d9349b6ee028c37679ed76fcfabf06acd61a`.

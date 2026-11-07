@@ -343,7 +343,9 @@ fn write8(addr: u64, value: u8) {
 
 fn init_gic() {
     write32(GICD + 0x000, 1);
-    write32(GICD + 0x100, (1 << TIMER_IRQ) | 0b11);
+    // SGI 0/1 (reschedule) và SGI 2 (panic halt, audit #4 P1-7) phải được
+    // enable; trước đây chỉ bật 0b11 nên `panic_halt_others` là dead code.
+    write32(GICD + 0x100, (1 << TIMER_IRQ) | (1 << 2) | 0b11);
     write32(GICD + 0x104, 1 << (UART_IRQ - 32));
     write8(GICD + 0x400 + TIMER_IRQ as u64, 0xA0);
     write8(GICD + 0x400 + UART_IRQ as u64, 0xA0);

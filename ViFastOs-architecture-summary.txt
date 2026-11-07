@@ -282,7 +282,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 140/140 PASS
+- `cargo test -p vifast-kernel`: 141/141 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -2193,6 +2193,9 @@ E. Desktop / Space
     (sửa P0 "waiter thứ hai ghi đè"); `detach`/`destroy`/`suspend` gỡ mọi
     slot. FS: `read_dir_entry` giữ index khi gặp entry hỏng. x86: IDT[0xFF]
     cho vector spurious; `Platform::send_ipi` gửi thật (GIC SGIR / LAPIC ICR).
+135. Vòng 89: `ack_timer` chỉ EOI PIC trên hart 0 (hart 1 từng xoá in-service
+    của BSP); aarch64 bật SGI 2 nên `panic_halt_others` hết chết; x86 kiểm
+    lại queue sau khi set `AP_IDLE_WINDOW` để không mất IPI.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
