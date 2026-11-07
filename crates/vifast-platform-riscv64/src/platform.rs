@@ -906,6 +906,11 @@ static mut KERNEL_STORAGE: Kernel = Kernel::new_const();
 /// rồi echo từng segment dữ liệu. Chỉ chờ ngắn (~1.5s) để không làm chậm boot
 /// khi không có client; dùng bound nhỏ nên mỗi lần poll rất nhanh.
 fn tcp_echo_demo() {
+    // Không có thiết bị net (ví dụ cấu hình test bàn phím) thì bỏ qua hẳn:
+    // trước đây demo vẫn chờ đủ cửa sổ, làm boot chậm và che mất input.
+    if !vifast_virtio::net_ready() {
+        return;
+    }
     const PORT: u16 = 8080;
     let mut payload = [0u8; 512];
     let mut have_conn = false;

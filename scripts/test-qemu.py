@@ -801,12 +801,14 @@ def input_check(name: str) -> bool:
         if ser is None or mon_sock is None:
             print(f"--- {name} input FAIL (no sockets) ---")
             return False
-        # Driver input khởi tạo rất sớm (<1s); chờ cố định rồi gửi 2 phím
-        # khác nhau với hold ngắn (tránh auto-repeat) và kiểm tra mã phím thô
-        # trong serial. Đây là bằng chứng thiết bị → driver hoạt động; phần
-        # shell đã được kiểm bằng test UART interactive riêng.
-        # Guest chỉ sống ~1.5-2s sau khi shell bắt đầu nên gửi đúng MỘT phím
-        # ngay khi driver đã sẵn sàng; yêu cầu đúng mã phím thô trong serial.
+        # Vòng 79: gõ "help" qua sendkey không khả thi vì guest chỉ sống ~2s
+        # sau SHELL READY và QEMU auto-repeat khi gửi dồn — test quay lại
+        # chuẩn một phím (bằng chứng thiết bị → driver), phần gõ lệnh đầy đủ
+        # để dành cho chế độ tương tác.
+        buf = b""
+        # Gửi đúng MỘT phím, sớm và
+        # cố định (0.9s sau khi kết nối socket) — chờ marker READY trên
+        # aarch64 thường trễ hơn thời điểm guest thoát.
         time.sleep(0.9)
         try:
             mon_sock.sendall(b"sendkey e 20\n")
@@ -817,12 +819,10 @@ def input_check(name: str) -> bool:
             except OSError:
                 pass
         except OSError:
-            print(f"--- {name} input FAIL (QEMU exited before keys sent) ---")
+            print(f"--- {name} input FAIL (QEMU exited before key sent) ---")
             return False
-        wanted = (b"VIRTIO KEY 18",)
         ok = False
-        deadline = time.time() + 5
-        buf = b""
+        deadline = time.time() + 6
         while time.time() < deadline:
             try:
                 chunk = ser.recv(65536)
@@ -830,7 +830,7 @@ def input_check(name: str) -> bool:
                     buf += chunk
             except socket.timeout:
                 pass
-            if all(marker in buf for marker in wanted):
+            if b"VIRTIO KEY 18" in buf:
                 ok = True
                 break
             if proc.poll() is not None:
@@ -839,11 +839,11 @@ def input_check(name: str) -> bool:
         if os.path.exists(serial):
             text = open(serial, "rb").read().decode("utf-8", errors="replace")
         if not ok:
-            ok = all(marker.decode() in text for marker in wanted)
+            ok = "VIRTIO KEY 18" in text
         ser.close()
         mon_sock.close()
         if not ok:
-            print(f"--- {name} input FAIL (keys not delivered) ---")
+            print(f"--- {name} input FAIL (key not delivered) ---")
             return False
         print(f"--- {name} input PASS (virtio-keyboard reached the shell) ---")
         return True

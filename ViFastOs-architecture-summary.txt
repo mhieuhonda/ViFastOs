@@ -221,6 +221,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 5a09244 feat: add a virtio-rng entropy source
 - 277b287 fix: retry the virtio-gpu probe so aarch64 stops failing at init
 - 2dbefef feat: add a minimal TCP echo server reachable through hostfwd
+- 73b56e5 fix: stop leaking RX descriptors and make the TCP check reliable
+- 27cf687 fix: degrade gracefully when the pager VFS setup fails
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
