@@ -458,7 +458,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     const RUNTIME_OBJECTS: usize = 5;
     const META_MAX_OBJECTS: usize = 34;
     const DATA_MAX_OBJECTS: usize = 86;
-    const BOOT_MAX_OBJECTS: usize = 32;
+    const BOOT_MAX_OBJECTS: usize = 40;
     if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS + BOOT_MAX_OBJECTS
         > vifast_kernel::MAX_OBJECTS
     {

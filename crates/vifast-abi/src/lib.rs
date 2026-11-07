@@ -265,6 +265,10 @@ pub mod user_layout {
     pub const WORKER_G_STACK_TOP: usize = CODE_VA + 0x21000;
     pub const WORKER_H_STACK_BASE: usize = CODE_VA + 0x21000;
     pub const WORKER_H_STACK_TOP: usize = CODE_VA + 0x22000;
+    /// Vùng staging cho exec demo (mốc 9, vòng 32): stack + vspace mới cho
+    /// bản sao ELF. Nằm trong khe trống 0x20000–0x20_0000.
+    pub const EXEC_STACK_BASE: usize = CODE_VA + 0x23000;
+    pub const EXEC_STACK_TOP: usize = CODE_VA + 0x24000;
     const _: () = assert!(WORKER_A_STACK_BASE > DATA_VA);
     const _: () = assert!(WORKER_A_STACK_TOP <= WORKER_B_STACK_BASE);
     const _: () = assert!(WORKER_B_STACK_TOP <= WORKER_C_STACK_BASE);
@@ -280,6 +284,7 @@ pub mod user_layout {
     const _: () = assert!(PAGER_IPC_BUF_VA <= WORKER_G_STACK_BASE);
     const _: () = assert!(WORKER_G_STACK_TOP <= WORKER_H_STACK_BASE);
     const _: () = assert!(WORKER_H_STACK_TOP <= ROOT_ELF_BASE);
+    const _: () = assert!(EXEC_STACK_TOP <= ROOT_ELF_BASE);
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one

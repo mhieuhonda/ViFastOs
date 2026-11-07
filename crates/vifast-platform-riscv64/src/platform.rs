@@ -54,8 +54,8 @@ static mut CONTEXTS: [TrapFrame; vifast_kernel::MAX_TCBS] =
     [TrapFrame::empty(); vifast_kernel::MAX_TCBS];
 #[allow(dead_code)]
 #[repr(align(4096))]
-struct BootPool([u8; 131072]);
-static mut BOOT_POOL: BootPool = BootPool([0; 131072]);
+struct BootPool([u8; 163840]);
+static mut BOOT_POOL: BootPool = BootPool([0; 163840]);
 struct KernelPointer(core::cell::UnsafeCell<*mut Kernel>);
 // Safety: boot installs the pointer once before any secondary hart starts and
 // only reads it afterwards; all kernel entry points run under the BKL.
@@ -1554,7 +1554,7 @@ impl Platform for RiscvPlatform {
 
     fn boot_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(BOOT_POOL) as *mut u8, 131072)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(BOOT_POOL) as *mut u8, 163840)
         }
     }
 

@@ -11,16 +11,16 @@ use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
     CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_STACK_BASE, CLIENT_STACK_TOP,
     CLIENT_UART_IRQ_SLOT, CLIENT_UART_NOTIFICATION_SLOT, CNODE_STACK_BASE, CNODE_STACK_TOP,
-    CODE_VA, FAULT1_STACK_TOP, FAULT1_TCB_SLOT, FAULT2_STACK_TOP, FAULT2_TCB_SLOT,
-    FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE, FAULT4_STACK_TOP, IDLE_STACK_BASE,
-    IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, PAGER2_STACK_BASE, PAGER2_STACK_TOP,
-    PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_IPC_BUF_VA, PAGER_SERVER_STACK_BASE,
-    PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP, SERVER_STACK_TOP, USER_ENTRY_FAULT1,
-    USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE,
-    WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE,
-    WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE,
-    WORKER_E_STACK_TOP, WORKER_G_STACK_BASE, WORKER_G_STACK_TOP, WORKER_H_STACK_BASE,
-    WORKER_H_STACK_TOP,
+    CODE_VA, EXEC_STACK_BASE, EXEC_STACK_TOP, FAULT1_STACK_TOP, FAULT1_TCB_SLOT, FAULT2_STACK_TOP,
+    FAULT2_TCB_SLOT, FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE, FAULT4_STACK_TOP,
+    IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, PAGER2_STACK_BASE,
+    PAGER2_STACK_TOP, PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_IPC_BUF_VA,
+    PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP,
+    SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
+    WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
+    WORKER_C_STACK_BASE, WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP,
+    WORKER_E_STACK_BASE, WORKER_E_STACK_TOP, WORKER_G_STACK_BASE, WORKER_G_STACK_TOP,
+    WORKER_H_STACK_BASE, WORKER_H_STACK_TOP,
 };
 use vifast_abi::{
     BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
@@ -922,6 +922,204 @@ fn spawn_idle(meta_untyped: u8, data_untyped: u8, root_vspace: u8, slots: &mut S
         0,
     ));
     check(vifast_user::tcb_resume(tcb));
+}
+
+/// Map một frame, tự cấp page table khi thiếu; fail-êm (false) thay vì
+/// panic như map_with_tables — dùng cho exec demo trên máy cạn Untyped.
+fn map_frame_fallible(
+    data_untyped: u8,
+    vspace: u8,
+    frame: u8,
+    va: u64,
+    rights: u8,
+    slots: &mut SlotAllocator,
+) -> bool {
+    for _ in 0..4 {
+        let mapped = vifast_user::frame_map(vspace, frame, va, rights);
+        if mapped.error == KError::Ok {
+            return true;
+        }
+        if mapped.error != KError::MissingPageTable {
+            return false;
+        }
+        let table = slots.alloc();
+        if vifast_user::retype(data_untyped, ObjType::PageTable as u64, table).error != KError::Ok {
+            return false;
+        }
+        if vifast_user::page_table_map(table, vspace, va).error != KError::Ok {
+            return false;
+        }
+    }
+    false
+}
+
+/// Exec MVP (mốc 9, vòng 32): nạp bản sao ELF client vào VSpace mới và
+/// spawn TCB chạy nó. Mọi bước fail-êm (trả None) để x86 cạn Untyped bỏ qua
+/// mà không panic — demo chỉ chạy khi đủ tài nguyên.
+/// ELF64 riscv tối giản cho exec demo (mốc 9, vòng 32): 1 segment R+X
+/// chứa `wfi; j .` (treo thân thiện, không in gì, không xung đột marker với
+/// bản gốc). Entry = CODE_VA.
+const EXEC_DEMO_CODE: u64 = CODE_VA as u64 + 0x1000;
+const EXEC_DEMO_ELF: &[u8] = &{
+    let mut elf = [0u8; 0x1000 + 8];
+    // ELF header.
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2; // 64-bit
+    elf[5] = 1; // LE
+    elf[6] = 1; // version
+                // e_type ET_EXEC(2), e_machine EM_RISCV(243) — parse theo arch build.
+    elf[16] = 2;
+    elf[17] = 0;
+    elf[18] = (USER_ELF_MACHINE & 0xff) as u8;
+    elf[19] = (USER_ELF_MACHINE >> 8) as u8;
+    elf[20] = 1; // e_version
+                 // e_entry, e_phoff.
+    let entry = EXEC_DEMO_CODE.to_le_bytes();
+    let mut i = 0;
+    while i < 8 {
+        elf[24 + i] = entry[i];
+        i += 1;
+    }
+    let phoff = 64u64.to_le_bytes();
+    i = 0;
+    while i < 8 {
+        elf[32 + i] = phoff[i];
+        i += 1;
+    }
+    // e_ehsize, e_phentsize, e_phnum.
+    elf[52] = 64;
+    elf[54] = 56;
+    elf[56] = 1;
+    // Program header: PT_LOAD(1), R+X(5), offset 0x1000, vaddr entry.
+    elf[64] = 1;
+    elf[68] = 5;
+    let off = 0x1000u64.to_le_bytes();
+    i = 0;
+    while i < 8 {
+        elf[72 + i] = off[i];
+        elf[80 + i] = entry[i];
+        elf[88 + i] = entry[i];
+        i += 1;
+    }
+    elf[96] = 8; // filesz
+    elf[104] = 8; // memsz
+    let align = 0x1000u64.to_le_bytes();
+    i = 0;
+    while i < 8 {
+        elf[112 + i] = align[i];
+        i += 1;
+    }
+    // Code: wfi (0x10500073) + jal x0,0 (0x0000006f).
+    elf[0x1000] = 0x73;
+    elf[0x1001] = 0x00;
+    elf[0x1002] = 0x50;
+    elf[0x1003] = 0x10;
+    elf[0x1004] = 0x6f;
+    elf
+};
+
+fn spawn_elf_copy(
+    meta_untyped: u8,
+    data_untyped: u8,
+    bytes: &[u8],
+    affinity: u8,
+    slots: &mut SlotAllocator,
+) -> Option<u8> {
+    let image = vifast_elf::parse(
+        bytes,
+        USER_ELF_MACHINE,
+        CODE_VA as u64,
+        CODE_VA as u64 + MODULE_WINDOW,
+    )
+    .ok()?;
+    let vspace = slots.alloc();
+    if vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace).error != KError::Ok {
+        return None;
+    }
+    for segment in image.segments() {
+        let page_base = segment.vaddr & !0xfff;
+        let page_count = segment.page_count();
+        let mut page = 0;
+        while page < page_count {
+            let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
+            let frame = slots.alloc();
+            if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+                return None;
+            }
+            // Copy nội dung segment (chunk 256B như load_module).
+            let copy_start = core::cmp::max(va, segment.vaddr);
+            let copy_end = core::cmp::min(
+                va + vifast_abi::DEFAULT_PAGE_SIZE,
+                segment.vaddr + segment.file_size as u64,
+            );
+            if copy_start < copy_end {
+                let source = segment.file_offset + (copy_start - segment.vaddr) as usize;
+                let frame_offset = copy_start - va;
+                let mut done = 0u64;
+                let total = copy_end - copy_start;
+                while done < total {
+                    let chunk = core::cmp::min(256, total - done);
+                    if vifast_user::frame_write(
+                        frame,
+                        frame_offset + done,
+                        bytes.as_ptr().wrapping_add(source + done as usize) as u64,
+                        chunk,
+                    )
+                    .error
+                        != KError::Ok
+                    {
+                        return None;
+                    }
+                    done += chunk;
+                }
+            }
+            let mut rights = Rights::READ;
+            if segment.writable() {
+                rights = rights | Rights::WRITE;
+            }
+            if segment.executable() {
+                rights = rights | Rights::EXEC;
+            }
+            if !map_frame_fallible(data_untyped, vspace, frame, va, rights.0, slots) {
+                return None;
+            }
+            page += 1;
+        }
+    }
+    // Stack riêng cho bản sao.
+    let stack_frame = slots.alloc();
+    if vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame).error != KError::Ok {
+        return None;
+    }
+    if !map_frame_fallible(
+        data_untyped,
+        vspace,
+        stack_frame,
+        EXEC_STACK_BASE as u64,
+        (Rights::READ | Rights::WRITE).0,
+        slots,
+    ) {
+        return None;
+    }
+    let tcb = slots.alloc();
+    if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
+        return None;
+    }
+    if vifast_user::tcb_configure(tcb, image.entry as u64, EXEC_STACK_TOP as u64, vspace, 5).error
+        != KError::Ok
+    {
+        return None;
+    }
+    if vifast_user::tcb_set_affinity(tcb, affinity).error != KError::Ok {
+        return None;
+    }
+    if vifast_user::tcb_resume(tcb).error != KError::Ok {
+        return None;
+    }
+    Some(tcb)
 }
 
 fn spawn_cnode_demo(
@@ -2004,6 +2202,21 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     write(TIME_MONOTONIC_OK);
                 } else {
                     write(TIME_MONOTONIC_BAD);
+                }
+                // Mốc 9 (vòng 32): exec MVP — nạp bản sao client ELF vào
+                // VSpace mới và spawn chạy. Fail-êm: x86 cạn Untyped thì bỏ
+                // qua, gate không đổi. Affinity hart 0 (luôn có task).
+                if info.sched_harts & 0b01 != 0 {
+                    match spawn_elf_copy(
+                        meta_untyped,
+                        data_untyped,
+                        EXEC_DEMO_ELF,
+                        0b01,
+                        &mut slots,
+                    ) {
+                        Some(_) => write(b"EXEC OK\n"),
+                        None => write(b"EXEC SKIP\n"),
+                    }
                 }
             }
         }
