@@ -2203,11 +2203,13 @@ E. Desktop / Space
 136. Vòng 90: `fault::suspend` lưu frame đang fault vào context slot của TCB
     (pager cứu thì chạy lại đúng điểm fault); cổng `Platform::fault_frame_complete()`
     vì x86 hiện truyền frame rỗng (trap.S đẩy vector/error trước SAVE_REGS).
-137. Vòng 91-92: marker FP bắt buộc trong harness (`EL0 FP TRAP` aarch64,
-    `SSE USER OFF` x86, harness 508 case); x86 dựng `TrapFrame` đầy đủ từ stack
-    thô (`TrapFrame::from_raw`, exc có vector+error, pf chỉ error) nên
-    `fault_frame_complete() = true` và pager cứu được task; const assert chốt
-    layout `size == 160`, `rip@120`; `AP_HART` + assert thay literal cho AP.
+137. Vòng 91: marker FP trở thành bắt buộc trong harness — `EL0 FP TRAP`
+    (aarch64) và `SSE USER OFF` (x86), harness 508 case; `AP_HART` + const assert
+    thay literal `[1]` cho đường AP.
+138. Vòng 92: x86 dựng `TrapFrame` đầy đủ từ stack thô (`TrapFrame::from_raw`:
+    exc có vector+error trước rip, pf chỉ có error) nên
+    `fault_frame_complete() = true` và pager cứu được task đang fault; const
+    assert chốt `size == 160`, `rip@120`, `cs@128`.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

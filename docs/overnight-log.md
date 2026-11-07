@@ -1490,4 +1490,4 @@ follow-up `62b31f4`.
 - Harness thêm marker bắt buộc `EL0 FP TRAP` (aarch64) và `SSE USER OFF` (x86)
   → 508 case; `AP_HART` + assert cho AP.
 - Soak 12 vòng: 12/12 cả ba kiến trúc.
-- SHA-256 `ViFastOs-architecture-summary.txt`: `e73f2e99f8d950cfd9891cc0d882930224504beac6acf2402ec03322203c0cba`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `05b0f380b725f1ec1031924ea335c30ef399b54098bf61b543512f0fadbc8fd4`.
