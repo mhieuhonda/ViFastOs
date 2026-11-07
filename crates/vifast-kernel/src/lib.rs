@@ -7413,6 +7413,65 @@ mod tests {
     }
 
     #[test]
+    fn round71_budget_exhaust_removes_from_runqueue() {
+        // Mốc 2 (vòng 71): task hết ngân sách sched_context phải rời
+        // runqueue khi chuyển BlockedBudget — nếu không nó vừa Blocked
+        // vừa queued, scheduler có thể pick task không còn budget (chạy
+        // lố) hoặc kẹt thành viên kép khi wake.
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x850_0000, 8);
+        let untyped = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().obj;
+        let context = kernel.retype(untyped, ObjType::SchedContext).unwrap();
+        kernel.configure_sched_context(context, 1, 100).unwrap();
+        let tcb = kernel.create_tcb("spender", 5).unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        kernel
+            .configure_tcb(tcb, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.bind_sched_context(tcb, context).unwrap();
+        kernel.resume_tcb(tcb).unwrap();
+        // Task đang queued sau resume — xác nhận có trong runq.
+        assert!(kernel.tcb(tcb).unwrap().queued);
+        // Lên sóng: pick rồi charge 1 tick (budget 1 -> cạn ngay).
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(tcb);
+        let _ = kernel.tick(0);
+        let table = kernel.tcb(tcb).unwrap();
+        assert_eq!(table.state, ThreadState::BlockedBudget);
+        assert!(
+            !table.queued,
+            "hết budget phải rời runqueue (không thành viên kép)"
+        );
+        // Wake sau đó phải enqueue sạch 1 lần, pick được đúng 1 lần.
+        kernel.make_ready(tcb);
+        assert!(kernel.tcb(tcb).unwrap().queued);
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        assert_eq!(kernel.pick_on(0), None);
+        // Chu kỳ mới: hết budget rồi tick qua deadline -> wake_budgeters
+        // đánh thức (Ready + queued), task chạy lại được.
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(tcb);
+        // Budget 1 đã cạn ở tick trước; tick tiếp qua deadline period.
+        for _ in 0..150 {
+            let _ = kernel.tick(0);
+        }
+        let table = kernel.tcb(tcb).unwrap();
+        assert_eq!(table.state, ThreadState::Ready);
+        assert!(table.queued);
+        // 2 pick thành công trước đó (lần đầu + sau make_ready).
+        assert_eq!(kernel.scheduler_stats(0).0 + kernel.scheduler_stats(0).1, 2);
+        // Lên sóng lại chu kỳ mới rồi check invariants (current phải
+        // Running, pick gỡ khỏi runq).
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(tcb);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn wake_error_does_not_queue_a_running_task() {
         // Vòng 98 (soi chay K1): task đang Running trên hart khác mà bị
         // wake_error sẽ vừa Running vừa queued -> có thể chạy hai lần.
