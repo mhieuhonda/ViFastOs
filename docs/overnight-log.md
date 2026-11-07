@@ -1370,4 +1370,15 @@ follow-up `62b31f4`.
 - x86 chốt chặn: huge page 2 MiB cần tách PMD; data/meta/boot Untyped đều
   không đủ. `gate.sh --with-tcp`: all steps passed.
 - Xem `docs/agent2-report-78.md`.
+
+## 9.58 — Vòng 79: input check và TCP early-out
+
+- TCP demo bỏ qua hẳn khi không có net device (`net_ready()`), trước đó nó
+  vẫn chờ đủ cửa sổ và làm `--input-check` hỏng (guest thoát trước khi phím
+  tới). Gõ "help" qua sendkey không khả thi (guest sống ~2s, QEMU auto-repeat)
+  nên test quay lại chuẩn một phím.
+- Kết quả: riscv 2/2, aarch64 3/3 cho `--input-check`; `gate.sh --with-input`
+  PASS; soak 10 vòng 100% cả 3 arch.
+- Thêm cờ `--with-input` cho `gate.sh`; cập nhật đầu tài liệu bàn giao.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `b45f0f08c91643957d68749634d8bf32a84dd8371cb5cdd6993ebec5c210e525`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `17b418dc0bb683496485cbe1d230412b3d4add07f67c49ad4300ed0319cde999`.
