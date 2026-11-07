@@ -1,4 +1,4 @@
-# agent2-report-27 — Vòng 103: soak 30 iter xong + gate xanh + settle
+# agent2-report-28 — Vòng 103: soak 30 iter xong + gate xanh + settle
 
 Ngày: 2026-11-07. Soak 30 iter (~456s) hoàn thành.
 
