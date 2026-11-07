@@ -19,7 +19,8 @@ use vifast_abi::user_layout::{
     USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE,
     WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE,
     WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE,
-    WORKER_E_STACK_TOP,
+    WORKER_E_STACK_TOP, WORKER_G_STACK_BASE, WORKER_G_STACK_TOP, WORKER_H_STACK_BASE,
+    WORKER_H_STACK_TOP,
 };
 use vifast_abi::{
     BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
@@ -48,6 +49,10 @@ const MODULE_WINDOW: u64 = 0x10_0000;
 const WORKER_LABEL_A: u64 = 0x5750_0001;
 const WORKER_LABEL_B: u64 = 0x5750_0002;
 const WORKER_LABEL_C: u64 = 0x5750_0003;
+// Worker G/H cho hart 2/3 (mốc 5, vòng 31): yield 50 vòng như A/B rồi báo
+// label riêng; root đếm bit 3/4, không đổi marker SMP WORKERS OK cũ.
+const WORKER_LABEL_G: u64 = 0x5750_0007;
+const WORKER_LABEL_H: u64 = 0x5750_0008;
 const WORKER_LABEL_D_READY: u64 = 0x5750_0004;
 const WORKER_LABEL_D_DONE: u64 = 0x5750_0005;
 const WORKER_LABEL_C_RUNNING: u64 = 0x5750_0006;
@@ -423,6 +428,16 @@ fn worker_loop(label: u64) -> ! {
     loop {
         let _ = vifast_user::yield_now();
     }
+}
+
+#[no_mangle]
+pub extern "C" fn smp_worker_g() -> ! {
+    worker_loop(WORKER_LABEL_G)
+}
+
+#[no_mangle]
+pub extern "C" fn smp_worker_h() -> ! {
+    worker_loop(WORKER_LABEL_H)
 }
 
 #[no_mangle]
@@ -1128,6 +1143,7 @@ fn spawn_worker(
     entry: usize,
     stack_base: usize,
     stack_top: usize,
+    affinity: u8,
     slots: &mut SlotAllocator,
 ) -> u8 {
     let tcb = slots.alloc();
@@ -1154,7 +1170,7 @@ fn spawn_worker(
     if let Some(notification) = completion_notification {
         copy(notification, tcb, 3, Rights::WRITE);
     }
-    check(vifast_user::tcb_set_affinity(tcb, 0b10));
+    check(vifast_user::tcb_set_affinity(tcb, affinity));
     check(vifast_user::tcb_resume(tcb));
     tcb
 }
@@ -1190,7 +1206,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         || info.client_elf_va == 0
         || info.client_elf_len == 0
         || info.sched_harts & 0b01 == 0
-        || info.sched_harts & !0b11 != 0
+        || info.sched_harts & !0b1111 != 0
     {
         panic!("invalid BootInfo slots");
     }
@@ -1633,6 +1649,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             smp_worker_d as *const () as usize,
             WORKER_D_STACK_BASE,
             WORKER_D_STACK_TOP,
+            0b10,
             &mut slots,
         );
         spawn_worker(
@@ -1647,6 +1664,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             smp_worker_a as *const () as usize,
             WORKER_A_STACK_BASE,
             WORKER_A_STACK_TOP,
+            0b10,
             &mut slots,
         );
         spawn_worker(
@@ -1661,6 +1679,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             smp_worker_b as *const () as usize,
             WORKER_B_STACK_BASE,
             WORKER_B_STACK_TOP,
+            0b10,
             &mut slots,
         );
         worker_c_tcb = spawn_worker(
@@ -1675,6 +1694,44 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             smp_worker_c as *const () as usize,
             WORKER_C_STACK_BASE,
             WORKER_C_STACK_TOP,
+            0b10,
+            &mut slots,
+        );
+    }
+    // Mốc 5 (vòng 31): worker cho hart 2/3 khi bootinfo có bit. Affinity
+    // 0b1100 để scheduler (enqueue least-loaded + steal) phân tải sang
+    // hart 2/3 thay vì để chúng spin BKL vô ích trong idle loop.
+    if info.sched_harts & 0b0100 != 0 {
+        spawn_worker(
+            meta_untyped,
+            data_untyped,
+            root_vspace,
+            fault_endpoint_slot,
+            root_notification_slot,
+            Rights::READ,
+            None,
+            5,
+            smp_worker_g as *const () as usize,
+            WORKER_G_STACK_BASE,
+            WORKER_G_STACK_TOP,
+            0b0100,
+            &mut slots,
+        );
+    }
+    if info.sched_harts & 0b1000 != 0 {
+        spawn_worker(
+            meta_untyped,
+            data_untyped,
+            root_vspace,
+            fault_endpoint_slot,
+            root_notification_slot,
+            Rights::READ,
+            None,
+            5,
+            smp_worker_h as *const () as usize,
+            WORKER_H_STACK_BASE,
+            WORKER_H_STACK_TOP,
+            0b1000,
             &mut slots,
         );
     }
@@ -1793,6 +1850,14 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 if message.data[0] == 50 {
                     worker_bits |= 2;
                 }
+            } else if message.label == WORKER_LABEL_G {
+                if message.data[0] == 50 {
+                    worker_bits |= 8;
+                }
+            } else if message.label == WORKER_LABEL_H {
+                if message.data[0] == 50 {
+                    worker_bits |= 16;
+                }
             } else if message.label == WORKER_LABEL_C {
                 let bits = vifast_user::poll(completion_notification_slot);
                 if message.data[0] == 1 && bits.error == KError::Ok && bits.value & 2 != 0 {
@@ -1885,6 +1950,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     smp_worker_e as *const () as usize,
                     WORKER_E_STACK_BASE,
                     WORKER_E_STACK_TOP,
+                    0b10,
                     &mut slots,
                 );
                 let suspended = vifast_user::tcb_suspend(worker_c_tcb);
@@ -1909,7 +1975,17 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 suspend_ok = suspended.error == KError::Ok && resumed.error == KError::Ok;
                 suspend_done = true;
             }
-            if worker_bits == 7 && !workers_ok {
+            // Mốc 5 (vòng 31): yêu cầu bit A/B/C như cũ, cộng bit G/H khi
+            // bootinfo có hart tương ứng. Marker SMP WORKERS OK giữ nguyên
+            // format (harness exact) — G/H chỉ thêm bit nội bộ.
+            let want_bits: u8 = 7
+                | (if info.sched_harts & 0b0100 != 0 { 8 } else { 0 })
+                | (if info.sched_harts & 0b1000 != 0 {
+                    16
+                } else {
+                    0
+                });
+            if worker_bits & want_bits == want_bits && !workers_ok {
                 write(SMP_WORKERS_OK);
                 workers_ok = true;
                 // The AP worker already checked its own sequence.  Repeat the

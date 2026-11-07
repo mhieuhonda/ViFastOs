@@ -258,6 +258,13 @@ pub mod user_layout {
     pub const PAGER3_STACK_TOP: usize = CODE_VA + 0x1f000;
     /// Trang IPC buffer riêng của pager server khi nó gọi VFS (vòng 71).
     pub const PAGER_IPC_BUF_VA: usize = CODE_VA + 0x1f000;
+    /// Worker G/H cho hart 2/3 (mốc 5, vòng 31): mỗi stack 4 KiB trong khe
+    /// trống giữa PAGER3 và ROOT_ELF_BASE (0x20_0000). Giữ thứ tự tăng dần
+    /// để assert layout bắt lỗi chồng lấn ngay lúc biên dịch.
+    pub const WORKER_G_STACK_BASE: usize = CODE_VA + 0x20000;
+    pub const WORKER_G_STACK_TOP: usize = CODE_VA + 0x21000;
+    pub const WORKER_H_STACK_BASE: usize = CODE_VA + 0x21000;
+    pub const WORKER_H_STACK_TOP: usize = CODE_VA + 0x22000;
     const _: () = assert!(WORKER_A_STACK_BASE > DATA_VA);
     const _: () = assert!(WORKER_A_STACK_TOP <= WORKER_B_STACK_BASE);
     const _: () = assert!(WORKER_B_STACK_TOP <= WORKER_C_STACK_BASE);
@@ -270,6 +277,9 @@ pub mod user_layout {
     const _: () = assert!(PAGER_SERVER_STACK_TOP <= PAGER2_STACK_BASE);
     const _: () = assert!(PAGER2_STACK_TOP <= PAGER3_STACK_BASE);
     const _: () = assert!(PAGER3_STACK_TOP <= PAGER_IPC_BUF_VA);
+    const _: () = assert!(PAGER_IPC_BUF_VA <= WORKER_G_STACK_BASE);
+    const _: () = assert!(WORKER_G_STACK_TOP <= WORKER_H_STACK_BASE);
+    const _: () = assert!(WORKER_H_STACK_TOP <= ROOT_ELF_BASE);
 
     /// Root Rust ELF lives in the next 2 MiB user window, after the bootstrap
     /// user.S code/stack window.  Its stack has four mapped pages and one

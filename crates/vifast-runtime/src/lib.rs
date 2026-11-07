@@ -457,7 +457,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     /* Runtime-owned objects: root TCB, VSpace, metadata Untyped, data Untyped. */
     const RUNTIME_OBJECTS: usize = 5;
     const META_MAX_OBJECTS: usize = 34;
-    const DATA_MAX_OBJECTS: usize = 76;
+    const DATA_MAX_OBJECTS: usize = 86;
     const BOOT_MAX_OBJECTS: usize = 32;
     if RUNTIME_OBJECTS + META_MAX_OBJECTS + DATA_MAX_OBJECTS + BOOT_MAX_OBJECTS
         > vifast_kernel::MAX_OBJECTS
@@ -809,7 +809,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         "BootInfo must include the boot hart"
     );
     assert!(
-        sched_harts & !0b11 == 0,
+        sched_harts & !0b1111 == 0,
         "BootInfo advertises an unsupported hart"
     );
     let boot_info = BootInfo {

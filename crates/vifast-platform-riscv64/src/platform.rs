@@ -41,8 +41,8 @@ static mut KERNEL_L1: Table = Table([0; 512]);
 static mut DEVICE_L1: Table = Table([0; 512]);
 #[allow(dead_code)]
 #[repr(align(4096))]
-struct DataPool([u8; 311296]);
-static mut USER_DATA: DataPool = DataPool([0; 311296]);
+struct DataPool([u8; 352256]);
+static mut USER_DATA: DataPool = DataPool([0; 352256]);
 #[allow(dead_code)]
 #[repr(align(16))]
 struct Metadata([u8; 81920]);
@@ -1196,7 +1196,10 @@ impl Platform for RiscvPlatform {
     }
 
     fn sched_harts() -> u32 {
-        0b11
+        // Mốc 5 (vòng 31): mask theo số hart phụ online thực tế thay vì cứng
+        // 0b11 — QEMU smp4 cho harts=4. Kẹp trong 4 bit của MAX_HARTS.
+        let online = SECONDARY_ONLINE.load(Ordering::Acquire).min(MAX_HARTS - 1);
+        ((1u32 << (online + 1)) - 1) & 0b1111
     }
 
     fn can_wait_for_work() -> bool {
@@ -1557,7 +1560,7 @@ impl Platform for RiscvPlatform {
 
     fn data_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_DATA) as *mut u8, 311296)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_DATA) as *mut u8, 352256)
         }
     }
 
