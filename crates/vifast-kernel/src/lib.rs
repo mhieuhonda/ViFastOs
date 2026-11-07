@@ -12457,6 +12457,34 @@ mod tests {
     }
 
     #[test]
+    fn round104_validate_user_range_rejects_wrap_and_empty() {
+        // Mốc 7: validate_user_range phải từ chối wrap-around địa chỉ
+        // (u64::MAX - N + M) và len = 0, kể cả khi mapping bên dưới có vẻ
+        // hợp lệ — nếu không userspace đọc/ghi được ngoài vspace.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("t", 5).unwrap();
+        // Không vspace -> InvalidArg.
+        assert_eq!(
+            kernel.validate_user_range(tcb, 0x1000, 64, false),
+            Err(KError::InvalidArg)
+        );
+        assert_eq!(
+            kernel.validate_user_range(tcb, 0, 0, false),
+            Err(KError::InvalidArg)
+        );
+        // Wrap-around: va gần MAX + len tràn.
+        assert_eq!(
+            kernel.validate_user_range(tcb, u64::MAX - 10, 64, false),
+            Err(KError::InvalidArg)
+        );
+        assert_eq!(
+            kernel.validate_user_range(tcb, u64::MAX, 1, true),
+            Err(KError::InvalidArg)
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn set_cap_badge_cannot_be_cleared_or_changed() {
         // Vòng 100 (K16): cho badge -> 0 rồi mint lại badge khác là đường rửa
         // danh tính (CapMint chỉ chặn mint từ nguồn đã có badge).
