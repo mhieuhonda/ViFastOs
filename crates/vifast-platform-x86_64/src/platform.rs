@@ -341,6 +341,25 @@ impl Tss {
 static mut GDT: [u64; 7] = [0; 7];
 static mut GDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
 static mut IDT: [IdtEntry; 256] = [IdtEntry::zero(); 256];
+/// Vùng ảnh kernel mà firmware đã nạp: (base, base + SizeOfImage) theo
+/// `EFI_LOADED_IMAGE_PROTOCOL` (vòng 96, audit #8). Ảnh là DYNAMIC_BASE nên
+/// không được hard-code 0x1400_0000.
+static mut IMAGE_RANGE: (u64, u64) = (0, 0);
+
+/// Ghi lại vùng ảnh ngay sau khi UEFI xác thực; dùng cho `kernel_image_end()`
+/// và để kiểm tra W^X sau này.
+pub fn set_image_range(base: u64, size: u64) {
+    let end = base.saturating_add(size);
+    unsafe {
+        IMAGE_RANGE = (base, end);
+    }
+}
+
+/// (base, end) của ảnh kernel trong bộ nhớ.
+pub fn image_range() -> (u64, u64) {
+    unsafe { IMAGE_RANGE }
+}
+
 static mut IDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
 static mut AP_GDT: [u64; 7] = [0; 7];
 static mut AP_GDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
@@ -2134,7 +2153,9 @@ impl Platform for X86Platform {
     }
 
     fn kernel_image_end() -> u64 {
-        0
+        // Vòng 96 (audit #8): trước đây trả 0 nên check "KERNEL IMAGE OUTSIDE"
+        // trong runtime không bao giờ chạy trên x86.
+        image_range().1
     }
 
     fn check_kernel_mappings(root_pa: u64) -> bool {

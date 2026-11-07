@@ -1519,3 +1519,13 @@ follow-up `62b31f4`.
   `-device virtio-gpu-device` (trước đây không có GPU nên không thể vẽ).
 - aarch64 2/2, riscv64 2/2; gate đầy đủ xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `87b8c1137c31e3abe327473d97f906d8fbda30b3b720e7d657c9344122ddd72e`.
+
+## 9.74 — Vòng 96: image range x86 + hết flake DNS
+
+- UEFI ghi `(base, SizeOfImage)` vào platform → `kernel_image_end()` thật;
+  `check_loaded_image` siết 4 GiB → 1 GiB.
+- DNS demo thử lại 8 lần khi TX ring drain; soak 12/12 cả ba kiến trúc (trước
+  đó 19/20 vì `VIRTIO NET DNS sent` mất).
+- Audit #8: kernel x86 dùng lld-link/COFF, không thể dùng linker script;
+  hướng đúng là đọc PE section table + NX toàn ảnh trừ text.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `92ae61a482b93504fdf7e37e1c1b739dc30e9f5dc2dd5eb97858caefbf49acb3`.

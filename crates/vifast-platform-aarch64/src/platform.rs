@@ -1663,11 +1663,28 @@ impl Platform for Aarch64Platform {
                                 let qoff = 12 + qname.len();
                                 dns[qoff..qoff + 2].copy_from_slice(&[0x00, 0x01]); // QTYPE A
                                 dns[qoff + 2..qoff + 4].copy_from_slice(&[0x00, 0x01]); // QCLASS IN
-                                match vifast_virtio::net_send_udp(
+                                                                                        // Vòng 96: TX ring có thể còn drain đúng lúc này
+                                                                                        // (soak bắt 1/20 lần): thử lại vài lần trước khi FAIL.
+                                let mut dns_sent = vifast_virtio::net_send_udp(
                                     [10, 0, 2, 3],
                                     53,
                                     &dns[..qoff + 4],
-                                ) {
+                                );
+                                let mut attempt = 0;
+                                while dns_sent.is_none() && attempt < 8 {
+                                    attempt += 1;
+                                    let mut spins = 0u32;
+                                    while spins < 200_000 {
+                                        core::hint::spin_loop();
+                                        spins += 1;
+                                    }
+                                    dns_sent = vifast_virtio::net_send_udp(
+                                        [10, 0, 2, 3],
+                                        53,
+                                        &dns[..qoff + 4],
+                                    );
+                                }
+                                match dns_sent {
                                     Some(len) => vifast_kernel::klog!(
                                         Aarch64Platform,
                                         "VIRTIO NET DNS sent len={}",

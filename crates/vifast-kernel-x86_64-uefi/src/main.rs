@@ -103,8 +103,16 @@ unsafe fn check_loaded_image(image_handle: *mut c_void, system_table: *mut c_voi
     }
     let image = &*(interface as *const LoadedImage);
     let base = image.image_base as u64;
-    let end = base.saturating_add(image.image_size);
-    base < 0x4000_0000 && end <= 0x4000_0000
+    let size = image.image_size;
+    let end = base.saturating_add(size);
+    // Vòng 96 (audit #8): identity map chỉ phủ 1 GiB (không phải 4 GiB), nên
+    // giới hạn phải khớp; đồng thời ghi lại vùng ảnh để kernel_image_end()
+    // và check W^X dùng.
+    if base >= 0x4000_0000 || end > 0x4000_0000 {
+        return false;
+    }
+    vifast_platform_x86_64::platform::set_image_range(base, size);
+    true
 }
 use vifast_runtime::{boot, PlatformInfo, UserImage};
 

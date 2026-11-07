@@ -2225,6 +2225,11 @@ E. Desktop / Space
     78x18 và flush riêng vùng đó; hook vào IRQ virtio-input (aarch64/riscv) với
     marker `INPUT ECHO <code>`; `--input-check` đòi cả `VIRTIO KEY 18`,
     `shell> e` và `INPUT ECHO 18` (kèm `-device virtio-gpu-device`).
+142. Vòng 96 (audit #8): UEFI ghi lại `(base, SizeOfImage)` vào platform nên
+    `kernel_image_end()` hết trả 0 và check `KERNEL IMAGE OUTSIDE` chạy thật;
+    `check_loaded_image` siết 4 GiB → 1 GiB cho khớp identity map. Demo DNS
+    (riscv/aarch64) thử lại 8 lần khi TX ring đang drain — hết flake soak
+    (12/12 sau khi sửa, trước đó 19/20).
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
