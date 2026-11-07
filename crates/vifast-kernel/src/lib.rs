@@ -12266,6 +12266,54 @@ mod tests {
     }
 
     #[test]
+    fn round103_destroy_tcb_cleans_all_binds_and_queues() {
+        // Mốc 1/2: destroy TCB đang park BlockedRecv + bound notification +
+        // ôm caller của client + giữ sched_context bound — mọi phía đều
+        // được dọn (detach_tcb), không còn ref treo, invariant sạch.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let ep = kernel.create_endpoint().unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        let server = kernel.create_tcb("server", 5).unwrap();
+        let client = kernel.create_tcb("client", 5).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000_0000, 4096, 4096, 8)
+            .unwrap();
+        let context = kernel.retype(untyped, ObjType::SchedContext).unwrap();
+        kernel.configure_sched_context(context, 100, 100).unwrap();
+        kernel.bind_sched_context(server, context).unwrap();
+        // Server park recv + bound notification.
+        kernel
+            .install_cap(root, 1, Cap::new(ep, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        assert_eq!(kernel.recv(server, ep, 7), Ok(None));
+        kernel
+            .install_cap(root, 2, Cap::new(ntfn, ObjType::Notification, Rights::ALL))
+            .unwrap();
+        kernel.bind_notification(server, ntfn).unwrap();
+        // Client call vào server (server ôm caller).
+        let call = Message::new(0x1234, &[7]).unwrap();
+        assert_eq!(kernel.send(client, ep, 0, call, true), Ok(true));
+        assert!(kernel.tcb(server).unwrap().caller.is_some());
+        // Destroy server: client được wake lỗi, notification unbound,
+        // sched_context unbound, hàng recv sạch.
+        kernel.destroy_object(server).unwrap();
+        assert!(kernel.tcb(server).is_none());
+        let client_table = kernel.tcb(client).unwrap();
+        assert_eq!(client_table.state, ThreadState::Ready);
+        assert_eq!(client_table.resume_error, Some(KError::ObjectDestroyed));
+        assert!(kernel.sched_context(context).unwrap().bound.is_none());
+        assert!(kernel
+            .notification(ntfn)
+            .unwrap()
+            .waiters
+            .iter()
+            .all(|slot| slot.is_none()));
+        assert!(kernel.endpoint(ep).unwrap().recv.is_empty());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn set_cap_badge_cannot_be_cleared_or_changed() {
         // Vòng 100 (K16): cho badge -> 0 rồi mint lại badge khác là đường rửa
         // danh tính (CapMint chỉ chặn mint từ nguồn đã có badge).
