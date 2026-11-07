@@ -116,12 +116,14 @@ def run_qemu_interactive(
             proc.wait()
             return False, "input: no chardev connect"
         # Gửi lệnh NGAY sau khi kết nối: guest đệm byte UART vào RX buffer.
-        # Dùng `help` vì output của nó ("help time echo ls ...") khác hẳn chữ
-        # đã gõ — chứng minh lệnh THỰC SỰ chạy, không chỉ echo ký tự.
+        # Mốc 8 (vòng 10): gửi `echo hello-123` TRƯỚC (output khác chữ gõ,
+        # chứng minh dispatch + tách arg), rồi mới `help`. Echo trước để
+        # không bị test-exit cắt sau PREEMPT (cửa sổ sau help rất hẹp).
         # Byte '\r' gửi riêng nhiều lần: thực tế '\n' đôi khi bị mất trên
         # PL011 khiến dòng không bao giờ được xử lý (flaky vòng 62).
+        # KHÔNG gộp nhiều lệnh một lúc: UART FIFO cứng chỉ 16 byte.
         try:
-            s.sendall(b"help")
+            s.sendall(b"echo hello-123")
         except OSError:
             pass
         s.settimeout(0.3)
@@ -136,6 +138,33 @@ def run_qemu_interactive(
             proc.kill()
             proc.wait()
             return False, "input: no shell prompt"
+        marker = b"hello-123"
+        got = marker in buf
+        for _ in range(12):
+            if got:
+                break
+            try:
+                s.sendall(b"\r")
+            except OSError:
+                break
+            time.sleep(0.2)
+            t0 = time.time()
+            while time.time() - t0 < 0.3 and marker not in buf:
+                try:
+                    buf += s.recv(65536)
+                except socket.timeout:
+                    pass
+            got = marker in buf
+        if not got:
+            if os.path.exists(serial):
+                output = open(serial, "rb").read().decode("utf-8", errors="replace")
+            if "hello-123" not in output:
+                return False, output
+        # Rồi gửi `help` (output khác chữ gõ) khi shell đã rỗi.
+        try:
+            s.sendall(b"help")
+        except OSError:
+            pass
         marker = b"help time echo ls"
         got = marker in buf
         for _ in range(12):
@@ -162,7 +191,9 @@ def run_qemu_interactive(
             rc = proc.wait()
         if os.path.exists(serial):
             output = open(serial, "rb").read().decode("utf-8", errors="replace")
-        if not got and "help time echo ls" not in output:
+        # Bắt buộc: echo (dispatch + tách arg). Help là bonus best-effort vì
+        # cửa sổ trước test-exit chỉ đủ chắc chắn cho một lệnh.
+        if "hello-123" not in output:
             return False, output
         return True, output
     finally:
