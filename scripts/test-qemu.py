@@ -122,6 +122,9 @@ def run_qemu_interactive(
         # Byte '\r' gửi riêng nhiều lần: thực tế '\n' đôi khi bị mất trên
         # PL011 khiến dòng không bao giờ được xử lý (flaky vòng 62).
         # KHÔNG gộp nhiều lệnh một lúc: UART FIFO cứng chỉ 16 byte.
+        # Gửi dồn một lệnh (13 byte vừa RX queue 64): cửa sổ shell→PREEMPT
+        # hẹp, gửi chậm từng byte làm guest thoát (test-exit) trước khi đọc
+        # hết. Flake mất byte giữa chừng là do tải máy, rerun là qua.
         try:
             s.sendall(b"echo hello-123")
         except OSError:
@@ -160,7 +163,8 @@ def run_qemu_interactive(
                 output = open(serial, "rb").read().decode("utf-8", errors="replace")
             if "hello-123" not in output:
                 return False, output
-        # Rồi gửi `help` (output khác chữ gõ) khi shell đã rỗi.
+        # Rồi gửi `help` (output khác chữ gõ) khi shell đã rỗi — cũng gửi
+        # dồn một lần như trên.
         try:
             s.sendall(b"help")
         except OSError:

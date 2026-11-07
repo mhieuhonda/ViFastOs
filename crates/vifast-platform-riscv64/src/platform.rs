@@ -436,6 +436,9 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
         set_timer(Riscv64::now() + TIMER_INTERVAL);
     }
     SECONDARY_ONLINE.fetch_add(1, Ordering::SeqCst);
+    // Mốc 5 (vòng 28): secondary tổng quát theo hartid (trước đây cứng
+    // hart 1 — hart 2,3 tranh hàng đợi hart 1 và làm hỏng scheduler).
+    let hart = hartid;
     loop {
         if vifast_arch::panic::is_panicking() {
             Riscv64::halt();
@@ -450,11 +453,11 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
         // the enqueue-vs-WFI race.
         let picked = {
             let bkl = bkl_lock();
-            let picked = RiscvPlatform::kernel().pick_on(1);
+            let picked = RiscvPlatform::kernel().pick_on(hart);
             if picked.is_none() {
-                IDLE_HARTS[1].store(true, Ordering::SeqCst);
-                if RiscvPlatform::kernel().has_ready_on(1) {
-                    IDLE_HARTS[1].store(false, Ordering::SeqCst);
+                IDLE_HARTS[hart].store(true, Ordering::SeqCst);
+                if RiscvPlatform::kernel().has_ready_on(hart) {
+                    IDLE_HARTS[hart].store(false, Ordering::SeqCst);
                 }
             }
             if let Some(tcb) = picked {
@@ -479,13 +482,13 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
         unsafe {
             core::arch::asm!("wfi");
         }
-        IDLE_HARTS[1].store(false, Ordering::SeqCst);
-        RESCHED_PENDING[1].store(false, Ordering::SeqCst);
+        IDLE_HARTS[hart].store(false, Ordering::SeqCst);
+        RESCHED_PENDING[hart].store(false, Ordering::SeqCst);
         let sip: u64;
         unsafe {
             core::arch::asm!("csrr {}, sip", out(reg) sip);
         }
-        let resched_wake = MAINT_KIND[1].load(Ordering::Acquire) & MAINT_RESCHEDULE != 0;
+        let resched_wake = MAINT_KIND[hart].load(Ordering::Acquire) & MAINT_RESCHEDULE != 0;
         record_secondary_wake(sip);
         if resched_wake {
             RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);
@@ -1790,19 +1793,26 @@ impl Platform for RiscvPlatform {
 
     fn start_smp() {
         let entry = secondary_entry as *const () as usize;
-        let started = unsafe {
-            let result: usize;
-            core::arch::asm!(
-                "ecall",
-                in("a7") 0x4853_4dusize,
-                in("a6") 0usize,
-                in("a0") 1usize,
-                in("a1") entry,
-                in("a2") 0usize,
-                lateout("a0") result,
-            );
-            result
-        };
+        // Mốc 5 (vòng 28): truyền hartid qua opaque (a2) — HSM start đưa
+        // opaque vào a0 của hart mới. Trước đây opaque=0 nên mọi hart phụ
+        // đều tưởng mình là hart 0 (không lộ vì chỉ start hart 1 và code
+        // cứng hart 1). S-mode không đọc được mhartid.
+        for hart in 1..MAX_HARTS {
+            let started = unsafe {
+                let result: usize;
+                core::arch::asm!(
+                    "ecall",
+                    in("a7") 0x4853_4dusize,
+                    in("a6") 0usize,
+                    in("a0") hart,
+                    in("a1") entry,
+                    in("a2") hart,
+                    lateout("a0") result,
+                );
+                result
+            };
+            let _ = started;
+        }
         let mut spins = 0u32;
         while SECONDARY_ONLINE.load(Ordering::SeqCst) == 0 && spins < 10_000_000 {
             core::hint::spin_loop();
@@ -1813,13 +1823,14 @@ impl Platform for RiscvPlatform {
             let ipi_ok = request_ipi();
             drop(bkl);
             BSP_RATE_BASE.store(BSP_TIMER_TICKS.load(Ordering::Acquire), Ordering::Release);
+            let online = SECONDARY_ONLINE.load(Ordering::Acquire) + 1;
             if ipi_ok {
-                vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2, ipi=1)");
+                vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts={online}, ipi=1)");
             } else {
-                vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts=2, ipi=pending)");
+                vifast_kernel::klog!(RiscvPlatform, "SMP OK (harts={online}, ipi=pending)");
             }
         } else {
-            vifast_kernel::klog!(RiscvPlatform, "SMP SKIP (hsm_start={:#x})", started);
+            vifast_kernel::klog!(RiscvPlatform, "SMP SKIP (no secondary online)");
         }
     }
 }
