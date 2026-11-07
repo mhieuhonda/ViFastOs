@@ -32,7 +32,13 @@ const _: () = assert!(MAX_CAPS <= u8::MAX as usize);
 /// past this budget silently clobbers neighbors (vòng 30: AArch64 DABT
 /// FAR=0xb4410 sau BOOTINFO). Runtime refuses to boot past it; platforms
 /// should also `const`-assert their layout against it.
-pub const KERNEL_STATIC_BUDGET: usize = 716_800;
+/// Ngân sách static cho `Kernel`. Giá trị thực tế hiện tại là 561_768 byte
+/// (`LAYOUT kernel=` trong build log); trước đây hằng số này là 716_800 nên
+/// runtime còn cho phép `Kernel` phình ~155 KB, trong khi trên AArch64 chỉ
+/// còn đúng 8 byte trước `BKL` (build.sh kiểm tra `KERNEL_STORAGE end` với
+/// địa chỉ BKL). Vòng 80 siết về 566_272 = 561_768 + 4_504 để chặn sớm ở
+/// runtime, trước khi linker/build chạm giới hạn thật.
+pub const KERNEL_STATIC_BUDGET: usize = 566_272;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ObjRef {

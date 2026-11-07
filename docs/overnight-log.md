@@ -1392,3 +1392,12 @@ follow-up `62b31f4`.
 - `gate.sh` 3m22s xanh; `--with-tcp --with-input` xanh.
 - Xem `docs/agent2-report-80.md` và `docs/audits/2026-11-07-round79.md`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `b3bc500917d1471dbfa10af5ab6186eca35ddfd27da369d86ed3157ea0e60760`.
+
+## 9.60 — Vòng 81: siết guard static AArch64
+
+- `KERNEL_STATIC_BUDGET` từ 716_800 (lỏng 155 KB) về 566_272 = Kernel hiện tại
+  + 4.5 KB, để runtime chặn sớm thay vì để build/linker chạm giới hạn thật.
+- `build.sh` in `gap=` giữa `KERNEL_STORAGE end` và `BKL` và cảnh báo khi dưới
+  4 KiB (hiện còn 8 byte).
+- QEMU 3/3, harness 504 case xanh.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `c222865bef13adbbe6f65a74b9d6d8881a0ee34af0925963662fd628a4f56ea7`.
