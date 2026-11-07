@@ -1401,3 +1401,12 @@ follow-up `62b31f4`.
   4 KiB (hiện còn 8 byte).
 - QEMU 3/3, harness 504 case xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `c222865bef13adbbe6f65a74b9d6d8881a0ee34af0925963662fd628a4f56ea7`.
+
+## 9.61 — Vòng 82: P1-1 và P1-4
+
+- Retype thất bại giờ trả byte về Untyped (trước đó đốt 4 KiB mỗi lần hỏng);
+  test host mới, kernel 135 test.
+- `check-docs` so hash nguồn (`source_sha256`) thay mtime: rebuild không đổi
+  mã vẫn PASS, sửa mã thì báo "kernel sources changed".
+- Gate đầy đủ xanh.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `c54166250b05ebb2ec2f9263124a0f9a04ca6778aec5dd83a8f1d1dea6b4ef12`.

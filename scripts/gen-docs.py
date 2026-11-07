@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -144,6 +146,28 @@ def pass_conditions() -> str:
     return "\n".join(lines)
 
 
+def source_fingerprint() -> str:
+    """Giống hệt scripts/test-qemu.py: hash tên tương đối + nội dung, sắp xếp
+    theo chuỗi tên tương đối (Path sort khác string sort nên phải thống nhất)."""
+    root = ROOT
+    entries = []
+    for base in (os.path.join(root, "crates"), os.path.join(root, "scripts", "build.sh")):
+        if os.path.isfile(base):
+            entries.append(base)
+            continue
+        for dirpath, _dirnames, filenames in os.walk(base):
+            for name in filenames:
+                if name.endswith((".rs", ".S", ".toml", ".ld")) or name == "build.sh":
+                    entries.append(os.path.join(dirpath, name))
+    digest = hashlib.sha256()
+    for path in sorted(entries, key=lambda item: os.path.relpath(item, root)):
+        digest.update(os.path.relpath(path, root).encode())
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def qemu_status() -> str:
     result_path = ROOT / "target" / "qemu-status-standard.json"
     if not result_path.exists():
@@ -151,12 +175,26 @@ def qemu_status() -> str:
             "gen-docs: target/qemu-status-standard.json missing; "
             "run test-qemu.py --repeat 3 first"
         )
-    build_path = ROOT / "target" / "vifast-build.log"
-    if build_path.exists() and result_path.stat().st_mtime < build_path.stat().st_mtime:
-        raise SystemExit(
-            "gen-docs: standard QEMU status is older than the kernel build; "
-            "rerun test-qemu.py --repeat 3"
-        )
+    import json as _json
+
+    try:
+        payload = _json.loads(result_path.read_text())
+    except (OSError, ValueError):
+        payload = {}
+    stored_source = payload.get("source_sha256")
+    if stored_source:
+        if stored_source != source_fingerprint():
+            raise SystemExit(
+                "gen-docs: kernel sources changed since the standard QEMU run; "
+                "rerun test-qemu.py --repeat 3"
+            )
+    else:
+        build_path = ROOT / "target" / "vifast-build.log"
+        if build_path.exists() and result_path.stat().st_mtime < build_path.stat().st_mtime:
+            raise SystemExit(
+                "gen-docs: standard QEMU status is older than the kernel build; "
+                "rerun test-qemu.py --repeat 3"
+            )
     import json
 
     data = json.loads(result_path.read_text())

@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import glob
+import hashlib
 
 from harness_spec import accept
 
@@ -471,6 +472,31 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         index=index,
         feature_mode=feature,
     )
+
+
+def source_fingerprint() -> str:
+    """SHA-256 của toàn bộ mã nguồn ảnh hưởng kernel (vòng 82, audit P1-4).
+
+    Hash *nguồn* chứ không hash file nhị phân: rebuild không đổi mã (chỉ đổi
+    metadata/debug info) phải giữ nguyên fingerprint, còn sửa mã thì đổi.
+    """
+    digest = hashlib.sha256()
+    roots = [os.path.join(ROOT, "crates"), os.path.join(ROOT, "scripts", "build.sh")]
+    entries = []
+    for root in roots:
+        if os.path.isfile(root):
+            entries.append(root)
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for name in filenames:
+                if name.endswith((".rs", ".S", ".toml", ".ld")) or name == "build.sh":
+                    entries.append(os.path.join(dirpath, name))
+    for path in sorted(entries, key=lambda item: os.path.relpath(item, ROOT)):
+        digest.update(os.path.relpath(path, ROOT).encode())
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
@@ -1074,6 +1100,10 @@ def main() -> int:
         "results": {
             name: [sum(results[name]), len(results[name])] for name in names
         },
+        # Vòng 82 (audit P1-4): ghi hash nội dung của kernel đã test để
+        # check-docs không còn phụ thuộc mtime (build lại không đổi mã vẫn
+        # coi là hợp lệ; sửa mã mà không chạy lại thì bị phát hiện).
+        "source_sha256": source_fingerprint(),
     }
     result_path = os.path.join(ROOT, "target", "vifast-qemu-last.json")
     os.makedirs(os.path.dirname(result_path), exist_ok=True)

@@ -1696,10 +1696,23 @@ impl Kernel {
             _ => return Err(KError::NotImplemented),
         };
         let offset = self.untyped_take(untyped, charge, align)?;
-        let pa = base.checked_add(offset).ok_or(KError::OutOfMemory)?;
-        let end = base.checked_add(size).ok_or(KError::OutOfMemory)?;
-        if pa.checked_add(charge).ok_or(KError::OutOfMemory)? > end {
+        // Vòng 82 (audit P1-1): mọi lỗi SAU khi đã lấy byte phải trả lại
+        // Untyped, nếu không mỗi lần retype thất bại lại đốt vĩnh viễn một
+        // khoảng (đúng kiểu làm cạn data/meta Untyped trên x86).
+        let Some(pa) = base.checked_add(offset) else {
+            self.untyped_reclaim(untyped, offset, charge);
             return Err(KError::OutOfMemory);
+        };
+        let Some(end) = base.checked_add(size) else {
+            self.untyped_reclaim(untyped, offset, charge);
+            return Err(KError::OutOfMemory);
+        };
+        match pa.checked_add(charge) {
+            Some(taken_end) if taken_end <= end => {}
+            _ => {
+                self.untyped_reclaim(untyped, offset, charge);
+                return Err(KError::OutOfMemory);
+            }
         }
         if matches!(ty, ObjType::Frame | ObjType::PageTable | ObjType::VSpace) {
             if let Some(ops) = self.page_table_ops {
@@ -1742,9 +1755,13 @@ impl Kernel {
         } else {
             kind
         };
-        let object = self
-            .alloc_owned(kind, Some(untyped), creator)
-            .ok_or(KError::OutOfMemory)?;
+        let object = match self.alloc_owned(kind, Some(untyped), creator) {
+            Some(object) => object,
+            None => {
+                self.untyped_reclaim(untyped, offset, charge);
+                return Err(KError::OutOfMemory);
+            }
+        };
         if let Some(record) = self.get_mut(object) {
             record.alloc_offset = offset as u32;
             record.alloc_len = charge as u32;
@@ -1803,10 +1820,29 @@ impl Kernel {
             return Err(KError::OutOfMemory);
         }
         let offset = self.untyped_take(untyped, size, page)?;
-        let child_base = base.checked_add(offset).ok_or(KError::OutOfMemory)?;
-        let parent_end = base.checked_add(parent_size).ok_or(KError::OutOfMemory)?;
-        let child_end = child_base.checked_add(size).ok_or(KError::OutOfMemory)?;
+        let child_base = match base.checked_add(offset) {
+            Some(value) => value,
+            None => {
+                self.untyped_reclaim(untyped, offset, size);
+                return Err(KError::OutOfMemory);
+            }
+        };
+        let parent_end = match base.checked_add(parent_size) {
+            Some(value) => value,
+            None => {
+                self.untyped_reclaim(untyped, offset, size);
+                return Err(KError::OutOfMemory);
+            }
+        };
+        let child_end = match child_base.checked_add(size) {
+            Some(value) => value,
+            None => {
+                self.untyped_reclaim(untyped, offset, size);
+                return Err(KError::OutOfMemory);
+            }
+        };
         if child_end > parent_end {
+            self.untyped_reclaim(untyped, offset, size);
             return Err(KError::OutOfMemory);
         }
         let kind = Kind::Untyped(Untyped {
@@ -1820,9 +1856,13 @@ impl Kernel {
             free: [None; MAX_UNTYPED_FREE],
             leaked: 0,
         });
-        let object = self
-            .alloc_owned(kind, Some(untyped), creator)
-            .ok_or(KError::OutOfMemory)?;
+        let object = match self.alloc_owned(kind, Some(untyped), creator) {
+            Some(object) => object,
+            None => {
+                self.untyped_reclaim(untyped, offset, size);
+                return Err(KError::OutOfMemory);
+            }
+        };
         if let Some(record) = self.get_mut(object) {
             record.alloc_offset = offset as u32;
             record.alloc_len = size as u32;
@@ -7245,6 +7285,31 @@ mod tests {
                 len: 8
             }
         );
+    }
+
+    #[test]
+    fn failed_retype_returns_the_carved_bytes() {
+        // Vòng 82 (audit P1-1): nếu alloc_owned thất bại sau untyped_take,
+        // byte đã lấy phải được trả lại; nếu không, mỗi lần retype hỏng lại
+        // đốt một khoảng Untyped và làm cạn arena (đúng kiểu x86 đã gặp).
+        let mut kernel = Kernel::new();
+        let untyped = kernel
+            .create_untyped_with_limit(0x3000_0000, 0x8000, 4096, 1)
+            .unwrap();
+        let before = kernel.untyped_usage(untyped).unwrap();
+        assert!(kernel.retype(untyped, ObjType::Frame).is_ok());
+        let after_ok = kernel.untyped_usage(untyped).unwrap();
+        assert!(after_ok.1 > before.1, "frame phải tiêu byte");
+        assert_eq!(
+            kernel.retype(untyped, ObjType::Frame),
+            Err(KError::OutOfMemory)
+        );
+        let after_fail = kernel.untyped_usage(untyped).unwrap();
+        assert_eq!(
+            after_fail.1, after_ok.1,
+            "retype thất bại không được đốt thêm byte"
+        );
+        assert_eq!(after_fail.2, after_ok.2, "và không được tăng số object");
     }
 
     #[test]
