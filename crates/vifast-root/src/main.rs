@@ -814,7 +814,8 @@ fn map_with_tables(
 struct SlotAllocator {
     next: u8,
     end: u8,
-    released: [u8; 8],
+    // Vòng 34: 16 để chứa hết slots exec (12) khi `run` lặp.
+    released: [u8; 16],
     released_len: u8,
 }
 
@@ -934,6 +935,8 @@ fn map_frame_fallible(
     va: u64,
     rights: u8,
     slots: &mut SlotAllocator,
+    used: &mut [u8; MAX_EXEC_SLOTS],
+    used_len: &mut usize,
 ) -> bool {
     for _ in 0..4 {
         let mapped = vifast_user::frame_map(vspace, frame, va, rights);
@@ -943,7 +946,12 @@ fn map_frame_fallible(
         if mapped.error != KError::MissingPageTable {
             return false;
         }
-        let table = slots.alloc();
+        // Mọi page table cấp cho exec đều track để destroy_exec dọn được
+        // (vòng 34: table leak làm `run` lần 2 RUN SKIP vì cạn Untyped).
+        let table = match track_alloc(slots, used, used_len) {
+            Some(slot) => slot,
+            None => return false,
+        };
         if vifast_user::retype(data_untyped, ObjType::PageTable as u64, table).error != KError::Ok {
             return false;
         }
@@ -1029,13 +1037,72 @@ const EXEC_DEMO_ELF: &[u8] = &{
     elf
 };
 
+/// Số slot tối đa spawn_elf_copy cấp cho ELF demo (tcb + vspace + stack +
+/// frame code + page tables). ELF demo cố định 1 page code nên 8 là dư;
+/// nếu tràn, spawn fail-êm thay vì ghi đè.
+/// Dọn task exec cũ trước khi `run` lần sau (mốc 9, vòng 34):
+/// destroy TCB trước (detach khỏi runq/endpoint), rồi VSpace (Faulted TCB
+/// còn sót + dọn page tables), rồi frames/tables còn lại. Bỏ qua lỗi từng
+/// slot — slot có thể đã trống nếu spawn trước fail giữa chừng.
+/// Không trả slot về SlotAllocator (slots chỉ tiến): destroy object giải
+/// phóng tài nguyên kernel/Untyped, slot cspace trống nhưng không tái dùng
+/// trong vòng đời root — chấp nhận được vì mỗi `run` tốn ≤ 8 slots trên
+/// 128 slot root và đây là demo.
+fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usize) {
+    // Một pass là đủ: kernel xử lý phụ thuộc khi destroy (VSpace
+    // destroy Faulted TCB còn trỏ; TCB destroy detach khỏi mọi hàng chờ).
+    // Destroy TCB trước để nó không chạy trong lúc dọn VSpace/frame.
+    // Sắp xếp: used[0] là vspace... — không đảm bảo thứ tự, nên destroy TCB
+    // riêng trước: tìm slot TCB bằng cách thử? Không — đơn giản: destroy
+    // tất cả 2 lượt, lượt 1 bỏ qua lỗi, lượt 2 dọn nốt.
+    let mut pass = 0;
+    while pass < 2 {
+        let mut i = 0;
+        while i < len {
+            if vifast_user::object_destroy(used[i]).error == KError::Ok {
+                // Slot đã trống thật mới trả về allocator; nếu destroy
+                // fail (slot còn object lạ) giữ nguyên để lần sau thử lại.
+                // Chỉ release ở pass cuối để slot không bị cấp lại giữa
+                // chừng khi pass 1 chưa dọn xong phụ thuộc.
+                if pass == 1 {
+                    slots.release(used[i]);
+                }
+            }
+            i += 1;
+        }
+        pass += 1;
+    }
+}
+
+/// Cấp slot và ghi lại để `destroy_exec` dọn được khi `run` lần sau.
+/// Trả None khi đầy (spawn fail-êm).
+fn track_alloc(
+    slots: &mut SlotAllocator,
+    used: &mut [u8; MAX_EXEC_SLOTS],
+    len: &mut usize,
+) -> Option<u8> {
+    if *len >= MAX_EXEC_SLOTS {
+        return None;
+    }
+    let slot = slots.alloc();
+    used[*len] = slot;
+    *len += 1;
+    Some(slot)
+}
+
+// Vòng 34: 12 slots (tcb + vspace + stack + frame code + tới 8 page
+// tables cho 2 vùng VA trên Sv39 3-level). Đếm thực tế đúng 8 nhưng sát
+// trần → lần 2 SKIP; dư 4 cho chắc.
+const MAX_EXEC_SLOTS: usize = 12;
 fn spawn_elf_copy(
     meta_untyped: u8,
     data_untyped: u8,
     bytes: &[u8],
     affinity: u8,
     slots: &mut SlotAllocator,
+    used: &mut [u8; MAX_EXEC_SLOTS],
 ) -> Option<u8> {
+    let mut used_len = 0usize;
     let image = vifast_elf::parse(
         bytes,
         USER_ELF_MACHINE,
@@ -1043,7 +1110,7 @@ fn spawn_elf_copy(
         CODE_VA as u64 + MODULE_WINDOW,
     )
     .ok()?;
-    let vspace = slots.alloc();
+    let vspace = track_alloc(slots, used, &mut used_len)?;
     if vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace).error != KError::Ok {
         return None;
     }
@@ -1053,7 +1120,7 @@ fn spawn_elf_copy(
         let mut page = 0;
         while page < page_count {
             let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
-            let frame = slots.alloc();
+            let frame = track_alloc(slots, used, &mut used_len)?;
             if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
                 return None;
             }
@@ -1091,14 +1158,23 @@ fn spawn_elf_copy(
             if segment.executable() {
                 rights = rights | Rights::EXEC;
             }
-            if !map_frame_fallible(data_untyped, vspace, frame, va, rights.0, slots) {
+            if !map_frame_fallible(
+                data_untyped,
+                vspace,
+                frame,
+                va,
+                rights.0,
+                slots,
+                used,
+                &mut used_len,
+            ) {
                 return None;
             }
             page += 1;
         }
     }
     // Stack riêng cho bản sao.
-    let stack_frame = slots.alloc();
+    let stack_frame = track_alloc(slots, used, &mut used_len)?;
     if vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame).error != KError::Ok {
         return None;
     }
@@ -1109,10 +1185,12 @@ fn spawn_elf_copy(
         EXEC_STACK_BASE as u64,
         (Rights::READ | Rights::WRITE).0,
         slots,
+        used,
+        &mut used_len,
     ) {
         return None;
     }
-    let tcb = slots.alloc();
+    let tcb = track_alloc(slots, used, &mut used_len)?;
     if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
         return None;
     }
@@ -1421,7 +1499,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut slots = SlotAllocator {
         next: info.free_slot_start as u8,
         end: info.free_slot_end as u8,
-        released: [0; 8],
+        released: [0; 16],
         released_len: 0,
     };
     let endpoint_slot = slots.alloc();
@@ -1965,6 +2043,12 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
 
     let mut worker_bits = 0u8;
     let mut workers_ok = false;
+    // Mốc 9 (vòng 34): VSpace exec setup 1 lần + TCB hiện tại. `run`
+    // lần sau chỉ thay TCB (rẻ, không chạm data_untyped).
+    let mut exec_used = [0u8; MAX_EXEC_SLOTS];
+    let mut exec_len = 0usize;
+    let mut exec_vspace = 0u8;
+    let mut exec_tcb = 0u8;
     let mut exit_demo_done = false;
     let mut tlb_remapped = false;
     let mut tlb_done = false;
@@ -1996,9 +2080,47 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             // fault_endpoint với badge RUN_BADGE. Không reply (send đơn).
             // Badge lạ + label RUN mới dispatch; fault thật badge 0.
             if message.label == LABEL_RUN && message.badge == RUN_BADGE {
-                match spawn_elf_copy(meta_untyped, data_untyped, EXEC_DEMO_ELF, 0b01, &mut slots) {
-                    Some(_) => write(b"RUN OK\n"),
-                    None => write(b"RUN SKIP\n"),
+                // `run` lặp: VSpace setup 1 lần, mỗi lần chỉ thay TCB.
+                if exec_vspace == 0 {
+                    destroy_exec(&mut slots, &exec_used, exec_len);
+                    exec_len = 0;
+                    exec_used = [0u8; MAX_EXEC_SLOTS];
+                    match spawn_elf_copy(
+                        meta_untyped,
+                        data_untyped,
+                        EXEC_DEMO_ELF,
+                        0b01,
+                        &mut slots,
+                        &mut exec_used,
+                    ) {
+                        Some(tcb) => {
+                            let mut n = 0;
+                            while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
+                                n += 1;
+                            }
+                            exec_len = n;
+                            // exec_used[?] là vspace — tìm slot vspace? Lưu
+                            // riêng: vspace là slot đầu tiên được cấp.
+                            exec_vspace = exec_used[0];
+                            exec_tcb = tcb;
+                            write(b"RUN OK\n")
+                        }
+                        None => write(b"RUN SKIP\n"),
+                    }
+                } else {
+                    // Tái dùng TCB cũ bằng restart (zombie sau exit, hoặc
+                    // Ready nếu `run` dồn dập chưa kịp chạy). Không tốn
+                    // object mới, không race với destroy (vòng 35: destroy +
+                    // recreate race resume IllegalOperation).
+                    // TCB cũ exit rồi nên restart từ entry/stack đã cấu hình.
+                    let rr = vifast_user::tcb_restart(exec_tcb);
+                    if rr.error == KError::Ok {
+                        write(b"RUN OK\n")
+                    } else {
+                        write(b"RUN SKIP ");
+                        write_decimal(300 + rr.error as u64);
+                        write(b"\n");
+                    }
                 }
             } else if message.label == CNODE_LABEL {
                 write(CNODE_OK);
@@ -2232,12 +2354,16 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 // VSpace mới và spawn chạy. Fail-êm: x86 cạn Untyped thì bỏ
                 // qua, gate không đổi. Affinity hart 0 (luôn có task).
                 if info.sched_harts & 0b01 != 0 {
+                    destroy_exec(&mut slots, &exec_used, exec_len);
+                    exec_len = 0;
+                    exec_used = [0u8; MAX_EXEC_SLOTS];
                     match spawn_elf_copy(
                         meta_untyped,
                         data_untyped,
                         EXEC_DEMO_ELF,
                         0b01,
                         &mut slots,
+                        &mut exec_used,
                     ) {
                         Some(_) => write(b"EXEC OK\n"),
                         None => write(b"EXEC SKIP\n"),
