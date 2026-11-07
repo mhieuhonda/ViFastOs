@@ -7542,6 +7542,34 @@ mod tests {
     }
 
     #[test]
+    fn round66_exit_removes_waiter_from_notification() {
+        // Mốc 1 (vòng 66): task đang BlockedNotification mà exit phải được
+        // gỡ khỏi notification.waiters — nếu không signal sau này chạm slot
+        // stale (tái dùng object) hoặc đánh thức zombie. Bit signal giữ
+        // nguyên cho waiter còn sống.
+        let mut kernel = Kernel::new();
+        let dying = kernel.create_tcb("dying", 5).unwrap();
+        let survivor = kernel.create_tcb("survivor", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(dying, ntfn), Ok(None));
+        assert_eq!(kernel.wait_as(survivor, ntfn), Ok(None));
+        // Đặt dying làm current rồi exit.
+        kernel.tcb_mut(dying).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(dying);
+        kernel.exit_current_on(0);
+        assert_eq!(kernel.tcb(dying).unwrap().state, ThreadState::Exited);
+        // Slot của dying đã sạch, survivor còn trong hàng.
+        let waiters = kernel.notification(ntfn).unwrap().waiters;
+        assert!(waiters.iter().all(|slot| *slot != Some(dying)));
+        assert!(waiters.iter().any(|slot| *slot == Some(survivor)));
+        // Signal đánh thức survivor và không chạm zombie.
+        assert_eq!(kernel.signal(ntfn, 0b1), Ok(()));
+        assert_eq!(kernel.tcb(survivor).unwrap().state, ThreadState::Ready);
+        assert_eq!(kernel.tcb(dying).unwrap().state, ThreadState::Exited);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn destroyed_vspace_removes_its_tcb_from_the_runqueue() {
         // Vòng 83 (audit #2 P1-6): destroy VSpace làm TCB Faulted nhưng trước
         // đây không gỡ khỏi runqueue → pick_on vẫn trả TCB không có VSpace.
