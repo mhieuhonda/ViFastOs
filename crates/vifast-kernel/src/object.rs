@@ -17,7 +17,12 @@ pub const MAX_CAPS_ROOT: usize = 128;
 /// `MAX_OBJECTS * sizeof(Option<Cap>)` bytes of the static kernel image.
 /// Task slots used in practice stay below 12 (client IRQ/UART, pager server);
 /// 48 leaves headroom while saving ~1 KiB per TCB vs 64.
-pub const MAX_CAPS_TASK: usize = 48;
+/// Mốc 2 (vòng 26): cspace nhúng giảm 48 -> 16 slot. Mọi task thực tế dùng
+/// <= 12 slot (server cao nhất: endpoint/tcb/vspace/frame×3 + untyped +
+/// vfs_ep + completion ≈ 12); ai cần hơn thì CNodeInstall CNode ngoài.
+/// Tiết kiệm (48-16)*64 = 2 KiB mỗi Tcb, ~80 KiB static toàn cục vì
+/// Object = max Kind (Tcb không còn là max, VSpace 3136 thành max mới).
+pub const MAX_CAPS_TASK: usize = 16;
 /// Historical name used by the BootInfo slot range (root cspace).
 pub const MAX_CAPS: usize = MAX_CAPS_ROOT;
 pub const MAX_QUEUE: usize = 8;
