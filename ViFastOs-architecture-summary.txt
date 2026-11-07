@@ -242,6 +242,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a0c0872 fix: stop the NX self-check and the x86 input check from passing falsely
 - 847a763 feat: draw the pressed key on the framebuffer and require it in the input check
 - fb5081f fix: give x86 a real kernel image bound and retry the DNS demo send
+- c1d953a feat: make the whole UEFI image non-executable except its text sections
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
