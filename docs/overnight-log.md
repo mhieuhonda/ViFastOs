@@ -1557,3 +1557,16 @@ follow-up `62b31f4`.
 - Kernel 156 test; QEMU 3/3×3; persist 7×3; harness 508; gate full
   --with-tcp --with-input xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `8eb5a24612eb494f763a8087a8afef3ef7e4ef26d7f6fddbd75de8780702ca30`.
+
+## 9.78 — Vòng 1–23 (mốc cuối tuần): Exit/Wait/Reply-cap + soak 10/10
+
+- Mốc 1: Exit theo task (`Exited`, `exit_current_on`), `TcbWait` (syscall 51),
+  chặn destroy khi có waiter, exit-demo QEMU worker F (`WAIT REAP OK`×3 arch),
+  6 test hồi quy (exit-wake, wait, sleep-exit, destroy-sạch, restart-tái-sinh,
+  syscall-lỗi-value-0, validate-range, group-revoke).
+- Mốc 5: Reply mang cap GRANT + 4 fix park/runq họ K32/K35.
+- Mốc 3/8/9/11: journal txn limit, shell 256B+lịch sử+Ctrl, FS→ELF→parse,
+  runbook 6 sự cố.
+- Soak 10/10×3 arch + harness mỗi vòng (514 cases); kernel 166, FS 27.
+- 2 bài học hạ tầng: x86 cạn data pages cuối boot (spawn tối giản);
+  `TcbWait` race Ok/ObjectDestroyed đều đúng.
