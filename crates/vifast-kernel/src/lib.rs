@@ -9753,6 +9753,61 @@ mod tests {
     }
 
     #[test]
+    fn round60_tcb_destroy_rejects_current_and_self() {
+        // Mốc 1 (vòng 60): TcbDestroy task đang là current trên bất kỳ
+        // hart nào, hoặc chính caller, phải IllegalOperation ở mức
+        // syscall — kẻ tấn công không tự sát hart mình chạy, cũng không
+        // giết task đang chạy trên hart khác (treo hart đó).
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let runner = kernel.create_tcb("runner", 5).unwrap();
+        kernel
+            .configure_tcb(runner, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(runner, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        kernel.resume_tcb(runner).unwrap();
+        assert_eq!(kernel.pick_on(0), Some(runner));
+        kernel.tcb_mut(runner).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(runner);
+        // Destroy current qua syscall → cấm, TCB còn nguyên.
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbDestroy as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::IllegalOperation,
+            }
+        );
+        assert!(kernel.get(runner).is_some());
+        assert_eq!(kernel.current[0], Some(runner));
+        // Caller tự destroy mình qua cap trỏ chính nó → cấm. Chuyển
+        // runner sang hart 1 trước (mỗi TCB chỉ current trên một hart).
+        kernel.current[0] = None;
+        kernel.tcb_mut(runner).unwrap().state = ThreadState::Ready;
+        kernel.tcb_mut(runner).unwrap().affinity = 0b11;
+        kernel.enqueue(runner);
+        assert_eq!(kernel.pick_on(1), Some(runner));
+        kernel.tcb_mut(runner).unwrap().state = ThreadState::Running;
+        kernel.current[1] = Some(runner);
+        kernel
+            .install_cap(runner, 7, Cap::new(runner, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(runner, SyscallId::TcbDestroy as u64, 7, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::IllegalOperation,
+            }
+        );
+        assert!(kernel.get(runner).is_some());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn cap_ids_are_not_reused_after_delete() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
