@@ -1916,7 +1916,10 @@ pub fn input_key_ascii(event: InputEvent) -> Option<u8> {
         }
         return None;
     }
-    if event.value == 0 {
+    // Vòng 94 (audit #7): value == 2 là auto-repeat của phím đang giữ; nếu
+    // nhận cả repeat thì giữ phím sinh nhiều ký tự và có thể lệch test.
+    // Chỉ nhận value == 1 (press) và 0 (release, đã lọc ở trên).
+    if event.value != 1 {
         return None;
     }
     let shift = unsafe { INPUT_SHIFT };

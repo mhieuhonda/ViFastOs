@@ -636,6 +636,13 @@ def tcp_check(name: str) -> bool:
     phục vụ và bị drop.
     """
     if name not in ("riscv64", "aarch64"):
+        # Vòng 94 (audit #7): x86_64 KHÔNG có driver bàn phím (không virtio-input,
+        # IRQ1 bị mask, không đọc port 0x60) nên trước đây trả True là
+        # false-green. Nay nói rõ là SKIP để không ai tưởng đã kiểm.
+        print(
+            f"--- {name} input SKIP (chưa có driver bàn phím: "
+            "không virtio-input, IRQ1 bị mask) ---"
+        )
         return True
     port = 18080 if name == "riscv64" else 18081
     serial_path = f"/tmp/vifast-tcp-{name}.sock"

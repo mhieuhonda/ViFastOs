@@ -2215,6 +2215,10 @@ E. Desktop / Space
     `AP_GDT_PTR`, `CPU_STATES` (19 vùng) nên các static này không còn
     executable dưới NX; `--input-check` đòi thêm echo `shell> e`, chứng minh
     phím đi hết device → driver → kernel → user shell.
+140. Vòng 94 (audit #7): thêm `PD_HIGH` (20 vùng NX); hết slot split NX giờ
+    `exit(1)` thay vì âm thầm tắt NX rồi self-check vẫn xanh; `--input-check`
+    của x86 in rõ SKIP (không còn false-green); lọc auto-repeat
+    (`value == 2`) và client ack UART IRQ ngay sau khi đọc được byte.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

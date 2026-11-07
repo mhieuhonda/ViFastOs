@@ -491,6 +491,12 @@ fn shell() -> ! {
             }
             continue;
         }
+        if input.error == KError::Ok {
+            // Vòng 94 (audit #7): ack ngay sau khi lấy được byte. Trước đây chỉ
+            // ack trong nhánh WouldBlock nên nếu byte đọc được ngay thì pending
+            // IRQ kẹt và phím sau bị coalesce.
+            let _ = vifast_user::irq_ack(CLIENT_UART_IRQ_SLOT);
+        }
         if input.error != KError::Ok {
             let _ = vifast_user::yield_now();
             continue;

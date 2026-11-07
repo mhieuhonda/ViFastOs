@@ -1501,3 +1501,12 @@ follow-up `62b31f4`.
 - Display tương tác hoãn: gọi `gpu_command` trong IRQ giữ BKL có nguy cơ deadlock,
   cần display service/deferred work.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `2f9809319ed47728e46ac5d530321426ef7319ae662d8868979ae7a1146e6ea5`.
+
+## 9.72 — Vòng 94: NX trung thực + input không false-green
+
+- `PD_HIGH` vào danh sách NX (20 vùng); hết slot split ⇒ exit(1) thay vì tắt NX
+  âm thầm (trước đây self-check vẫn xanh khi toàn bộ data executable).
+- `--input-check` x86 in SKIP thay vì trả True; lọc auto-repeat `value==2`;
+  client ack IRQ ngay sau khi đọc byte (tránh coalesce).
+- QEMU 3 arch 2/2; input check aarch64 2/2, riscv 1/1.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `3c70ac64c9c2b1f731980beca3c8f86be0c7aba8def3612c4d40e42ed5e5f475`.

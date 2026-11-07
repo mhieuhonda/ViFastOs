@@ -630,6 +630,15 @@ unsafe fn disable_sse() {
     core::arch::asm!("mov cr4, {}", in(reg) cr4);
 }
 
+/// CPU có hỗ trợ NX không (đọc CPUID, không phụ thuộc cờ runtime).
+fn cpu_has_nx() -> bool {
+    let ext = core::arch::x86_64::__cpuid(0x8000_0000).eax;
+    if ext < 0x8000_0001 {
+        return false;
+    }
+    core::arch::x86_64::__cpuid(0x8000_0001).edx & (1 << 20) != 0
+}
+
 unsafe fn enable_nx() -> bool {
     let ext = core::arch::x86_64::__cpuid(0x8000_0000).eax;
     if ext < 0x8000_0001 || core::arch::x86_64::__cpuid(0x8000_0001).edx & (1 << 20) == 0 {
@@ -696,7 +705,7 @@ unsafe fn mark_nx_range(start: u64, len: usize) -> bool {
     true
 }
 
-fn kernel_data_ranges() -> [(u64, usize); 19] {
+fn kernel_data_ranges() -> [(u64, usize); 20] {
     [
         (
             core::ptr::addr_of!(TRAP_STACKS) as u64,
@@ -776,6 +785,12 @@ fn kernel_data_ranges() -> [(u64, usize); 19] {
             core::ptr::addr_of!(CPU_STATES) as u64,
             core::mem::size_of::<[CpuState; MAX_HARTS]>(),
         ),
+        // Vòng 94 (audit #7): PD_HIGH là page table của LAPIC (2 MiB leaf);
+        // thiếu nó thì trang chứa LAPIC vẫn executable dưới NX.
+        (
+            core::ptr::addr_of!(PD_HIGH) as u64,
+            core::mem::size_of::<Table>(),
+        ),
     ]
 }
 
@@ -816,9 +831,18 @@ unsafe fn build_kernel_page_tables() {
     NX_ENABLED = enable_nx();
     if NX_ENABLED {
         for (start, len) in kernel_data_ranges() {
+            // Vòng 94 (audit #7): trước đây hết slot split thì NX_ENABLED bị
+            // đặt false và `kernel_data_nx` trả true (vì !NX_ENABLED) — tức
+            // toàn bộ data kernel thành executable mà self-check vẫn xanh.
+            // Nay thiếu slot là lỗi chết người, không im lặng.
             if !mark_nx_range(start, len) {
-                NX_ENABLED = false;
-                break;
+                vifast_kernel::klog!(
+                    X86Platform,
+                    "NX FAIL: không đủ slot split cho static tại {:#x} (len={})",
+                    start,
+                    len
+                );
+                X86_64::exit(1);
             }
         }
     }
@@ -1953,8 +1977,10 @@ fn kernel_range_nx(root_pa: u64, start: u64, len: usize) -> bool {
 }
 
 fn kernel_data_nx(root_pa: u64) -> bool {
+    // NX tắt chỉ hợp lệ khi CPU không hỗ trợ (enable_nx trả false). Nếu CPU có
+    // NX mà cờ bị tắt thì đó là lỗi, không được coi là "pass".
     if unsafe { !NX_ENABLED } {
-        return true;
+        return !cpu_has_nx();
     }
     kernel_data_ranges()
         .into_iter()
