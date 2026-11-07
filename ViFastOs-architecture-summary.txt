@@ -261,6 +261,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 17d8227 moc 9 (buoc 1): FS -> ELF bytes -> parse (nen exec)
 - f27adb4 docs moc 11: runbook 6 su co that (vong 9-16)
 - f19cda9 moc 1/2: hoi quy destroy-ca-nhom qua revoke Untyped
+- 85b4188 moc 7: hoi quy validate_user_range (wrap + empty)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
