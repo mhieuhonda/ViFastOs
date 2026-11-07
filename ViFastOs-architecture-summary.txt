@@ -228,6 +228,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 71d34a7 fix: close the user-copy boundary and make TCP a resident server
 - bb3a28f fix: tighten the kernel static budget to what AArch64 can actually take
 - 2d0ddcf fix: reclaim Untyped on failed retype and hash sources for the docs gate
+- f87124d fix: harden the filesystem against corrupt images and finish the RX/TCP patches
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -275,7 +276,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 135/135 PASS
+- `cargo test -p vifast-kernel`: 136/136 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS

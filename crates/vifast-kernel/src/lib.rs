@@ -4128,6 +4128,12 @@ impl Kernel {
                             table.state = ThreadState::Faulted;
                         }
                     }
+                    // Vòng 83 (audit #2 P1-6): TCB vừa bị Faulted phải được
+                    // gỡ khỏi runqueue; nếu không nó vẫn được pick_on chọn và
+                    // chạy với vspace = None.
+                    if self.tcb(r).map(|tcb| tcb.state) == Some(ThreadState::Faulted) {
+                        self.remove_from_runq(r);
+                    }
                 }
             }
             Kind::Irq(_)
@@ -6681,6 +6687,24 @@ mod tests {
             assert_eq!(region.leaked, 0, "round {round}");
             assert!(kernel.check_invariants().is_ok());
         }
+    }
+
+    #[test]
+    fn destroyed_vspace_removes_its_tcb_from_the_runqueue() {
+        // Vòng 83 (audit #2 P1-6): destroy VSpace làm TCB Faulted nhưng trước
+        // đây không gỡ khỏi runqueue → pick_on vẫn trả TCB không có VSpace.
+        let mut kernel = Kernel::new();
+        let untyped = kernel
+            .create_untyped_with_limit(0x940_0000, 0x8000, 4096, 8)
+            .unwrap();
+        let vspace = kernel.retype(untyped, ObjType::VSpace).unwrap();
+        let tcb = kernel.create_tcb("worker", 5).unwrap();
+        kernel.set_tcb_vspace(tcb, vspace).unwrap();
+        kernel.enqueue(tcb);
+        kernel.destroy_object(vspace).unwrap();
+        assert_eq!(kernel.tcb(tcb).unwrap().state, ThreadState::Faulted);
+        assert_ne!(kernel.pick_on(0), Some(tcb));
+        assert!(kernel.check_invariants().is_ok());
     }
 
     #[test]

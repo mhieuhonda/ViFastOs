@@ -39,6 +39,14 @@ trong filesystem và chỉ ra 3 bản vá vòng 80 chỉ đúng một phần.
 - **Fingerprint docs**: phủ thêm `harness_spec.py`, `test-qemu.py`, `gate.sh`,
   `soak.py` để đổi tiêu chí PASS cũng làm status cũ.
 
+## 3b. P1-6 — TCB bị Faulted vẫn nằm trong runqueue
+
+- `destroy_object` cho VSpace đặt các TCB dùng nó thành `Faulted` nhưng không
+  gỡ khỏi runqueue; `pick_on` vẫn có thể chọn TCB với `vspace = None`.
+- Sửa: sau khi đặt Faulted, gọi `remove_from_runq(r)` cho TCB đó.
+- Test mới `destroyed_vspace_removes_its_tcb_from_the_runqueue`; kernel
+  **136 test** pass.
+
 ## 4. Kiểm chứng
 
 - `cargo test -p vifast-fs`: 24 passed (2 test corruption mới).
