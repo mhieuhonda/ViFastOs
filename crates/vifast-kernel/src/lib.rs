@@ -12219,6 +12219,53 @@ mod tests {
     }
 
     #[test]
+    fn round103_exit_while_sleeping_never_revives() {
+        // Mốc 1: task BlockedSleep exit thì zombie Exited không bị
+        // wake_sleepers/wake_budgeters đánh thức lại (state đã Exited,
+        // wake_at đã xóa). Tương tự với BlockedBudget.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let sleeper = kernel.create_tcb("sleeper", 5).unwrap();
+        kernel
+            .configure_tcb(sleeper, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        let other = kernel.create_tcb("other", 5).unwrap();
+        kernel
+            .configure_tcb(other, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.enqueue(sleeper);
+        kernel.enqueue(other);
+        assert_eq!(kernel.pick_on(0), Some(sleeper));
+        // Park ngủ qua syscall Sleep (timeout tương đối 100 ticks; cần có
+        // task khác ready nếu không Sleep trả WouldBlock).
+        assert_eq!(
+            kernel.user_syscall(sleeper, SyscallId::Sleep as u64, 100, 0, 0, 0, 0, 0),
+            UserAction::Sleep
+        );
+        assert_eq!(
+            kernel.tcb(sleeper).unwrap().state,
+            ThreadState::BlockedSleep
+        );
+        // Đặt làm current rồi exit.
+        kernel.tcb_mut(sleeper).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(sleeper);
+        kernel.exit_current_on(0);
+        assert_eq!(kernel.tcb(sleeper).unwrap().state, ThreadState::Exited);
+        // Quay thời gian qua deadline: zombie không sống lại.
+        let _ = kernel.tick(0);
+        for _ in 0..10 {
+            let _ = kernel.tick(0);
+        }
+        assert_eq!(kernel.tcb(sleeper).unwrap().state, ThreadState::Exited);
+        assert!(kernel.check_invariants().is_ok());
+        // Zombie giữ sched_context bound vẫn consistent, reap giải phóng.
+        kernel.destroy_object(sleeper).unwrap();
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn set_cap_badge_cannot_be_cleared_or_changed() {
         // Vòng 100 (K16): cho badge -> 0 rồi mint lại badge khác là đường rửa
         // danh tính (CapMint chỉ chặn mint từ nguồn đã có badge).
