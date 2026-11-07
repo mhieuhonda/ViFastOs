@@ -64,7 +64,7 @@ Kernel portable hiện có:
   chạy lại); `restart` gỡ mọi hàng chờ + cấm client BlockedReply; destroy
   VSpace gỡ queue Blocked; destroy Notification gỡ `bound_ntfn`/`irq.routing`;
   cấm giấu vé sau CNode (vòng 101, K32–K44, K47, K51, K62–K69);
-- 51 syscall number: 51 implemented, 0 placeholder; CNode phẳng, SchedContext
+- 52 syscall number: 52 implemented, 0 placeholder (mới: 51 `TcbWait`); CNode phẳng, SchedContext
   budget/period, timer IRQ/UART IRQ, TCB destroy/reap đã chạy;
 - `ObjectDestroy` (số 50) cho Frame/Endpoint/Notification/PageTable/VSpace/
   CNode/SchedContext: chỉ cap gốc, không còn cap khác, object không đang dùng

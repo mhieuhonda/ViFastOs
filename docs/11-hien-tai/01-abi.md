@@ -196,10 +196,11 @@ Số syscall là ổn định. `-` nghĩa là không dùng.
 | 46 | `Sleep` | a0 deadline tick | BlockedSleep |
 | 47 | `ConsoleRead` | a0 buffer, a1 len | Đọc input IRQ-driven |
 | 48 | `CNodeInstall` | a0 TCB, a1 CNode cap (0 = bỏ) | Chỉ TCB Inactive/Suspended/Faulted |
-| 49 | `TcbDestroy` | a0 TCB | Reparent cspace rồi destroy |
+| 49 | `TcbDestroy` | a0 TCB | Reparent cspace rồi destroy; WouldBlock khi target có waiter TcbWait |
 | 50 | `ObjectDestroy` | a0 cap slot gốc | Destroy Frame/Endpoint/Notification/PageTable/VSpace/CNode/SchedContext; trả bộ nhớ về Untyped |
+| 51 | `TcbWait` | a0 TCB | Block tới khi target Exited (xong ngay nếu đã exit; WouldBlock nếu đã có waiter khác) |
 
-Tất cả 51 số 0..50 đều có handler (`SYSCALL_STATUS = true`).
+Tất cả 52 số 0..51 đều có handler (`SYSCALL_STATUS = true`).
 
 ## 7. Quy ước thanh ghi
 
