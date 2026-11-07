@@ -12216,6 +12216,60 @@ mod tests {
     }
 
     #[test]
+    fn round53_nested_wait_and_inactive_target_rejected() {
+        // Mốc 1 (vòng 53): waiter đang BlockedReply (đã wait/call ai đó)
+        // mà wait tiếp phải WouldBlock — nếu không một waiter ôm hai
+        // rendezvous, exit một bên không biết đánh thức đường nào.
+        // Wait target Inactive phải IllegalOperation (task chưa từng chạy).
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let a = kernel.create_tcb("a", 5).unwrap();
+        let b = kernel.create_tcb("b", 5).unwrap();
+        let c = kernel.create_tcb("c", 5).unwrap();
+        for (t, entry) in [(a, 0x4000_0000u64), (b, 0x4000_1000), (c, 0x4000_2000)] {
+            kernel
+                .configure_tcb(t, entry, 0x4000_4000, space, 5)
+                .unwrap();
+        }
+        // a wait b: park thành công (resume đã enqueue, không enqueue
+        // tay hai lần).
+        kernel.resume_tcb(b).unwrap();
+        kernel.tcb_mut(a).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(a);
+        assert_eq!(kernel.wait_tcb(a, b), Ok(false));
+        assert_eq!(kernel.tcb(a).unwrap().state, ThreadState::BlockedReply);
+        // a đang BlockedReply mà wait c tiếp → WouldBlock, c không bị
+        // gán caller (không ôm rendezvous thứ hai). c phải Ready trước để
+        // target-check qua được và lộ đúng nhánh waiter-check.
+        kernel.resume_tcb(c).unwrap();
+        assert_eq!(kernel.wait_tcb(a, c), Err(KError::WouldBlock));
+        assert!(kernel.tcb(c).unwrap().caller.is_none());
+        assert_eq!(kernel.tcb(a).unwrap().state, ThreadState::BlockedReply);
+        // Wait target Inactive (chưa resume bao giờ) → IllegalOperation.
+        let fresh = kernel.create_tcb("fresh", 5).unwrap();
+        kernel
+            .configure_tcb(fresh, 0x4000_3000, 0x4000_4000, space, 5)
+            .unwrap();
+        let watcher = kernel.create_tcb("watcher", 5).unwrap();
+        kernel
+            .configure_tcb(watcher, 0x4000_3100, 0x4000_4000, space, 5)
+            .unwrap();
+        assert_eq!(
+            kernel.wait_tcb(watcher, fresh),
+            Err(KError::IllegalOperation)
+        );
+        // Wait park waiter đang Running nhưng giữ current (runtime tiếp
+        // tục schedule từ đó) — invariants đòi current là Running nên
+        // chuyển hart sang task khác trước khi check, như scheduler thật.
+        assert_eq!(kernel.pick_on(0), Some(b));
+        kernel.tcb_mut(b).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(b);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn round103_reply_carries_grant_cap() {
         // Mốc 5: server reply mang cap GRANT cho client qua recv_slot.
         let mut kernel = Kernel::new();
