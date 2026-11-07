@@ -55,7 +55,15 @@ Kernel portable hiện có:
 - user-space VFS server, FS v3 journal, hard link/symlink, double-indirect,
   `STAT_PATH`, block cache write-back cho data, write-through journal/metadata,
   `fsync` → `BlockFlush`;
-- software IOMMU domain + `IoMap`/`IoUnmap`;
+- software IOMMU domain + `IoMap`/`IoUnmap`; W^X chéo CPU/DMA qua `mapped_w`
+  (DMA-WRITE cộng counter, destroy domain trừ lại); `IoMap` đòi vé Frame chứa
+  quyền DMA, `IoUnmap` đòi vé Frame khớp pa (vòng 101, K55/K73/K74/K56);
+- GRANT qua IPC snapshot vé lúc queue, verify lúc dequeue, chống TOCTOU đổi
+  cspace giữa chừng; grant-fail trả về đầu hàng giữ FIFO (vòng 101, K48/K49);
+- `resume` chỉ cho Inactive/Suspended/Ready/BlockedFault (fault handler cho
+  chạy lại); `restart` gỡ mọi hàng chờ + cấm client BlockedReply; destroy
+  VSpace gỡ queue Blocked; destroy Notification gỡ `bound_ntfn`/`irq.routing`;
+  cấm giấu vé sau CNode (vòng 101, K32–K44, K47, K51, K62–K69);
 - 51 syscall number: 51 implemented, 0 placeholder; CNode phẳng, SchedContext
   budget/period, timer IRQ/UART IRQ, TCB destroy/reap đã chạy;
 - `ObjectDestroy` (số 50) cho Frame/Endpoint/Notification/PageTable/VSpace/
