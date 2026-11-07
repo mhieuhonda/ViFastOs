@@ -98,6 +98,14 @@ def main() -> int:
         action="store_true",
         help="also run test-harness-spec.py each iteration (fast)",
     )
+    parser.add_argument(
+        "--settle",
+        type=float,
+        default=3.0,
+        help="seconds to sleep between iterations so QEMU/host settles "
+        "(round 102: soak back-to-back shows infra flakes: lost first "
+        "serial byte, aarch64 GPU timing, QEMU timeout under load)",
+    )
     args = parser.parse_args()
     if args.iterations < 1:
         parser.error("--iterations must be at least 1")
@@ -155,6 +163,8 @@ def main() -> int:
                 arch_failures.append("harness")
         status = "PASS" if not arch_failures else "FAIL " + ",".join(arch_failures)
         print(f"iteration {iteration:03d}/{args.iterations:03d}: {status}", flush=True)
+        if args.settle > 0 and iteration < args.iterations:
+            time.sleep(args.settle)
         if arch_failures:
             directory = save_failure(iteration, output_all, env)
             failures.append((iteration, arch_failures, directory))
