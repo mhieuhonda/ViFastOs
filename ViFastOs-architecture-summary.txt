@@ -237,6 +237,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 74b7a30 fix: queue notification waiters so no task is stranded, and keep readdir indices aligned
 - 48de675 fix: keep the PIC EOI on the BSP, enable SGI 2 for panic halt, close the x86 idle race
 - 1674ed2 fix: save the faulting frame so a pager-rescued task resumes where it faulted
+- d2f78b2 feat: hand x86 the real fault frame and enforce the FP hardening in the harness
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
