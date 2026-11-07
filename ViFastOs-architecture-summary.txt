@@ -250,6 +250,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6a671a9 moc 1: Exit theo task (state Exited + exit_current_on) thay vi kill ca may
 - c33c040 moc 1: TcbWait rendezvous (sleep 51) + chan destroy khi co waiter
 - 61e67be moc 8: shell dong 256B + lich su 4 lenh + Ctrl-C/L/P/N
+- 6731e14 moc 8: shell dong 256B + lich su + Ctrl + interactive echo test
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -297,7 +298,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 159/159 PASS
+- `cargo test -p vifast-kernel`: 160/160 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS

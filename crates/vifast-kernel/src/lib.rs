@@ -12170,6 +12170,55 @@ mod tests {
     }
 
     #[test]
+    fn round103_reply_carries_grant_cap() {
+        // Mốc 5: server reply mang cap GRANT cho client qua recv_slot.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let ep = kernel.create_endpoint().unwrap();
+        let server = kernel.create_tcb("server", 5).unwrap();
+        let client = kernel.create_tcb("client", 5).unwrap();
+        let obj = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(ep, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(server, 2, Cap::new(obj, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        assert_eq!(kernel.recv(server, ep, 7), Ok(None));
+        let call = Message::new(0x1234, &[7]).unwrap();
+        assert_eq!(kernel.send(client, ep, 0, call, true), Ok(true));
+        kernel.tcb_mut(client).unwrap().recv_slot = 5;
+        let mut reply = Message::default();
+        reply.cap = 2;
+        assert_eq!(kernel.reply(server, reply), Ok(()));
+        let got = kernel
+            .cap_at(SlotAddr {
+                tcb: client,
+                slot: 5,
+            })
+            .expect("grant installed");
+        assert_eq!(got.obj, obj);
+        assert!(!got.rights.contains(Rights::GRANT));
+        assert!(kernel.check_invariants().is_ok());
+        // Reply vé không GRANT thì từ chối, caller đã take (server giữ
+        // nguyên, client vẫn BlockedReply chờ reply khác).
+        let obj2 = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(
+                server,
+                3,
+                Cap::new(obj2, ObjType::Endpoint, Rights::READ | Rights::WRITE),
+            )
+            .unwrap();
+        assert_eq!(kernel.recv(server, ep, 7), Ok(None));
+        assert_eq!(kernel.send(client, ep, 0, call, true), Ok(true));
+        let mut bad = Message::default();
+        bad.cap = 3;
+        assert_eq!(kernel.reply(server, bad), Err(KError::NoRights));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn set_cap_badge_cannot_be_cleared_or_changed() {
         // Vòng 100 (K16): cho badge -> 0 rồi mint lại badge khác là đường rửa
         // danh tính (CapMint chỉ chặn mint từ nguồn đã có badge).

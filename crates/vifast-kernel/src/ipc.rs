@@ -164,6 +164,12 @@ impl Kernel {
                     table.state = ThreadState::BlockedReply;
                     table.pending = None;
                 }
+                // Mốc 5 (vòng 11): call giao ngay cũng park sender — sender
+                // có thể đang Ready+queued từ lần wake trước (vd. reply 1
+                // vừa make_ready client, client call tiếp). Không gỡ thì
+                // BlockedReply+queued, scheduler có thể pick nhầm task đang
+                // chờ (cùng họ bug K32/K35 như park path).
+                self.remove_from_runq(sender);
             } else if self
                 .tcb(sender)
                 .is_some_and(|t| t.state != ThreadState::Running)
@@ -189,6 +195,11 @@ impl Kernel {
                 table.pending = Some(pending);
                 table.state = ThreadState::BlockedSend;
             }
+            // Mốc 5 (vòng 11): park phải rời runqueue trước — sender có thể
+            // đang Ready+queued (vd. make_ready từ lần giao ngay trước rồi
+            // send tiếp mà không có receiver). Không gỡ thì thành viên kép
+            // Blocked+queued (cùng họ K32/K35).
+            self.remove_from_runq(sender);
             let pushed = {
                 let ep = self.endpoint_mut(endpoint).ok_or(KError::InvalidCap)?;
                 ep.send.push(sender)
@@ -273,6 +284,10 @@ impl Kernel {
                 table.state = ThreadState::BlockedRecv;
                 table.recv_slot = recv_slot;
             }
+            // Mốc 5 (vòng 11): như send — receiver có thể đang Ready+queued
+            // (make_ready từ lần giao ngay trước) rồi recv tiếp mà hàng
+            // trống. Park mà không gỡ runq thì BlockedRecv+queued.
+            self.remove_from_runq(receiver);
             let pushed = {
                 let ep = self.endpoint_mut(endpoint).ok_or(KError::InvalidCap)?;
                 ep.recv.push(receiver)
@@ -318,6 +333,26 @@ impl Kernel {
         });
         if !valid {
             return Err(KError::NoCaller);
+        }
+        // Mốc 5 (vòng 11): Reply mang cap — server GRANT vé cho client qua
+        // recv_slot của client (đường grant_message_cap chung với send, có
+        // verify TOCTOU K49). Trước đây msg.cap trên reply bị bỏ qua thầm lặng.
+        let mut msg = msg;
+        if msg.cap_slot().is_some() {
+            let raw_slot = msg.cap_slot().ok_or(KError::InvalidCap)?;
+            let slot = u8::try_from(raw_slot).map_err(|_| KError::InvalidCap)?;
+            let source = self.lookup_cap(server, slot, None, Rights::GRANT)?;
+            let hint = self.tcb(client).map(|table| table.recv_slot).unwrap_or(0);
+            let probe = PendingSend {
+                badge: 0,
+                msg,
+                is_call: false,
+                can_grant: true,
+                grant_key: PendingSend::grant_key_for(slot, source.id, source.obj),
+            };
+            if let Err(error) = self.grant_message_cap(server, client, hint, &mut msg, &probe) {
+                return Err(error);
+            }
         }
         self.copy_ipc_buffers(server, client);
         if let Some(table) = self.tcb_mut(client) {
