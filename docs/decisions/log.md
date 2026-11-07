@@ -78,4 +78,4 @@
 | 94 | `PD_HIGH` vào NX; NX fail ồn ào; input x86 SKIP; lọc auto-repeat; ack sớm | Audit #7: self-check NX từng xanh giả khi NX tắt | a0c0872 |
 | 95 | `gpu_echo_key` vẽ mã phím + flush vùng nhỏ; `--input-check` đòi `INPUT ECHO` | Mốc display tương tác; x86 vẫn SKIP vì thiếu driver bàn phím | 847a763 |
 | 96 | UEFI ghi image range; siết load bound 1 GiB; DNS retry 8 lần | Check `KERNEL IMAGE OUTSIDE` chạy thật; hết flake soak | fb5081f |
-| 97 | NX toàn ảnh trừ text (PE) + reload_cr3 + wx hai chiều; K1/K3/N1 | Audit #9 chỉ ra TLB và OOB region; soi chay chỉ ra wake_error/enqueue/frame clamp | (commit sau) |
+| 97 | NX toàn ảnh trừ text (PE) + reload_cr3 + wx hai chiều; K1/K3/N1 | Audit #9 chỉ ra TLB và OOB region; soi chay chỉ ra wake_error/enqueue/frame clamp | 9c2b7e4 |
