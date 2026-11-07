@@ -200,7 +200,12 @@ pub struct Endpoint {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Notification {
     pub word: u64,
+    /// Waiter chính (một slot như cũ).
     pub waiter: Option<ObjRef>,
+    /// Slot thứ hai (vòng 86, audit #3 P0-1): trước đây waiter thứ hai ghi đè
+    /// waiter đầu khiến task đầu BlockedNotification vĩnh viễn. Hai slot đủ
+    /// cho mọi trường hợp thực tế; waiter thứ ba nhận WouldBlock.
+    pub waiter2: Option<ObjRef>,
 }
 
 /// A physical memory frame that can be mapped into a virtual address space.

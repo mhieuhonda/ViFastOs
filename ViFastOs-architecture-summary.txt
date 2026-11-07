@@ -279,7 +279,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 136/136 PASS
+- `cargo test -p vifast-kernel`: 139/139 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS
@@ -2178,6 +2178,9 @@ E. Desktop / Space
 131. Vòng 85: x86_64 quét PCI config space (0xCF8/0xCFC) — `PCI SCAN OK
     devices=4 first=8086:29c0 class=0600`, marker bắt buộc; nền tảng cho
     virtio-pci sau này.
+132. Vòng 86 (audit #3): notification có hai slot waiter, `signal` chỉ đánh
+    thức waiter đang block, `detach_tcb` gỡ cả hai; thêm `cld` ở 6 entry x86;
+    gate chạy kernel test tường minh + `--quick` báo rõ bước bị bỏ.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

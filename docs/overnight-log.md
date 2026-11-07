@@ -1407,6 +1407,15 @@ follow-up `62b31f4`.
   mã vẫn PASS, sửa mã thì báo "kernel sources changed".
 - Gate đầy đủ xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `e6bfcce0d8a91e868e203083e0b3b463613a219416386495f07c2c2bfcfc9abe`.
+
+## 9.65 — Vòng 86: P0 notification + cld + gate
+
+- Fix P0: waiter notification thứ hai không còn ghi đè (thêm `waiter2`,
+  `signal` chỉ đánh thức waiter đang block, `detach_tcb` gỡ cả hai) + 2 test.
+- Thêm `cld` ở 6 entry x86; gate chạy kernel test tường minh, đếm test, và
+  `--quick` báo "QEMU and persistence were SKIPPED".
+- Test mới xác nhận destroy server đánh thức client BlockedReply (audit P1-3
+  là false positive).
 - SHA-256 `ViFastOs-architecture-summary.txt`: `c54166250b05ebb2ec2f9263124a0f9a04ca6778aec5dd83a8f1d1dea6b4ef12`.
 
 ## 9.62 — Vòng 83: P0 filesystem từ audit #2
@@ -1434,3 +1443,4 @@ follow-up `62b31f4`.
 - Đây là nền tảng cho virtio-pci (x86 hiện chưa có virtio).
 - Gate đầy đủ xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `e6bfcce0d8a91e868e203083e0b3b463613a219416386495f07c2c2bfcfc9abe`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `fb66a3619780ee3dc67f23242d0a799c3b116449e6c4cf6135a5aa2c19ff2d85`.

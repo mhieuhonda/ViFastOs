@@ -37,6 +37,7 @@
 
     .globl int80_entry
 int80_entry:
+    cld                    # vòng 86: DF của user không được sống vào ring 0
     SAVE_REGS
     test byte ptr [rsp + 128], 3
     jz 1f
@@ -204,6 +205,7 @@ exc31:
     jmp exc_common
 
 exc_common:
+    cld                    # DF có thể đến từ user (exception sau khi nó set DF)
     SAVE_REGS
     test byte ptr [rsp + 144], 3
     jz 1f
@@ -218,6 +220,7 @@ exc_common:
     jmp 1b
 
 pf_entry:
+    cld
     SAVE_REGS
     test byte ptr [rsp + 136], 3
     jz 1f
@@ -232,6 +235,7 @@ pf_entry:
 
     .globl irq0_entry
 irq0_entry:
+    cld
     SAVE_REGS
     test byte ptr [rsp + 128], 3
     jz 1f
@@ -248,6 +252,7 @@ irq0_entry:
 
     .globl irq4_entry
 irq4_entry:
+    cld
     SAVE_REGS
     test byte ptr [rsp + 128], 3
     jz 1f
@@ -273,6 +278,7 @@ ap_timer_entry:
     jmp ap_irq_common
 
 ap_irq_common:
+    cld
     SAVE_REGS
     test byte ptr [rsp + 128], 3
     jz 1f

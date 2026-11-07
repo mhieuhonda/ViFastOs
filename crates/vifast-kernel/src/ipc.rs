@@ -273,16 +273,25 @@ impl Kernel {
 
     pub fn signal(&mut self, notification: ObjRef, bits: u64) -> KResult<()> {
         let bits = if bits == 0 { 1 } else { bits };
-        let waiter = {
-            let ntfn = self
-                .notification_mut(notification)
-                .ok_or(KError::InvalidCap)?;
-            let waiter = ntfn.waiter.take();
+        // Vòng 86 (audit #3 P0-1): đánh thức CẢ HAI slot waiter còn sống; nếu
+        // slot nào đã chết (stale) thì bỏ qua và tích luỹ bit vào word.
+        let (live, value) = {
+            let ntfn = self.notification(notification).ok_or(KError::InvalidCap)?;
             let value = ntfn.word | bits;
-            ntfn.word = if waiter.is_some() { 0 } else { value };
-            waiter.map(|w| (w, value))
+            let live: [Option<ObjRef>; 2] = [ntfn.waiter, ntfn.waiter2];
+            (live, value)
         };
-        if let Some((waiter, value)) = waiter {
+        let mut delivered = false;
+        for waiter in live.into_iter().flatten() {
+            // Chỉ đánh thức waiter còn thật sự block; TCB đã chết hoặc đã được
+            // đánh thức bởi đường khác không được đưa vào runqueue.
+            let blocked = self
+                .tcb(waiter)
+                .map(|table| table.state == ThreadState::BlockedNotification)
+                .unwrap_or(false);
+            if !blocked {
+                continue;
+            }
             if let Ok(msg) = Message::new(LABEL_NOTIFICATION, &[value]) {
                 if let Some(table) = self.tcb_mut(waiter) {
                     table.resume = Some(msg);
@@ -290,6 +299,15 @@ impl Kernel {
                 }
             }
             self.make_ready(waiter);
+            delivered = true;
+        }
+        {
+            let ntfn = self
+                .notification_mut(notification)
+                .ok_or(KError::InvalidCap)?;
+            ntfn.waiter = None;
+            ntfn.waiter2 = None;
+            ntfn.word = if delivered { 0 } else { value };
         }
         self.stats.notifications += 1;
         Ok(())
@@ -318,7 +336,15 @@ impl Kernel {
         let ntfn = self
             .notification_mut(notification)
             .ok_or(KError::InvalidCap)?;
-        ntfn.waiter = Some(tcb);
+        if ntfn.waiter.is_none() {
+            ntfn.waiter = Some(tcb);
+        } else if ntfn.waiter2.is_none() {
+            ntfn.waiter2 = Some(tcb);
+        } else {
+            // Cả hai slot đã có waiter đang chờ: trả WouldBlock thay vì ghi đè.
+            // KHÔNG đụng state của caller ở đây — nó vẫn Running, chỉ nhận lỗi.
+            return Err(KError::WouldBlock);
+        }
         Ok(None)
     }
 

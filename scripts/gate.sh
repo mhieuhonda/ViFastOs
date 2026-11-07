@@ -39,28 +39,37 @@ step() {
 }
 
 step "build" ./scripts/build.sh
-QEMU_ARGS=""
-if [ "$TCP" -eq 1 ]; then
-    QEMU_ARGS="$QEMU_ARGS --tcp-check"
-fi
-if [ "$INPUT" -eq 1 ]; then
-    QEMU_ARGS="$QEMU_ARGS --input-check"
-fi
-step "qemu" sh -c "python3 scripts/test-qemu.py --repeat 3 $QEMU_ARGS"
-if [ "$QUICK" -eq 0 ]; then
-    step "persist" python3 scripts/test-persist.py
-fi
-# Fuzzer seed dài (reclaim + 100k syscall) bị #[ignore] trong bộ test thường;
-# ở release chỉ tốn ~0.5s nên chạy luôn trong cổng để không bị bỏ quên.
+# Host test của kernel chạy tường minh (audit #3 P1-4): bước fuzz chỉ chạy
+# --ignored, nên nếu chỉ dựa vào đó thì các test thường không nằm trong cổng.
+step "kernel-test" cargo test -p vifast-kernel
+# Fuzz chỉ có nghĩa khi đúng 2 test #[ignore] còn tồn tại; đổi tên chúng thì
+# "0 passed" vẫn xanh, nên chặn bằng cách đếm số test liệt kê được.
+step "tests-present" sh -c 'test "$(cargo test -p vifast-kernel -- --list 2>/dev/null | grep -c ": test$")" -ge 138'
 step "fuzz" cargo test -p vifast-kernel --release -- --ignored
+
+if [ "$QUICK" -eq 0 ]; then
+    QEMU_ARGS=""
+    if [ "$TCP" -eq 1 ]; then
+        QEMU_ARGS="$QEMU_ARGS --tcp-check"
+    fi
+    if [ "$INPUT" -eq 1 ]; then
+        QEMU_ARGS="$QEMU_ARGS --input-check"
+    fi
+    step "qemu" sh -c "python3 scripts/test-qemu.py --repeat 3 $QEMU_ARGS"
+    step "persist" python3 scripts/test-persist.py
+    step "docs" sh -c 'python3 scripts/gen-docs.py >/dev/null && python3 scripts/check-docs.py'
+fi
 step "harness" python3 scripts/test-harness-spec.py
 step "fmt" cargo fmt --check
-step "docs" sh -c 'python3 scripts/gen-docs.py >/dev/null && python3 scripts/check-docs.py'
 
 printf '\n=== gate summary ===\n'
 if [ -n "$FAILED" ]; then
     printf 'FAILED steps:%s\n' "$FAILED"
     exit 1
+fi
+if [ "$QUICK" -eq 1 ]; then
+    printf 'all executed steps passed (--quick: QEMU and persistence were SKIPPED)\n'
+    exit 0
 fi
 printf 'all steps passed\n'
 exit 0

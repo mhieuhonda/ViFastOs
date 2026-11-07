@@ -3379,6 +3379,11 @@ impl Kernel {
                 if notification.waiter == Some(obj) {
                     notification.waiter = None;
                 }
+                // Vòng 86 (audit #3 P0-1): slot waiter thứ hai cũng phải được
+                // gỡ khi TCB bị destroy.
+                if notification.waiter2 == Some(obj) {
+                    notification.waiter2 = None;
+                }
             }
         }
     }
@@ -6709,6 +6714,63 @@ mod tests {
             assert_eq!(region.leaked, 0, "round {round}");
             assert!(kernel.check_invariants().is_ok());
         }
+    }
+
+    #[test]
+    fn destroying_a_server_wakes_a_client_blocked_in_reply() {
+        // Vòng 86 (audit #3 P1-3): xác nhận destroy TCB server có đánh thức
+        // client đang BlockedReply (detach_tcb gọi wake_error).
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 1).unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let call = Message::new(0x1234, &[7]).unwrap();
+        // Server chưa recv nên send(call) đẩy vào hàng đợi và trả Ok(true)?
+        // Cần call thật: server recv trước để nhận caller.
+        assert_eq!(kernel.recv(server, endpoint, 4), Ok(None));
+        assert_eq!(kernel.send(client, endpoint, 0, call, true), Ok(true));
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::BlockedReply);
+        kernel.destroy_object(server).unwrap();
+        let client_state = kernel.tcb(client).unwrap();
+        assert_eq!(client_state.state, ThreadState::Ready);
+        assert_eq!(client_state.resume_error, Some(KError::ObjectDestroyed));
+    }
+
+    #[test]
+    fn notification_serves_two_waiters_and_rejects_a_third() {
+        // Vòng 86 (audit #3 P0-1): waiter thứ hai từng ghi đè waiter đầu,
+        // khiến task đầu BlockedNotification vĩnh viễn. Nay có hai slot.
+        let mut kernel = Kernel::new();
+        let first = kernel.create_tcb("first", 5).unwrap();
+        let second = kernel.create_tcb("second", 5).unwrap();
+        let third = kernel.create_tcb("third", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(first, ntfn), Ok(None));
+        assert_eq!(kernel.wait_as(second, ntfn), Ok(None));
+        assert_eq!(
+            kernel.tcb(first).unwrap().state,
+            ThreadState::BlockedNotification
+        );
+        assert_eq!(
+            kernel.tcb(second).unwrap().state,
+            ThreadState::BlockedNotification
+        );
+        assert_eq!(kernel.wait_as(third, ntfn), Err(KError::WouldBlock));
+        assert_eq!(kernel.signal(ntfn, 0b10), Ok(()));
+        assert_eq!(kernel.tcb(first).unwrap().state, ThreadState::Ready);
+        assert_eq!(kernel.tcb(second).unwrap().state, ThreadState::Ready);
+    }
+
+    #[test]
+    fn signal_with_dead_waiter_keeps_the_bits() {
+        // Vòng 86 (audit #3 P0-1): waiter đã chết không được làm mất bit.
+        let mut kernel = Kernel::new();
+        let waiter = kernel.create_tcb("waiter", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(waiter, ntfn), Ok(None));
+        kernel.destroy_object(waiter).unwrap();
+        assert_eq!(kernel.signal(ntfn, 0b100), Ok(()));
+        assert_eq!(kernel.poll(ntfn), Ok(0b100));
     }
 
     #[test]
