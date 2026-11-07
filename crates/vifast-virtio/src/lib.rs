@@ -266,6 +266,10 @@ fn net_rx_post() {
     }
     let queue = core::ptr::addr_of_mut!(NET_RX_QUEUE);
     unsafe {
+        if RX_OUTSTANDING != 0 {
+            return;
+        }
+        RX_OUTSTANDING = 1;
         let q = &mut *queue;
         let slot = (q.avail.idx as usize) % QUEUE_SIZE;
         q.avail.ring[slot] = 0;
@@ -280,13 +284,9 @@ fn net_rx_post() {
 /// Bổ sung buffer RX cho tới khi còn ít nhất `min_outstanding` gói chờ được
 /// thiết bị ghi (vòng 78). Trước một phiên TCP, ring có thể chỉ còn 2-3 buffer
 /// sau ARP/DNS; nạp đầy lại giúp không mất SYN khi client bắt tay dồn dập.
-pub fn net_rx_refill(min_outstanding: u16) {
-    let (avail, used, _) = net_rx_stats();
-    let mut outstanding = avail.wrapping_sub(used);
-    while outstanding < min_outstanding && outstanding < QUEUE_SIZE as u16 {
-        net_rx_post();
-        outstanding += 1;
-    }
+pub fn net_rx_refill(_min_outstanding: u16) {
+    // Chỉ có một buffer RX: đăng lại nếu chưa có chain nào đang treo.
+    net_rx_post();
 }
 
 /// Thống kê RX để chẩn đoán: (avail.idx, used.idx, RX_SEEN).
@@ -321,6 +321,7 @@ fn net_rx_poll_bounded(bound: u64) -> bool {
         // RX không được đăng lại → sau vài gói thiết bị hết buffer và "im"
         // (thấy rõ trên aarch64: LISTEN nhưng không bao giờ ACCEPT).
         RX_SEEN = RX_SEEN.wrapping_add(1);
+        RX_OUTSTANDING = 0;
         true
     }
 }
@@ -338,6 +339,12 @@ pub fn net_rx_rearm() {
 /// Gửi một Ethernet frame qua TX queue (kick + poll used, vòng 64).
 /// Tách từ net_ping để UDP dùng lại; frame tối đa 60 byte (đã pad).
 fn net_tx_frame(frame: &[u8]) -> Option<u32> {
+    net_tx_frame_bounded(frame, 6_000_000)
+}
+
+/// Như `net_tx_frame` nhưng chỉ định bound poll used ring (dùng cho đường
+/// gọi từ IRQ timer, nơi không được phép chặn lâu).
+fn net_tx_frame_bounded(frame: &[u8], bound: u64) -> Option<u32> {
     let base = unsafe {
         if !NET_READY || NET_BASE == 0 {
             return None;
@@ -373,9 +380,8 @@ fn net_tx_frame(frame: &[u8]) -> Option<u32> {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         write_at(base, 0x50, 1);
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
-        // Vòng 70: bound rộng hơn cho TX (trước đây 2M hay trượt dưới tải).
         let mut spins = 0u64;
-        while core::ptr::read_volatile(&q.used.idx) != target && spins < 6_000_000 {
+        while core::ptr::read_volatile(&q.used.idx) != target && spins < bound {
             core::hint::spin_loop();
             spins += 1;
         }
@@ -725,6 +731,10 @@ pub fn net_ping(dst_ip: [u8; 4]) -> Option<u32> {
 static mut NET_READY: bool = false;
 /// Số phần tử used ring đã thấy trên RX (dùng để biết gói mới).
 static mut RX_SEEN: u16 = 0;
+/// Vòng 80 (audit P1-2): chỉ có MỘT buffer RX, nên chỉ được treo tối đa một
+/// descriptor chain tại một thời điểm. Trước đây `net_rx_refill` đẩy cùng
+/// chain 8 lần, thiết bị ghi nhiều gói đè lên cùng buffer và driver đọc sai.
+static mut RX_OUTSTANDING: u16 = 0;
 static mut NET_BASE: u64 = 0;
 
 /// Negotiate a VirtIO-net device at `base`: reset, ACK+DRIVER, read features,
@@ -2224,6 +2234,23 @@ pub fn net_send_tcp(
     flags: u8,
     payload: &[u8],
 ) -> Option<u32> {
+    net_send_tcp_bounded(
+        dst_ip, dst_port, src_port, seq, ack, flags, payload, 6_000_000,
+    )
+}
+
+/// Như `net_send_tcp` nhưng chỉ định bound TX (dùng từ IRQ timer).
+#[allow(clippy::too_many_arguments)]
+pub fn net_send_tcp_bounded(
+    dst_ip: [u8; 4],
+    dst_port: u16,
+    src_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    payload: &[u8],
+    bound: u64,
+) -> Option<u32> {
     let mac = unsafe { net_mac(NET_BASE)? };
     const SRC_IP: [u8; 4] = [10, 0, 2, 15];
     let tcp_len = 20 + payload.len();
@@ -2262,7 +2289,7 @@ pub fn net_send_tcp(
     tcp[20..].copy_from_slice(payload);
     let tcp_sum = tcp_checksum(SRC_IP, dst_ip, tcp);
     tcp[16..18].copy_from_slice(&tcp_sum.to_be_bytes());
-    net_tx_frame(&frame[..total])
+    net_tx_frame_bounded(&frame[..total], bound)
 }
 
 /// Chờ một segment TCP gửi tới `dst_port` (payload copy vào `payload`).
@@ -2286,7 +2313,10 @@ pub fn net_recv_tcp_bounded(dst_port: u16, payload: &mut [u8], bound: u64) -> Op
                 let ihl = (q.buf[14] & 0x0f) as usize * 4;
                 let proto = q.buf[14 + 9];
                 let ip_total = u16::from_be_bytes([q.buf[16], q.buf[17]]) as usize;
-                if proto == 6 && ihl >= 20 && 14 + ip_total <= q.buf.len() {
+                // Vòng 80 (audit P0-2): phải chặn ip_total < ihl + 20, nếu
+                // không `ip_total - ihl` underflow và driver copy byte rác
+                // trong buffer RX ra ngoài (rò rỉ dữ liệu giữa các gói).
+                if proto == 6 && ihl >= 20 && ip_total >= ihl + 20 && 14 + ip_total <= q.buf.len() {
                     let tcp_off = 14 + ihl;
                     let src_port = u16::from_be_bytes([q.buf[tcp_off], q.buf[tcp_off + 1]]);
                     let dst_port_rx = u16::from_be_bytes([q.buf[tcp_off + 2], q.buf[tcp_off + 3]]);
@@ -2311,8 +2341,9 @@ pub fn net_recv_tcp_bounded(dst_port: u16, payload: &mut [u8], bound: u64) -> Op
                             ]);
                             segment.flags = q.buf[tcp_off + 13];
                             let data_len = tcp_total - doff;
-                            let copy = core::cmp::min(data_len, payload.len());
                             let start = tcp_off + doff;
+                            let avail = q.buf.len().saturating_sub(start);
+                            let copy = core::cmp::min(data_len, payload.len()).min(avail);
                             payload[..copy].copy_from_slice(&q.buf[start..start + copy]);
                             segment.payload_len = copy;
                             matched = true;

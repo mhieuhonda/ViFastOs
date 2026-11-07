@@ -715,7 +715,18 @@ unsafe fn build_kernel_page_tables() {
 }
 
 fn user_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
-    ptr >= base as u64 && ptr as usize + len <= base + size
+    // Vòng 80 (audit P0-1): dùng checked_add để con trỏ gần u64::MAX không
+    // tràn qua phép cộng và lọt kiểm tra cửa sổ.
+    if ptr < base as u64 {
+        return false;
+    }
+    let Some(end) = ptr.checked_add(len as u64) else {
+        return false;
+    };
+    let Some(limit) = (base as u64).checked_add(size as u64) else {
+        return false;
+    };
+    end <= limit
 }
 
 fn active_root_matches_current() -> bool {

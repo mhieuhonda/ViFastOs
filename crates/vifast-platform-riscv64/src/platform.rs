@@ -79,6 +79,7 @@ static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_NONE_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_WAIT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 static POST_STARTED: AtomicBool = AtomicBool::new(false);
+static SERVICE_TICKS: AtomicUsize = AtomicUsize::new(0);
 static POST_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static POST_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static POST_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
@@ -372,7 +373,18 @@ fn table_pa(table: *const Table) -> u64 {
 }
 
 fn page_in_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
-    ptr >= base as u64 && ptr as usize + len <= base + size
+    // Vòng 80 (audit P0-1): dùng checked_add để con trỏ gần u64::MAX không
+    // tràn qua phép cộng và lọt kiểm tra cửa sổ.
+    if ptr < base as u64 {
+        return false;
+    }
+    let Some(end) = ptr.checked_add(len as u64) else {
+        return false;
+    };
+    let Some(limit) = (base as u64).checked_add(size as u64) else {
+        return false;
+    };
+    end <= limit
 }
 
 unsafe fn set_timer(at: u64) {
@@ -902,118 +914,126 @@ static PAGE_OPS: PageOps = PageOps;
 
 static mut KERNEL_STORAGE: Kernel = Kernel::new_const();
 
-/// TCP echo server tối giản (vòng 77): nghe cổng 8080, bắt tay SYN/SYN-ACK
-/// rồi echo từng segment dữ liệu. Chỉ chờ ngắn (~1.5s) để không làm chậm boot
-/// khi không có client; dùng bound nhỏ nên mỗi lần poll rất nhanh.
-fn tcp_echo_demo() {
-    // Không có thiết bị net (ví dụ cấu hình test bàn phím) thì bỏ qua hẳn:
-    // trước đây demo vẫn chờ đủ cửa sổ, làm boot chậm và che mất input.
+/// TCP echo server thường trú (vòng 79): trạng thái nằm trong static, được
+/// bơm từ IRQ timer nên phục vụ bất kỳ lúc nào guest còn sống, không cần cửa
+/// sổ chờ trong init_block. Mỗi tick xử lý tối đa 2 segment với bound nhỏ để
+/// IRQ không bị giữ lâu.
+struct TcpServer {
+    conn: bool,
+    client_ip: [u8; 4],
+    client_port: u16,
+    client_seq: u32,
+    our_seq: u32,
+    echoes: u32,
+    accepts: u32,
+}
+
+static mut TCP_SERVER: TcpServer = TcpServer {
+    conn: false,
+    client_ip: [0; 4],
+    client_port: 0,
+    client_seq: 0,
+    our_seq: 0x5150_0000,
+    echoes: 0,
+    accepts: 0,
+};
+
+const TCP_PORT: u16 = 8080;
+const TCP_IRQ_TX_BOUND: u64 = 250_000;
+
+/// Khởi tạo server một lần trong init_block: lấy ISN từ rng (nếu có), nạp
+/// buffer RX và in marker để harness/test biết server đã sẵn sàng.
+fn tcp_init() {
     if !vifast_virtio::net_ready() {
         return;
     }
-    const PORT: u16 = 8080;
-    let mut payload = [0u8; 512];
-    let mut have_conn = false;
-    let mut client_ip = [0u8; 4];
-    let mut client_port = 0u16;
-    let mut client_seq = 0u32;
-    // ISN lấy từ virtio-rng nếu có (vòng 78); không có thì dùng hằng dự phòng.
     let mut seed = [0u8; 8];
-    let mut our_seq = if vifast_virtio::rng_read(&mut seed) == 8 {
+    let isn = if vifast_virtio::rng_read(&mut seed) == 8 {
         u32::from_le_bytes([seed[0], seed[1], seed[2], seed[3]])
     } else {
         0x5150_0000
     };
-    let mut echoes = 0u32;
-    let mut polls = 0u32;
-    vifast_virtio::net_rx_refill(8);
-    vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP LISTEN OK port={}", PORT);
-    {
-        let (avail, used, seen) = vifast_virtio::net_rx_stats();
-        vifast_kernel::klog!(
-            RiscvPlatform,
-            "VIRTIO TCP RX avail={} used={} seen={}",
-            avail,
-            used,
-            seen
-        );
+    unsafe {
+        let server = &mut *core::ptr::addr_of_mut!(TCP_SERVER);
+        server.our_seq = isn;
     }
-    while polls < 400 {
-        polls += 1;
-        let Some(seg) = vifast_virtio::net_recv_tcp_bounded(PORT, &mut payload, 25_000) else {
-            continue;
+    vifast_virtio::net_rx_refill(8);
+    vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP LISTEN OK port={}", TCP_PORT);
+}
+
+/// Một nhịp phục vụ TCP, gọi từ timer IRQ hart 0.
+fn tcp_pump() {
+    if !vifast_virtio::net_ready() {
+        return;
+    }
+    let mut payload = [0u8; 512];
+    let mut budget = 2;
+    while budget > 0 {
+        budget -= 1;
+        let Some(seg) = vifast_virtio::net_recv_tcp_bounded(TCP_PORT, &mut payload, 2_000) else {
+            break;
         };
-        if !have_conn {
+        let server = unsafe { &mut *core::ptr::addr_of_mut!(TCP_SERVER) };
+        if !server.conn {
             if seg.flags & vifast_virtio::TCP_SYN != 0 && seg.flags & vifast_virtio::TCP_ACK == 0 {
-                client_ip = seg.src_ip;
-                client_port = seg.src_port;
-                client_seq = seg.seq.wrapping_add(1);
-                have_conn = true;
-                let _ = vifast_virtio::net_send_tcp(
-                    client_ip,
-                    client_port,
-                    PORT,
-                    our_seq,
-                    client_seq,
+                server.client_ip = seg.src_ip;
+                server.client_port = seg.src_port;
+                server.client_seq = seg.seq.wrapping_add(1);
+                server.conn = true;
+                let _ = vifast_virtio::net_send_tcp_bounded(
+                    server.client_ip,
+                    server.client_port,
+                    TCP_PORT,
+                    server.our_seq,
+                    server.client_seq,
                     vifast_virtio::TCP_SYN | vifast_virtio::TCP_ACK,
                     &[],
+                    TCP_IRQ_TX_BOUND,
                 );
-                our_seq = our_seq.wrapping_add(1);
+                server.our_seq = server.our_seq.wrapping_add(1);
+                server.accepts = server.accepts.wrapping_add(1);
                 vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP ACCEPT");
             }
             continue;
         }
+        if seg.flags & vifast_virtio::TCP_RST != 0 {
+            server.conn = false;
+            vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP RESET");
+            continue;
+        }
         if seg.flags & vifast_virtio::TCP_ACK != 0 {
             let len = seg.payload_len as u32;
-            if len > 0 && seg.seq == client_seq {
-                client_seq = client_seq.wrapping_add(len);
-                let _ = vifast_virtio::net_send_tcp(
-                    client_ip,
-                    client_port,
-                    PORT,
-                    our_seq,
-                    client_seq,
+            if len > 0 && seg.seq == server.client_seq {
+                server.client_seq = server.client_seq.wrapping_add(len);
+                let _ = vifast_virtio::net_send_tcp_bounded(
+                    server.client_ip,
+                    server.client_port,
+                    TCP_PORT,
+                    server.our_seq,
+                    server.client_seq,
                     vifast_virtio::TCP_ACK | vifast_virtio::TCP_PSH,
                     &payload[..len as usize],
+                    TCP_IRQ_TX_BOUND,
                 );
-                our_seq = our_seq.wrapping_add(len);
-                echoes += 1;
-            }
-            if seg.flags & vifast_virtio::TCP_RST != 0 {
-                vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP RESET");
-                have_conn = false;
-                continue;
+                server.our_seq = server.our_seq.wrapping_add(len);
+                server.echoes = server.echoes.wrapping_add(1);
             }
             if seg.flags & vifast_virtio::TCP_FIN != 0 {
-                client_seq = client_seq.wrapping_add(1);
-                let _ = vifast_virtio::net_send_tcp(
-                    client_ip,
-                    client_port,
-                    PORT,
-                    our_seq,
-                    client_seq,
+                server.client_seq = server.client_seq.wrapping_add(1);
+                let _ = vifast_virtio::net_send_tcp_bounded(
+                    server.client_ip,
+                    server.client_port,
+                    TCP_PORT,
+                    server.our_seq,
+                    server.client_seq,
                     vifast_virtio::TCP_ACK | vifast_virtio::TCP_FIN,
                     &[],
+                    TCP_IRQ_TX_BOUND,
                 );
+                server.conn = false;
                 vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP CLOSE");
-                have_conn = false;
-                break;
             }
         }
-    }
-    {
-        let (avail, used, seen) = vifast_virtio::net_rx_stats();
-        vifast_kernel::klog!(
-            RiscvPlatform,
-            "VIRTIO TCP RXEND avail={} used={} seen={} echoes={}",
-            avail,
-            used,
-            seen,
-            echoes
-        );
-    }
-    if echoes > 0 {
-        vifast_kernel::klog!(RiscvPlatform, "VIRTIO TCP ECHO OK segs={}", echoes);
     }
 }
 
@@ -1145,6 +1165,18 @@ impl Platform for RiscvPlatform {
             POST_IDLE_ENTRIES.load(Ordering::Relaxed),
             POST_TIMER_WAKES.load(Ordering::Relaxed),
         ))
+    }
+
+    fn service_window() {
+        // Vòng 80: giữ guest sống thêm ~2.5s (250 tick × 10ms) sau khi các
+        // demo kết thúc để test tương tác (TCP, bàn phím) kịp chạy. Timer IRQ
+        // vẫn bơm input/TCP trong lúc WFI.
+        let start = SERVICE_TICKS.load(Ordering::Relaxed);
+        while SERVICE_TICKS.load(Ordering::Relaxed).wrapping_sub(start) < 250 {
+            unsafe {
+                core::arch::asm!("wfi");
+            }
+        }
     }
 
     fn post_idle_ready() -> bool {
@@ -1427,9 +1459,9 @@ impl Platform for RiscvPlatform {
                 }
             }
         }
-        // Vòng 77: TCP echo server (hostfwd từ QEMU) — chờ ngắn, có client
-        // thì phục vụ, không thì thoát để không làm chậm boot.
-        tcp_echo_demo();
+        // Vòng 79: TCP echo server thường trú — chỉ khởi tạo trạng thái ở
+        // đây, việc phục vụ chạy trong timer IRQ nên không chặn boot.
+        tcp_init();
         // Vòng 75: virtio-rng (entropy source, device id 4).
         vifast_virtio::scan_devices(0x1000_1000, 0x1000_9000, 0x1000, |base, device| {
             if device == vifast_virtio::DEVICE_RNG {
@@ -1847,6 +1879,8 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         } else if hart == 0 {
             BSP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
             poll_virtio_input();
+            tcp_pump();
+            SERVICE_TICKS.fetch_add(1, Ordering::Relaxed);
         }
         let changed = vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
         if hart == 1 && user && changed {

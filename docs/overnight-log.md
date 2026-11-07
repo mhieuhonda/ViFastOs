@@ -1382,3 +1382,13 @@ follow-up `62b31f4`.
 - Thêm cờ `--with-input` cho `gate.sh`; cập nhật đầu tài liệu bàn giao.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `b45f0f08c91643957d68749634d8bf32a84dd8371cb5cdd6993ebec5c210e525`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `17b418dc0bb683496485cbe1d230412b3d4add07f67c49ad4300ed0319cde999`.
+
+## 9.59 — Vòng 80: audit P0 + TCP thường trú
+
+- Audit subagent (DeepSeek V4.1 Flash) tìm P0-1 `FrameWrite` thiếu validate,
+  P0-2 underflow TCP RX, P1-2 RX descriptor treo trùng → đã sửa, có test host.
+- TCP chuyển sang `tcp_pump` trong timer IRQ + `service_window()` 2.5s trước
+  khi thoát; phát hiện aarch64 chưa từng gọi pump. TCP 3/3 cả 2 arch.
+- `gate.sh` 3m22s xanh; `--with-tcp --with-input` xanh.
+- Xem `docs/agent2-report-80.md` và `docs/audits/2026-11-07-round79.md`.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `b3bc500917d1471dbfa10af5ab6186eca35ddfd27da369d86ed3157ea0e60760`.

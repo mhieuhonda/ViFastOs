@@ -14,6 +14,8 @@
 
 pub const MSG_MAX_WORDS: usize = 8;
 pub const IPC_BUFFER_WORDS: usize = 32;
+/// Số byte tối đa một syscall copy giữa user và kernel (vòng 80).
+pub const USER_COPY_MAX: usize = 256;
 pub const DEFAULT_PAGE_SIZE: u64 = 4096;
 
 /// Shared user-address layout for all architectures.  The high base keeps

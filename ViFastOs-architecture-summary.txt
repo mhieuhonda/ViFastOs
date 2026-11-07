@@ -283,7 +283,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 330128 byte (`kernel_end=0x803af670`)
+- RISC-V headroom: 330096 byte (`kernel_end=0x803af690`)
 - `Kernel = 561768`, `Object = 3728`, `Tcb = 3672`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
@@ -2150,6 +2150,11 @@ E. Desktop / Space
     aarch64 LISTEN mà không ACCEPT; thêm `net_rx_refill`, ISN từ virtio-rng,
     xử lý RST; `--tcp-check` dùng chardev socket nên aarch64 5/5, riscv 3/3.
     x86 VFS demand-load chốt chặn: trang 2 MiB cần tách PMD, Untyped đã cạn.
+126. Vòng 80 (audit): vá P0-1 `FrameWrite` thiếu kiểm tra con trỏ (thêm
+    `validate_user_range` + `USER_COPY_MAX` + `checked_add` ở ba platform),
+    P0-2 underflow `ip_total - ihl`, P1-2 treo trùng RX descriptor; TCP thành
+    server thường trú trong timer IRQ + `service_window()` 2.5s; aarch64
+    trước đó chưa hề gọi `tcp_pump`. Báo cáo audit lưu ở `docs/audits/`.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

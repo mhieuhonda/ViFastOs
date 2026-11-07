@@ -5734,6 +5734,17 @@ impl Kernel {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
+                // Vòng 80 (audit P0-1): trước đây arm này không kiểm tra con
+                // trỏ người dùng, nên frame_write(slot, 0, <VA rác>, n) làm
+                // kernel copy từ địa chỉ chưa map và chết ở EL1. Kiểm tra
+                // đúng số byte runtime sẽ copy (đã kẹp USER_COPY_MAX).
+                let len = (a3 as usize).min(vifast_abi::USER_COPY_MAX);
+                if self.validate_user_range(tcb, a2, len, false).is_err() {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::InvalidArg,
+                    };
+                }
                 UserAction::FrameWrite {
                     frame: frame.obj,
                     offset: a1,
@@ -7188,6 +7199,48 @@ mod tests {
                 0
             ),
             UserAction::Debug {
+                ptr: 0x10_0000_0000,
+                len: 8
+            }
+        );
+        // Vòng 80 (audit P0-1): FrameWrite phải kiểm tra con trỏ như mọi
+        // syscall copy khác. Trước bản sửa, con trỏ rác vẫn tạo ra
+        // UserAction::FrameWrite và runtime copy từ địa chỉ chưa map → chết
+        // kernel ở EL1.
+        let frame = kernel.create_frame(0x1f00_0000, 4096).unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(frame, ObjType::Frame, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameWrite as u64,
+                1,
+                0,
+                0x8000_0000,
+                8,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::InvalidArg
+            }
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameWrite as u64,
+                1,
+                0,
+                0x10_0000_0000,
+                8,
+                0,
+                0
+            ),
+            UserAction::FrameWrite {
+                frame,
+                offset: 0,
                 ptr: 0x10_0000_0000,
                 len: 8
             }
