@@ -1177,6 +1177,28 @@ pub mod syscall {
                 }
             }
             UserAction::Exit => {
+                // Mốc 1: exit chỉ kết thúc TASK gọi, không kill cả máy.
+                // Task rời scheduler thành zombie (Exited); hart chọn task
+                // khác chạy tiếp. Chỉ halt khi không còn task nào.
+                let kernel = A::kernel();
+                let hart = A::hart_id();
+                if let Some(old) = kernel.current_on(hart) {
+                    if let Some(slot) = kernel.context_slot(old) {
+                        A::contexts()[slot as usize] = *context;
+                    }
+                }
+                if kernel.exit_current_on(hart).is_some() {
+                    // Có task kế tiếp: nạp context của nó như switch_blocked.
+                    let next = kernel.current_on(hart).unwrap();
+                    note_current_tcb::<A>(kernel);
+                    let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+                    *context = A::contexts()[slot];
+                    crate::syscall::apply_resume::<A>(context, next);
+                    if ensure_current_root::<A>().is_err() {
+                        fault::suspend::<A>(context, 0, 0);
+                    }
+                    return waiting;
+                }
                 A::write_str("\r\nUSER EXIT\r\n");
                 A::exit(0);
             }

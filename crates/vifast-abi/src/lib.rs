@@ -636,6 +636,10 @@ pub enum ThreadState {
     BlockedSleep = 10,
     /// Budget exhausted; the scheduler wakes the TCB when its period ends.
     BlockedBudget = 11,
+    /// Voluntary exit (mốc 1): task đã rời scheduler nhưng object còn để
+    /// parent reap qua TcbDestroy. Không resume/suspend/wake được nữa,
+    /// nhưng restart cho phép (tái sinh như từ Inactive).
+    Exited = 12,
 }
 
 impl ThreadState {

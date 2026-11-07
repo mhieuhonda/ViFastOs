@@ -1159,9 +1159,10 @@ impl Kernel {
         }
         let state = self.tcb(target).ok_or(KError::WrongType)?.state;
         match state {
-            ThreadState::Inactive | ThreadState::Faulted | ThreadState::BlockedFault => {
-                return Err(KError::IllegalOperation)
-            }
+            ThreadState::Inactive
+            | ThreadState::Faulted
+            | ThreadState::BlockedFault
+            | ThreadState::Exited => return Err(KError::IllegalOperation),
             ThreadState::Suspended => return Err(KError::AlreadyMapped),
             ThreadState::BlockedReply => return Err(KError::IllegalOperation),
             ThreadState::Running => {
@@ -5190,6 +5191,58 @@ impl Kernel {
         let old = slot.take()?;
         if let Some(table) = self.tcb_mut(old) {
             table.state = ThreadState::Faulted;
+            table.queued = false;
+        }
+        self.pick_on(hart)
+    }
+
+    /// Voluntary exit (mốc 1): task hiện tại rời scheduler, object giữ lại
+    /// làm zombie để parent reap qua TcbDestroy. Gỡ khỏi mọi hàng chờ (tái
+    /// dùng logic detach nhưng không destroy object). Trả task kế tiếp.
+    /// Server đang ôm caller của task exit thì caller được wake lỗi (detach
+    /// đã xử lý qua wake_error); client đang BlockedReply vào task exit thì
+    /// reply sau trả NoCaller sạch (restart-K36 đã dọn caller ma).
+    pub fn exit_current_on(&mut self, hart: usize) -> Option<ObjRef> {
+        let slot = self.current.get_mut(hart)?;
+        let old = slot.take()?;
+        self.remove_from_runq(old);
+        // Gỡ khỏi endpoint/send-recv + notification waiters như detach, và
+        // trả caller đang trỏ tới task exit để server không treo caller ma.
+        for i in 0..MAX_OBJECTS {
+            let r = ObjRef {
+                index: i as u8,
+                gen: self.objs[i].gen,
+            };
+            if let Some(endpoint) = self.endpoint_mut(r) {
+                endpoint.send.remove(old);
+                endpoint.recv.remove(old);
+            }
+            if let Some(notification) = self.notification_mut(r) {
+                for waiter in notification.waiters.iter_mut() {
+                    if *waiter == Some(old) {
+                        *waiter = None;
+                    }
+                }
+            }
+            if let Some(table) = self.tcb_mut(r) {
+                if table.caller.is_some_and(|(client, _)| client == old) {
+                    table.caller = None;
+                }
+            }
+        }
+        // Client đang BlockedReply chờ task exit: đánh thức lỗi ngay để
+        // không treo vô hạn (mốc 1: hết kẹt BlockedReply).
+        if let Some((client, _)) = self.tcb(old).and_then(|table| table.caller) {
+            self.wake_error(client, KError::ObjectDestroyed);
+        }
+        if let Some(table) = self.tcb_mut(old) {
+            table.pending = None;
+            table.resume = None;
+            table.resume_error = None;
+            table.recv_slot = 0;
+            table.wake_at = None;
+            table.caller = None;
+            table.state = ThreadState::Exited;
             table.queued = false;
         }
         self.pick_on(hart)
@@ -11947,6 +12000,76 @@ mod tests {
         assert_eq!(kernel.recv(receiver, ep, 7), Err(KError::NoRights));
         let front = kernel.endpoint(ep).unwrap().send.front();
         assert_eq!(front, Some(sender));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round102_exit_current_picks_next_and_zombies() {
+        // Mốc 1: Exit chỉ kết thúc task gọi — hart chọn task khác, task cũ
+        // thành zombie Exited (reap sau qua destroy_object), không kill máy.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let a = kernel.create_tcb("a", 5).unwrap();
+        let b = kernel.create_tcb("b", 5).unwrap();
+        kernel
+            .configure_tcb(a, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel
+            .configure_tcb(b, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.enqueue(a);
+        kernel.enqueue(b);
+        assert_eq!(kernel.pick_on(0), Some(a));
+        // Client block chờ a (server) qua call, rồi a exit: client phải
+        // được wake lỗi thay vì treo BlockedReply vô hạn.
+        let ep = kernel.create_endpoint().unwrap();
+        assert_eq!(kernel.recv(a, ep, 0), Ok(None));
+        let call = Message::new(0x1234, &[7]).unwrap();
+        assert_eq!(kernel.send(b, ep, 0, call, true), Ok(true));
+        assert_eq!(kernel.tcb(b).unwrap().state, ThreadState::BlockedReply);
+        // a đang BlockedRecv (park ở recv) — mô phỏng a đang chạy trên hart
+        // bằng cách đặt current trực tiếp (test cùng crate), rồi exit.
+        kernel.tcb_mut(a).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(a);
+        // a đang giữ caller của b; exit phải wake b lỗi.
+        let next = kernel.exit_current_on(0);
+        assert_eq!(kernel.tcb(a).unwrap().state, ThreadState::Exited);
+        assert!(kernel.check_invariants().is_ok());
+        // b được wake lỗi (resume_error), không treo. pick_on cuối
+        // exit_current_on đã chọn b chạy tiếp nên b là Running.
+        let b_state = kernel.tcb(b).unwrap();
+        assert_eq!(b_state.state, ThreadState::Running);
+        assert_eq!(b_state.resume_error, Some(KError::ObjectDestroyed));
+        assert_eq!(next, Some(b));
+        // Zombie reap được qua destroy_object.
+        kernel.destroy_object(a).unwrap();
+        assert!(kernel.tcb(a).is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round102_exited_rejects_resume_and_suspend() {
+        // Task Exited không resume/suspend được nữa, nhưng restart được
+        // (tái sinh như từ Inactive).
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("t", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.enqueue(t);
+        assert_eq!(kernel.pick_on(0), Some(t));
+        kernel.exit_current_on(0);
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Exited);
+        assert_eq!(kernel.resume_tcb(t), Err(KError::IllegalOperation));
+        assert_eq!(kernel.suspend_tcb(t, root), Err(KError::IllegalOperation));
+        assert_eq!(kernel.restart_tcb(t, root), Ok((0x4000_0000, 0x4000_4000)));
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
         assert!(kernel.check_invariants().is_ok());
     }
 
