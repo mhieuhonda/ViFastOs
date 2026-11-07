@@ -1410,3 +1410,13 @@ follow-up `62b31f4`.
   mã vẫn PASS, sửa mã thì báo "kernel sources changed".
 - Gate đầy đủ xanh.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `c54166250b05ebb2ec2f9263124a0f9a04ca6778aec5dd83a8f1d1dea6b4ef12`.
+
+## 9.62 — Vòng 83: P0 filesystem từ audit #2
+
+- Dir entry length và dir size trên đĩa không còn làm panic VFS server; bitmap
+  kiểm biên; 2 test ảnh hỏng (FS 24 test).
+- RX init đặt `RX_OUTSTANDING=1`; TCP kẹp `ip_total` theo used-ring len;
+  gỡ `service_window` sai (IRQ mask, không được gọi).
+- Client kẹp readdir; fingerprint docs phủ thêm script test/harness.
+- Gate `--with-tcp --with-input` xanh.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `0110dd90b36117a83fe66ae7051e39c7d4eee5426c8594ebccceb2deba699bb6`.

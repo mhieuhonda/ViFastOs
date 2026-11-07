@@ -75,12 +75,6 @@ pub struct UserImage {
 /// boundary: it owns MMU state, trap frames, timer/IRQ controllers, user
 /// memory copies and the transition to user mode.
 pub trait Platform: Arch + Console {
-    /// Cửa sổ phục vụ hữu hạn trước khi thoát (vòng 80). Mặc định không làm
-    /// gì; platform có thiết bị tương tác (bàn phím, mạng) ghi đè để giữ
-    /// guest sống thêm vài giây sau khi các demo kết thúc — nhờ đó timer IRQ
-    /// tiếp tục bơm input/TCP thay vì thoát ngay.
-    fn service_window() {}
-
     type Context: Copy + 'static;
 
     const USER_CODE_VA: usize;
@@ -1176,7 +1170,6 @@ pub mod syscall {
             }
             UserAction::Exit => {
                 A::write_str("\r\nUSER EXIT\r\n");
-                A::service_window();
                 A::exit(0);
             }
         }

@@ -289,7 +289,9 @@ fn vfs_readdir(fd: u64, index: u64) -> Result<Option<(u64, [u8; 28], usize)>, u6
             if reply.label != vfs::OK {
                 return Ok(None);
             }
-            let len = reply.data[1] as usize;
+            // Vòng 83 (audit #2): server trả về độ dài; phải kẹp theo buffer
+            // đích trước khi copy, nếu không một reply sai làm ghi quá biên.
+            let len = core::cmp::min(reply.data[1] as usize, 28);
             let mut name = [0u8; 28];
             unsafe {
                 core::ptr::copy_nonoverlapping(

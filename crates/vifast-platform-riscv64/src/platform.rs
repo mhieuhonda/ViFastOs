@@ -79,7 +79,6 @@ static SECONDARY_IPI_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_NONE_WAKES: AtomicUsize = AtomicUsize::new(0);
 static SECONDARY_WAIT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 static POST_STARTED: AtomicBool = AtomicBool::new(false);
-static SERVICE_TICKS: AtomicUsize = AtomicUsize::new(0);
 static POST_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 static POST_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static POST_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
@@ -1167,18 +1166,6 @@ impl Platform for RiscvPlatform {
         ))
     }
 
-    fn service_window() {
-        // Vòng 80: giữ guest sống thêm ~2.5s (250 tick × 10ms) sau khi các
-        // demo kết thúc để test tương tác (TCP, bàn phím) kịp chạy. Timer IRQ
-        // vẫn bơm input/TCP trong lúc WFI.
-        let start = SERVICE_TICKS.load(Ordering::Relaxed);
-        while SERVICE_TICKS.load(Ordering::Relaxed).wrapping_sub(start) < 250 {
-            unsafe {
-                core::arch::asm!("wfi");
-            }
-        }
-    }
-
     fn post_idle_ready() -> bool {
         if !POST_STARTED.load(Ordering::SeqCst) {
             return false;
@@ -1880,7 +1867,6 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
             BSP_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
             poll_virtio_input();
             tcp_pump();
-            SERVICE_TICKS.fetch_add(1, Ordering::Relaxed);
         }
         let changed = vifast_runtime::timer::on_timer::<RiscvPlatform>(frame);
         if hart == 1 && user && changed {

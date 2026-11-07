@@ -74,7 +74,9 @@ FORBIDDEN = [
     "PERCPU CLOBBER BAD",
     "VFS BAD",
     "ROOT PANIC",
-    "STALL",
+    # Chỉ khớp cả dòng; substring "STALL" trùng "USER CODE CAP INSTALL FAILED".
+    "KERNEL STALL",
+    "WATCHDOG STALL",
     "BOOT HANDOFF FAIL",
     "KERNEL IRQ OUTSIDE IDLE",
     "AP PIC IRQ",

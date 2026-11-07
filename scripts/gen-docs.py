@@ -159,6 +159,14 @@ def source_fingerprint() -> str:
             for name in filenames:
                 if name.endswith((".rs", ".S", ".toml", ".ld")) or name == "build.sh":
                     entries.append(os.path.join(dirpath, name))
+    for extra in (
+        os.path.join(root, "scripts", "harness_spec.py"),
+        os.path.join(root, "scripts", "test-qemu.py"),
+        os.path.join(root, "scripts", "gate.sh"),
+        os.path.join(root, "scripts", "soak.py"),
+    ):
+        if os.path.isfile(extra):
+            entries.append(extra)
     digest = hashlib.sha256()
     for path in sorted(entries, key=lambda item: os.path.relpath(item, root)):
         digest.update(os.path.relpath(path, root).encode())

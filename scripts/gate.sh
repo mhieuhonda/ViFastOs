@@ -50,6 +50,9 @@ step "qemu" sh -c "python3 scripts/test-qemu.py --repeat 3 $QEMU_ARGS"
 if [ "$QUICK" -eq 0 ]; then
     step "persist" python3 scripts/test-persist.py
 fi
+# Fuzzer seed dài (reclaim + 100k syscall) bị #[ignore] trong bộ test thường;
+# ở release chỉ tốn ~0.5s nên chạy luôn trong cổng để không bị bỏ quên.
+step "fuzz" cargo test -p vifast-kernel --release -- --ignored
 step "harness" python3 scripts/test-harness-spec.py
 step "fmt" cargo fmt --check
 step "docs" sh -c 'python3 scripts/gen-docs.py >/dev/null && python3 scripts/check-docs.py'

@@ -1066,10 +1066,18 @@ impl<D: BlockDev> Fs<D> {
     }
 
     fn mark_used(&mut self, block: u32) {
+        if block >= self.dev.block_count() || block as usize / 8 >= self.bitmap.len() {
+            return;
+        }
         self.bitmap[block as usize / 8] |= 1 << (block as usize % 8);
     }
 
     fn mark_free(&mut self, block: u32) {
+        // Vòng 83: block number đọc từ đĩa (free_inode_blocks) có thể rác.
+        // Không kiểm tra biên thì bitmap[block/8] ghi ra ngoài mảng.
+        if block >= self.dev.block_count() || block as usize / 8 >= self.bitmap.len() {
+            return;
+        }
         self.bitmap[block as usize / 8] &= !(1 << (block as usize % 8));
     }
 
@@ -1284,6 +1292,12 @@ impl<D: BlockDev> Fs<D> {
                     continue;
                 }
                 let len = block[off + 2] as usize;
+                // Vòng 83 (audit #2 P0-1): độ dài tên đến từ đĩa phải được
+                // kiểm tra trước khi cắt slice, nếu không một byte hỏng là đủ
+                // để panic trong VFS server.
+                if len == 0 || len > MAX_NAME || off + 3 + len > BLOCK_SIZE {
+                    continue;
+                }
                 if len == name.len() && &block[off + 3..off + 3 + len] == name {
                     return Ok(Some(ino));
                 }
@@ -1468,6 +1482,12 @@ impl<D: BlockDev> Fs<D> {
                     continue;
                 }
                 let len = block[off + 2] as usize;
+                // Vòng 83 (audit #2 P0-1): độ dài tên đến từ đĩa phải được
+                // kiểm tra trước khi cắt slice, nếu không một byte hỏng là đủ
+                // để panic trong VFS server.
+                if len == 0 || len > MAX_NAME || off + 3 + len > BLOCK_SIZE {
+                    continue;
+                }
                 if len == name.len() && &block[off + 3..off + 3 + len] == name {
                     put_u16(&mut block, off, 0);
                     block[off + 2] = 0;
@@ -1864,6 +1884,10 @@ impl<D: BlockDev> Fs<D> {
                 if seen == index {
                     let mut name = [0u8; MAX_NAME];
                     let len = block[off + 2] as usize;
+                    // Vòng 83: cùng lý do như trên — len rác không được cắt.
+                    if len == 0 || len > MAX_NAME || off + 3 + len > BLOCK_SIZE {
+                        continue;
+                    }
                     name[..len].copy_from_slice(&block[off + 3..off + 3 + len]);
                     return Ok(Some((ino, name, len)));
                 }
@@ -2086,10 +2110,17 @@ impl Inode {
         if self.kind == INODE_FREE {
             return 0;
         }
+        // Vòng 83 (audit #2 P0-2): size trên đĩa có thể bị hỏng (ví dụ dir
+        // size > 6144). Nếu không kẹp theo số slot thật của `blocks`, các
+        // vòng lặp bên dưới sẽ index `[u32; MAX_BLOCKS_PER_INODE]` quá biên
+        // và panic trong VFS server (mọi IPC sau đó treo).
+        let blocks = (self.size as usize).div_ceil(BLOCK_SIZE);
         if self.kind == INODE_DIR {
-            return (self.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            // Chỉ thư mục mới index trực tiếp `blocks[]`; file lớn dùng
+            // `file_block()` nên có thể vượt 12 slot một cách hợp lệ.
+            return core::cmp::min(blocks, MAX_BLOCKS_PER_INODE);
         }
-        (self.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE
+        blocks
     }
 }
 
@@ -2778,6 +2809,36 @@ mod tests {
                 "partial write at k={k}: size={size}"
             );
         }
+    }
+
+    #[test]
+    fn corrupt_dir_entry_length_does_not_panic() {
+        // Vòng 83 (audit #2 P0-1): một byte độ dài tên hỏng trên đĩa từng làm
+        // VFS server panic (slice index) → mọi IPC treo.
+        let mut fs = fresh();
+        let dir = fs.create(b"/d", 1, INODE_DIR).unwrap();
+        fs.create(b"/d/a", 1, INODE_FILE).unwrap();
+        let block_no = fs.inodes[dir as usize - 1].blocks[0];
+        assert!(block_no != 0);
+        let mut dev = fs.dev.clone();
+        let off = block_no as usize * BLOCK_SIZE;
+        dev.data[off + 2] = 200; // len rác, lớn hơn MAX_NAME
+        let mut fs = Fs::mount(dev).unwrap();
+        // Không được panic; entry hỏng bị bỏ qua.
+        let _ = fs.lookup(b"/d/a", 0);
+        let _ = fs.read_dir_entry(dir, 0);
+    }
+
+    #[test]
+    fn corrupt_dir_size_beyond_block_slots_does_not_panic() {
+        // Vòng 83 (audit #2 P0-2): dir size > 12 block làm index `blocks[]`
+        // quá biên trong các vòng lặp thư mục.
+        let mut fs = fresh();
+        let dir = fs.create(b"/big", 1, INODE_DIR).unwrap();
+        fs.inodes[dir as usize - 1].size = 7000;
+        let _ = fs.read_dir_entry(dir, 0);
+        let _ = fs.lookup(b"/big", 0);
+        assert!(fs.inodes[dir as usize - 1].blocks_used() <= MAX_BLOCKS_PER_INODE);
     }
 
     #[test]

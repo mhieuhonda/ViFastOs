@@ -227,6 +227,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 612ad25 test: let the gate run the virtio keyboard check on demand
 - 71d34a7 fix: close the user-copy boundary and make TCP a resident server
 - bb3a28f fix: tighten the kernel static budget to what AArch64 can actually take
+- 2d0ddcf fix: reclaim Untyped on failed retype and hash sources for the docs gate
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -281,7 +282,7 @@ Test hiện tại:
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
-- `cargo test -p vifast-fs`: 22/22 PASS
+- `cargo test -p vifast-fs`: 24/24 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
@@ -1373,7 +1374,8 @@ Cấm xuất hiện:
 - `PERCPU CLOBBER BAD` — forbidden
 - `VFS BAD` — forbidden
 - `ROOT PANIC` — forbidden
-- `STALL` — forbidden
+- `KERNEL STALL` — forbidden
+- `WATCHDOG STALL` — forbidden
 - `BOOT HANDOFF FAIL` — forbidden
 - `KERNEL IRQ OUTSIDE IDLE` — forbidden
 - `AP PIC IRQ` — forbidden
@@ -2162,6 +2164,10 @@ E. Desktop / Space
 128. Vòng 82: trả lại byte Untyped khi retype thất bại (`untyped_reclaim` +
     test `failed_retype_returns_the_carved_bytes`); `check-docs` so
     `source_sha256` của mã thay vì mtime — rebuild không đổi mã vẫn xanh.
+129. Vòng 83 (audit #2): FS kiểm tra độ dài tên và kẹp `blocks_used()` cho
+    thư mục, `mark_free/mark_used` kiểm biên bitmap (có test ảnh hỏng);
+    `RX_OUTSTANDING=1` sau hand-post của net init; TCP kẹp `ip_total` theo
+    `used.ring[].len`; gỡ `service_window` (chạy với IRQ mask, không được gọi).
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

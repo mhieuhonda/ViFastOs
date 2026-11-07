@@ -281,6 +281,17 @@ fn net_rx_post() {
     unsafe { core::ptr::write_volatile((base + 0x50) as *mut u32, 0) };
 }
 
+/// Độ dài thật (byte) của gói vừa tiêu thụ, lấy từ used ring. Vòng 83
+/// (audit #2 P1-3): parser không được tin các trường độ dài trong frame; thiết
+/// bị/QEMU chỉ ghi đúng `len` byte vào buffer, phần còn lại là dữ liệu cũ.
+fn net_rx_last_len() -> usize {
+    unsafe {
+        let q = &*core::ptr::addr_of!(NET_RX_QUEUE);
+        let index = RX_SEEN.wrapping_sub(1) as usize % QUEUE_SIZE;
+        core::ptr::read_volatile(&q.used.ring[index].len) as usize
+    }
+}
+
 /// Bổ sung buffer RX cho tới khi còn ít nhất `min_outstanding` gói chờ được
 /// thiết bị ghi (vòng 78). Trước một phiên TCP, ring có thể chỉ còn 2-3 buffer
 /// sau ARP/DNS; nạp đầy lại giúp không mất SYN khi client bắt tay dồn dập.
@@ -823,6 +834,12 @@ pub fn net_init_both(base: u64) -> Option<u64> {
         (*rx).avail.ring[0] = 0;
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         core::ptr::write_volatile(&mut (*rx).avail.idx, 1);
+        // Vòng 83 (audit #2 P1-2): chain 0 vừa được treo thủ công ở đây, nên
+        // phải đánh dấu đang có 1 chain outstanding; nếu không, lần
+        // `net_rx_rearm()` đầu tiên sẽ treo chain 0 lần thứ hai lên cùng một
+        // buffer (đúng lỗi mà bản vá vòng 80 định diệt).
+        RX_SEEN = 0;
+        RX_OUTSTANDING = 1;
     }
     attach(base, 0, rx as u64);
     // Kick queue 0: VirtIO yêu cầu notify sau khi thêm buffer RX, nếu không
@@ -2304,6 +2321,7 @@ pub fn net_recv_tcp_bounded(dst_port: u16, payload: &mut [u8], bound: u64) -> Op
         if !net_rx_poll_bounded(bound) {
             return None;
         }
+        let frame_len = net_rx_last_len();
         let mut segment = TcpSegment::default();
         let mut matched = false;
         unsafe {
@@ -2312,7 +2330,9 @@ pub fn net_recv_tcp_bounded(dst_port: u16, payload: &mut [u8], bound: u64) -> Op
             if ethertype == 0x0800 {
                 let ihl = (q.buf[14] & 0x0f) as usize * 4;
                 let proto = q.buf[14 + 9];
-                let ip_total = u16::from_be_bytes([q.buf[16], q.buf[17]]) as usize;
+                let declared = u16::from_be_bytes([q.buf[16], q.buf[17]]) as usize;
+                // Không tin ip_total: kẹp theo độ dài gói thật mà thiết bị báo.
+                let ip_total = core::cmp::min(declared, frame_len.saturating_sub(14));
                 // Vòng 80 (audit P0-2): phải chặn ip_total < ihl + 20, nếu
                 // không `ip_total - ihl` underflow và driver copy byte rác
                 // trong buffer RX ra ngoài (rò rỉ dữ liệu giữa các gói).

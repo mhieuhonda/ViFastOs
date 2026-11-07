@@ -483,6 +483,14 @@ def source_fingerprint() -> str:
     digest = hashlib.sha256()
     roots = [os.path.join(ROOT, "crates"), os.path.join(ROOT, "scripts", "build.sh")]
     entries = []
+    for extra in (
+        os.path.join(ROOT, "scripts", "harness_spec.py"),
+        os.path.join(ROOT, "scripts", "test-qemu.py"),
+        os.path.join(ROOT, "scripts", "gate.sh"),
+        os.path.join(ROOT, "scripts", "soak.py"),
+    ):
+        if os.path.isfile(extra):
+            entries.append(extra)
     for root in roots:
         if os.path.isfile(root):
             entries.append(root)
