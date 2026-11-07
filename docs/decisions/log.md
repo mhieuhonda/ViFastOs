@@ -62,4 +62,4 @@
 | 78 | Sửa rò rỉ descriptor RX (`RX_SEEN` tiến từng gói); tcp-check qua chardev socket | aarch64 5/5, riscv 3/3; x86 chốt chặn huge page 2 MiB | 73b56e5 |
 | 80 | Vá P0 audit: FrameWrite validate con trỏ, TCP RX chặn underflow, một RX chain; TCP thường trú + `service_window()` 2.5s | Audit lưu ở `docs/audits/`; aarch64 trước đó chưa gọi `tcp_pump` | 71d34a7 |
 | 81 | Siết `KERNEL_STATIC_BUDGET` về 566_272 + cảnh báo gap 4 KiB trong build.sh | Guard runtime cũ lỏng 155 KB trong khi AArch64 chỉ còn 8 byte | bb3a28f |
-| 82 | Trả byte Untyped khi retype hỏng; check-docs so hash nguồn thay mtime | Test host mới; rebuild không đổi mã vẫn xanh | (commit sau) |
+| 82 | Trả byte Untyped khi retype hỏng; check-docs so hash nguồn thay mtime | Test host mới; rebuild không đổi mã vẫn xanh | 2d0ddcf |
