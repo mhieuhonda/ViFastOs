@@ -344,8 +344,32 @@ fn shell_command(line: &[u8]) {
         let path = if line.len() > 3 { &line[3..] } else { b"/" };
         if let Some((fd, _)) = vfs_open(path, 0) {
             let mut index = 0u64;
+            // Mốc 8 (vòng 25): hậu tố loại — `/` cho dir, `@` cho symlink
+            // (qua STAT_PATH từng entry; INODE_DIR=2, INODE_SYMLINK=3).
+            let mut full = [0u8; 256];
             while let Ok(Some((_, name, len))) = vfs_readdir(fd, index) {
+                let mut flen = 0usize;
+                if path != b"/" {
+                    flen = path.len().min(200);
+                    full[..flen].copy_from_slice(&path[..flen]);
+                    if flen < full.len() {
+                        full[flen] = b'/';
+                        flen += 1;
+                    }
+                } else if flen < full.len() {
+                    full[flen] = b'/';
+                    flen += 1;
+                }
+                let take = len.min(full.len() - flen);
+                full[flen..flen + take].copy_from_slice(&name[..take]);
+                flen += take;
+                let suffix: &[u8] = match vfs_stat_path(&full[..flen]) {
+                    Some((_, _, 2)) => b"/",
+                    Some((_, _, 3)) => b"@",
+                    _ => b"",
+                };
                 write(&name[..len]);
+                write(suffix);
                 write(b"\n");
                 index += 1;
             }
