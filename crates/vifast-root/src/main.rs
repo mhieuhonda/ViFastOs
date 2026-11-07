@@ -1060,8 +1060,10 @@ fn spawn_pager_server(
     ));
 
     // Vòng 71: cấp IPC buffer + cap VFS để pager server tự đọc /page.bin khi
-    // fault. Chỉ riscv64/aarch64 — x86_64 đã cạn Untyped cho cả frame IPC
-    // buffer lẫn page table của VA mới (vòng 72 thử boot Untyped vẫn thiếu PT).
+    // fault. Chỉ riscv64/aarch64: trên x86_64 data/meta Untyped đã cạn mà
+    // kiến trúc này map root ELF/stack bằng trang 2 MiB, nên VA mới trong
+    // cùng block cần tách PMD thành PageTable — cả frame lẫn PT đều không có
+    // nguồn (vòng 72 và 78 đã thử data, meta, boot Untyped: đều thiếu).
     let enable_vfs = cfg!(any(target_arch = "riscv64", target_arch = "aarch64"));
     unsafe {
         PAGER_VFS_ENABLED = enable_vfs;
@@ -1077,18 +1079,28 @@ fn spawn_pager_server(
             Rights::READ | Rights::WRITE,
             slots,
         );
-        check(vifast_user::tcb_set_ipc_buffer(
-            server_tcb,
-            ipc_frame,
-            PAGER_IPC_BUF_VA as u64,
-        ));
-        check(vifast_user::cap_mint(
+        if vifast_user::tcb_set_ipc_buffer(server_tcb, ipc_frame, PAGER_IPC_BUF_VA as u64).error
+            != KError::Ok
+        {
+            write(b"PAGER IPC BUF BAD\n");
+            unsafe {
+                PAGER_VFS_ENABLED = false;
+            }
+        } else if vifast_user::cap_mint(
             vfs_endpoint,
             server_tcb,
             PAGER_SERVER_VFS_ENDPOINT,
             Rights::WRITE.0,
             vifast_abi::BADGE_PAGER,
-        ));
+        )
+        .error
+            != KError::Ok
+        {
+            write(b"PAGER VFS CAP BAD\n");
+            unsafe {
+                PAGER_VFS_ENABLED = false;
+            }
+        }
     }
     check(vifast_user::tcb_resume(server_tcb));
 }
