@@ -1472,3 +1472,12 @@ follow-up `62b31f4`.
 - `enqueue` bỏ rơi TCB: xét lại — mỗi hàng chứa MAX_TCBS=18 = tổng TCB nên
   không thể xảy ra; ghi chú tại chỗ.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `f141eb6c8e69737481ba364ed168d9349b6ee028c37679ed76fcfabf06acd61a`.
+
+## 9.69 — Vòng 90: fault resume lưu frame
+
+- `fault::suspend` lưu frame vào slot của TCB fault; thêm cổng
+  `Platform::fault_frame_complete()` (x86 = false vì trap.S đẩy vector/error
+  trước SAVE_REGS — lưu frame rỗng gây GP).
+- QEMU 3 arch 2/2; gate đầy đủ xanh.
+- Audit #5 lỗi hai lần phía subagent; sẽ chạy lại vòng sau.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `2bff5071ef04b103702cb65cb86e7263d2ca31f89b6ed8cdb2ea24536f800e39`.

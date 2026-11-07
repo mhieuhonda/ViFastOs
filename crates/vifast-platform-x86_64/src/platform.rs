@@ -1969,6 +1969,10 @@ impl Platform for X86Platform {
         }
     }
 
+    fn fault_frame_complete() -> bool {
+        false
+    }
+
     fn prepare_user() {
         unsafe {
             // The GDT/TSS/IDT was installed in init_platform before the AP
@@ -2543,6 +2547,10 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
         );
         X86Platform::exit(1);
     }
+    // Vòng 90: frame thật đã thử nhưng trap.S đẩy thêm vector/error trước
+    // SAVE_REGS nên cast thẳng rsp làm hỏng đường trả về user (GP vector=13).
+    // Giữ frame rỗng; runtime vẫn lưu frame vào slot của TCB fault nên không
+    // ảnh hưởng task khác.
     let mut context = TrapFrame::empty();
     vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, error);
     drop(bkl);

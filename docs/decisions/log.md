@@ -71,3 +71,4 @@
 | 87 | Chặn FP/SIMD của EL0 (aarch64 CPACR, x86 CR4) thay vì lưu per-task | Không vừa ngân sách static; ELF user không dùng FP/SIMD | 02163be |
 | 88 | Notification dùng hàng đợi 6 waiter; signal đánh thức tất cả | Root park 4 worker trên một notification; mọi thiết kế WouldBlock/2-slot đều hỏng boot | 74b7a30 |
 | 89 | EOI PIC chỉ trên BSP; bật SGI 2; idle race kiểm lại queue | Sửa P1 audit #4; enqueue drop là không thể với hằng số hiện tại | 48de675 |
+| 90 | `fault::suspend` lưu frame; cổng `fault_frame_complete()` | x86 chưa có frame đầy đủ nên tạm tắt lưu ở đó | (commit sau) |

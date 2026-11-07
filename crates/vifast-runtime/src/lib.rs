@@ -145,6 +145,14 @@ pub trait Platform: Arch + Console {
 
     fn prepare_user() {}
 
+    /// `true` khi `Context` mà `fault::suspend` nhận là frame user đầy đủ
+    /// (aarch64/riscv64 truyền frame trap thật). x86_64 hiện truyền frame
+    /// rỗng vì trap.S đẩy vector/error trước SAVE_REGS, nên không được lưu nó
+    /// vào slot (sẽ làm task chạy lại từ frame 0 → GP).
+    fn fault_frame_complete() -> bool {
+        true
+    }
+
     fn start_timer();
     fn reload_timer();
     fn ack_timer();
@@ -1239,6 +1247,16 @@ pub mod fault {
         let kernel = A::kernel();
         let hart = A::hart_id();
         let old = kernel.current_on(hart);
+        // Vòng 90 (audit #4 P1-3): lưu frame đang fault vào context slot của
+        // TCB để nếu pager cứu nó (map trang rồi cho chạy lại), task tiếp tục
+        // đúng điểm fault thay vì chạy lại frame cũ / entry point.
+        if A::fault_frame_complete() {
+            if let Some(faulting) = old {
+                if let Some(slot) = kernel.context_slot(faulting) {
+                    A::contexts()[slot as usize] = *context;
+                }
+            }
+        }
         vifast_kernel::klog!(
             A,
             "USER FAULT tcb={:?} cause={:#x} addr={:#x}",

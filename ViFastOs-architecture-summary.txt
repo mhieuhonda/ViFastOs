@@ -2197,6 +2197,9 @@ E. Desktop / Space
 135. Vòng 89: `ack_timer` chỉ EOI PIC trên hart 0 (hart 1 từng xoá in-service
     của BSP); aarch64 bật SGI 2 nên `panic_halt_others` hết chết; x86 kiểm
     lại queue sau khi set `AP_IDLE_WINDOW` để không mất IPI.
+136. Vòng 90: `fault::suspend` lưu frame đang fault vào context slot của TCB
+    (pager cứu thì chạy lại đúng điểm fault); cổng `Platform::fault_frame_complete()`
+    vì x86 hiện truyền frame rỗng (trap.S đẩy vector/error trước SAVE_REGS).
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
