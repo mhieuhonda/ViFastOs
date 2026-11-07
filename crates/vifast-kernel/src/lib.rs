@@ -8573,6 +8573,36 @@ mod tests {
     }
 
     #[test]
+    fn round67_reclaim_adjacent_to_bump_lowers_watermark() {
+        // Mốc 3 (vòng 67): free vùng kề bump phải hạ watermark thay vì
+        // chiếm slot free-list — nếu không alloc/free lặp ở đỉnh Untyped
+        // làm đầy list 16 slot rồi rò rỉ giả (leaked tăng dù bộ nhớ còn).
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x840_0000, 8);
+        let untyped = kernel.cap_at(SlotAddr { tcb: root, slot: 1 }).unwrap().obj;
+        // 2 endpoint: offsets 0 và 256, bump = 512.
+        let _e0 = retype_at(&mut kernel, root, ObjType::Endpoint, 2);
+        let _e1 = retype_at(&mut kernel, root, ObjType::Endpoint, 3);
+        assert_eq!(kernel.untyped(untyped).unwrap().bump, 512);
+        // Free e1 (offset 256, kề bump 512): bump hạ về 256, không tốn slot.
+        assert_eq!(kernel.destroy_cap_object(root, 3), Ok(()));
+        let region = kernel.untyped(untyped).unwrap();
+        assert_eq!(region.bump, 256);
+        assert_eq!(region.free.iter().flatten().count(), 0);
+        assert_eq!(region.leaked, 0);
+        // Free e0 (offset 0, kề bump 256): bump hạ về 0 — Untyped sạch.
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        let region = kernel.untyped(untyped).unwrap();
+        assert_eq!(region.bump, 0);
+        assert_eq!(region.objects, 0);
+        assert_eq!(region.free.iter().flatten().count(), 0);
+        // Retype lại từ đầu: tái dùng offset 0 (không rò rỉ).
+        let e2 = retype_at(&mut kernel, root, ObjType::Endpoint, 4);
+        assert_eq!(kernel.get(e2).unwrap().alloc_offset, 0);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn untyped_free_list_full_counts_leak() {
         let mut kernel = Kernel::new();
         let root = test_root_with_untyped(&mut kernel, 0x830_0000, 48);
