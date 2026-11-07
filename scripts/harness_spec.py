@@ -365,7 +365,10 @@ def accept(
         return False
     if faults.count(0x1001001000) not in (1, 2):
         return False
-    if faults.count(0x1001002000) != 1:
+    # Vòng 33: exec demo thêm task làm đổi interleaving evict/demand nên
+    # PAGER3 (0x1001002000) cũng fault 2 lần như PAGER2 (vòng 67) — cùng
+    # bản chất race server map lại trước khi client đọc.
+    if faults.count(0x1001002000) not in (1, 2):
         return False
     rate = RATE_RE.search(output)
     if not rate:

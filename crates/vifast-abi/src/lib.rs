@@ -29,6 +29,11 @@ pub mod pager {
     pub const LABEL_UNMAP: u64 = 0x5047_0003;
     pub const LABEL_EVICT: u64 = 0x5047_0004;
     pub const LABEL_REPLY: u64 = 0x5047_0005;
+    /// Shell `run` -> root exec demo (mốc 9, vòng 33): gửi trên
+    /// fault_endpoint với badge RUN_BADGE, không phải fault thật.
+    pub const LABEL_RUN: u64 = 0x5047_0006;
+    /// Badge của cap lệnh root mint cho client (phân biệt với fault badge 0).
+    pub const RUN_BADGE: u64 = 7;
 
     pub const MAX_CLIENTS: usize = 4;
     pub const POOL_FRAMES: usize = 8;
@@ -50,7 +55,7 @@ pub mod pager {
     pub const fn valid_label(label: u64) -> bool {
         matches!(
             label,
-            LABEL_FAULT | LABEL_MAP | LABEL_UNMAP | LABEL_EVICT | LABEL_REPLY
+            LABEL_FAULT | LABEL_MAP | LABEL_UNMAP | LABEL_EVICT | LABEL_REPLY | LABEL_RUN
         )
     }
 
@@ -328,6 +333,11 @@ pub mod user_layout {
     pub const FAULT1_TCB_SLOT: usize = 9;
     pub const FAULT2_TCB_SLOT: usize = 10;
     pub const FAULT3_TCB_SLOT: usize = 11;
+    /// Client cspace slot for the command cap to root (shell `run`;
+    /// mốc 9, vòng 33): root mint fault_endpoint vào đây, badge RUN_CMD.
+    /// Slot 12: client dùng 1-3,5-11 và slot 4 làm scratch retype (vòng 33
+    /// mint đè slot 4 làm vỡ scratch → boot kẹt sau DEMAND LOAD).
+    pub const CLIENT_CMD_SLOT: u8 = 12;
     /// Client cspace slots used for the IRQ demos/notifications.
     pub const CLIENT_IRQ_SLOT: u8 = 8;
     pub const CLIENT_IRQ_NOTIFICATION_SLOT: u8 = 9;

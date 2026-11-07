@@ -3,8 +3,9 @@
 #![no_main]
 
 use core::panic::PanicInfo;
+use vifast_abi::pager::LABEL_RUN;
 use vifast_abi::user_layout::{
-    CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_UART_IRQ_SLOT,
+    CLIENT_CMD_SLOT, CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_UART_IRQ_SLOT,
     CLIENT_UART_NOTIFICATION_SLOT, DATA_VA, IPC_BUF_CLIENT_VA,
 };
 use vifast_abi::vfs;
@@ -333,7 +334,7 @@ fn shell_command(line: &[u8]) {
     if line == b"help" {
         write(b"help time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
-        write(b"truncate <path> <size> fsck\n");
+        write(b"truncate <path> <size> fsck run\n");
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");
@@ -461,6 +462,16 @@ fn shell_command(line: &[u8]) {
         } else {
             write(b"usage: truncate <path> <size>\n");
         }
+    } else if line == b"run" {
+        // Mốc 9 (vòng 33): yêu cầu root exec demo ELF qua cap lệnh.
+        // Fire-and-forget: root in RUN OK/SKIP; shell không block chờ reply
+        // nên không treo nếu root bận (root recv fault_endpoint chung).
+        let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_RUN, 0, 0, 0);
+        write(if r.error == KError::Ok {
+            b"run sent\n"
+        } else {
+            b"run failed\n"
+        });
     } else if line == b"fsck" {
         write(if vfs_fsck() {
             b"ok\n"

@@ -9,12 +9,12 @@
 
 use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
-    CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_STACK_BASE, CLIENT_STACK_TOP,
-    CLIENT_UART_IRQ_SLOT, CLIENT_UART_NOTIFICATION_SLOT, CNODE_STACK_BASE, CNODE_STACK_TOP,
-    CODE_VA, EXEC_STACK_BASE, EXEC_STACK_TOP, FAULT1_STACK_TOP, FAULT1_TCB_SLOT, FAULT2_STACK_TOP,
-    FAULT2_TCB_SLOT, FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE, FAULT4_STACK_TOP,
-    IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, PAGER2_STACK_BASE,
-    PAGER2_STACK_TOP, PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_IPC_BUF_VA,
+    CLIENT_CMD_SLOT, CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_STACK_BASE,
+    CLIENT_STACK_TOP, CLIENT_UART_IRQ_SLOT, CLIENT_UART_NOTIFICATION_SLOT, CNODE_STACK_BASE,
+    CNODE_STACK_TOP, CODE_VA, EXEC_STACK_BASE, EXEC_STACK_TOP, FAULT1_STACK_TOP, FAULT1_TCB_SLOT,
+    FAULT2_STACK_TOP, FAULT2_TCB_SLOT, FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE,
+    FAULT4_STACK_TOP, IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
+    PAGER2_STACK_BASE, PAGER2_STACK_TOP, PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_IPC_BUF_VA,
     PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP,
     SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
     WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
@@ -23,6 +23,7 @@ use vifast_abi::user_layout::{
     WORKER_H_STACK_BASE, WORKER_H_STACK_TOP,
 };
 use vifast_abi::{
+    pager::{LABEL_RUN, RUN_BADGE},
     BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
     LABEL_FAULT,
 };
@@ -956,12 +957,13 @@ fn map_frame_fallible(
 /// Exec MVP (mốc 9, vòng 32): nạp bản sao ELF client vào VSpace mới và
 /// spawn TCB chạy nó. Mọi bước fail-êm (trả None) để x86 cạn Untyped bỏ qua
 /// mà không panic — demo chỉ chạy khi đủ tài nguyên.
-/// ELF64 riscv tối giản cho exec demo (mốc 9, vòng 32): 1 segment R+X
-/// chứa `wfi; j .` (treo thân thiện, không in gì, không xung đột marker với
-/// bản gốc). Entry = CODE_VA.
+/// ELF64 tối giản cho exec demo (mốc 9, vòng 32/33): 1 segment R+X chứa
+/// `j .` (busy loop thân thiện, không in gì, không xung đột marker với bản
+/// gốc). Không dùng `wfi`: ở U-mode nó trap illegal khi TW=1 (vòng 33 riscv
+/// fault addr=0x10500073, system_opcode_insn). Entry = CODE_VA.
 const EXEC_DEMO_CODE: u64 = CODE_VA as u64 + 0x1000;
 const EXEC_DEMO_ELF: &[u8] = &{
-    let mut elf = [0u8; 0x1000 + 8];
+    let mut elf = [0u8; 0x1000 + 16];
     // ELF header.
     elf[0] = 0x7f;
     elf[1] = b'E';
@@ -1012,12 +1014,18 @@ const EXEC_DEMO_ELF: &[u8] = &{
         elf[112 + i] = align[i];
         i += 1;
     }
-    // Code: wfi (0x10500073) + jal x0,0 (0x0000006f).
-    elf[0x1000] = 0x73;
-    elf[0x1001] = 0x00;
-    elf[0x1002] = 0x50;
-    elf[0x1003] = 0x10;
-    elf[0x1004] = 0x6f;
+    // Code (8B): li a7,34 (exit) + ecall -> task thoát ngay sau khi chạy
+    // (giống worker F). Không busy/yield loop: vòng 33 busy loop đốt BKL
+    // (h0_acq tăng 4x) làm boot quá 20s timeout; wfi thì trap ở U-mode.
+    // addi a7,x0,34 = 93 08 20 02; ecall = 73 00 00 00.
+    elf[0x1000] = 0x93;
+    elf[0x1001] = 0x08;
+    elf[0x1002] = 0x20;
+    elf[0x1003] = 0x02;
+    elf[0x1004] = 0x73;
+    elf[0x1005] = 0x00;
+    elf[0x1006] = 0x00;
+    elf[0x1007] = 0x00;
     elf
 };
 
@@ -1621,6 +1629,15 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     // rebadge of the badge-2 endpoint.  The endpoint itself remains the only
     // client endpoint cap; there is no badge-0 endpoint in the client.
     copy(client_tcb, client_tcb, 7, Rights::WRITE);
+    // Mốc 9 (vòng 33): cap lệnh cho shell `run` — fault_endpoint với badge
+    // RUN_BADGE vào slot lệnh của client. Root phân biệt bằng badge.
+    check(vifast_user::cap_mint(
+        fault_endpoint_slot,
+        client_tcb,
+        CLIENT_CMD_SLOT,
+        Rights::WRITE.0,
+        RUN_BADGE,
+    ));
     copy(client_vspace, client_tcb, 2, Rights::WRITE);
     copy(client_untyped, client_tcb, 3, Rights::WRITE);
     copy(
@@ -1975,7 +1992,15 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             destroy_smp_done = true;
         }
         if message.error == KError::Ok {
-            if message.label == CNODE_LABEL {
+            // Mốc 9 (vòng 33): lệnh `run` từ shell — fire-and-forget trên
+            // fault_endpoint với badge RUN_BADGE. Không reply (send đơn).
+            // Badge lạ + label RUN mới dispatch; fault thật badge 0.
+            if message.label == LABEL_RUN && message.badge == RUN_BADGE {
+                match spawn_elf_copy(meta_untyped, data_untyped, EXEC_DEMO_ELF, 0b01, &mut slots) {
+                    Some(_) => write(b"RUN OK\n"),
+                    None => write(b"RUN SKIP\n"),
+                }
+            } else if message.label == CNODE_LABEL {
                 write(CNODE_OK);
                 reap_ok &= vifast_user::tcb_destroy(cnode_tcb).error == KError::Ok;
                 reaped = reaped.saturating_add(1);

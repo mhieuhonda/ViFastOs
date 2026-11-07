@@ -54,8 +54,8 @@ static mut L2_LOW: Table = Table([0; 512]);
 static mut L2_KERNEL: Table = Table([0; 512]);
 #[allow(dead_code)]
 #[repr(align(4096))]
-struct DataPool([u8; 311296]);
-static mut USER_DATA: DataPool = DataPool([0; 311296]);
+struct DataPool([u8; 352256]);
+static mut USER_DATA: DataPool = DataPool([0; 352256]);
 #[allow(dead_code)]
 #[repr(align(16))]
 struct Metadata([u8; 81920]);
@@ -1114,7 +1114,7 @@ impl Platform for Aarch64Platform {
 
     fn data_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_DATA) as *mut u8, 311296)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_DATA) as *mut u8, 352256)
         }
     }
 

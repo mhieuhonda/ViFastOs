@@ -270,6 +270,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 76841ef moc 5 (buoc 3): BKL STATS mo rong 4 hart (do contention SMP4)
 - 83a8db7 moc 5 (vong 31): SMP riscv 4 hart co task that (worker G/H) + mo rong DATA arena
 - 7e35e56 moc 5 (vong 31, not): host test scheduler hart 2/3
+- cdb87aa moc 9 (vong 32): exec MVP + mo rong boot pool
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
