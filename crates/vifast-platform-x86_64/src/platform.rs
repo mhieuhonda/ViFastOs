@@ -421,6 +421,52 @@ unsafe fn outw(port: u16, value: u16) {
     core::arch::asm!("out dx, ax", in("dx") port, in("ax") value);
 }
 
+unsafe fn outl(port: u16, value: u32) {
+    core::arch::asm!("out dx, eax", in("dx") port, in("eax") value);
+}
+
+unsafe fn inl(port: u16) -> u32 {
+    let value: u32;
+    core::arch::asm!("in eax, dx", in("dx") port, out("eax") value);
+    value
+}
+
+/// Đọc 32-bit từ PCI config space qua cơ chế 0xCF8/0xCFC (vòng 84).
+unsafe fn pci_read32(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
+    let address = 0x8000_0000u32
+        | ((bus as u32) << 16)
+        | ((slot as u32) << 11)
+        | ((func as u32) << 8)
+        | (offset as u32 & 0xfc);
+    outl(0xcf8, address);
+    inl(0xcfc)
+}
+
+/// Quét bus 0 để chứng minh truy cập config space hoạt động và đếm thiết bị.
+/// Đây là nền tảng cho virtio-pci sau này (x86_64 hiện chưa có virtio).
+fn pci_scan() -> (u32, u32, u32, u32) {
+    let mut count = 0u32;
+    let mut first_vendor = 0u32;
+    let mut first_device = 0u32;
+    let mut first_class = 0u32;
+    for slot in 0..32u8 {
+        let id = unsafe { pci_read32(0, slot, 0, 0) };
+        let vendor = id & 0xffff;
+        if vendor == 0xffff || vendor == 0 {
+            continue;
+        }
+        let device = id >> 16;
+        let class = unsafe { pci_read32(0, slot, 0, 8) } >> 16;
+        if count == 0 {
+            first_vendor = vendor;
+            first_device = device;
+            first_class = class;
+        }
+        count += 1;
+    }
+    (count, first_vendor, first_device, first_class)
+}
+
 const ATA_BASE: u16 = 0x1F0;
 const ATA_CTRL: u16 = 0x3F6;
 
@@ -1984,6 +2030,20 @@ impl Platform for X86Platform {
                 true,
                 false,
             )
+    }
+
+    fn init_block() {
+        // Vòng 84: quét PCI bus 0 (port I/O 0xCF8/0xCFC) — bằng chứng x86_64
+        // truy cập được config space, nền tảng cho virtio-pci sau này.
+        let (devices, vendor, device, class) = pci_scan();
+        vifast_kernel::klog!(
+            X86Platform,
+            "PCI SCAN OK devices={} first={:04x}:{:04x} class={:04x}",
+            devices,
+            vendor,
+            device,
+            class
+        );
     }
 
     fn read_user(ptr: u64, out: &mut [u8]) -> Result<(), KError> {

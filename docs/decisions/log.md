@@ -66,3 +66,4 @@
 | 83 | FS kiểm tra tên/biên block (audit #2 P0); RX init set `RX_OUTSTANDING`; TCP kẹp theo used-ring len; gỡ `service_window` sai | 2 test ảnh hỏng (FS 24), kernel 136; gate xanh | f87124d |
 | 83b | Gỡ TCB Faulted khỏi runqueue khi VSpace bị destroy | Test mới, `pick_on` không còn trả TCB mất VSpace | cd0ec59 |
 | 84 | Xoá `net_recv_udp`; assert ngân sách static lúc biên dịch; slot sai trả `InvalidArg` | 53 chỗ đổi sang `slot_or_invalid!`; kernel 136 test | cf9d72e |
+| 85 | x86_64 quét PCI config space, marker `PCI SCAN OK` | Nền tảng virtio-pci; Q35 cho 4 thiết bị, host bridge 8086:29c0 | (commit sau) |

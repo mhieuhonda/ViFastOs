@@ -164,7 +164,6 @@ follow-up `62b31f4`.
 - QEMU 3/3 PASS ×3; ROOT SWITCH lần đầu 49945 / 32607 / 17520.
   Data Untyped test-exit vẫn 21/22 trang, 6/48 object; headroom 618480 B.
 
-
 ## 8.1 — IPC buffer API/core
 
 - Commit `854744a feat: add ipc buffer binding and copy`.
@@ -568,7 +567,6 @@ follow-up `62b31f4`.
   (QEMU sifive_test không mang exit-code — nợ R2).
 - Persistence 6 phase × 3 PASS; harness 263 case âm.
 
-
 ## 8.29 — RISC-V panic, D6 badge, GetTime, FS small, per-VA TLB (vòng 18)
 
 - `2851cdf`: RISC-V panic ghi `(1<<16)|0x3333`; QEMU rc=1 (5/5).
@@ -578,7 +576,6 @@ follow-up `62b31f4`.
 - `111e072`: per-VA TLB + `harts_loaded`, TLB_VA mailbox, 50/50 cả 3.
 - Final: build 0 warning; QEMU 10/10 và 50/50 cả 3; persist 6/6; panic 5/5;
   handoff 10/10; harness 300 case; RISC headroom `138672` B.
-
 
 ## 8.30 — Headroom, TLB mutation, CapDelete, suspend, FS v3, GetTime fast (vòng 19)
 
@@ -1409,6 +1406,7 @@ follow-up `62b31f4`.
 - `check-docs` so hash nguồn (`source_sha256`) thay mtime: rebuild không đổi
   mã vẫn PASS, sửa mã thì báo "kernel sources changed".
 - Gate đầy đủ xanh.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `e6bfcce0d8a91e868e203083e0b3b463613a219416386495f07c2c2bfcfc9abe`.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `c54166250b05ebb2ec2f9263124a0f9a04ca6778aec5dd83a8f1d1dea6b4ef12`.
 
 ## 9.62 — Vòng 83: P0 filesystem từ audit #2
@@ -1428,3 +1426,11 @@ follow-up `62b31f4`.
 - Kernel 136 test; QEMU: riscv64 3/3, aarch64 3/3, x86_64 3/3 sau khi sửa
   điều kiện ghi status chuẩn (chỉ ghi khi chạy đủ ba arch).
 - SHA-256 `ViFastOs-architecture-summary.txt`: `b9d474384dc9e1e2304063ce40cb95bdd22d4ff507315292ad787cea3c2c52e8`.
+
+## 9.64 — Vòng 85: quét PCI trên x86_64
+
+- `pci_scan()` qua 0xCF8/0xCFC: `PCI SCAN OK devices=4 first=8086:29c0
+  class=0600` (host bridge Q35) — marker bắt buộc của x86_64, harness 507 case.
+- Đây là nền tảng cho virtio-pci (x86 hiện chưa có virtio).
+- Gate đầy đủ xanh.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `e6bfcce0d8a91e868e203083e0b3b463613a219416386495f07c2c2bfcfc9abe`.

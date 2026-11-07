@@ -62,6 +62,7 @@ def fixture(arch: str) -> str:
     else:
         lines += [
             "KERNEL DATA NX OK",
+            "PCI SCAN OK devices=4",
             "ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000)",
             "LAPIC OK (id=0)",
             "AP TRAMPOLINE OK (page=0x90000)",
