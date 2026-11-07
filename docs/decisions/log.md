@@ -77,4 +77,4 @@
 | 93 | NX thêm 5 static; `--input-check` đòi echo từ user shell | Input end-to-end; display tương tác hoãn vì rủi ro IRQ+BKL | 9e0cad7 |
 | 94 | `PD_HIGH` vào NX; NX fail ồn ào; input x86 SKIP; lọc auto-repeat; ack sớm | Audit #7: self-check NX từng xanh giả khi NX tắt | a0c0872 |
 | 95 | `gpu_echo_key` vẽ mã phím + flush vùng nhỏ; `--input-check` đòi `INPUT ECHO` | Mốc display tương tác; x86 vẫn SKIP vì thiếu driver bàn phím | 847a763 |
-| 96 | UEFI ghi image range; siết load bound 1 GiB; DNS retry 8 lần | Check `KERNEL IMAGE OUTSIDE` chạy thật; hết flake soak | (commit sau) |
+| 96 | UEFI ghi image range; siết load bound 1 GiB; DNS retry 8 lần | Check `KERNEL IMAGE OUTSIDE` chạy thật; hết flake soak | 7e1a4c8 |
