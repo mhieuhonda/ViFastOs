@@ -75,4 +75,4 @@
 | 91 | Marker `EL0 FP TRAP`/`SSE USER OFF` thành bắt buộc trong harness | Hồi quy bật lại FP cho EL0 sẽ đỏ cổng | d2f78b2 |
 | 92 | x86 dựng TrapFrame đầy đủ từ stack thô, bật fault_frame_complete | Pager cứu được task trên x86; const assert chốt layout | d2f78b2 |
 | 93 | NX thêm 5 static; `--input-check` đòi echo từ user shell | Input end-to-end; display tương tác hoãn vì rủi ro IRQ+BKL | 9e0cad7 |
-| 94 | `PD_HIGH` vào NX; NX fail ồn ào; input x86 SKIP; lọc auto-repeat; ack sớm | Audit #7: self-check NX từng xanh giả khi NX tắt | (commit sau) |
+| 94 | `PD_HIGH` vào NX; NX fail ồn ào; input x86 SKIP; lọc auto-repeat; ack sớm | Audit #7: self-check NX từng xanh giả khi NX tắt | c4f8e21 |
