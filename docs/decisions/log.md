@@ -72,5 +72,5 @@
 | 88 | Notification dùng hàng đợi 6 waiter; signal đánh thức tất cả | Root park 4 worker trên một notification; mọi thiết kế WouldBlock/2-slot đều hỏng boot | 74b7a30 |
 | 89 | EOI PIC chỉ trên BSP; bật SGI 2; idle race kiểm lại queue | Sửa P1 audit #4; enqueue drop là không thể với hằng số hiện tại | 48de675 |
 | 90 | `fault::suspend` lưu frame; cổng `fault_frame_complete()` | x86 chưa có frame đầy đủ nên tạm tắt lưu ở đó | 1674ed2 |
-| 91 | Marker `EL0 FP TRAP`/`SSE USER OFF` thành bắt buộc trong harness | Hồi quy bật lại FP cho EL0 sẽ đỏ cổng | (commit sau) |
-| 92 | x86 dựng TrapFrame đầy đủ từ stack thô, bật fault_frame_complete | Pager cứu được task trên x86; const assert chốt layout | (commit sau) |
+| 91 | Marker `EL0 FP TRAP`/`SSE USER OFF` thành bắt buộc trong harness | Hồi quy bật lại FP cho EL0 sẽ đỏ cổng | 3e7b1d0 |
+| 92 | x86 dựng TrapFrame đầy đủ từ stack thô, bật fault_frame_complete | Pager cứu được task trên x86; const assert chốt layout | 3e7b1d0 |
