@@ -12411,6 +12411,52 @@ mod tests {
     }
 
     #[test]
+    fn round104_revoke_group_reclaims_tree_keeps_sibling() {
+        // Mốc 1/2 (vòng 21): destroy-cả-nhóm qua revoke Untyped — nhóm A
+        // (TCB + Frame con cháu) bị thu hồi cả cây, nhóm B (Untyped anh em
+        // từ cùng cha) còn nguyên, invariant sạch.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let parent = kernel
+            .create_untyped_with_limit(0x900_0000, 0x20000, 4096, 64)
+            .unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(parent, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        // Nhóm A: child untyped + TCB + Frame trong đó.
+        let child_a = kernel
+            .retype_untyped_child_as(parent, 0x8000, 16, None)
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(child_a, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let tcb_a = kernel.retype(child_a, ObjType::Tcb).unwrap();
+        let frame_a = kernel.retype(child_a, ObjType::Frame).unwrap();
+        // Nhóm B: child untyped anh em + TCB riêng.
+        let child_b = kernel
+            .retype_untyped_child_as(parent, 0x8000, 16, None)
+            .unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(child_b, ObjType::Untyped, Rights::ALL))
+            .unwrap();
+        let tcb_b = kernel.retype(child_b, ObjType::Tcb).unwrap();
+        // Revoke nhóm A qua vé child_a (trả về số CAP bị xóa, không phải
+        // số object — TCB/Frame tạo trực tiếp không có cap trỏ tới).
+        let _ = kernel.revoke_cap(root, 2).unwrap();
+        assert!(kernel.tcb(tcb_a).is_none());
+        assert!(kernel.get(frame_a).is_none());
+        // Nhóm B còn nguyên.
+        assert!(kernel.tcb(tcb_b).is_some());
+        assert!(kernel.untyped(child_b).is_some());
+        assert!(kernel.check_invariants().is_ok());
+        // Dọn nhóm B để không rò.
+        kernel.revoke_cap(root, 3).unwrap();
+        assert!(kernel.tcb(tcb_b).is_none());
+        assert!(kernel.check_invariants().is_ok());
+        let _ = frame_a;
+    }
+
+    #[test]
     fn set_cap_badge_cannot_be_cleared_or_changed() {
         // Vòng 100 (K16): cho badge -> 0 rồi mint lại badge khác là đường rửa
         // danh tính (CapMint chỉ chặn mint từ nguồn đã có badge).
