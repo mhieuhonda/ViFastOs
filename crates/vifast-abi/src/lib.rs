@@ -809,6 +809,9 @@ pub enum SyscallId {
     TcbDestroy = 49,
     /// Destroy a retyped object through its root capability.
     ObjectDestroy = 50,
+    /// Block until a TCB exits (reap rendezvous).  Immediate Ok when the
+    /// target already exited; WouldBlock when it already has another waiter.
+    TcbWait = 51,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -866,6 +869,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::CNodeInstall, true),
     (SyscallId::TcbDestroy, true),
     (SyscallId::ObjectDestroy, true),
+    (SyscallId::TcbWait, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

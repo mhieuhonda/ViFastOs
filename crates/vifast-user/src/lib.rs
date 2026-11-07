@@ -1115,6 +1115,11 @@ pub fn tcb_destroy(tcb_slot: u8) -> SyscallResult {
     result(e, v)
 }
 
+pub fn tcb_wait(tcb_slot: u8) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::TcbWait as u64, [tcb_slot as u64, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn tcb_resume(tcb_slot: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

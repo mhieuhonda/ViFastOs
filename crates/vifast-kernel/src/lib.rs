@@ -5231,8 +5231,10 @@ impl Kernel {
             }
         }
         // Client đang BlockedReply chờ task exit: đánh thức lỗi ngay để
-        // không treo vô hạn (mốc 1: hết kẹt BlockedReply).
-        if let Some((client, _)) = self.tcb(old).and_then(|table| table.caller) {
+        // không treo vô hạn (mốc 1: hết kẹt BlockedReply). Bao gồm cả
+        // parent TcbWait qua target.caller. Xóa caller sau wake để zombie
+        // không giữ ref stale (restart zombie kiểm tra caller).
+        if let Some((client, _)) = self.tcb_mut(old).and_then(|table| table.caller.take()) {
             self.wake_error(client, KError::ObjectDestroyed);
         }
         if let Some(table) = self.tcb_mut(old) {
@@ -6042,11 +6044,43 @@ impl Kernel {
                     Ok(cap) => cap,
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
+                // Mốc 1: không destroy task đang là rendezvous-wait của ai
+                // (có waiter TcbWait đang chờ) — buộc waiter hoàn tất trước,
+                // nếu không waiter treo mà target đã biến mất.
+                if self
+                    .tcb(target.obj)
+                    .and_then(|table| table.caller)
+                    .is_some()
+                {
+                    return UserAction::Return {
+                        value: 0,
+                        error: KError::WouldBlock,
+                    };
+                }
                 match self.destroy_object(target.obj) {
                     Ok(()) => UserAction::Return {
                         value: 0,
                         error: KError::Ok,
                     },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbWait as u64 => {
+                let target = match self.lookup_cap(
+                    tcb,
+                    slot_or_invalid!(a0),
+                    Some(ObjType::Tcb),
+                    Rights::READ,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.wait_tcb(tcb, target.obj) {
+                    Ok(true) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
+                    },
+                    Ok(false) => UserAction::Blocked,
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
@@ -12070,6 +12104,68 @@ mod tests {
         assert_eq!(kernel.suspend_tcb(t, root), Err(KError::IllegalOperation));
         assert_eq!(kernel.restart_tcb(t, root), Ok((0x4000_0000, 0x4000_4000)));
         assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn round103_tcb_wait_rendezvous() {
+        // Mốc 1: parent TcbWait con — con sống thì park, con exit thì
+        // parent được wake lỗi (ObjectDestroyed) và có thể reap.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let parent = kernel.create_tcb("parent", 5).unwrap();
+        let child = kernel.create_tcb("child", 5).unwrap();
+        kernel
+            .configure_tcb(parent, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel
+            .configure_tcb(child, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        // Con đã exit: wait xong ngay.
+        kernel.enqueue(child);
+        assert_eq!(kernel.pick_on(0), Some(child));
+        kernel.exit_current_on(0);
+        assert_eq!(kernel.wait_tcb(parent, child), Ok(true));
+        // Con sống: wait park parent.
+        let child2 = kernel.create_tcb("child2", 5).unwrap();
+        kernel
+            .configure_tcb(child2, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.tcb_mut(child2).unwrap().state = ThreadState::Suspended;
+        kernel.resume_tcb(child2).unwrap();
+        // Đặt parent làm current trực tiếp (scheduler có thể chọn child2
+        // trước vì resume sớm hơn — không quan trọng với kịch bản wait).
+        kernel.tcb_mut(parent).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(parent);
+        assert_eq!(kernel.wait_tcb(parent, child2), Ok(false));
+        assert_eq!(kernel.tcb(parent).unwrap().state, ThreadState::BlockedReply);
+        // Waiter thứ hai bị từ chối (một waiter tại một thời điểm).
+        let other = kernel.create_tcb("other", 5).unwrap();
+        kernel
+            .configure_tcb(other, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        assert_eq!(kernel.wait_tcb(other, child2), Err(KError::WouldBlock));
+        // Destroy con đang có waiter bị chặn — waiter phải xong trước.
+        kernel
+            .install_cap(parent, 1, Cap::new(child2, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(parent, SyscallId::TcbDestroy as u64, 1, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::WouldBlock
+            }
+        );
+        // Con exit: parent được wake lỗi.
+        kernel.tcb_mut(child2).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(child2);
+        kernel.exit_current_on(0);
+        assert_eq!(
+            kernel.tcb(parent).unwrap().resume_error,
+            Some(KError::ObjectDestroyed)
+        );
         assert!(kernel.check_invariants().is_ok());
     }
 

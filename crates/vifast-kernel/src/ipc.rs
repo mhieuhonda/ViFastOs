@@ -329,6 +329,38 @@ impl Kernel {
         Ok(())
     }
 
+    /// Parent chờ con exit (mốc 1): target đã Exited thì xong ngay; nếu
+    /// không, waiter park BlockedReply và mượn `target.caller` làm chỗ chờ
+    /// (exit_current_on wake caller này — cùng đường dọn caller ma K36).
+    /// Chỉ một waiter tại một thời điểm (target đã có caller thì WouldBlock).
+    /// Waiter đang BlockedReply (chờ IPC nơi khác) thì WouldBlock.
+    pub fn wait_tcb(&mut self, waiter: ObjRef, target: ObjRef) -> KResult<bool> {
+        let target_table = self.tcb(target).ok_or(KError::WrongType)?;
+        if target_table.state == ThreadState::Exited {
+            return Ok(true);
+        }
+        if target_table.state == ThreadState::Inactive {
+            return Err(KError::IllegalOperation);
+        }
+        if target_table.caller.is_some() {
+            return Err(KError::WouldBlock);
+        }
+        let waiter_state = self.tcb(waiter).ok_or(KError::InvalidCap)?.state;
+        if waiter_state == ThreadState::BlockedReply {
+            return Err(KError::WouldBlock);
+        }
+        let epoch = self.tcb(target).ok_or(KError::ObjectDestroyed)?.reply_epoch;
+        if let Some(table) = self.tcb_mut(target) {
+            table.caller = Some((waiter, epoch));
+        }
+        if let Some(table) = self.tcb_mut(waiter) {
+            table.state = ThreadState::BlockedReply;
+            table.pending = None;
+        }
+        self.remove_from_runq(waiter);
+        Ok(false)
+    }
+
     pub fn signal(&mut self, notification: ObjRef, bits: u64) -> KResult<()> {
         let bits = if bits == 0 { 1 } else { bits };
         // Vòng 88 (audit #4 P0): đánh thức TẤT CẢ waiter còn sống trong hàng
