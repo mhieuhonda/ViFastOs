@@ -79,4 +79,4 @@
 | 95 | `gpu_echo_key` vẽ mã phím + flush vùng nhỏ; `--input-check` đòi `INPUT ECHO` | Mốc display tương tác; x86 vẫn SKIP vì thiếu driver bàn phím | 847a763 |
 | 96 | UEFI ghi image range; siết load bound 1 GiB; DNS retry 8 lần | Check `KERNEL IMAGE OUTSIDE` chạy thật; hết flake soak | fb5081f |
 | 97 | NX toàn ảnh trừ text (PE) + reload_cr3 + wx hai chiều; K1/K3/N1 | Audit #9 chỉ ra TLB và OOB region; soi chay chỉ ra wake_error/enqueue/frame clamp | c1d953a |
-| 98 | Bàn phím PS/2 cho x86 + `input_check_x86`; `make_ready` chỉ đánh thức task đang chờ | Audit #10: 6 lỗi i8042; K4 từ review; K6 là false positive | 1f6c8d2 |
+| 98 | Bàn phím PS/2 cho x86 + `input_check_x86`; `make_ready` chỉ đánh thức task đang chờ | Audit #10: 6 lỗi i8042; K4 từ review; K6 là false positive | c1cd90b |
