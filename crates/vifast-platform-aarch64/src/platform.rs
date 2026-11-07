@@ -243,14 +243,15 @@ fn poll_maintenance() {
 }
 
 fn maintenance_target_online(target: usize) -> bool {
-    target == 0 || (target == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0)
+    if target == 0 {
+        return true;
+    }
+    // Mốc 5 (vòng 29): như riscv — mọi hart phụ đã online đều nhận
+    // maintenance (đồng bộ, dù aarch64 hiện mới start tới hart 1).
+    target < MAX_HARTS && SECONDARY_ONLINE.load(Ordering::SeqCst) >= target
 }
 
 fn send_maintenance(target: usize, kind: u32) -> bool {
-    assert!(
-        SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
-        "maintenance mailbox supports at most 2 online harts"
-    );
     if target >= MAX_HARTS || !maintenance_target_online(target) {
         return false;
     }
@@ -1390,12 +1391,8 @@ impl Platform for Aarch64Platform {
     }
 
     fn wake_hart(hart: usize) {
-        assert!(
-            SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
-            "reschedule mailbox supports at most 2 online harts"
-        );
-        if hart == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            let _ = send_reschedule(1);
+        if hart < MAX_HARTS && maintenance_target_online(hart) {
+            let _ = send_reschedule(hart);
         }
     }
 

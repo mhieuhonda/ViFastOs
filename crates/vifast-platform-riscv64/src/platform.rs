@@ -239,14 +239,15 @@ fn poll_maintenance() {
 }
 
 fn maintenance_target_online(target: usize) -> bool {
-    target == 0 || (target == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0)
+    if target == 0 {
+        return true;
+    }
+    // Mốc 5 (vòng 29): mọi hart phụ đã online đều nhận maintenance (trước
+    // đây chỉ hart 1). Hart chưa boot thì bỏ qua như trước.
+    target < MAX_HARTS && SECONDARY_ONLINE.load(Ordering::SeqCst) >= target
 }
 
 fn send_maintenance(target: usize, kind: u32) -> bool {
-    assert!(
-        SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
-        "maintenance mailbox supports at most 2 online harts"
-    );
     if target >= MAX_HARTS || !maintenance_target_online(target) {
         return false;
     }
@@ -260,11 +261,7 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
     );
     let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
     MAINT_KIND[target].fetch_or(kind, Ordering::AcqRel);
-    if target == 1 {
-        <Riscv64 as Arch>::send_ipi(1);
-    } else {
-        <Riscv64 as Arch>::send_ipi(0);
-    }
+    <Riscv64 as Arch>::send_ipi(target);
     let mut spins = 0usize;
     while MAINT_ACK[target].load(Ordering::Acquire) < seq && spins < 5_000_000 {
         poll_maintenance();
@@ -427,6 +424,8 @@ fn record_secondary_wake(sip: u64) {
 
 #[no_mangle]
 pub extern "C" fn rust_secondary(hartid: usize) -> ! {
+    // Log boot mỗi hart phụ (không chỉ hart 1): cần để chẩn đoán SMP>2.
+    vifast_kernel::klog!(RiscvPlatform, "SEC boot hart={hartid}");
     unsafe {
         init_cpu(hartid);
         core::arch::asm!("csrw stvec, {}", in(reg) trap_entry as *const () as usize);
@@ -1189,12 +1188,10 @@ impl Platform for RiscvPlatform {
     }
 
     fn wake_hart(hart: usize) {
-        assert!(
-            SECONDARY_ONLINE.load(Ordering::SeqCst) + 1 <= 2,
-            "reschedule mailbox supports at most 2 online harts"
-        );
-        if hart == 1 && SECONDARY_ONLINE.load(Ordering::SeqCst) > 0 {
-            let _ = send_reschedule(1);
+        // Mốc 5 (vòng 29): wake đúng hart đã online (trước đây cứng hart 1
+        // và assert tối đa 2 harts).
+        if hart < MAX_HARTS && maintenance_target_online(hart) {
+            let _ = send_reschedule(hart);
         }
     }
 
@@ -1793,10 +1790,9 @@ impl Platform for RiscvPlatform {
 
     fn start_smp() {
         let entry = secondary_entry as *const () as usize;
-        // Mốc 5 (vòng 28): truyền hartid qua opaque (a2) — HSM start đưa
-        // opaque vào a0 của hart mới. Trước đây opaque=0 nên mọi hart phụ
-        // đều tưởng mình là hart 0 (không lộ vì chỉ start hart 1 và code
-        // cứng hart 1). S-mode không đọc được mhartid.
+        // Mốc 5 (vòng 28-29): start xong một hart thì đợi nó online (có
+        // timeout) rồi mới start tiếp — HSM start dồn dập làm OpenSBI bỏ
+        // sót hart sau (đo được: không delay thì chỉ hart 1 boot).
         for hart in 1..MAX_HARTS {
             let started = unsafe {
                 let result: usize;
@@ -1812,6 +1808,9 @@ impl Platform for RiscvPlatform {
                 result
             };
             let _ = started;
+            // Log mỗi HSM start (vừa chẩn đoán SMP, vừa tạo delay tự nhiên:
+            // đo được start dồn dập làm OpenSBI bỏ sót hart sau).
+            vifast_kernel::klog!(RiscvPlatform, "HSM hart={hart} rc={started}");
         }
         let mut spins = 0u32;
         while SECONDARY_ONLINE.load(Ordering::SeqCst) == 0 && spins < 10_000_000 {

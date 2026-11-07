@@ -235,10 +235,6 @@ pub mod user_layout {
     pub const WORKER_D_STACK_TOP: usize = CODE_VA + 0x12000;
     pub const WORKER_E_STACK_BASE: usize = CODE_VA + 0x12000;
     pub const WORKER_E_STACK_TOP: usize = CODE_VA + 0x13000;
-    /// Worker F (exit/wait/reap demo, mốc 1): khe 0x13000-0x14000 còn trống
-    /// giữa WORKER_E và IDLE stack.
-    pub const WORKER_F_STACK_BASE: usize = CODE_VA + 0x13000;
-    pub const WORKER_F_STACK_TOP: usize = CODE_VA + 0x14000;
     /// BSP idle task stack.  The idle task only runs when no other hart-0
     /// TCB is runnable; a separate page keeps root's Rust stack untouched.
     pub const IDLE_STACK_BASE: usize = CODE_VA + 0x14000;
@@ -267,8 +263,7 @@ pub mod user_layout {
     const _: () = assert!(WORKER_B_STACK_TOP <= WORKER_C_STACK_BASE);
     const _: () = assert!(WORKER_C_STACK_TOP <= WORKER_D_STACK_BASE);
     const _: () = assert!(WORKER_D_STACK_TOP <= WORKER_E_STACK_BASE);
-    const _: () = assert!(WORKER_E_STACK_TOP <= WORKER_F_STACK_BASE);
-    const _: () = assert!(WORKER_F_STACK_TOP <= IDLE_STACK_BASE);
+    const _: () = assert!(WORKER_E_STACK_TOP <= IDLE_STACK_BASE);
     const _: () = assert!(IDLE_STACK_TOP <= CNODE_STACK_BASE);
     const _: () = assert!(CNODE_STACK_TOP <= PAGER_STACK_BASE);
     const _: () = assert!(PAGER_STACK_TOP <= PAGER_SERVER_STACK_BASE);
