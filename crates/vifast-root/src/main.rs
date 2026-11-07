@@ -16,16 +16,16 @@ use vifast_abi::user_layout::{
     FAULT4_STACK_TOP, IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
     PAGER2_STACK_BASE, PAGER2_STACK_TOP, PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_IPC_BUF_VA,
     PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP,
-    SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2, USER_ENTRY_FAULT3, USER_ENTRY_FAULT4,
-    WORKER_A_STACK_BASE, WORKER_A_STACK_TOP, WORKER_B_STACK_BASE, WORKER_B_STACK_TOP,
-    WORKER_C_STACK_BASE, WORKER_C_STACK_TOP, WORKER_D_STACK_BASE, WORKER_D_STACK_TOP,
-    WORKER_E_STACK_BASE, WORKER_E_STACK_TOP, WORKER_G_STACK_BASE, WORKER_G_STACK_TOP,
-    WORKER_H_STACK_BASE, WORKER_H_STACK_TOP,
+    ROOT_IPC_BUF_VA, ROOT_SELF_SLOT, SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2,
+    USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE, WORKER_A_STACK_TOP,
+    WORKER_B_STACK_BASE, WORKER_B_STACK_TOP, WORKER_C_STACK_BASE, WORKER_C_STACK_TOP,
+    WORKER_D_STACK_BASE, WORKER_D_STACK_TOP, WORKER_E_STACK_BASE, WORKER_E_STACK_TOP,
+    WORKER_G_STACK_BASE, WORKER_G_STACK_TOP, WORKER_H_STACK_BASE, WORKER_H_STACK_TOP,
 };
 use vifast_abi::{
     pager::{LABEL_RUN, RUN_BADGE},
-    BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER, IRQ_UART,
-    LABEL_FAULT,
+    vfs as vfs_abi, BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER,
+    IRQ_UART, LABEL_FAULT,
 };
 use vifast_user::SyscallResult;
 
@@ -1415,6 +1415,31 @@ fn spawn_pager_server(
     check(vifast_user::tcb_resume(server_tcb));
 }
 
+// Mốc 9 (vòng 46): root tự STAT path qua endpoint gốc. Gọi sau khi VFS
+// sẵn sàng (cuối boot, sau DEMAND VFSLOAD) vì server init FS bất đồng
+// bộ sau resume. Trả size khi OK.
+fn root_vfs_stat(endpoint_slot: u8, path: &[u8]) -> Option<u64> {
+    if path.is_empty() || path.len() > vifast_abi::vfs::MAX_PATH {
+        return None;
+    }
+    unsafe {
+        let mut i = 0;
+        while i < path.len() {
+            core::ptr::write_volatile((ROOT_IPC_BUF_VA as *mut u8).add(i), path[i]);
+            i += 1;
+        }
+    }
+    // STAT_PATH: data0 = độ dài path (khác OPEN dùng data1).
+    let reply = unsafe {
+        vifast_user::call_message(endpoint_slot, vfs_abi::STAT_PATH, path.len() as u64, 0, 0)
+    };
+    if reply.error == KError::Ok && reply.label == vfs_abi::OK {
+        Some(reply.data[0])
+    } else {
+        None
+    }
+}
+
 fn spawn_worker(
     meta_untyped: u8,
     data_untyped: u8,
@@ -1680,6 +1705,34 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         IPC_BUF_SERVER_VA as u64,
     ));
     check(vifast_user::tcb_resume(server_tcb));
+
+    // Mốc 9 (vòng 46): IPC buffer + tự gọi VFS từ root. Root giữ cap gốc
+    // tới VFS endpoint (badge SUPERUSER = uid 0) nhưng chưa có IPC buffer
+    // nên không tự STAT/READ được. Cấp 1 frame map ở ROOT_IPC_BUF_VA,
+    // bind cho chính root qua ROOT_SELF_SLOT. Fail-êm: thiếu tài nguyên
+    // (x86) thì bỏ qua, gate không đổi.
+    let root_ipc_ok = (|| {
+        let frame = slots.alloc();
+        if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+            return false;
+        }
+        map_with_tables(
+            data_untyped,
+            root_vspace,
+            frame,
+            ROOT_IPC_BUF_VA as u64,
+            Rights::READ | Rights::WRITE,
+            &mut slots,
+        );
+        if vifast_user::tcb_set_ipc_buffer(ROOT_SELF_SLOT as u8, frame, ROOT_IPC_BUF_VA as u64)
+            .error
+            != KError::Ok
+        {
+            return false;
+        }
+        true
+    })();
+    let _ = root_ipc_ok;
 
     let client_untyped = slots.alloc();
     check(vifast_user::retype_untyped(
@@ -2082,31 +2135,62 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             if message.label == LABEL_RUN && message.badge == RUN_BADGE {
                 // `run` lặp: VSpace setup 1 lần, mỗi lần chỉ thay TCB.
                 if exec_vspace == 0 {
-                    destroy_exec(&mut slots, &exec_used, exec_len);
-                    exec_len = 0;
-                    exec_used = [0u8; MAX_EXEC_SLOTS];
-                    match spawn_elf_copy(
-                        meta_untyped,
-                        data_untyped,
-                        EXEC_DEMO_ELF,
-                        0b01,
-                        &mut slots,
-                        &mut exec_used,
-                    ) {
-                        Some(tcb) => {
-                            let mut n = 0;
-                            while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
-                                n += 1;
-                            }
-                            exec_len = n;
-                            // exec_used[?] là vspace — tìm slot vspace? Lưu
-                            // riêng: vspace là slot đầu tiên được cấp.
-                            exec_vspace = exec_used[0];
-                            exec_tcb = tcb;
-                            write(b"RUN OK\n")
+                    // Vòng 46: đọc path shell gửi qua IPC buffer (kernel
+                    // copy sang ROOT_IPC_BUF_VA khi send). STAT xác minh
+                    // trước khi spawn; run trần (không path) bỏ qua STAT.
+                    let mut plen = 0usize;
+                    while plen < vifast_abi::vfs::MAX_PATH {
+                        let b = unsafe {
+                            core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(plen))
+                        };
+                        if b == 0 {
+                            break;
                         }
-                        None => write(b"RUN SKIP\n"),
+                        plen += 1;
                     }
+                    let mut stat_ok = plen == 0;
+                    if plen != 0 {
+                        let mut path = [0u8; vifast_abi::vfs::MAX_PATH];
+                        let mut i = 0;
+                        while i < plen {
+                            path[i] = unsafe {
+                                core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i))
+                            };
+                            i += 1;
+                        }
+                        if root_vfs_stat(endpoint_slot, &path[..plen]).is_some() {
+                            stat_ok = true;
+                        }
+                    }
+                    if !stat_ok {
+                        write(b"RUN SKIP\n");
+                    } else {
+                        destroy_exec(&mut slots, &exec_used, exec_len);
+                        exec_len = 0;
+                        exec_used = [0u8; MAX_EXEC_SLOTS];
+                        match spawn_elf_copy(
+                            meta_untyped,
+                            data_untyped,
+                            EXEC_DEMO_ELF,
+                            0b01,
+                            &mut slots,
+                            &mut exec_used,
+                        ) {
+                            Some(tcb) => {
+                                let mut n = 0;
+                                while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
+                                    n += 1;
+                                }
+                                exec_len = n;
+                                // exec_used[?] là vspace — tìm slot vspace? Lưu
+                                // riêng: vspace là slot đầu tiên được cấp.
+                                exec_vspace = exec_used[0];
+                                exec_tcb = tcb;
+                                write(b"RUN OK\n")
+                            }
+                            None => write(b"RUN SKIP\n"),
+                        }
+                    } // if stat_ok
                 } else {
                     // Tái dùng TCB cũ bằng restart (zombie sau exit, hoặc
                     // Ready nếu `run` dồn dập chưa kịp chạy). Không tốn

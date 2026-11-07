@@ -93,9 +93,11 @@ fn percpu_clobber_ok() -> bool {
 }
 
 fn copy_path(path: &[u8]) -> usize {
-    let len = core::cmp::min(path.len(), vfs::MAX_PATH);
+    let len = core::cmp::min(path.len(), vfs::MAX_PATH - 1);
     unsafe {
         core::ptr::copy_nonoverlapping(path.as_ptr(), IPC_BUF_CLIENT_VA as *mut u8, len);
+        // NUL-terminate để root đọc path từ IPC buffer (vòng 46).
+        core::ptr::write_volatile((IPC_BUF_CLIENT_VA as *mut u8).add(len), 0);
     }
     len
 }
@@ -463,17 +465,18 @@ fn shell_command(line: &[u8]) {
             write(b"usage: truncate <path> <size>\n");
         }
     } else if line == b"run" || line.starts_with(b"run ") {
-        // Mốc 9 (vòng 33/38): yêu cầu root exec demo ELF qua cap lệnh.
+        // Mốc 9 (vòng 33/38/46): yêu cầu root exec qua cap lệnh.
         // Fire-and-forget: root in RUN OK/SKIP; shell không block chờ reply
         // nên không treo nếu root bận (root recv fault_endpoint chung).
-        // Có path thì kiểm tra file tồn tại qua VFS trước (vòng 38);
-        // root hiện chỉ chạy demo ELF nội bộ, chưa nạp file thật.
+        // Path copy vào IPC buffer của client — kernel copy sang root khi
+        // send, root tự STAT qua VFS endpoint gốc (vòng 46).
         let arg = if line.len() > 3 { &line[4..] } else { b"" };
         let mut ready = true;
         if !arg.is_empty() {
             match vfs_open(arg, 0) {
                 Some((fd, _)) => {
                     let _ = vfs_close(fd);
+                    copy_path(arg);
                 }
                 None => {
                     write(b"run: not found\n");
@@ -482,6 +485,11 @@ fn shell_command(line: &[u8]) {
             }
         }
         if ready {
+            // Run trần: xóa byte đầu IPC buffer để root biết không có path
+            // (tránh đọc rác của lệnh trước còn sót — vòng 46).
+            if arg.is_empty() {
+                copy_path(b"");
+            }
             let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_RUN, 0, 0, 0);
             write(if r.error == KError::Ok {
                 b"run sent\n"

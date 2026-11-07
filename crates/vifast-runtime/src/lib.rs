@@ -554,6 +554,20 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
         A::exit(1);
     }
 
+    // Mốc 9 (vòng 46): self-TCB cap để root tự set IPC buffer + tự gọi VFS
+    // (STAT/READ file exec). Không GRANT để root không phát tán quyền
+    // điều khiển chính nó.
+    if kernel
+        .install_cap(
+            root,
+            vifast_abi::user_layout::ROOT_SELF_SLOT as u8,
+            Cap::new(root, ObjType::Tcb, Rights::READ | Rights::WRITE),
+        )
+        .is_err()
+    {
+        A::exit(1);
+    }
+
     let page_size = A::PAGE_SIZE as u64;
     let layout = TaskLayout {
         code_va: vifast_abi::user_layout::CODE_VA as u64,
