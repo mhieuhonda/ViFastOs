@@ -665,6 +665,12 @@ impl Arch for Aarch64Platform {
     const NAME: &'static str = Aarch64::NAME;
     fn init() {
         Aarch64::init();
+        // Vòng 91: marker bắt buộc để harness phát hiện hồi quy nếu ai đó bật
+        // lại FP cho EL0 (CPACR FPEN=0b11) — khi đó q0..q31 rò rỉ giữa task.
+        vifast_kernel::klog!(
+            Aarch64Platform,
+            "EL0 FP TRAP (FPEN=0b01, kernel vẫn dùng FP/SIMD)"
+        );
     }
     fn putc(byte: u8) {
         Aarch64::putc(byte);

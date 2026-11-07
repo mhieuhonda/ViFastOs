@@ -1450,6 +1450,7 @@ Theo kiến trúc:
   - `SMP WORKERS OK (a=50, b=50, c=1)` — both yield workers and busy worker completed
   - `SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)` — post-worker idle timer proof
   - `TLB STATS (va_flush=V, ipi=I, skipped=K)` — per-VA TLB accounting
+  - `EL0 FP TRAP` — FP/SIMD của EL0 bị trap, không rò rỉ giữa task
   - 8 USER FAULT records including 0x80000000, 0x1000002000, 0x1000301000, 0x1001000000, 0x1001001000x2, 0x1001002000
   - ROOT SWITCH n > 1
   - T > 0, I >= 1
@@ -2201,6 +2202,11 @@ E. Desktop / Space
 136. Vòng 90: `fault::suspend` lưu frame đang fault vào context slot của TCB
     (pager cứu thì chạy lại đúng điểm fault); cổng `Platform::fault_frame_complete()`
     vì x86 hiện truyền frame rỗng (trap.S đẩy vector/error trước SAVE_REGS).
+137. Vòng 91-92: marker FP bắt buộc trong harness (`EL0 FP TRAP` aarch64,
+    `SSE USER OFF` x86, harness 508 case); x86 dựng `TrapFrame` đầy đủ từ stack
+    thô (`TrapFrame::from_raw`, exc có vector+error, pf chỉ error) nên
+    `fault_frame_complete() = true` và pager cứu được task; const assert chốt
+    layout `size == 160`, `rip@120`; `AP_HART` + assert thay literal cho AP.
 
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------

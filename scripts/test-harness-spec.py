@@ -26,6 +26,7 @@ def fixture(arch: str) -> str:
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
             "TLB STATS (va_flush=2, ipi=1, skipped=1)",
+            "EL0 FP TRAP",
             "VIRTIO NET READY base=0x10007000 accepted=0x10020",
             "VIRTIO NET PING REPLY from 10.0.2.2",
             "VIRTIO NET DNS sent len=0",
@@ -48,6 +49,7 @@ def fixture(arch: str) -> str:
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
             "TLB STATS (va_flush=2, ipi=0, skipped=0)",
+            "EL0 FP TRAP",
             "VIRTIO NET READY base=0xa003c00 accepted=0x10020",
             "VIRTIO NET PING REPLY from 10.0.2.2",
             "VIRTIO NET DNS sent len=0",
@@ -63,6 +65,7 @@ def fixture(arch: str) -> str:
         lines += [
             "KERNEL DATA NX OK",
             "PCI SCAN OK devices=4",
+            "SSE USER OFF",
             "ACPI MADT OK (cpus=2, bsp=0, lapic=0xfee00000)",
             "LAPIC OK (id=0)",
             "AP TRAMPOLINE OK (page=0x90000)",
@@ -78,6 +81,7 @@ def fixture(arch: str) -> str:
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
             "TLB STATS (va_flush=2, ipi=1, skipped=1)",
+            "EL0 FP TRAP",
             "DEMAND LOAD OK",
         ]
     addresses = list(spec.FAULT_ADDRESSES)

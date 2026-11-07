@@ -15,6 +15,13 @@ pub struct X86Platform;
 const USER_DATA_SEL: u64 = 0x18;
 const USER_CODE_SEL: u64 = 0x20;
 const TSS_SEL: u16 = 0x28;
+
+/// Hart mà trampoline AP khởi động. x86_64 hiện chỉ có **một** AP: trampoline,
+/// GDT và stack được dựng cố định cho hart 1 (audit #4 P1-7). Mọi chỗ dùng
+/// index này thay vì literal `1` để giới hạn nằm ở một nơi và có assert.
+const AP_HART: usize = 1;
+const _: () = assert!(AP_HART < MAX_HARTS);
+const _: () = assert!(AP_HART > 0);
 const USER_DATA_RPL3: u64 = USER_DATA_SEL | 3;
 const USER_CODE_RPL3: u64 = USER_CODE_SEL | 3;
 
@@ -364,6 +371,15 @@ pub struct TrapFrame {
     ss: u64,
 }
 
+// Vòng 92: chốt layout với trap.S để lệch một word là fail lúc build chứ
+// không phải lúc chạy (audit #6 ca ngợi const assert kiểu này).
+const _: () = assert!(core::mem::size_of::<TrapFrame>() == 160);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, r15) == 0);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, rax) == 112);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, rip) == 120);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, cs) == 128);
+const _: () = assert!(core::mem::offset_of!(TrapFrame, ss) == 152);
+
 impl TrapFrame {
     const fn empty() -> Self {
         TrapFrame {
@@ -388,6 +404,21 @@ impl TrapFrame {
             rsp: 0,
             ss: 0,
         }
+    }
+
+    /// Dựng `TrapFrame` đầy đủ từ stack thô sau `SAVE_REGS` (vòng 92, audit
+    /// #6): `exc_common` đẩy thêm vector+error trước rip nên rip ở word 17;
+    /// `pf_entry` chỉ có error nên rip ở word 16. Phần 15 thanh ghi trùng
+    /// layout với struct nên copy thẳng.
+    unsafe fn from_raw(frame: *const u64, has_vector: bool) -> Self {
+        let mut out = *(frame as *const TrapFrame);
+        let tail = if has_vector { 17 } else { 16 };
+        out.rip = *frame.add(tail);
+        out.cs = *frame.add(tail + 1);
+        out.rflags = *frame.add(tail + 2);
+        out.rsp = *frame.add(tail + 3);
+        out.ss = *frame.add(tail + 4);
+        out
     }
 
     fn user(entry: usize, stack: usize) -> Self {
@@ -1254,7 +1285,7 @@ unsafe fn install_real_trampoline() {
     ];
     let lm_offset = 0x80;
     core::ptr::copy_nonoverlapping(lm.as_mut_ptr(), page.add(lm_offset), lm.len());
-    let stack = core::ptr::addr_of!(TRAP_STACKS[1]) as u64 + 0x4000;
+    let stack = core::ptr::addr_of!(TRAP_STACKS[AP_HART]) as u64 + 0x4000;
     let entry = ap_entry as *const () as u64;
     core::ptr::write_unaligned(page.add(lm_offset + 16) as *mut u64, stack);
     core::ptr::write_unaligned(page.add(lm_offset + 26) as *mut u64, entry);
@@ -1289,13 +1320,18 @@ pub extern "C" fn ap_entry() -> ! {
         let stage_ptr = (AP_TRAMPOLINE + TRAMPOLINE_STAGE_OFFSET) as *mut u8;
         core::ptr::write_volatile(stage_ptr, 3);
         setup_ap_gdt_tss_idt();
-        init_cpu(1);
+        init_cpu(AP_HART);
+        assert_eq!(
+            X86Platform::hart_id(),
+            AP_HART,
+            "AP hart id mismatch (trampoline chỉ dựng cho hart 1)"
+        );
         let mut tr: u16;
         core::arch::asm!("str {}", out(reg) tr);
         assert_eq!(tr, TSS_SEL, "AP TSS selector mismatch");
         assert_eq!(
             read_msr(IA32_GS_BASE),
-            core::ptr::addr_of!(CPU_STATES[1]) as u64,
+            core::ptr::addr_of!(CPU_STATES[AP_HART]) as u64,
             "AP GS base mismatch"
         );
         let _ = configure_lapic();
@@ -1306,7 +1342,7 @@ pub extern "C" fn ap_entry() -> ! {
 
         disable_sse();
 
-        vifast_kernel::klog!(X86Platform, "SSE USER OFF");
+        vifast_kernel::klog!(X86Platform, "AP SSE OFF");
         core::ptr::write_volatile(stage_ptr, 4);
         AP_ONLINE.store(true, Ordering::SeqCst);
         AP_LONG_ONLINE = true;
@@ -1456,9 +1492,9 @@ unsafe fn init_cpu(hartid: usize) {
     write_msr(IA32_KERNEL_GS_BASE, 0);
 }
 unsafe fn setup_ap_gdt_tss_idt() {
-    let tss = core::ptr::addr_of_mut!(TSSS[1]);
-    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[1]) as u64 + 16384;
-    (*tss).ist[0] = core::ptr::addr_of!(IST_STACKS[1]) as u64 + 32768;
+    let tss = core::ptr::addr_of_mut!(TSSS[AP_HART]);
+    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[AP_HART]) as u64 + 16384;
+    (*tss).ist[0] = core::ptr::addr_of!(IST_STACKS[AP_HART]) as u64 + 32768;
     (*tss).iomap = core::mem::size_of::<Tss>() as u16;
     let tss_base = tss as u64;
     let tss_limit = core::mem::size_of::<Tss>() as u64 - 1;
@@ -1970,7 +2006,7 @@ impl Platform for X86Platform {
     }
 
     fn fault_frame_complete() -> bool {
-        false
+        true
     }
 
     fn prepare_user() {
@@ -1982,7 +2018,7 @@ impl Platform for X86Platform {
             enable_pcid();
             // Vòng 87: CR4 là per-hart nên BSP cũng phải tắt SSE cho user.
             disable_sse();
-            vifast_kernel::klog!(X86Platform, "SSE USER OFF (bsp)");
+            vifast_kernel::klog!(X86Platform, "SSE USER OFF");
             if NX_ENABLED {
                 vifast_kernel::klog!(X86Platform, "KERNEL DATA NX OK");
             }
@@ -2551,8 +2587,10 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
     // SAVE_REGS nên cast thẳng rsp làm hỏng đường trả về user (GP vector=13).
     // Giữ frame rỗng; runtime vẫn lưu frame vào slot của TCB fault nên không
     // ảnh hưởng task khác.
-    let mut context = TrapFrame::empty();
-    vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, error);
+    // vòng 92: frame thật (audit #6) — pager cứu được task và nó chạy lại
+    // đúng instruction đã fault.
+    let mut context = unsafe { TrapFrame::from_raw(frame, true) };
+    vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, 0);
     drop(bkl);
     assert_bkl_released();
     <X86Platform as Platform>::enter_user(&context);
@@ -2577,7 +2615,7 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
         );
         X86_64::exit(1);
     }
-    let mut context = TrapFrame::empty();
+    let mut context = unsafe { TrapFrame::from_raw(_frame, false) };
     vifast_runtime::fault::suspend::<X86Platform>(&mut context, error, cr2);
     drop(bkl);
     assert_bkl_released();

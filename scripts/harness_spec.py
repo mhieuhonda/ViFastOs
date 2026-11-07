@@ -148,6 +148,7 @@ ARCH = {
         ("SMP WORKERS OK (a=50, b=50, c=1)", "both yield workers and busy worker completed"),
         ("SMP POST IDLE OK (ticks=Tp, idle_entries=Ip, wake_timer=Wtp)", "post-worker idle timer proof"),
         ("TLB STATS (va_flush=V, ipi=I, skipped=K)", "per-VA TLB accounting"),
+        ("EL0 FP TRAP", "FP/SIMD của EL0 bị trap, không rò rỉ giữa task"),
     ],
     "x86_64": [
         ("KERNEL DATA NX OK", "kernel data is non-executable"),
@@ -219,7 +220,7 @@ ARCH_EXACT_ONE = {
         "VIRTIO RNG READY",
         "VIRTIO TCP LISTEN OK",
     ],
-    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK", "SMP PREEMPT OK", "SMP TIMER RATE", "SMP IPI COUNT", "SMP SCHED OK", "SMP WORKERS OK", "SMP POST IDLE OK", "DEMAND LOAD OK", "PCI SCAN OK"],
+    "x86_64": ["KERNEL DATA NX OK", "ACPI MADT OK", "LAPIC OK", "AP TRAMPOLINE OK", "AP REAL MODE OK", "AP LONG MODE OK", "SMP OK", "SMP TIMER OK", "SMP IDLE OK", "SMP PREEMPT OK", "SMP TIMER RATE", "SMP IPI COUNT", "SMP SCHED OK", "SMP WORKERS OK", "SMP POST IDLE OK", "DEMAND LOAD OK", "PCI SCAN OK", "SSE USER OFF"],
 }
 
 NUMERIC = {

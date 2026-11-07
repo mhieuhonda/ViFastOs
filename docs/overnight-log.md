@@ -1481,3 +1481,13 @@ follow-up `62b31f4`.
 - QEMU 3 arch 2/2; gate đầy đủ xanh.
 - Audit #5 lỗi hai lần phía subagent; sẽ chạy lại vòng sau.
 - SHA-256 `ViFastOs-architecture-summary.txt`: `2bff5071ef04b103702cb65cb86e7263d2ca31f89b6ed8cdb2ea24536f800e39`.
+
+## 9.70 — Vòng 91-92: fault frame x86 + marker FP trong harness
+
+- x86: `TrapFrame::from_raw` dựng frame đầy đủ từ stack thô (exc: vector+error
+  trước rip; pf: chỉ error) → `fault_frame_complete() = true`, pager cứu được
+  task; const assert `size_of::<TrapFrame>() == 160`, `rip@120`, `cs@128`.
+- Harness thêm marker bắt buộc `EL0 FP TRAP` (aarch64) và `SSE USER OFF` (x86)
+  → 508 case; `AP_HART` + assert cho AP.
+- Soak 12 vòng: 12/12 cả ba kiến trúc.
+- SHA-256 `ViFastOs-architecture-summary.txt`: `e73f2e99f8d950cfd9891cc0d882930224504beac6acf2402ec03322203c0cba`.
