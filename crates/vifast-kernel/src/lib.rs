@@ -3487,6 +3487,9 @@ impl Kernel {
         // Running trên hart khác — nó sẽ vừa Running vừa queued và có thể bị
         // chọn chạy lần hai (vỡ loại trừ của BKL). Task đang chạy chỉ nhận
         // `resume_error` và thấy lỗi ở lần trả syscall kế tiếp.
+        // Vòng 65: BlockedBudget (hết ngân sách sched_context) cũng là
+        // Blocked* — wake_error phải Ready + queued, nếu không task treo
+        // (có resume_error nhưng không ai pick).
         let was_blocked = matches!(
             state,
             ThreadState::BlockedSend
@@ -3495,6 +3498,7 @@ impl Kernel {
                 | ThreadState::BlockedNotification
                 | ThreadState::BlockedSleep
                 | ThreadState::BlockedFault
+                | ThreadState::BlockedBudget
         );
         if let Some(table) = self.tcb_mut(tcb) {
             table.pending = None;
@@ -7415,6 +7419,25 @@ mod tests {
         assert_eq!(table.state, ThreadState::Ready);
         assert!(table.queued);
         assert_eq!(table.resume_error, Some(KError::ObjectDestroyed));
+    }
+
+    #[test]
+    fn round65_wake_error_queues_blocked_budget() {
+        // Mốc 1 (vòng 65): task BlockedBudget (hết ngân sách sched_context)
+        // bị wake_error (vd. server nó chờ bị destroy) phải Ready + queued
+        // như mọi Blocked* khác — trước đây was_blocked bỏ sót BlockedBudget
+        // nên task chỉ nhận resume_error mà treo mãi không ai pick.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("budgeted", 5).unwrap();
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::BlockedBudget;
+        kernel.wake_error(tcb, KError::ObjectDestroyed);
+        let table = kernel.tcb(tcb).unwrap();
+        assert_eq!(table.state, ThreadState::Ready);
+        assert!(table.queued, "BlockedBudget phải vào runqueue khi wake");
+        assert_eq!(table.resume_error, Some(KError::ObjectDestroyed));
+        // Pick được và invariants giữ.
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        assert!(kernel.check_invariants().is_ok());
     }
 
     #[test]

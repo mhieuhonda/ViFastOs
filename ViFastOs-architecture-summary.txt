@@ -285,6 +285,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 2c35c11 moc 1 (vong 58): host test destroy sleeper khong revive
 - 4e4d7b1 moc 1 (vong 60): host test TcbDestroy current/self bi cam
 - 72b29d1 moc 1 (vong 62): cam TcbWait tu cho chinh minh + host test
+- f281a94 moc 1 (vong 64): cam restart current + host test, don debug sot vong 62
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
