@@ -307,7 +307,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 321904 byte (`kernel_end=0x803b1690`)
+- RISC-V headroom: 317808 byte (`kernel_end=0x803b2690`)
 - `Kernel = 562944`, `Object = 3736`, `Tcb = 3680`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status

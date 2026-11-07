@@ -474,8 +474,18 @@ fn parse_u64(text: &[u8]) -> Option<u64> {
 }
 
 fn shell() -> ! {
-    let mut line = [0u8; 96];
+    // Mốc 8 (vòng 9): dòng lệnh 256B + lịch sử 4 lệnh + Ctrl-C/L/P/N.
+    // (Giới hạn 4 lệnh vì client stack chỉ 4 KiB; static 2 KiB trong .bss
+    // làm client ELF to ra và treo timer phase — nguyên nhân chưa rõ, đã
+    // bisect xác nhận. TODO mốc 2: cấp buffer lịch sử từ Untyped riêng.)
+    const LINE_MAX: usize = 256;
+    const HIST_MAX: usize = 4;
+    let mut line = [0u8; LINE_MAX];
     let mut len = 0usize;
+    let mut hist = [[0u8; LINE_MAX]; HIST_MAX];
+    let mut hist_len = [0usize; HIST_MAX];
+    let mut hist_count = 0usize;
+    let mut hist_pos: Option<usize> = None;
     // Vòng 61 (pha 4 input): marker chứng minh input task (UART console_read
     // + IRQ notify) đã vào vòng lặp — harness khóa exact-one cả 3 arch.
     write(b"SHELL READY\n");
@@ -504,6 +514,19 @@ fn shell() -> ! {
         let byte = input.value as u8;
         if byte == b'\r' || byte == b'\n' {
             write(b"\n");
+            if len != 0 {
+                if hist_count < HIST_MAX {
+                    hist_count += 1;
+                } else {
+                    hist.copy_within(1.., 0);
+                    hist_len.copy_within(1.., 0);
+                    hist_count = HIST_MAX;
+                }
+                let slot = hist_count - 1;
+                hist[slot][..len].copy_from_slice(&line[..len]);
+                hist_len[slot] = len;
+            }
+            hist_pos = None;
             shell_command(&line[..len]);
             len = 0;
             write(b"shell> ");
@@ -512,10 +535,45 @@ fn shell() -> ! {
                 len -= 1;
                 write(b"\x08 \x08");
             }
+            hist_pos = None;
+        } else if byte == 3 {
+            while len != 0 {
+                len -= 1;
+                write(b"\x08 \x08");
+            }
+            hist_pos = None;
+            write(b"^C\nshell> ");
+        } else if byte == 12 {
+            write(b"\x1b[2J\x1b[Hshell> ");
+            write(&line[..len]);
+            hist_pos = None;
+        } else if byte == 16 || byte == 14 {
+            if hist_count != 0 {
+                let next = match hist_pos {
+                    None if byte == 16 => Some(hist_count - 1),
+                    Some(pos) if byte == 16 && pos > 0 => Some(pos - 1),
+                    Some(pos) if byte == 14 && pos + 1 < hist_count => Some(pos + 1),
+                    _ => hist_pos,
+                };
+                if next != hist_pos {
+                    while len != 0 {
+                        len -= 1;
+                        write(b"\x08 \x08");
+                    }
+                    if let Some(pos) = next {
+                        let hlen = hist_len[pos];
+                        line[..hlen].copy_from_slice(&hist[pos][..hlen]);
+                        len = hlen;
+                        write(&line[..len]);
+                    }
+                    hist_pos = next;
+                }
+            }
         } else if byte >= 32 && len < line.len() {
             line[len] = byte;
             len += 1;
             write(&[byte]);
+            hist_pos = None;
         }
     }
 }
