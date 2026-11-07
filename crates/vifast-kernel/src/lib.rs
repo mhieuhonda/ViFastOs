@@ -12379,6 +12379,38 @@ mod tests {
     }
 
     #[test]
+    fn round42_restart_from_ready_rebirths_runnable() {
+        // Mốc 1 (vòng 42): `run` dồn dập restart TCB khi nó còn Ready
+        // (chưa kịp chạy sau resume) — phải Ready + queued + chạy được,
+        // không IllegalOperation, invariants giữ.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("exec", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.resume_tcb(t).unwrap();
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
+        // Restart khi còn Ready (chưa pick lần nào).
+        let (entry, stack) = kernel.restart_tcb(t, root).unwrap();
+        assert_eq!((entry, stack), (0x4000_0000, 0x4000_4000));
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
+        // Tái sinh chạy được ngay.
+        assert_eq!(kernel.pick_on(0), Some(t));
+        assert!(kernel.check_invariants().is_ok());
+        // Exit rồi restart lại (đời zombie) vẫn sạch.
+        kernel.exit_current_on(0);
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Exited);
+        kernel.restart_tcb(t, root).unwrap();
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
+        assert_eq!(kernel.pick_on(0), Some(t));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn round103_failed_syscalls_return_zero_value() {
         // Mốc 7: syscall lỗi không được rò rỉ dữ liệu kernel qua `value`
         // (userspace nhận cả error lẫn value). Quét các họ syscall với
