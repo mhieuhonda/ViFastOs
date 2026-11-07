@@ -1467,6 +1467,12 @@ pub mod timer {
                     objects,
                     max_objects
                 );
+                // Vòng 36: bytes leak tích lũy (free list đầy khi reclaim).
+                // Kỳ vọng 0 sau boot chuẩn; >0 là tín hiệu cần dọn.
+                if let Some(leaked) = kernel.untyped_leak_by_base(A::data_page().as_ptr() as usize)
+                {
+                    vifast_kernel::klog!(A, "DATA LEAKED {}", leaked);
+                }
                 if let Some((used, size)) = A::boot_stack_usage() {
                     vifast_kernel::klog!(A, "BOOT STACK used={} size={}", used, size);
                 }

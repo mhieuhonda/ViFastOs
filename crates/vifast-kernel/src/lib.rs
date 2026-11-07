@@ -1613,6 +1613,15 @@ impl Kernel {
         Some((region.size, region.bump, region.objects, region.max_objects))
     }
 
+    /// Leaked bytes for an Untyped by physical base: ranges returned while
+    /// the free list was full (vòng 36: quan sát leak tích lũy qua serial).
+    pub fn untyped_leak_by_base(&self, base: usize) -> Option<u32> {
+        self.objs.iter().find_map(|object| match object.kind {
+            Kind::Untyped(ref region) if region.base == base => Some(region.leaked),
+            _ => None,
+        })
+    }
+
     /// Look up usage for an Untyped by its physical base.  Runtime uses this
     /// to log the data arena at test-exit after root has allocated from it.
     pub fn untyped_usage_by_base(&self, base: usize) -> Option<(usize, usize, usize, usize)> {
