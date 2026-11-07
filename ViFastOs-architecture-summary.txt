@@ -253,6 +253,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6731e14 moc 8: shell dong 256B + lich su + Ctrl + interactive echo test
 - 084a46c moc 5: Reply mang cap + sua 3 duong park quen go runq
 - 95e796d moc 1: hoi quy exit-khi-dang-ngu khong song lai
+- c863085 moc 1/2: hoi quy destroy TCB don sach moi phia
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -300,7 +301,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 162/162 PASS
+- `cargo test -p vifast-kernel`: 163/163 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS

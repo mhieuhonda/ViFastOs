@@ -12314,6 +12314,62 @@ mod tests {
     }
 
     #[test]
+    fn round103_restart_from_exited_rebirths_clean() {
+        // Mốc 1: restart zombie Exited tái sinh sạch — Ready + enqueue,
+        // pending/resume/fds/wake_at reset, entry/stack giữ, bound_ntfn giữ
+        // (thuộc tính task), sched_context giữ bind.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("t", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000_0000, 4096, 4096, 8)
+            .unwrap();
+        let context = kernel.retype(untyped, ObjType::SchedContext).unwrap();
+        kernel.configure_sched_context(context, 100, 100).unwrap();
+        kernel.bind_sched_context(t, context).unwrap();
+        kernel.bind_notification(t, ntfn).unwrap();
+        kernel.enqueue(t);
+        assert_eq!(kernel.pick_on(0), Some(t));
+        kernel.tcb_mut(t).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(t);
+        // Bẩn hóa đời cũ: pending + resume_error + wake_at + fd giả.
+        kernel.tcb_mut(t).unwrap().pending = Some(PendingSend {
+            badge: 0,
+            msg: Message::empty(0),
+            is_call: false,
+            can_grant: false,
+            grant_key: 0,
+        });
+        kernel.tcb_mut(t).unwrap().resume_error = Some(KError::Ok);
+        kernel.tcb_mut(t).unwrap().wake_at = Some(999);
+        kernel.exit_current_on(0);
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Exited);
+        assert!(kernel.tcb(t).unwrap().pending.is_none());
+        // Restart tái sinh.
+        let (entry, stack) = kernel.restart_tcb(t, root).unwrap();
+        assert_eq!((entry, stack), (0x4000_0000, 0x4000_4000));
+        let table = kernel.tcb(t).unwrap();
+        assert_eq!(table.state, ThreadState::Ready);
+        assert!(table.queued);
+        assert_eq!(table.resume, None);
+        assert_eq!(table.resume_error, None);
+        assert_eq!(table.wake_at, None);
+        assert_eq!(table.bound_ntfn, Some(ntfn));
+        assert_eq!(table.sched_context, Some(context));
+        assert!(kernel.check_invariants().is_ok());
+        // Task tái sinh chạy được.
+        assert_eq!(kernel.pick_on(0), Some(t));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn set_cap_badge_cannot_be_cleared_or_changed() {
         // Vòng 100 (K16): cho badge -> 0 rồi mint lại badge khác là đường rửa
         // danh tính (CapMint chỉ chặn mint từ nguồn đã có badge).
