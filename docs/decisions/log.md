@@ -74,4 +74,4 @@
 | 90 | `fault::suspend` lưu frame; cổng `fault_frame_complete()` | x86 chưa có frame đầy đủ nên tạm tắt lưu ở đó | 1674ed2 |
 | 91 | Marker `EL0 FP TRAP`/`SSE USER OFF` thành bắt buộc trong harness | Hồi quy bật lại FP cho EL0 sẽ đỏ cổng | d2f78b2 |
 | 92 | x86 dựng TrapFrame đầy đủ từ stack thô, bật fault_frame_complete | Pager cứu được task trên x86; const assert chốt layout | d2f78b2 |
-| 93 | NX thêm 5 static; `--input-check` đòi echo từ user shell | Input end-to-end; display tương tác hoãn vì rủi ro IRQ+BKL | (commit sau) |
+| 93 | NX thêm 5 static; `--input-check` đòi echo từ user shell | Input end-to-end; display tương tác hoãn vì rủi ro IRQ+BKL | 2b7d4f1 |
