@@ -274,6 +274,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 8ff206d moc 9 (vong 33): shell run -> root exec (end-to-end)
 - ae4ff9d moc 9 (vong 34+35): run lap an toan bang restart + don debug
 - 15dacda moc 2 (vong 36): quan sat duoc untyped leak tich luy
+- 96f93e9 moc 11 (vong 37): runbook van hanh 11.16
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

@@ -334,7 +334,7 @@ fn shell_command(line: &[u8]) {
     if line == b"help" {
         write(b"help time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
-        write(b"truncate <path> <size> fsck run\n");
+        write(b"truncate <path> <size> fsck run [path]\n");
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");
@@ -462,16 +462,33 @@ fn shell_command(line: &[u8]) {
         } else {
             write(b"usage: truncate <path> <size>\n");
         }
-    } else if line == b"run" {
-        // Mốc 9 (vòng 33): yêu cầu root exec demo ELF qua cap lệnh.
+    } else if line == b"run" || line.starts_with(b"run ") {
+        // Mốc 9 (vòng 33/38): yêu cầu root exec demo ELF qua cap lệnh.
         // Fire-and-forget: root in RUN OK/SKIP; shell không block chờ reply
         // nên không treo nếu root bận (root recv fault_endpoint chung).
-        let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_RUN, 0, 0, 0);
-        write(if r.error == KError::Ok {
-            b"run sent\n"
-        } else {
-            b"run failed\n"
-        });
+        // Có path thì kiểm tra file tồn tại qua VFS trước (vòng 38);
+        // root hiện chỉ chạy demo ELF nội bộ, chưa nạp file thật.
+        let arg = if line.len() > 3 { &line[4..] } else { b"" };
+        let mut ready = true;
+        if !arg.is_empty() {
+            match vfs_open(arg, 0) {
+                Some((fd, _)) => {
+                    let _ = vfs_close(fd);
+                }
+                None => {
+                    write(b"run: not found\n");
+                    ready = false;
+                }
+            }
+        }
+        if ready {
+            let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_RUN, 0, 0, 0);
+            write(if r.error == KError::Ok {
+                b"run sent\n"
+            } else {
+                b"run failed\n"
+            });
+        }
     } else if line == b"fsck" {
         write(if vfs_fsck() {
             b"ok\n"
