@@ -3557,6 +3557,21 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 } else {
                     0
                 });
+            // Vòng 135: cấp phát vượt phần còn lại của Untyped phải trả
+            // OutOfMemory (không panic, không cấp nửa vời), và size 0
+            // phải bị từ chối.
+            // Dùng lại slot endpoint đã destroy ở trên — KHÔNG alloc thêm: vùng slot
+            // của root rất sát ngưỡng trên aarch64 (alloc thêm ⇒ panic 843).
+            let probe_slot = probe_endpoint_slot;
+            let too_big = vifast_user::retype_untyped(data_untyped, 0x40_0000_0000, 1, probe_slot);
+            let zero = vifast_user::retype_untyped(data_untyped, 0, 1, probe_slot);
+            write(
+                if too_big.error == KError::OutOfMemory && zero.error != KError::Ok {
+                    b"MEM OOM OK\n"
+                } else {
+                    b"MEM OOM BAD\n"
+                },
+            );
             if worker_bits & want_bits == want_bits && !workers_ok {
                 write(SMP_WORKERS_OK);
                 workers_ok = true;

@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "MEM OOM OK",
+        "oversized untyped request was refused with OutOfMemory and size 0 rejected",
+    ),
+    (
         "IPC DEAD OK",
         "calling a destroyed endpoint returned an error instead of blocking",
     ),
