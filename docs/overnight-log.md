@@ -3396,3 +3396,16 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Phụ: thêm `LABEL_LOOP = 0x5047_0008` vào ABI; bảng lệnh shell tự sinh lại
   (**26 lệnh**).
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS, fmt sạch.
+
+## 9.199 — Vòng 202: cố đưa `loop` vào cổng — marker IPC lúc boot KHÔNG ổn định (đã revert)
+
+- Thêm probe: client gửi `LABEL_LOOP` (n=2) ngay sau `SHELL READY`, root in
+  `LOOP OK`, đưa vào `COMMON` ⇒ harness **589 → 592 ca**.
+- Kết quả: **riscv 2/3** — một lần **thiếu `LOOP OK`**.
+- Đã thử **gửi 3 lần kèm yield** ⇒ vẫn **2/3** ⇒ **không phải đua đơn thuần**;
+  có lần root không xử lý message đó trong lúc boot (nguyên nhân chưa xác định).
+- **Quyết định**: **gỡ** probe + marker khỏi cổng để không ship kiểm tra chập
+  chờn; giữ lệnh `loop` (kiểm bằng tay, đã ghi runbook 2c-1). Ghi vào
+  `17-su-co.md` dòng chẩn đoán mới.
+- Gate sau gỡ: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS,
+  fmt sạch.
