@@ -22,7 +22,7 @@ import time
 import glob
 import hashlib
 
-from harness_spec import COMMON, accept
+from harness_spec import ARCH, COMMON, accept
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QEMU_RV = "qemu-system-riscv64"

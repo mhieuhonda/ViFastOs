@@ -637,6 +637,15 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             Ok(()) => (vfs::OK, 0, 0, 0),
             Err(error) => err(error),
         },
+        vfs::STATFS => {
+            let (used, total) = fs().usage();
+            (
+                vfs::OK,
+                used as u64,
+                total as u64,
+                vifast_fs::BLOCK_SIZE as u64,
+            )
+        }
         vfs::FSCK => {
             let ok = fs().fsck().is_ok();
             unsafe {

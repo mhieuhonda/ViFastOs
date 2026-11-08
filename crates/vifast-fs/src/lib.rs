@@ -1581,6 +1581,22 @@ impl<D: BlockDev> Fs<D> {
         self.lookup_path(path, uid)
     }
 
+    /// Vòng 139: dung lượng dữ liệu còn dùng được — trả (đã dùng, tổng).
+    /// Chỉ tính vùng DATA (bỏ superblock/bitmap/inode/journal) đúng như
+    /// `alloc_block`, để con số khớp với khả năng cấp phát thật.
+    pub fn usage(&self) -> (u32, u32) {
+        let total = self.dev.block_count().saturating_sub(DATA_START);
+        let mut used = 0;
+        let mut block = DATA_START;
+        while block < self.dev.block_count() {
+            if self.block_is_used(block) {
+                used += 1;
+            }
+            block += 1;
+        }
+        (used, total)
+    }
+
     pub fn info(&self, ino: u16) -> Result<InodeInfo, FsError> {
         let inode = *self.inodes.get(ino as usize - 1).ok_or(FsError::BadFd)?;
         if inode.kind == INODE_FREE {

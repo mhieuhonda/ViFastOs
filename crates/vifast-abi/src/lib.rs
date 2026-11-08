@@ -452,6 +452,8 @@ pub mod vfs {
     pub const TRUNCATE: u64 = 0x200A;
     pub const FSYNC: u64 = 0x200B;
     pub const FSCK: u64 = 0x200C;
+    /// Vòng 139: dung lượng FS — reply data = (đã dùng, tổng, block_size).
+    pub const STATFS: u64 = 0x200D;
     /// Identity probe: server returns the kernel-stamped badge in data[0].
     pub const BADGE_PROBE: u64 = 0x200D;
     /// Hard link: old path in buffer[0], new path in buffer[MAX_PATH].

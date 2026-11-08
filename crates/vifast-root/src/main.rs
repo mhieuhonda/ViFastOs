@@ -3060,6 +3060,34 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"SLOT REUSE BAD\n"
                     });
+                    // Vòng 139: dung lượng FS qua STATFS — dùng phải ≤ tổng,
+                    // tổng > 0, và block size đúng 512 (vifast_fs::BLOCK_SIZE).
+                    let usage = unsafe {
+                        vifast_user::call_message(root_vfs_slot, vfs_abi::STATFS, 0, 0, 0)
+                    };
+                    let usage_ok = usage.error == KError::Ok
+                        && usage.label == vfs_abi::OK
+                        && usage.data[1] > 0
+                        && usage.data[0] <= usage.data[1]
+                        && usage.data[2] == 512;
+                    if !usage_ok {
+                        write(b"FSUS ");
+                        write_decimal(usage.error as u64);
+                        write(b" ");
+                        write_decimal(usage.label);
+                        write(b" ");
+                        write_decimal(usage.data[0]);
+                        write(b" ");
+                        write_decimal(usage.data[1]);
+                        write(b" ");
+                        write_decimal(usage.data[2]);
+                        write(b"\n");
+                    }
+                    write(if usage_ok {
+                        b"FS USAGE OK\n"
+                    } else {
+                        b"FS USAGE BAD\n"
+                    });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];

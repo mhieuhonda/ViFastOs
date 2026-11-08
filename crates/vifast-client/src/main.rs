@@ -360,7 +360,7 @@ fn shell_command(line: &[u8]) {
     if line == b"help" {
         write(b"help time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
-        write(b"truncate <path> <size> fsck run [path]\n");
+        write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...] exec <path> [args...]\n");
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
@@ -553,6 +553,19 @@ fn shell_command(line: &[u8]) {
             } else {
                 b"run failed\n"
             });
+        }
+    } else if line == b"df" {
+        // Vòng 139: dung lượng FS (data area).
+        let reply = unsafe { vifast_user::call_message(1, vfs::STATFS, 0, 0, 0) };
+        if reply.error == KError::Ok && reply.label == vfs::OK {
+            write_u64(reply.data[0]);
+            write(b"/");
+            write_u64(reply.data[1]);
+            write(b" blocks, ");
+            write_u64(reply.data[2]);
+            write(b" B/block\n");
+        } else {
+            write(b"df: error\n");
         }
     } else if line == b"fsck" {
         write(if vfs_fsck() {
