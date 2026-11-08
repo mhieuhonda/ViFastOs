@@ -1716,3 +1716,20 @@ follow-up `62b31f4`.
   Chưa kết luận nhân quả — ghi nhận để điều tra bằng bisect sạch.
 - Kết luận vòng: giữ nguyên hành vi hệ thống ở `9fd145a`; gate xanh
   (riscv 3/3, aarch64 3/3, x86 3/3 sau rerun), harness 523.
+
+## 9.88 — Vòng 97: sửa `runfs <path>` (index 6) + xác nhận flake riscv
+
+- Shell `runfs <path>`: cắt từ index 6 (trước là 7 nên mất dấu `/`). Kiểm
+  chứng tay: `runfs /prog.elf` → root nhận đúng path, nạp lại từ FS và in
+  `HI DK`.
+- Flake riscv64: hai lần chạy cổng đầy đủ cho 0/3 dù serial đã tới
+  `SHELL READY` (timeout 20 s), trong khi chạy riêng `--repeat 5` thì 5/5.
+  Chạy lại cổng đầy đủ khi máy rảnh: **3/3** — kết luận đây là flake do tải
+  máy (QEMU bị kill trước khi kịp thoát), không phải lỗi logic.
+  Bài học: khi 0/3 hàng loạt, kiểm tra `ps qemu` + chạy lại trước khi nghi
+  commit.
+- Ảnh ELF 0x200 (tiết kiệm 4 KiB headroom) vẫn chưa chạy được: spawn OK
+  (`EXEC OK`, `RUN FS OK`) nhưng chương trình không in, kể cả khi in chuỗi
+  cố định — cần trace phía kernel (entry/segment/icache) trước khi dùng lại.
+- Gate: QEMU 3/3×3, persist 7×3, harness 523, docs PASS, fmt sạch, 0 warning,
+  headroom riscv 199 024 B.

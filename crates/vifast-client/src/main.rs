@@ -468,8 +468,9 @@ fn shell_command(line: &[u8]) {
         // Mốc 9 (vòng 89): exec-thật từ FS, KHÔNG kiểm tra file tồn tại
         // trước (root tự tạo /prog.elf từ ảnh ELF dựng sẵn rồi nạp từ
         // filesystem). Dùng để kiểm chứng đường exec-from-FS.
+        // "runfs " dài 6 byte → path bắt đầu ở index 6 (giữ dấu '/').
         let arg = if line.len() > 6 {
-            &line[7..]
+            &line[6..]
         } else {
             b"/prog.elf"
         };
