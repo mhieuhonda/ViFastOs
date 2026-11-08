@@ -2150,3 +2150,17 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   hiện ngay sau khi chương trình in byte đầu ⇒ nghi **luồng thực thi bị lạc sau
   syscall**, không phải lỗi đọc bộ nhớ.
 - Đã revert; gate xanh (QEMU 2/2×3, 0 warning, headroom 199 024 B).
+
+## 9.119 — Vòng 122: chương trình test dài tự gây fault (cause=2)
+
+- Thử chương trình 18 lệnh: in byte từ trang code (`entry+0x80`), in chuỗi từ
+  trang stack (`EXEC_STACK_BASE+0x100`), in byte kiểm tra (`entry+0x81`).
+- Kết quả: **không in gì**, kết thúc bằng `USER FAULT cause=0x2 addr=0x0`
+  (illegal instruction). Trong khi chương trình 8 lệnh hiện tại **vẫn chạy
+  đúng** ở cùng bản build.
+- Nghi vấn: code 52 byte (0x120..0x168) chạm vùng `write_program_args` ghi đè
+  (0x140/0x160) hoặc `filesz`/`e_entry` lệch ⇒ **lỗi của test tự chế**, chưa
+  kết luận gì về lỗi stack.
+- Bài học: test asm tay phải **ngắn (≤8 lệnh)**, kiểm từng bước, tránh vùng
+  0x140..0x180 mà root dùng cho tham số.
+- Gate: QEMU 2/2×3, build 0 warning, headroom 199 024 B.
