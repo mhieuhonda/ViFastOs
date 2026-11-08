@@ -307,6 +307,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - ffa12f0 tai lieu (vong 96): dieu tra argv dong + headroom, chua doi hanh vi
 - d40ad5c moc 9 (vong 97): sua runfs <path> (index 6) + xac nhan flake riscv
 - e961297 ha tang (vong 98): chan doan flake timeout + retry co kiem soat
+- 845a112 ha tang (vong 99): chan doan timeout cho persist + bo thu nghiem giu slot exec
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -357,7 +358,7 @@ Test hiện tại:
 - `cargo test -p vifast-kernel`: 183/183 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
-- `cargo test -p vifast-elf`: 18/18 PASS
+- `cargo test -p vifast-elf`: 19/19 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
@@ -367,7 +368,7 @@ Test hiện tại:
 ### BEGIN GENERATED status
 - RISC-V headroom: 199024 byte (`kernel_end=0x803cf690`)
 - `Kernel = 550296`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
+- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 2/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped (đo 2026-11-06): RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B

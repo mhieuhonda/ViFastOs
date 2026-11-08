@@ -1759,3 +1759,18 @@ follow-up `62b31f4`.
   đường boot vẫn có thể phá persist dù QEMU xanh).
 - Gate cuối vòng: QEMU 3/3×3, persist 3/3 (sau rerun), harness 523, docs PASS,
   fmt sạch, 0 warning.
+
+## 9.91 — Vòng 100: kiểm chứng parse cho entry lệch trang + bỏ thử thu hồi server
+
+- Thêm test `accepts_unaligned_entry_inside_segment` (vifast-elf): ảnh kiểu
+  "thu gọn" (PT_LOAD offset 0x1000, filesz 0x100, e_entry = vaddr+0x80) được
+  parse chấp nhận; loader map tại page_base và code rơi đúng offset 0x80.
+  Kết luận: **parse không phải nút thắt** — nếu ảnh 0x200 không chạy thì lỗi
+  nằm ở đường thực thi phía kernel/runtime, không phải kiểm tra ELF.
+- Thử thu hồi pager server (TCB + stack + IPC frame) sau PAGER_DONE:
+  `PAGER SRV 0/0/0` (destroy OK cả 3) nhưng DATA untyped chỉ giảm
+  objects 76 → 74, pages giữ 80; đồng thời **headroom destroy-smp tụt
+  199 024 → 194 928** (dưới ngưỡng 192 KiB) → build fail. Đã revert.
+- Bài học lặp lại: mọi thêm mã vào root đều ăn vào headroom destroy-smp
+  (chỉ còn ~2.4 KiB); muốn thêm tính năng phải giải phóng chỗ trước.
+- Gate cuối vòng: QEMU 3/3×3 (x86 rerun), persist 3/3, harness 523 continue.

@@ -414,6 +414,45 @@ mod tests {
     }
 
     #[test]
+    fn accepts_unaligned_entry_inside_segment() {
+        // Mốc 9 (vòng 100): ảnh ELF nhỏ đặt code ở offset 0x80 trong segment
+        // và e_entry = vaddr + 0x80 (entry KHÔNG page-aligned). parse phải
+        // chấp nhận: entry chỉ cần nằm trong segment, không cần trùng địa
+        // chỉ trang — đây là điều kiện để thu nhỏ ảnh demo tiết kiệm headroom.
+        let mut bytes = vec![0u8; 0x1100];
+        bytes[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        bytes[4] = 2;
+        bytes[5] = 1;
+        bytes[6] = 1;
+        bytes[16] = 2; // ET_EXEC
+        put_u16(&mut bytes, 18, TEST_MACHINE);
+        put_u32(&mut bytes, 20, 1);
+        put_u64(&mut bytes, 24, TEST_USER_START + 0x1000 + 0x80); // e_entry
+        put_u64(&mut bytes, 32, 64); // e_phoff
+        bytes[52] = 64;
+        bytes[54] = 56;
+        bytes[56] = 1;
+        // PT_LOAD: offset 0x1000, vaddr USER_START+0x1000, filesz/memsz 0x100
+        let base = ELF_HEADER_SIZE;
+        put_u32(&mut bytes, base, PT_LOAD);
+        put_u32(&mut bytes, base + 4, PF_R | PF_X);
+        put_u64(&mut bytes, base + 8, 0x1000);
+        put_u64(&mut bytes, base + 16, TEST_USER_START + 0x1000);
+        put_u64(&mut bytes, base + 32, 0x100);
+        put_u64(&mut bytes, base + 40, 0x100);
+        put_u64(&mut bytes, base + 48, PAGE_SIZE);
+        let image = parse_test(&bytes).expect("unaligned entry");
+        assert_eq!(image.entry, TEST_USER_START + 0x1080);
+        assert_eq!(image.segment_count(), 1);
+        let segment = image.segment(0).unwrap();
+        assert_eq!(segment.page_count(), 1);
+        // Loader: trang được map tại page_base và code rơi vào offset 0x80.
+        let page_base = segment.vaddr & !(PAGE_SIZE - 1);
+        assert_eq!(page_base, TEST_USER_START + 0x1000);
+        assert_eq!(image.entry - page_base, 0x80);
+    }
+
+    #[test]
     fn rejects_bad_magic_and_class() {
         let mut bytes = valid_elf();
         bytes[0] = 0;
