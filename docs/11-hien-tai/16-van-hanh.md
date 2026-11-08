@@ -96,6 +96,41 @@ Kết quả mẫu (vòng 36): 5/5×3 PASS trong 88.8s. Serial lần hỏng nằm
   `vfs::STATFS`.
 - `fsck` chạy kiểm tra toàn vẹn; `time` in tick monotonic.
 
+<!-- SHELL-TABLE:BEGIN -->
+### 2c. Bảng tra lệnh shell (sinh tự động từ mã nguồn)
+
+Sinh bằng `python3 scripts/gen-shell-table.py`; **đừng sửa tay** — sửa
+`COMMAND_SYSCALLS`/`COMMAND_SOURCE` trong script rồi chạy lại.
+
+| Lệnh | Syscall/đường IPC | Nơi sửa chính | Marker/cổng liên quan |
+|---|---|---|---|
+| `!!` | - | vifast-client | - |
+| `cat` | vfs_open (Open) + vfs_read_at (Read) + vfs_close (Close) | vifast-client (vfs_read_at) + vifast-server (OPEN/READ) | - |
+| `df` | vfs_statfs (StatFs) | vifast-client + vifast-server (STATFS) + vifast-fs (usage) | FS USAGE OK |
+| `echo` | - | vifast-client | - |
+| `exec` | send LABEL_RUN | vifast-client + vifast-root (spawn_elf_from_fs) | RUN OK / RUN FS OK |
+| `free` | mem_info (MemInfo) | vifast-client + vifast-kernel (MemInfo) | MEM FREE OK |
+| `fsck` | vfs_fsck (Fsck) | vifast-client + vifast-server + vifast-fs (fsck) | FS OPS FSCK OK |
+| `help` | - | vifast-client | - |
+| `history` | - | vifast-client | - |
+| `jobs` | tcb_info (TcbInfo) | vifast-client + vifast-kernel (TcbInfo) | - |
+| `kill` | send LABEL_KILL | vifast-client + vifast-root (destroy_exec) | KILL OK (self-test) |
+| `ln` | vfs_link (Link) | vifast-client | - |
+| `ls` | vfs_open + vfs_read_at + vfs_close | vifast-client + vifast-server | - |
+| `mkdir` | vfs_open (create dir) | vifast-client | - |
+| `mv` | vfs_rename (Rename) | vifast-client | - |
+| `ps` | tcb_info (TcbInfo) | vifast-client + vifast-kernel (TcbInfo) | - |
+| `rm` | vfs_unlink (Unlink) | vifast-client | - |
+| `run` | send LABEL_RUN | vifast-client + vifast-root | - |
+| `runfs` | send LABEL_RUN | vifast-client + vifast-root | RUN FS OK / HIARG (QEMU) + persist |
+| `stat` | vfs_stat_path (StatPath) | vifast-client + vifast-server + vifast-fs | - |
+| `sync` | vfs_fsync (Fsync) | vifast-client + vifast-server + vifast-fs (journal) | FS PERSIST OK (persist) |
+| `time` | get_time (GetTime) | vifast-client + vifast-user | - |
+| `truncate` | vfs_truncate (Truncate) | vifast-client | - |
+| `uname` | - | vifast-client | - |
+| `uptime` | get_time (GetTime) + timer_hz (TimerInfo) | vifast-client + vifast-kernel (TimerInfo) | - |
+<!-- SHELL-TABLE:END -->
+
 ## 3. Shell lệnh `run` (exec demo)
 
 Trong shell QEMU (interactive):

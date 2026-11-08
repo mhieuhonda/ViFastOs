@@ -417,6 +417,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d022bcb test (vong 171): thu tu scheduler (uu tien + FIFO + affinity)
 - dda68fd test (vong 172): IPC trao truc tiep vs xep hang FIFO
 - 044508f test (vong 173): chuyen capability qua IPC + reply (bao mat microkernel)
+- 8530864 test (vong 174): bo nho — W^X, VA trung, bien frame
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

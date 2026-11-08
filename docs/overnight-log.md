@@ -2973,3 +2973,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Runbook mục **5q** ghi cả hai điều này (dễ mất thời gian nếu không biết).
 - Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 195, FS 31, virtio 7,
   docs PASS, fmt sạch, 0 warning.
+
+## 9.172 — Vòng 175: bảng tra lệnh shell sinh TỰ ĐỘNG từ mã nguồn
+
+- Vấn đề: bảng viết tay trong runbook sẽ lệch ngay sau vài vòng (đúng như
+  `check-docs` đã bắt được với danh sách marker trước đây).
+- `scripts/gen-shell-table.py`: đọc `vifast-client/src/main.rs` để lấy **danh
+  sách lệnh thật** (25 lệnh), rồi chèn bảng `<lệnh> → syscall/IPC → nơi sửa →
+  marker/cổng liên quan` vào `16-van-hanh.md` giữa hai mốc
+  `<!-- SHELL-TABLE:BEGIN/END -->`. Có chế độ `--check` (exit 1 nếu lệch).
+- `scripts/build.sh` chạy `gen-shell-table.py --check` ⇒ bảng **không thể lệch
+  âm thầm** nữa.
+- Ghi chú thiết kế: ánh xạ "lệnh → syscall" khai báo tường minh trong script
+  (`COMMAND_SYSCALLS`) chứ không suy luận tự động, vì client gọi wrapper gián
+  tiếp qua helper nội bộ — suy luận sẽ sai mà không báo.
+- Gate: build (kèm check bảng) xanh, QEMU 3/3×3, persist 3/3, harness 583,
+  docs PASS, fmt sạch, 0 warning.

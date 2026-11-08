@@ -19,6 +19,8 @@ cargo test -p vifast-elf
 cargo test -p vifast-fs
 # Vòng 167: checksum/parse của net stack cũng phải nằm trong cổng.
 cargo test -p vifast-virtio
+# Vòng 175: bảng tra lệnh shell trong tài liệu phải khớp mã nguồn.
+python3 scripts/gen-shell-table.py --check
 cargo test -p vifast-runtime
 cargo test -p vifast-user
 cargo test -p vifast-acpi
