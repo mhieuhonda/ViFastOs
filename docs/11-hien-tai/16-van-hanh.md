@@ -17,7 +17,11 @@ cargo fmt --all -- --check            # 0 warning
 
 `./scripts/check-all.sh` chạy toàn bộ cổng trên trong một lệnh.
 
-### 1b. Chạy cổng song song 2 máy (giảm ~½ thời gian)
+### 1b. Chạy cổng song song 2 máy
+
+> Quy trình đầy đủ (chuẩn bị, luật chống flake, số đo thời gian) nằm trong
+> skill [`skills/vifast-parallel-gate/SKILL.md`](../../skills/vifast-parallel-gate/SKILL.md).
+ (giảm ~½ thời gian)
 
 Máy phụ (`ps`, Linux x86_64) đã dựng sẵn: rustup + dải target bare-metal,
 `qemu-system-{riscv64,aarch64,x86_64}`, OVMF (`/usr/share/OVMF/OVMF_CODE.fd`

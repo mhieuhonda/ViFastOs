@@ -2043,3 +2043,19 @@ thử map stack ở VA khác để xem có phải lỗi VA-specific.
   trong runbook với 3 hướng điều tra phía kernel.
 - Gate: QEMU 3/3×3, persist 3/3, harness 535, kernel 183, docs PASS, fmt sạch,
   0 warning, headroom 199 024 B.
+
+## 9.112 — Vòng 116: biến cổng song song thành skill + đo lợi ích thật
+
+- Tạo skill [`skills/vifast-parallel-gate/SKILL.md`](../skills/vifast-parallel-gate/SKILL.md):
+  chuẩn bị máy `ps`, cách chạy, **4 luật chống flake**, cách đọc log, số đo.
+- Sửa lỗi thật trong `scripts/par-gate.sh`: `gen-docs` đòi dấu vân tay của lần
+  chạy `--repeat 3` nên `--repeat 1 --full` **fail oan** ở bước docs; nay chỉ
+  chạy gen-docs/check-docs khi `--repeat >= 3`.
+- Thử tối ưu "bỏ qua build ở xa khi mã nguồn không đổi": **đã bỏ** — hash lưu
+  trong thư mục bị rsync --delete xoá, và một lần bỏ build dẫn tới QEMU chạy
+  binary cũ, FAIL khó hiểu. Nguyên tắc: thà build lại còn hơn chạy binary cũ.
+- **Số đo (thật, không tô hồng)**: `--repeat 1 --full` tuần tự **107 s** vs
+  song song **129 s** → song song *chậm hơn* ở repeat nhỏ vì chi phí cố định
+  rsync+build (~50-60 s) lớn hơn phần tiết kiệm. Chỉ đáng dùng khi repeat ≥ 3
+  hoặc khi máy local đang bận.
+- Gate: QEMU 3/3×3, harness 535, docs PASS, fmt sạch.

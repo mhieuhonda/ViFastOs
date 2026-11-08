@@ -332,6 +332,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 283022b tai lieu: dong bo docs sinh tu dong (vong 112)
 - 2b28129 tai lieu (vong 113): bai hoc auipc trong test asm + thu fault endpoint cho exec
 - 5e7eb18 tai lieu (vong 114): xac nhan loi exec khong doc duoc trang stack
+- 91bf3ca moc 9 (vong 115): PTE riscv set san A/D (dung dac ta)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

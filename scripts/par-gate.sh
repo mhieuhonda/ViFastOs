@@ -57,8 +57,14 @@ post_local() {
     if [ "$FULL" -eq 1 ]; then
         python3 scripts/test-persist.py || return 1
         python3 scripts/test-harness-spec.py || return 1
-        python3 scripts/gen-docs.py || return 1
-        python3 scripts/check-docs.py || return 1
+        # gen-docs cần dấu vân tay của lần chạy chuẩn `--repeat 3`; với
+        # --repeat < 3 thì bỏ qua để cổng phát triển không fail oan.
+        if [ "$REPEAT" -ge 3 ]; then
+            python3 scripts/gen-docs.py || return 1
+            python3 scripts/check-docs.py || return 1
+        else
+            echo "par-gate: bỏ qua gen-docs/check-docs (cần --repeat >= 3)"
+        fi
         cargo fmt --all -- --check || return 1
     fi
 }
@@ -74,6 +80,8 @@ start_remote() {
     if [ "$FULL" -eq 1 ]; then
         REMOTE_PERSIST=" && PATH=\$HOME/.cargo/bin:\$PATH python3 scripts/test-persist.py"
     fi
+    # Luôn build ở xa sau khi đồng bộ: rẻ hơn nhiều so với việc chạy QEMU
+    # trên binary cũ (đã từng gây FAIL khó hiểu khi thêm cơ chế bỏ qua).
     ssh -o BatchMode=yes "$REMOTE" \
         "cd ~/$REMOTE_DIR && PATH=\$HOME/.cargo/bin:\$PATH ./scripts/build.sh >/dev/null 2>&1 && PATH=\$HOME/.cargo/bin:\$PATH python3 scripts/test-qemu.py --arch x86_64 --repeat $REPEAT$REMOTE_PERSIST"
 }
