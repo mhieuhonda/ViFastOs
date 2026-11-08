@@ -148,6 +148,23 @@ vào VSpace mới, hoặc `tcb_restart` TCB cũ nếu đã có. `RUN SKIP` =
 hết tài nguyên (fail-êm, không panic). Chạy `run` liên tiếp nhiều lần
 an toàn: VSpace setup một lần, mỗi lần chỉ restart TCB.
 
+### 2d. Chạy nhiều chương trình với tham số khác nhau
+
+`runfs /prog.elf ONE` rồi `runfs /prog.elf TWO` cho ra **hai lượt chạy độc lập**
+cùng một ảnh ELF, mỗi lượt in đúng tham số của mình (đã kiểm chứng):
+
+```
+shell> runfs /prog.elf ONE
+ONE
+shell> runfs /prog.elf TWO
+TWO
+```
+
+Cơ chế: root ghi tham số vào trang code của chương trình (cặp `ptr/len` + chuỗi),
+không phụ thuộc quy ước `sp`. Từ vòng 181, tham số được **chuẩn hoá newline**
+(nếu người dùng không gõ `\n` thì root thêm vào) — trước đó output dính liền
+lời nhắc kế tiếp (`ONEshell> `).
+
 ### 3b. `runfs <path> [args...]` — chạy chương trình từ filesystem
 
 ```text

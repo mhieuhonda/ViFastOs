@@ -3087,3 +3087,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   lặp lại).
 - Gate: build 0 warning, QEMU 3/3×3 (3/3 lần host nhận payload), persist 3/3,
   harness 583, docs PASS, fmt sạch.
+
+## 9.178 — Vòng 181: nhiều lượt chạy cùng một ảnh ELF với tham số khác nhau
+
+- Kiểm chứng bằng tay: `runfs /prog.elf ONE` → in `ONE`; sau đó
+  `runfs /prog.elf TWO` → in `TWO`. Hai lượt **độc lập** trên cùng ảnh ELF,
+  chứng minh đường exec-từ-FS không bị khoá vào một tham số cố định.
+- **Lỗi thấy được khi chạy hai lần liên tiếp**: output không có `\n` nên dính
+  lời nhắc kế tiếp (`ONErunfs /prog.elf TWO`). Sửa trong `write_program_args`:
+  chuẩn hoá thêm `\n` nếu tham số chưa kết thúc bằng newline. Sau sửa output
+  sạch: `ONE` / `TWO` mỗi thứ một dòng.
+- Ghi vào runbook mục **2d** (kèm cơ chế truyền tham số qua trang code, không
+  dựa vào `sp`).
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
+  sạch; headroom 2.29 MB, client riscv 7 trang (đúng ngân sách).

@@ -1162,6 +1162,22 @@ const MAX_EXEC_SLOTS: usize = 12;
 fn write_program_args(code_frame: u8, msg: &[u8]) -> bool {
     // Cặp (ptr, len) ở frame 0x140 = entry+0x20; chuỗi ở 0x160 = entry+0x40.
     // Độ dài ĐỘNG nên chương trình in đúng tham số truyền vào.
+    // Vòng 181: chương trình in y nguyên chuỗi nhận được, nên nếu người dùng
+    // gọi `runfs /prog.elf ONE` (không có '\n') thì output sẽ dính vào lời nhắc
+    // kế tiếp (`ONEshell> `). Thêm '\n' khi thiếu — sửa lỗi thấy được khi chạy
+    // hai lần liên tiếp với hai tham số khác nhau.
+    let mut src = [0u8; 32];
+    let mut src_len = core::cmp::min(msg.len(), 31);
+    let mut k = 0;
+    while k < src_len {
+        src[k] = msg[k];
+        k += 1;
+    }
+    if src_len == 0 || src[src_len - 1] != b'\n' {
+        src[src_len] = b'\n';
+        src_len += 1;
+    }
+    let msg = &src[..src_len];
     let len = core::cmp::min(msg.len() as u64, 32);
     let mut pair = [0u8; 16];
     let ptr = EXEC_DEMO_CODE + 0x160;
