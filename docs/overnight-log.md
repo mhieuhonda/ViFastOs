@@ -2108,3 +2108,17 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   cách viết test platform giả đúng (override `user_va_range`, kiểm tra PTE
   thật thay vì chỉ `mapping_at`).
 - Gate: QEMU 3/3×3, persist 3/3, harness 535, kernel 184, docs PASS, fmt sạch.
+
+## 9.116 — Vòng 119: loại trừ API map + thứ tự map; viết báo cáo lỗi có cấu trúc
+
+- Thay `map_frame_fallible` bằng **`map_with_tables`** (đúng đường client dùng
+  để map 5 trang code + stack): chương trình vẫn không đọc được stack ⇒ không
+  phải lỗi của API map nào.
+- **Đảo thứ tự map** (stack trước, code sau): vẫn không đọc được stack ⇒ không
+  phải "trang thứ hai" như giả thuyết trước; vấn đề nằm ở **trang RW của exec**
+  nói chung.
+- Viết báo cáo lỗi có cấu trúc: `docs/bugs/exec-stack-page-unreadable.md` —
+  triệu chứng, **bảng 8 thí nghiệm**, danh sách đã loại trừ (sai địa chỉ,
+  frame_write, kernel core, API map, thứ tự map, A/D), 3 giả thuyết còn lại và
+  cách kiểm tra nhanh (QEMU monitor xem PTE thật / klog platform).
+- Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, fmt sạch, 0 warning.
