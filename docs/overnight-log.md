@@ -2059,3 +2059,37 @@ thử map stack ở VA khác để xem có phải lỗi VA-specific.
   rsync+build (~50-60 s) lớn hơn phần tiết kiệm. Chỉ đáng dùng khi repeat ≥ 3
   hoặc khi máy local đang bận.
 - Gate: QEMU 3/3×3, harness 535, docs PASS, fmt sạch.
+
+## 9.113 — Vòng 117: manh mối mới — TRANG THỨ HAI của exec không truy cập được
+
+Thí nghiệm tách biệt VA:
+
+- Đổi VA stack của exec từ `EXEC_STACK_BASE (0x10_0002_3000)` sang **ngay sau
+  trang code** (`0x10_0000_2000`), ghi `"HI FS"` vào frame stack offset 0x40,
+  chương trình đọc `0x10_0000_2040` (`auipc 1 ; addi -0x120`).
+- Kết quả: `EXEC OK`, **không** có `STK WRITE BAD` (frame_write Ok) nhưng
+  chương trình **vẫn không in** — y hệt khi đọc ở 0x23xxx.
+
+⇒ Lỗi **không phụ thuộc VA**: **trang ĐẦU TIÊN** được map vào vspace exec thì
+truy cập được (chương trình chạy và in `HI FS` từ trang code), **trang THỨ HAI**
+thì không — dù `frame_map` báo thành công.
+
+Giả thuyết hẹp nhất (vòng sau kiểm tra): `map_frame_fallible` tạo page table
+qua `page_table_map` rồi `frame_map` ghi leaf; nếu lần map thứ hai rơi vào
+**bảng KHÁC** với bảng mà CPU duyệt (hai bảng cùng cấp, root trỏ bảng cũ) thì
+leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` với
+`map_with_tables` (đường client dùng, map 5 trang + stack đều chạy tốt).
+
+- Đã revert; cây về HEAD `f1d6d63`.
+
+## 9.114 — Vòng 117b: test host chứng minh kernel map 2 trang ĐÚNG
+
+- Thêm test host `maps_two_pages_in_one_fresh_vspace` (vifast-kernel): tạo
+  vspace mới, tạo 3 bảng trang, map trang code (`R|X`) rồi map trang stack
+  (`R|W`) trong **cùng vùng 2 MiB**, kiểm tra qua `mapping_at` — **PASS**.
+- Ý nghĩa: **logic kernel (walk bảng, tạo leaf, ghi mapping) đúng**. Lỗi
+  "trang thứ hai của exec không truy cập được" vì thế nằm ở **platform ops
+  (riscv)** hoặc **đường dựng vspace của exec trong runtime/root**, không phải
+  ở kernel core. Đây là bước thu hẹp quan trọng sau nhiều vòng đoán.
+- Kernel tests **183 → 184**.
+- Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, fmt sạch, 0 warning.

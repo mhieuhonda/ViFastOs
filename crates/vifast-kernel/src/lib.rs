@@ -9336,6 +9336,46 @@ mod tests {
     }
 
     #[test]
+    fn maps_two_pages_in_one_fresh_vspace() {
+        // Vòng 117: mô phỏng đúng tình huống exec — vspace mới, map trang code
+        // trước (tạo bảng), rồi map trang stack thứ hai trong CÙNG bảng L0.
+        // Cả hai leaf phải nằm trong bộ nhớ bảng trang giả.
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x4000_0000, 0x8000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let space = kernel
+            .create_vspace_with_page_size(0, 0x4000_0000, 0x4000_0000, 4096)
+            .unwrap();
+        let pt1 = kernel.create_page_table(0x1000, 0).unwrap();
+        let pt2 = kernel.create_page_table(0x2000, 0).unwrap();
+        let pt3 = kernel.create_page_table(0x3000, 0).unwrap();
+        let code = kernel.create_frame(0x4000, 4096).unwrap();
+        let stack = kernel.create_frame(0x5000, 4096).unwrap();
+        let code_va = 0x4000_1000;
+        let stack_va = 0x4000_2000;
+
+        // Trang thứ nhất: tạo chuỗi bảng rồi map.
+        assert_eq!(kernel.map_page_table(pt1, space, code_va), Ok(1));
+        assert_eq!(kernel.map_page_table(pt2, space, code_va), Ok(2));
+        assert_eq!(kernel.map_page_table(pt3, space, code_va), Ok(3));
+        kernel
+            .map_frame(space, code, code_va, Rights::READ | Rights::EXEC)
+            .unwrap();
+        // Trang thứ hai: cùng vùng 2 MiB ⇒ dùng lại đúng bảng L0.
+        kernel
+            .map_frame(space, stack, stack_va, Rights::READ | Rights::WRITE)
+            .unwrap();
+
+        // Kiểm tra qua bảng mapping của vspace (không phụ thuộc mã hoá PTE giả).
+        let code_map = kernel.mapping_at(space, code_va).expect("code mapping");
+        assert_eq!(code_map.pa, 0x4000);
+        let stack_map = kernel.mapping_at(space, stack_va).expect("stack mapping");
+        assert_eq!(stack_map.pa, 0x5000);
+    }
+
+    #[test]
     fn page_table_map_syscall_uses_capabilities() {
         let _guard = WALK_LOCK.lock().unwrap();
         reset_fake();
