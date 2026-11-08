@@ -1959,3 +1959,22 @@ follow-up `62b31f4`.
   (`PROG MID OK`) và **cuối** (`PROG TAIL OK`) của ảnh ELF ghi xuống FS.
 - Thêm marker vào `COMMON` → harness **532 → 535 ca**.
 - Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, fmt sạch, 0 warning.
+
+## 9.107 — Vòng 112: bisect sạch — ghi stack OK, đọc stack hỏng
+
+Thí nghiệm tách đôi (giữ nguyên chương trình cũ ở bước 1):
+
+- **B1**: thêm `frame_write(stack_frame, 0x100, "HI FS\n")` song song với việc
+  ghi trang code như cũ → **xanh**, không có `STACK ARGS BAD`. Kết luận: ghi
+  vào frame stack **thành công và không phá gì**.
+- **B2**: đổi chương trình sang đọc chuỗi từ `EXEC_ARGS_VA` (= `0x10_0002_3100`)
+  với `addi a0, a2, 0; addi a1, x0, 6` → `EXEC OK` nhưng **không in gì**.
+- Suy luận: `frame_write` báo Ok và địa chỉ đã kiểm chứng bằng tay
+  (`auipc 0x22; addi -0x20`), nên khả năng cao nhất là **trang stack không được
+  map (hoặc map vào vspace khác) trong vspace của task** ⇒ đọc → fault → task
+  chết im lặng (exec TCB không có fault endpoint nên không có dấu vết nào).
+- Bước kiểm chứng kế tiếp (vòng sau, rất rẻ): cho chương trình đọc 1 byte tại
+  `EXEC_STACK_TOP - 8` (nơi SP trỏ tới, chắc chắn phải map) và so với đọc tại
+  `EXEC_STACK_BASE + 0x100`; nếu cả hai đều fault thì lỗi ở `frame_map` cho
+  trang thứ hai của cùng vspace — một bug thật đáng sửa.
+- Đã revert B1/B2; cây về HEAD `6fdad21`, gate xanh (QEMU 2/2×3, build 0 warning).
