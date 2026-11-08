@@ -79,6 +79,18 @@ hello
 - Cổng chuẩn tự chạy đường này sau thu hồi pager và in `HIARG` (marker chỉ
   đến từ argv, không nhúng trong ảnh trên đĩa).
 
+#### Ngân sách bộ nhớ (số đo thực, riscv64)
+
+- Pool dữ liệu người dùng: `USER_DATA` = **352 256 B = 86 trang**;
+  `DATA_MAX_OBJECTS = 86`.
+- Cuối boot (sau toàn bộ demo, trước mọi exec): kernel in
+  `DATA UNTYPED pages=80/86 objects=77/86` ⇒ còn **~6 trang + 9 object**.
+- Một lần exec (vspace + code frame + stack frame + TCB + page table) tiêu thụ
+  ~5 trang/object ⇒ lần exec thứ hai trong cùng phiên **hết chỗ** (đúng giới
+  hạn ở mục trên). Vì vậy mọi thêm object vào đường boot đều phải cân nhắc.
+- Ngưỡng build: headroom kernel riscv phải ≥ **192 KiB** cho cả bản thường và
+  bản `test-destroy-smp`; hiện 203 120 B (thường) và 199 024 B (destroy-smp).
+
 #### Giới hạn đã biết (vòng 108)
 
 - `runfs`/`exec` nạp được **một lần mỗi phiên**; lần thứ hai trong cùng phiên
