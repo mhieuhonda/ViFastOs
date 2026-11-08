@@ -615,3 +615,9 @@ img.brand-mark {
 .nav .nav-home, .site-nav .nav-home { font-weight: 600; opacity: .85; }
 .nav .nav-home:hover, .nav .nav-home:focus-visible,
 .site-nav .nav-home:hover, .site-nav .nav-home:focus-visible { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
+
+/* wordmark: Vi do + Fast nghieng + hau to do (giong ViFastKey / ViFastTts) */
+.brand-word { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.8px; line-height: 1; }
+.brand-word .red { color: var(--accent); }
+.brand-word em { font-style: italic; color: var(--text); }
+.brand:hover .brand-word .red { color: var(--accent-dark); }

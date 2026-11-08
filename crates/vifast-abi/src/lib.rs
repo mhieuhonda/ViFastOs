@@ -453,7 +453,8 @@ pub mod vfs {
     pub const FSYNC: u64 = 0x200B;
     pub const FSCK: u64 = 0x200C;
     /// Vòng 139: dung lượng FS — reply data = (đã dùng, tổng, block_size).
-    pub const STATFS: u64 = 0x200D;
+    /// (0x200D đã bị BADGE_PROBE dùng — bài học: kiểm tra trùng mã opcode.)
+    pub const STATFS: u64 = 0x2012;
     /// Identity probe: server returns the kernel-stamped badge in data[0].
     pub const BADGE_PROBE: u64 = 0x200D;
     /// Hard link: old path in buffer[0], new path in buffer[MAX_PATH].
