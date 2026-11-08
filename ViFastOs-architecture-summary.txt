@@ -413,6 +413,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a9d64a6 test (vong 167): net stack co test checksum trong cong
 - 2c0147e tai lieu (vong 168): runbook su co 17-su-co.md
 - a796448 tinh nang (vong 169): lenh kill — dung chuong trinh dang chay tu shell
+- a063c55 tinh nang (vong 170): jobs + sua bug that trong kill (suspend slot cu)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -460,7 +461,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 5/5 PASS
-- `cargo test -p vifast-kernel`: 186/186 PASS
+- `cargo test -p vifast-kernel`: 188/188 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS

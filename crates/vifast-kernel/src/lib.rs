@@ -7630,6 +7630,38 @@ mod tests {
     }
 
     #[test]
+    fn pick_prefers_higher_priority_and_is_fifo_within_a_level() {
+        // Vòng 171 (sched): hàng đợi phải chọn ưu tiên cao nhất, và giữa các
+        // TCB cùng ưu tiên thì FIFO theo `queue_seq`.
+        let mut kernel = Kernel::new();
+        let low = kernel.create_tcb("low", 3).unwrap();
+        let high = kernel.create_tcb("high", 9).unwrap();
+        let same_a = kernel.create_tcb("same_a", 5).unwrap();
+        let same_b = kernel.create_tcb("same_b", 5).unwrap();
+        kernel.enqueue(low);
+        kernel.enqueue(same_a);
+        kernel.enqueue(same_b);
+        kernel.enqueue(high);
+        assert_eq!(kernel.pick(), Some(high), "ưu tiên cao nhất phải được chọn trước");
+        assert_eq!(kernel.pick(), Some(same_a), "cùng ưu tiên thì FIFO theo queue_seq");
+        assert_eq!(kernel.pick(), Some(same_b));
+        assert_eq!(kernel.pick(), Some(low));
+        assert_eq!(kernel.pick(), None, "hàng rỗng phải trả None");
+    }
+
+    #[test]
+    fn pick_skips_tasks_whose_affinity_excludes_the_hart() {
+        // Vòng 171: task ghim hart 1 không bao giờ được chọn trên hart 0, kể cả
+        // khi là task duy nhất còn lại — đây là bất biến của affinity.
+        let mut kernel = Kernel::new();
+        let pinned = kernel.create_tcb("pinned", 7).unwrap();
+        kernel.tcb_mut(pinned).unwrap().affinity = 0b10;
+        kernel.enqueue(pinned);
+        assert_eq!(kernel.pick_on(0), None, "hart 0 không được chạy task ghim hart 1");
+        assert_eq!(kernel.pick_on(1), Some(pinned));
+    }
+
+    #[test]
     fn enqueue_prefers_the_least_loaded_eligible_hart() {
         // Vòng 98 (soi chay K3): trước đây luôn chọn hart chỉ số nhỏ nhất nên
         // hart 0 đầy trước khi tràn sang hart 1.

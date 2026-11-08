@@ -199,6 +199,15 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5t. Scheduler: thứ tự chọn đã có test
+
+`cargo test -p vifast-kernel --lib` (nay **188**) khoá hai bất biến của `pick`:
+- `pick_prefers_higher_priority_and_is_fifo_within_a_level` — ưu tiên cao nhất
+  được chọn trước; cùng mức ưu tiên thì **FIFO theo `queue_seq`**; hàng rỗng ⇒
+  `None`.
+- `pick_skips_tasks_whose_affinity_excludes_the_hart` — task ghim hart 1 **không
+  bao giờ** được chọn trên hart 0, kể cả khi nó là task duy nhất.
+
 ### 5u. Net stack: checksum nằm trong cổng
 
 `cargo test -p vifast-virtio` (nay **trong cổng**, 7 test) khoá hai chỗ dễ sai

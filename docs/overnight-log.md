@@ -2913,3 +2913,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   runnable`, `KILL EXEC OK` khi đang chạy task.
 - Bài học ghi vào `17-su-co.md` (mục về self-test/slot): biến theo dõi slot
   **phải** được reset cùng nhịp với biến đếm.
+
+## 9.168 — Vòng 171: test thứ tự scheduler (ưu tiên + FIFO + affinity)
+
+- Thêm 2 host test kernel (**186 → 188**):
+  - `pick_prefers_higher_priority_and_is_fifo_within_a_level` — chọn ưu tiên cao
+    nhất; cùng mức thì FIFO theo `queue_seq`; hàng rỗng ⇒ `None`;
+  - `pick_skips_tasks_whose_affinity_excludes_the_hart` — task ghim hart 1 không
+    bao giờ được chọn trên hart 0.
+- Lặp lại **đúng lỗi cũ** khi chèn test: để lại `#[test]` thừa và làm
+  `enqueue_prefers_the_least_loaded_eligible_hart` mất thuộc tính ⇒ 2 cảnh báo +
+  test bị `never used`. Đã sửa, build **0 warning**, kernel 188/188.
+- Runbook thêm mục **5t**; `09-testing.md` cập nhật số test kernel.
+- Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 188, FS 31, virtio 7,
+  docs PASS, fmt sạch.
