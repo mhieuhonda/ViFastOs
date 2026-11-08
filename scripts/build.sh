@@ -69,6 +69,17 @@ cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none
     -C link-arg=-z -C link-arg=separate-code
 "$OBJCOPY" --strip-all "$ROOT_RV" "$ROOT_RV.stripped"
 scripts/check-root-elf.sh "$ROOT_RV.stripped" riscv64imac-unknown-none-elf 243
+# Ngân sách trang cho client ELF: mỗi trang client bị staging cấp 1 Frame lúc
+# boot, và Untyped dữ liệu chỉ còn ~6 trang. Vượt 6 trang sẽ làm demo PREEMPT
+# OK timeout (bài học vòng 116) — chặn ngay ở build thay vì để QEMU đỏ khó hiểu.
+CLIENT_RV_SIZE=$(wc -c < "${CLIENT_RV}.stripped" | tr -d ' ')
+CLIENT_RV_PAGES=$(( (CLIENT_RV_SIZE + 4095) / 4096 ))
+echo "client(riscv64) ${CLIENT_RV_SIZE} B = ${CLIENT_RV_PAGES} trang (ngân sách 6)"
+if (( CLIENT_RV_PAGES > 6 )); then
+    echo "CLIENT ELF VƯỢT NGÂN SÁCH TRANG (tối đa 6): ${CLIENT_RV_PAGES} trang" >&2
+    echo "Thu gọn vifast-client hoặc nới ngân sách Untyped trước khi tăng." >&2
+    exit 1
+fi
 
 cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
     -C relocation-model=static \

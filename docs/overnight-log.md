@@ -2210,3 +2210,16 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   `let code: [u32; 8]` xuất hiện ở nhiều hàm/nhánh arch → phải `grep -n` kèm
   ngữ cảnh hàm sau mỗi lần sửa, và luôn in dấu hiệu (TEST) trước khi kết luận.
 - Gate: QEMU 3/3×3, build 0 warning, docs PASS, headroom 199 024 B.
+
+## 9.123 — Vòng 126: chốt ngân sách trang client ELF ngay ở build
+
+- Thêm guard trong `scripts/build.sh`: đo `${CLIENT_RV}.stripped`, in
+  `client(riscv64) N B = X trang (ngân sách 6)` và **fail build** nếu vượt 6
+  trang, kèm hướng dẫn thu gọn client hoặc nới Untyped.
+- Lý do: mỗi trang client bị staging cấp 1 Frame lúc boot; vượt ngân sách làm
+  demo `PREEMPT OK` timeout (đã xảy ra ở vòng 116 khi thêm tính năng `ls`).
+  Giờ lỗi này lộ ra ngay ở build với thông điệp rõ ràng thay vì QEMU đỏ khó hiểu.
+- Cập nhật runbook mục "Ngân sách bộ nhớ" với con số 6 trang.
+- Điều tra lỗi "exec không đọc được trang stack" **tạm dừng** (báo cáo đã đủ
+  dữ kiện); quay lại khi có cách quan sát kernel tốt hơn.
+- Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, build 0 warning.

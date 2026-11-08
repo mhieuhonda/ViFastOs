@@ -350,6 +350,9 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d515196 tai lieu (vong 124): task exec chay dung vspace cua no (bang chung duong)
 - 9f2b711 tai lieu (vong 124b): ghi log bang chung duong + bai hoc chuong trinh dai
 - b0f7c15 tai lieu (vong 125): bai hoc quy trinh — sua code trong spawn_elf_copy de lac cho
+- d4731b8 tai lieu: dong bo docs sinh tu dong (vong 125)
+- 7bc79a5 tai lieu (vong 125b): ghi log be tac cuc bo + bai hoc quy trinh
+- 7a2f396 tai lieu (vong 126): chuong trinh 8 lenh in errno cung khong in — tam dung dieu tra
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
