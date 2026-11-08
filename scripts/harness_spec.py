@@ -40,6 +40,8 @@ COMMON = [
     ("Zero OK", "zero page / BSS path verified"),
     ("BLOCK OK", "block device backend responded"),
     ("FS DISK OK", "filesystem disk path responded"),
+    ("PAGER RECLAIM OK", "pager demo frames/TCBs returned to untyped"),
+    ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
 ]
 
 # Exactly one occurrence is required for each of these lines.

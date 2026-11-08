@@ -299,6 +299,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 120f95d moc 9 (vong 84): parse ELF metadata + exec-from-FS + gate song song 2 may
 - e9c1557 moc 9 (vong 89): exec-that tu filesystem chay duoc (RUN FS OK)
 - 9c1cff1 ha tang (vong 90): par-gate --full chay song song 2 may ca persist/harness/docs
+- 741255b moc 9 (vong 91): thu hoi demo pager (PAGER RECLAIM OK) + fix runfs path
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1415,6 +1416,8 @@ QEMU test:
 - `Zero OK` — zero page / BSS path verified
 - `BLOCK OK` — block device backend responded
 - `FS DISK OK` — filesystem disk path responded
+- `PAGER RECLAIM OK` — pager demo frames/TCBs returned to untyped
+- `RUN FS OK` — exec-from-filesystem loaded an ELF page-by-page and ran it
 
 Mỗi dòng sau đúng một lần:
 - `VFS SERVER OK` — exactly once

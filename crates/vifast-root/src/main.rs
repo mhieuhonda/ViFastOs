@@ -1426,19 +1426,19 @@ fn spawn_pager_server(
                 PAGER_VFS_ENABLED = false;
             }
         }
-        // Vòng 91: cap tới fault endpoint của root để báo hoàn tất demo
-        // pager; root dùng cap gốc của chính nó để revoke + unmap + destroy.
-        if vifast_user::cap_copy(
-            root_endpoint,
-            server_tcb,
-            PAGER_SERVER_ROOT,
-            Rights::WRITE.0,
-        )
-        .error
-            != KError::Ok
-        {
-            write(b"PAGER ROOT CAP BAD\n");
-        }
+    }
+    // Vòng 91/92: cap tới fault endpoint của root để báo hoàn tất demo pager
+    // (mọi arch — không phụ thuộc VFS; x86 cũng cần để thu hồi + exec-from-FS).
+    if vifast_user::cap_copy(
+        root_endpoint,
+        server_tcb,
+        PAGER_SERVER_ROOT,
+        Rights::WRITE.0,
+    )
+    .error
+        != KError::Ok
+    {
+        write(b"PAGER ROOT CAP BAD\n");
     }
     check(vifast_user::tcb_resume(server_tcb));
 }
@@ -2506,6 +2506,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut reap_done = false;
     let mut pending_worker_e = false;
     let mut start_worker_e = false;
+    let mut run_fs_selftest_done = false;
     #[cfg(feature = "test-destroy-smp")]
     let mut destroy_smp_done = false;
     loop {
@@ -2579,6 +2580,57 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 } else {
                     PAGER_RECLAIM_BAD
                 });
+                // Vòng 92: ngay sau thu hồi, tự chạy exec-thật từ FS (ghi
+                // ELF demo thành /prog.elf rồi nạp TỪNG PAGE từ file). Đây
+                // là điểm kiểm chứng tự động trong cổng chuẩn, không cần
+                // nhập bàn phím; fail-êm nếu thiếu bộ nhớ.
+                if !run_fs_selftest_done {
+                    run_fs_selftest_done = true;
+                    let mut off = 0usize;
+                    while off < EXEC_DEMO_ELF.len() {
+                        let n = core::cmp::min(vifast_abi::vfs::MAX_IO, EXEC_DEMO_ELF.len() - off);
+                        let mut chunk = [0u8; vifast_abi::vfs::MAX_IO];
+                        let mut j = 0;
+                        while j < n {
+                            chunk[j] = EXEC_DEMO_ELF[off + j];
+                            j += 1;
+                        }
+                        if !root_vfs_write_at(
+                            root_vfs_slot,
+                            b"/prog.elf",
+                            off as u64,
+                            &chunk[..n],
+                            off == 0,
+                        ) {
+                            break;
+                        }
+                        off += n;
+                    }
+                    destroy_exec(&mut slots, &exec_used, exec_len);
+                    exec_len = 0;
+                    exec_used = [0u8; MAX_EXEC_SLOTS];
+                    match spawn_elf_from_fs(
+                        root_vfs_slot,
+                        b"/prog.elf",
+                        meta_untyped,
+                        data_untyped,
+                        0b01,
+                        &mut slots,
+                        &mut exec_used,
+                    ) {
+                        Some(tcb) => {
+                            let mut n = 0;
+                            while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
+                                n += 1;
+                            }
+                            exec_len = n;
+                            exec_vspace = exec_used[0];
+                            exec_tcb = tcb;
+                            write(b"RUN FS OK\n");
+                        }
+                        None => write(b"RUN FS FAIL\n"),
+                    }
+                }
             }
             if message.label == LABEL_RUN && message.badge == RUN_BADGE {
                 // `run` lặp: VSpace setup 1 lần, mỗi lần chỉ thay TCB.

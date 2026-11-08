@@ -1642,3 +1642,15 @@ follow-up `62b31f4`.
   bằng `cargo build` không cập nhật ELF nhúng (dễ test nhầm bản cũ).
 - Gate: QEMU 3/3×3, persist 7×3, harness 514, docs PASS, fmt sạch, 0 warning,
   headroom riscv giữ 199024 B.
+
+## 9.83 — Vòng 92: exec-from-FS + thu hồi pager vào CỔNG CHUẨN (3 arch)
+
+- Root tự chạy exec-thật từ FS ngay sau khi thu hồi pager (`PAGER_DONE`):
+  ghi ELF demo thành `/prog.elf`, `spawn_elf_from_fs` nạp từng page từ file,
+  in `RUN FS OK`. Không cần nhập bàn phím → chạy tự động trong cổng chuẩn.
+- `PAGER RECLAIM OK` + `RUN FS OK` vào `harness_spec.COMMON`; fixture của
+  `test-harness-spec.py` sinh từ chính COMMON nên chỉ tăng 514 → 520 ca.
+- Sửa: cap tới fault endpoint của root cho pager server phải copy NGOÀI khối
+  `enable_vfs` — trước đó x86_64 không có cap nên không thu hồi/không exec.
+- Kết quả: QEMU 3/3×3 PASS với cả hai marker; persist 7×3; harness 520; docs
+  PASS; fmt sạch; 0 warning; headroom riscv 199 024 B.
