@@ -2578,3 +2578,21 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Runbook: bổ sung hai lệnh vào mục "Lệnh shell có sẵn".
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch,
   0 warning, headroom 199 024 B.
+
+## 9.148 — Vòng 151: `ps` chạy được nhưng lộ ra test SMP idle hỏng thật; thêm chẩn đoán
+
+- **Tính năng `ps`** (syscall `TcbInfo = 52`, kernel duyệt TCB sống, client in
+  `<slot> <prio> <state>`): chạy **đúng** trong shell thật, ví dụ
+  `0 15 4 / 55 5 4 / 56 5 2 / 60 5 6 / 99 0 1 / 110 5 12 …`
+  (state theo `ThreadState`: 2 = Running, 4 = BlockedRecv, 12 = Exited…).
+- **Nhưng**: chỉ thêm syscall + lệnh đã làm **riscv 0/3** (`PREEMPT OK` mất,
+  `SMP IDLE OK` cũng mất). Revert ⇒ **2/2 PASS** ngay.
+- Kết luận quan trọng: `post_idle_ready()` đã "chờ tường minh" ở vòng 150 nhưng
+  vẫn hỏng khi **hart phụ không vào idle lần nào** trong pha POST (hart phụ bận
+  chạy task, blocked ≠ idle). Đây là **phụ thuộc lịch**, không phải đếm nhịp —
+  vá mức 1 (vòng 150) chưa đủ.
+- Vì vậy vòng này **revert `ps`** để giữ cổng xanh, và thêm **chẩn đoán một
+  lần** trong runtime: nếu đã đủ điều kiện khác mà `post_idle_ready()` vẫn sai
+  sau `TIMER_TICKS`, in `SMP IDLE STALL (ticks=…, wake_timer=…, wake_sgi=…)`
+  (không phải marker của gate) để lần sau thấy ngay vì sao.
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.

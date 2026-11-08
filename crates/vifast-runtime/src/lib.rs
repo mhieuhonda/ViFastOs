@@ -23,6 +23,10 @@ static TEST_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBo
 #[cfg(feature = "test-exit")]
 static TEST_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
+/// Vòng 151: chỉ in chẩn đoán SMP IDLE STALL một lần.
+static POST_IDLE_STALLED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-exit")]
 static TEST_FS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
 static TEST_FS_LARGE_DONE: core::sync::atomic::AtomicBool =
@@ -1374,6 +1378,25 @@ pub mod timer {
         #[cfg(feature = "test-panic-hart1")]
         if hart == 1 {
             panic!("test-panic-hart1");
+        }
+        #[cfg(feature = "test-exit")]
+        if hart == 0
+            && !A::post_idle_ready()
+            && kernel.ticks_on(0) >= TIMER_TICKS
+            && !POST_IDLE_STALLED.load(core::sync::atomic::Ordering::SeqCst)
+            && TEST_DONE.load(core::sync::atomic::Ordering::SeqCst)
+        {
+            // Vòng 151: chẩn đoán "vì sao PREEMPT OK không bao giờ in" — chỉ in
+            // MỘT lần và KHÔNG phải marker của gate.
+            POST_IDLE_STALLED.store(true, core::sync::atomic::Ordering::SeqCst);
+            let (timer_wakes, ipi_wakes) = A::secondary_wakeups();
+            vifast_kernel::klog!(
+                A,
+                "SMP IDLE STALL (ticks={}, wake_timer={}, wake_sgi={})",
+                kernel.ticks_on(0),
+                timer_wakes,
+                ipi_wakes
+            );
         }
         #[cfg(feature = "test-exit")]
         if hart == 0
