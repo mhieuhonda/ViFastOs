@@ -52,6 +52,10 @@ COMMON = [
         "oversized untyped request was refused with OutOfMemory and size 0 rejected",
     ),
     (
+        "SLOT REUSE OK",
+        "a slot destroyed and immediately retyped worked again (no leaked cap)",
+    ),
+    (
         "IPC DEAD OK",
         "calling a destroyed endpoint returned an error instead of blocking",
     ),

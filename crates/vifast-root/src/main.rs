@@ -3048,6 +3048,18 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             b"IPC DEAD BAD\n"
                         },
                     );
+                    // Vòng 137: slot VỪA destroy phải retype lại được ngay
+                    // (kiểm cspace thực sự trả slot về, không giữ cap chết).
+                    let reuse = vifast_user::retype(meta_untyped, ObjType::Endpoint as u64, ep);
+                    let reuse_ok = reuse.error == KError::Ok;
+                    if reuse_ok {
+                        let _ = vifast_user::object_destroy(ep);
+                    }
+                    write(if reuse_ok {
+                        b"SLOT REUSE OK\n"
+                    } else {
+                        b"SLOT REUSE BAD\n"
+                    });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
@@ -3574,29 +3586,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 } else {
                     0
                 });
-            // Vòng 137: slot đã destroy phải được TÁI SỬ DỤNG — tạo
-            // lại Endpoint đúng vào slot cũ phải thành công (chứng
-            // minh cspace trả slot về, không rò rỉ).
-            let reuse =
-                vifast_user::retype(meta_untyped, ObjType::Endpoint as u64, probe_endpoint_slot);
-            let reuse_ok = reuse.error == KError::Ok;
-            if reuse_ok {
-                let _ = vifast_user::object_destroy(probe_endpoint_slot);
-            }
-            if reuse_ok {
-                write(b"SLOT REUSE OK\n");
-            } else {
-                let c = [
-                    b'S',
-                    b'L',
-                    b'O',
-                    b'T',
-                    b' ',
-                    b'0' + (reuse.error as u8 % 10),
-                    b'\n',
-                ];
-                write(&c);
-            }
 
             // Vòng 135: cấp phát vượt phần còn lại của Untyped phải trả
             // OutOfMemory (không panic, không cấp nửa vời), và size 0

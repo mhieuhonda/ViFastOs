@@ -2353,3 +2353,18 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
 - Kiểm chứng: legacy-migration boot riêng lẻ **5/5 PASS**; `test-persist` chạy
   **2 lần liền đều 3/3 PASS** (trước đó fail 1/2 lần ở phase 3 x86_64).
 - Gate: QEMU 3/3×3, persist 3/3 ×2, harness 565, docs PASS, fmt sạch.
+
+## 9.134 — Vòng 137: slot sau destroy phải retype lại được (và bài học thử sai)
+
+- Thêm **test host** `destroyed_slot_can_be_retyped_again` (kernel lib **184 →
+  185**): retype Endpoint vào slot 2 → `destroy_cap_object` → retype lại đúng
+  slot 2 phải `Ok`. Khẳng định cspace thực sự trả slot về.
+- Thêm test guest **ngay sau** bước destroy: `object_destroy(ep)` rồi
+  `retype(meta_untyped, Endpoint, ep)` phải `Ok` (rồi destroy lại) → `SLOT
+  REUSE OK`; marker vào `COMMON`: harness **565 → 568 ca**.
+- **Đường vòng đáng ghi lại**: lần đầu tôi đặt test reuse cách chỗ destroy ~500
+  dòng, kết quả `SlotOccupied` — vì **slot đã bị hệ thống cấp lại cho object
+  khác** trong khoảng giữa (workers/fault demo). Đó không phải lỗi kernel mà là
+  bằng chứng slot được tái dùng; test phải đặt **liền kề** destroy.
+- Gate: QEMU 3/3×3, persist 3/3, harness 568, kernel tests 185, docs PASS,
+  fmt sạch, 0 warning, headroom 199 024 B.

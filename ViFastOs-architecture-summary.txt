@@ -366,6 +366,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - bb17cd0 chore: tach LICENSE MIT thuan + TRADEMARKS.md (brand assets), on dinh hoa compose
 - 94dfc39 moc 9 (vong 135): cap phat vuot han muc phai tra OutOfMemory, khong panic
 - a728f42 web: gop trang os.vifast.org (FastAPI + dang ky som) vao deploy/vifastos_web
+- 3189990 moc 9 (vong 136): W^X thanh marker + giam flake boot (chan doan + retry + timeout)
+- b61fa73 brand: logo ViFastOs (icon + lockup + PNG) + favicon/manifest
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -413,7 +415,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 184/184 PASS
+- `cargo test -p vifast-kernel`: 185/185 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
@@ -1487,6 +1489,7 @@ QEMU test:
 - `HIARG` — program executed from the filesystem printed an argv-only marker
 - `WX OK` — writing an executable-mapped frame was denied while the RW stack stayed writable
 - `MEM OOM OK` — oversized untyped request was refused with OutOfMemory and size 0 rejected
+- `SLOT REUSE OK` — a slot destroyed and immediately retyped worked again (no leaked cap)
 - `IPC DEAD OK` — calling a destroyed endpoint returned an error instead of blocking
 - `IPC JUNK OK` — unknown VFS opcode got an error reply and the channel kept working
 - `SYS REJECT OK` — invalid handles and out-of-range user pointers were all refused

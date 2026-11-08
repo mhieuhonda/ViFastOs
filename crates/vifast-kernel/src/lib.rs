@@ -7855,6 +7855,32 @@ mod tests {
     }
 
     #[test]
+    fn destroyed_slot_can_be_retyped_again() {
+        // Vòng 137: sau khi destroy, slot phải THỰC SỰ trống để retype lại.
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x720_0000, 8);
+        let _ = retype_at(&mut kernel, root, ObjType::Endpoint, 2);
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::Retype as u64,
+                1,
+                ObjType::Endpoint as u64,
+                2,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 2,
+                error: KError::Ok
+            },
+            "retype lại đúng slot vừa destroy phải thành công"
+        );
+    }
+
+    #[test]
     fn object_destroy_requires_original_cap_and_no_dependents() {
         let mut kernel = Kernel::new();
         let root = test_root_with_untyped(&mut kernel, 0x700_0000, 8);
