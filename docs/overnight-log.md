@@ -1825,3 +1825,12 @@ follow-up `62b31f4`.
 - Kết quả: riscv64/aarch64/x86_64 đều in `HI FS` (ảnh RAM) và `HIARG` (exec
   từ FS + argv).
 - Gate: QEMU 3/3×3, persist 3/3, harness 523, docs PASS, fmt sạch, 0 warning.
+
+## 9.96 — Vòng 103b: ghi nhận flake persist trong par-gate
+
+- `par-gate --full` lần đầu báo local FAIL: persist riscv64 "blank boot"
+  (thiếu `FS DISK OK`, `FS FORMAT OK`, `SHELL READY`) trong khi
+  `SELFTEST PASS` đã có → boot dừng sớm, không phải lỗi marker mới.
+- Chạy lại `test-persist.py` một mình: **3/3 PASS**. Kết luận: flake do tải
+  máy khi QEMU local + persist remote chạy chồng; `timeout_hint()` đã chỉ
+  đúng nhóm marker thiếu để phân biệt.
