@@ -180,7 +180,7 @@ p { margin: 0 0 1em; }
 /* ---------- hero ---------- */
 
 .hero {
-  padding: clamp(44px, 7vw, 88px) 0 clamp(36px, 5vw, 60px);
+  padding: clamp(26px, 3.6vw, 46px) 0 clamp(24px, 3vw, 34px);
   background:
     radial-gradient(900px 380px at 82% -12%, rgba(192, 57, 43, 0.10), transparent 70%),
     var(--bg);
@@ -188,6 +188,7 @@ p { margin: 0 0 1em; }
 
 /* hero shares the section grid so every left edge lines up */
 .hero-inner { max-width: var(--wrap); }
+.hero-actions { margin: 22px 0 0; }
 
 .badge {
   display: inline-block;
@@ -221,7 +222,7 @@ p { margin: 0 0 1em; }
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  margin: 26px 0 34px;
+  margin: 22px 0 0;
 }
 
 .hero-facts {
@@ -229,7 +230,7 @@ p { margin: 0 0 1em; }
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   margin: 0;
-  padding-top: 24px;
+  padding-top: 18px;
   border-top: 1px solid var(--border);
 }
 
@@ -245,7 +246,7 @@ p { margin: 0 0 1em; }
 
 /* ---------- sections ---------- */
 
-.section { padding: clamp(44px, 6vw, 72px) 0; }
+.section { padding: clamp(28px, 3.4vw, 44px) 0; }
 .section-alt { background: #FDF1E2; border-block: 1px solid var(--border); }
 
 /* keep the sticky header from covering anchor targets */
@@ -255,7 +256,7 @@ section[id], main[id] { scroll-margin-top: 78px; }
   max-width: 62ch;
   color: var(--muted);
   font-size: 1.02rem;
-  margin-bottom: 28px;
+  margin-bottom: 16px;
 }
 
 .section-head {
@@ -274,14 +275,14 @@ section[id], main[id] { scroll-margin-top: 78px; }
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 16px;
+  gap: 14px;
 }
 
 .card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px 20px 6px;
+  padding: 16px 18px 4px;
   box-shadow: var(--shadow);
 }
 
@@ -341,16 +342,16 @@ section[id], main[id] { scroll-margin-top: 78px; }
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 18px 20px 12px 62px;
+  padding: 14px 16px 4px 52px;
 }
 
 .timeline li::before {
   content: counter(milestone);
   position: absolute;
-  left: 18px;
-  top: 17px;
-  width: 28px;
-  height: 28px;
+  left: 14px;
+  top: 13px;
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
   border-radius: 50%;
@@ -792,4 +793,95 @@ img.brand-mark {
   .header-inner .brand { order: 1; margin-right: auto; }
   .header-inner .ghost-btn { order: 2; margin-left: 0; display: inline-flex; }
   .header-inner .nav-toggle { order: 3; margin-left: 0; }
+}
+
+/* ============================================================
+   Bố cục 2026-11 — hero 2 cột có sơ đồ, thẻ có icon, dày hơn
+   ============================================================ */
+
+.hero-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr);
+  gap: 34px;
+  align-items: center;
+}
+.hero-copy { min-width: 0; }
+.hero-facts { grid-column: 1 / -1; }
+
+/* Thẻ sơ đồ kiến trúc */
+.arch {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: 0 20px 44px -34px rgba(59, 42, 34, .6);
+}
+.arch__head {
+  display: flex; align-items: center; gap: 10px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.arch__head img { width: 34px; height: 34px; border-radius: 8px; flex: 0 0 auto; }
+.arch__title { min-width: 0; display: flex; flex-direction: column; }
+.arch__title strong { font-size: 0.95rem; line-height: 1.2; }
+.arch__title span { color: var(--muted); font-size: 0.78rem; }
+.arch__chip {
+  margin-left: auto; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg);
+  color: var(--muted); font-family: var(--mono); font-size: 0.72rem; white-space: nowrap;
+}
+.arch__rows { margin: 0; padding: 0; list-style: none; }
+.arch__rows li {
+  display: grid; grid-template-columns: 62px minmax(0, 1fr);
+  gap: 10px; align-items: baseline;
+  padding: 8px 0; border-bottom: 1px dashed var(--border);
+}
+.arch__rows li:last-child { border-bottom: 0; }
+.arch__k {
+  color: var(--muted); font-family: var(--mono); font-size: 0.72rem;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.arch__v {
+  color: var(--text); font-family: var(--mono); font-size: 0.8rem; line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.arch__rows li.is-core { background: rgba(192, 57, 43, 0.05); border-radius: 8px; padding-inline: 8px; }
+.arch__rows li.is-core .arch__k { color: var(--accent-dark); font-weight: 700; }
+.arch__foot {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 8px 0 0; padding-top: 9px; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 0.78rem;
+}
+
+/* Icon trong thẻ "Nó là gì" */
+.card__ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: #F6E9DA; color: var(--accent-dark);
+}
+.card__ico svg { width: 19px; height: 19px; }
+.card h3 { margin-top: 0; }
+
+/* Lộ trình: 6 mốc thành lưới 3 cột thay vì 6 dòng dài */
+.timeline { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.timeline li { min-height: 0; }
+.timeline h3 { font-size: 1rem; }
+
+@media (max-width: 1000px) {
+  .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .hero-inner { grid-template-columns: 1fr; gap: 20px; }
+  .arch { max-width: 520px; }
+  .hero-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .timeline { grid-template-columns: 1fr; }
+  .arch__rows li { grid-template-columns: 54px minmax(0, 1fr); }
+}
+
+/* Mobile: ẩn thẻ sơ đồ trong hero (thông tin đã có ở mục "Nó là gì"),
+   giữ hero ngắn để vào nội dung nhanh. */
+@media (max-width: 640px) {
+  .arch { display: none; }
 }

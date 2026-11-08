@@ -25,7 +25,7 @@
   <meta name="twitter:title" content="ViFastOs — microkernel nhỏ, viết bằng Rust">
   <meta name="twitter:description" content="seL4-style, capability-based, no_std. Chạy trên QEMU với riscv64 / aarch64 / x86_64.">
   <meta name="twitter:image" content="https://os.vifast.org/static/brand/og-1200.png">
-  <link rel="stylesheet" href="/static/styles.css?v=20261108b">
+  <link rel="stylesheet" href="/static/styles.css?v=20261108c">
 </head>
 <body>
   <div class="topline" aria-hidden="true"></div>
@@ -57,20 +57,53 @@
     <!-- 1. Hero -->
     <section class="hero">
       <div class="wrap hero-inner">
-        <p class="badge">Đang phát triển · đăng ký sớm</p>
-        <h1>ViFastOs — microkernel nhỏ, viết bằng Rust</h1>
-        <p class="hero-en">A small seL4-style, capability-based microkernel written in Rust.</p>
-        <p class="hero-lead">
-          Kiểu seL4, capability-based, kernel <code>no_std</code> — chạy trên QEMU
-          với ba kiến trúc: <strong>riscv64</strong>, <strong>aarch64</strong> và
-          <strong>x86_64</strong>. Đây là dự án nghiên cứu/demo, chưa dùng cho
-          production.
-        </p>
-        <div class="hero-actions">
-          <a class="btn btn-primary" href="#dang-ky">Đăng ký nhận tin</a>
-          <a class="btn btn-secondary" href="https://github.com/vifast-oss/ViFastOs"
-             target="_blank" rel="noopener noreferrer">GitHub repo ↗</a>
+        <div class="hero-copy">
+          <p class="badge">Đang phát triển · đăng ký sớm</p>
+          <h1>ViFastOs — microkernel nhỏ, viết bằng Rust</h1>
+          <p class="hero-en">A small seL4-style, capability-based microkernel written in Rust.</p>
+          <p class="hero-lead">
+            Kiểu seL4, capability-based, kernel <code>no_std</code> — chạy trên QEMU
+            với ba kiến trúc: <strong>riscv64</strong>, <strong>aarch64</strong> và
+            <strong>x86_64</strong>. Đây là dự án nghiên cứu/demo, chưa dùng cho
+            production.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#dang-ky">Đăng ký nhận tin</a>
+            <a class="btn btn-secondary" href="https://github.com/vifast-oss/ViFastOs"
+               target="_blank" rel="noopener noreferrer">GitHub repo ↗</a>
+          </div>
         </div>
+
+        <aside class="arch" aria-label="Kiến trúc kernel ViFastOs">
+          <div class="arch__head">
+            <img src="/static/brand/vifastos-icon-192.png" alt="" width="34" height="34" loading="lazy">
+            <div class="arch__title">
+              <strong>kiến trúc</strong>
+              <span>lõi portable · 3 arch</span>
+            </div>
+            <span class="arch__chip">no_std</span>
+          </div>
+          <ul class="arch__rows">
+            <li>
+              <span class="arch__k">user</span>
+              <span class="arch__v">server · client · shell · fs</span>
+            </li>
+            <li class="is-core">
+              <span class="arch__k">kernel</span>
+              <span class="arch__v">object · capability · IPC · sched</span>
+            </li>
+            <li>
+              <span class="arch__k">arch</span>
+              <span class="arch__v">riscv64 · aarch64 · x86_64</span>
+            </li>
+            <li>
+              <span class="arch__k">hw</span>
+              <span class="arch__v">OpenSBI · PSCI · UEFI/OVMF</span>
+            </li>
+          </ul>
+          <p class="arch__foot"><span>51 syscall</span><span>·</span><span>forbid(unsafe_code)</span><span>·</span><span>QEMU</span></p>
+        </aside>
+
         <dl class="hero-facts">
           <div><dt>Ngôn ngữ</dt><dd>Rust · <code>no_std</code></dd></div>
           <div><dt>Mô hình</dt><dd>Capability-based</dd></div>
@@ -90,6 +123,7 @@
         </p>
         <div class="cards">
           <article class="card">
+            <span class="card__ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="3.2"/><path d="M10.4 12.6 20 3M16.5 6.5l2 2M14 9l2 2"/></svg></span>
             <h3>Capability-based</h3>
             <p>
               Mọi quyền truy cập đều đi qua capability. TCB, endpoint, notification,
@@ -98,6 +132,7 @@
             </p>
           </article>
           <article class="card">
+            <span class="card__ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h12l-3-3m3 3-3 3"/><path d="M20 15H8l3-3m-3 3 3 3"/></svg></span>
             <h3>IPC + Notification</h3>
             <p>
               Giao tiếp đồng bộ với Send / Call / Recv / Reply / ReplyRecv, kèm
@@ -106,6 +141,7 @@
             </p>
           </article>
           <article class="card">
+            <span class="card__ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2 19 6v6c0 4-3 7-7 8.8C8 19 5 16 5 12V6z"/><path d="m9 12 2.2 2.2L15.5 9.8"/></svg></span>
             <h3><code>no_std</code> + <code>forbid(unsafe_code)</code></h3>
             <p>
               Kernel là <code>no_std</code>. Các crate kernel, runtime và fs đều bật
@@ -114,6 +150,7 @@
             </p>
           </article>
           <article class="card">
+            <span class="card__ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5 12 12l9-4.5z"/><path d="M3 12.5 12 17l9-4.5"/><path d="M3 17 12 21.5 21 17"/></svg></span>
             <h3>3 kiến trúc, chạy trên QEMU</h3>
             <p>
               riscv64 (OpenSBI, Sv39), aarch64 (QEMU virt, GICv2) và x86_64

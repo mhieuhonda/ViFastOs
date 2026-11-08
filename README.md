@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/brand/vifastos-lockup-cream.png" alt="ViFastOs · microkernel kiểu seL4 viết bằng Rust" width="620">
+</p>
+
 # ViFastOs — multi-architecture kernel
 
 ViFastOs là một microkernel kiểu seL4, viết bằng Rust, với **lõi portable** dùng
