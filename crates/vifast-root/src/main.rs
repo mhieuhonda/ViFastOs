@@ -1110,6 +1110,18 @@ const EXEC_DEMO_ELF: &[u8] = &exec_demo_elf();
 /// phóng tài nguyên kernel/Untyped, slot cspace trống nhưng không tái dùng
 /// trong vòng đời root — chấp nhận được vì mỗi `run` tốn ≤ 8 slots trên
 /// 128 slot root và đây là demo.
+/// Vòng 194: độ dài THẬT của danh sách slot đang giữ. Dùng `exec_len` đã lưu
+/// có thể cũ hơn `exec_used` (spawn ghi thêm slot rồi mới cập nhật), khiến
+/// `destroy_exec` bỏ sót TCB ⇒ VSpace luôn "in use" ⇒ frame không giải phóng
+/// (đo: `DESTROY DIAG` idx=0..4 Busy mỗi chu kỳ).
+fn used_len(used: &[u8; MAX_EXEC_SLOTS]) -> usize {
+    let mut n = 0;
+    while n < MAX_EXEC_SLOTS && used[n] != 0 {
+        n += 1;
+    }
+    n
+}
+
 fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usize) {
     // Vòng 192: SỬA LỖI RÒ RỈ SLOT. Bản cũ chỉ `slots.release()` ở **pass 1**,
     // nhưng phần lớn object được huỷ thành công ngay **pass 0** — sang pass 1
@@ -1149,12 +1161,16 @@ fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usi
     if stuck > 0 {
         write(b"DESTROY DIAG stuck=");
         write_decimal(stuck);
+        write(b" len=");
+        write_decimal(len as u64);
         write(b"\n");
         // Vòng 193: in cả slot và mã lỗi để biết kernel từ chối vì lý do gì.
         let mut j = 0;
         while j < len {
             if !done[j] {
-                write(b"  slot=");
+                write(b"  idx=");
+                write_decimal(j as u64);
+                write(b" slot=");
                 write_decimal(used[j] as u64);
                 write(b" err=");
                 write_decimal(last_err[j]);
@@ -3160,7 +3176,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     // destroy không trả trang về arena thì `used` sẽ TĂNG dần
                     // sau mỗi lần chạy — loại rò rỉ giết hệ sau vài chục lần.
                     let mem_before = vifast_user::mem_info().value & 0xffff_ffff;
-                    destroy_exec(&mut slots, &exec_used, exec_len);
+                    destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
                     exec_len = 0;
                     exec_tcb = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
@@ -3205,7 +3221,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     if exec_tcb != 0 {
                         let _ = vifast_user::tcb_suspend(exec_tcb);
                     }
-                    destroy_exec(&mut slots, &exec_used, exec_len);
+                    destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
                     exec_vspace = 0;
@@ -3359,7 +3375,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     if !stat_ok {
                         write(b"RUN SKIP\n");
                     } else {
-                        destroy_exec(&mut slots, &exec_used, exec_len);
+                        destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
                         exec_len = 0;
                         exec_tcb = 0;
                         exec_used = [0u8; MAX_EXEC_SLOTS];
@@ -3459,7 +3475,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         // Vòng 104: luôn destroy + nạp lại từ file (không phụ
                         // thuộc stat) để `runfs/exec` chạy được cả khi TCB cũ
                         // đã có; fail thì rơi về demo copy như nhánh đầu.
-                        destroy_exec(&mut slots, &exec_used, exec_len);
+                        destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
                         exec_len = 0;
                         exec_tcb = 0;
                         exec_used = [0u8; MAX_EXEC_SLOTS];
@@ -3765,7 +3781,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 // VSpace mới và spawn chạy. Fail-êm: x86 cạn Untyped thì bỏ
                 // qua, gate không đổi. Affinity hart 0 (luôn có task).
                 if info.sched_harts & 0b01 != 0 {
-                    destroy_exec(&mut slots, &exec_used, exec_len);
+                    destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
                     exec_len = 0;
                     exec_tcb = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];

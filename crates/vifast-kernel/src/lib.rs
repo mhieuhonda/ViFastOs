@@ -4437,6 +4437,13 @@ impl Kernel {
             }),
             ObjType::VSpace => self.vspace_in_use(object),
             ObjType::CNode => self.cnode_in_use(object),
+            // Vòng 194: TCB KHÔNG được rơi vào nhánh `_ => true`. Trước đây nó
+            // luôn bị coi là "in use" ⇒ `destroy_cap_object` trả `Busy` vĩnh
+            // viễn ⇒ TCB của task exec không bao giờ bị huỷ ⇒ VSpace luôn
+            // `vspace_in_use` ⇒ frame luôn còn mapping ⇒ rò rỉ 6 object mỗi chu
+            // kỳ (`DESTROY DIAG stuck=6`). `destroy_object` đã tự kiểm tra
+            // current/root và tự gỡ khỏi runqueue/endpoint/notification.
+            ObjType::Tcb => false,
             ObjType::SchedContext => false,
             _ => true,
         }

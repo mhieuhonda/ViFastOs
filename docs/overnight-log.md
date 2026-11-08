@@ -3281,3 +3281,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   biết **ai còn tham chiếu** (TCB Faulted? IOMMU? cnode?).
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
   sạch.
+
+## 9.191 — Vòng 194: TCB không có trong danh sách huỷ (`len=6`) — tìm ra mắt xích
+
+- Đo có `idx`: `DESTROY DIAG stuck=6 len=6`, `idx=0`=**VSpace** (Busy),
+  `idx=1..4`=**4 frame ảnh** (Busy), `idx=5`=stack (`InvalidArg`).
+  **`len=6` ⇒ TCB không nằm trong `exec_used` lúc huỷ** ⇒ VSpace luôn in-use ⇒
+  frame không giải phóng. Đó là gốc của chuỗi rò rỉ.
+- Sửa lỗi thật: `object_in_use` xếp **TCB vào `_ => true`** ⇒
+  `destroy_cap_object` trả `Busy` vĩnh viễn cho TCB (không TCB nào huỷ được qua
+  đường cap!). Giờ `ObjType::Tcb => false`.
+- Thêm `used_len()` để huỷ theo độ dài **thật** của `exec_used`.
+- Đã **revert** bản vá VSpace-unmap (chưa chứng minh được tác dụng) để cây sạch.
+- Chưa xong: cần biết vì sao slot TCB không được ghi vào `exec_used` (in toàn bộ
+  mảng trước/sau spawn ở vòng sau).
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt sạch.

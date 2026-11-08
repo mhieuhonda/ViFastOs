@@ -297,9 +297,20 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
   thuyết: VSpace huỷ mà không giảm `mapped_w`/`mapped_x` của frame) — **không
   đổi kết quả** (`stuck=6` vẫn còn) ⇒ nhánh đó **không được chạy tới**, tức
   `can_destroy(VSpace)` đã từ chối trước. Đã **revert** thay đổi chưa chứng minh.
-- Việc cần làm (vòng sau): in **loại object** của từng slot kẹt (root biết thứ
-  tự cấp: tcb → vspace → stack → code → pte) và kiểm `can_destroy` của VSpace
-  để biết **ai còn tham chiếu** nó (TCB Faulted? IOMMU? cnode?).
+- **Kết quả đo có `idx` (vòng 194)**: `DESTROY DIAG stuck=6 len=6` với
+  `idx=0` = **VSpace** (Busy), `idx=1..4` = **4 frame ảnh** (Busy, còn mapping),
+  `idx=5` = frame stack (`InvalidArg`, đã trống). **`len=6` chứng minh TCB KHÔNG
+  có trong danh sách cần huỷ** ⇒ VSpace luôn `vspace_in_use` ⇒ frame không bao
+  giờ được giải phóng. Đây là gốc của chuỗi rò rỉ.
+- Đã sửa một lỗi thật: `object_in_use` xếp **TCB vào nhánh `_ => true`** ⇒
+  `destroy_cap_object` trả `Busy` **vĩnh viễn** cho TCB (không TCB nào huỷ được
+  qua đường cap). Giờ `ObjType::Tcb => false` (việc kiểm current/root và gỡ
+  hàng chờ đã nằm trong `destroy_object`).
+- Đã thêm `used_len()` để luôn huỷ theo **độ dài thật** của `exec_used` thay vì
+  `exec_len` có thể cũ.
+- **Chưa xong**: `len=6` vẫn còn ⇒ cần tìm vì sao slot **TCB** không nằm trong
+  `exec_used` tại thời điểm huỷ (in toàn bộ mảng + `exec_len`/`used_len` ngay
+  trước và sau khi spawn).
 
 ### 5p-b. Đo rò rỉ qua NHIỀU lần exec (vòng 187)
 
