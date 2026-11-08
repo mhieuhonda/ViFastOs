@@ -3101,3 +3101,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   dựa vào `sp`).
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
   sạch; headroom 2.29 MB, client riscv 7 trang (đúng ngân sách).
+
+## 9.179 — Vòng 182: soak tìm flake thật (và một lần bắt được)
+
+- Soak có kiểm soát: **riscv 5/5**, **x86_64 4/5** — lần hỏng duy nhất là
+  **flake thật ở giai đoạn boot**: serial dừng ở `USER EXIT` (126 dòng, bình
+  thường 216), chưa tới `SHELL READY`. Đây là lần đầu soak bắt được loại này
+  bằng số liệu thay vì cảm nhận.
+- **Sửa**: thêm nhánh retry `SHELL READY` (giống `boot_retry` của persist):
+  nếu guest không đạt `SHELL READY` thì thử lại **một lần** và in lý do; nếu lần
+  hai vẫn hỏng, cổng vẫn đỏ ⇒ không che lỗi thật.
+- Sau sửa: x86 **5/5** rồi **8/8** (không tái hiện flake để chứng kiến retry —
+  ghi nhận trung thực; tần suất quan sát ~1/13 lần chạy).
+- Runbook `17-su-co.md` thêm dòng chẩn đoán: serial ngắn (~126 dòng) hết ở
+  `USER EXIT` ⇒ loại flake này.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
+  sạch.

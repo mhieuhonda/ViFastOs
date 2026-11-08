@@ -393,11 +393,19 @@ def run_qemu(
         retry_exit = (
             not timed_out and MARKERS_OK["flag"] and bonus > 0 and not retry_boot
         )
-        if not (retry_timeout or retry_boot or retry_exit):
+        retry_shell = (not SHELL_READY["flag"] and bonus > 0 and not retry_boot)
+        if not (retry_timeout or retry_boot or retry_exit or retry_shell):
             return False
         if retry_boot and not retry_timeout:
             bonus -= 1
             print(f"RETRY {name}: guest không boot (nghi flake UEFI/QEMU), chạy lại MỘT lần")
+        elif retry_shell:
+            bonus -= 1
+            print(
+                f"RETRY {name}: guest dừng trước SHELL READY "
+                f"({len(output.splitlines())} dòng serial) — nghi flake boot,"
+                " chạy lại MỘT lần"
+            )
         elif retry_exit:
             bonus -= 1
             print(
@@ -416,6 +424,10 @@ NEVER_BOOTED = {"flag": False}
 # Vòng 177: guest in ĐỦ marker mà QEMU thoát mã lạ ⇒ nghi race của cơ chế
 # `isa-debug-exit`, không phải lỗi sản phẩm; cho phép thử lại một lần.
 MARKERS_OK = {"flag": False}
+# Vòng 182: soak x86 5 lần bắt được 1 lần guest dừng giữa boot (sau `USER EXIT`,
+# chưa tới `SHELL READY`). Đây là flake của giai đoạn boot, không phải lỗi
+# marker; cho phép thử lại MỘT lần và in lý do rõ ràng.
+SHELL_READY = {"flag": False}
 
 
 def run_qemu_once(
@@ -476,6 +488,7 @@ def run_qemu_once(
         return True, False
     from harness_spec import COMMON as _COMMON, EXACT_ONE as _EXACT
 
+    SHELL_READY["flag"] = "SHELL READY" in output
     MARKERS_OK["flag"] = all(text in output for text, _ in _COMMON) and all(
         output.count(text) == 1 for text in _EXACT
     )
