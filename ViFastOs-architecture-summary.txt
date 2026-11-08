@@ -353,6 +353,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d4731b8 tai lieu: dong bo docs sinh tu dong (vong 125)
 - 7bc79a5 tai lieu (vong 125b): ghi log be tac cuc bo + bai hoc quy trinh
 - 7a2f396 tai lieu (vong 126): chuong trinh 8 lenh in errno cung khong in — tam dung dieu tra
+- 0823077 cong cu (vong 126): chan ngan sach trang client ELF ngay o build
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

@@ -92,10 +92,13 @@ hello
 - Một lần exec (vspace + code frame + stack frame + TCB + page table) tiêu thụ
   ~5 trang/object ⇒ lần exec thứ hai trong cùng phiên **hết chỗ** (đúng giới
   hạn ở mục trên). Vì vậy mọi thêm object vào đường boot đều phải cân nhắc.
-- **Ngân sách trang client ELF: tối đa 6 trang** (24 KiB). Mỗi trang client bị
-  staging cấp 1 Frame lúc boot; vượt 6 trang sẽ làm demo `PREEMPT OK` timeout
-  (đã xảy ra ở vòng 116). `scripts/build.sh` **chặn ngay** với thông báo
-  `CLIENT ELF VƯỢT NGÂN SÁCH TRANG`.
+- **Ngân sách trang client ELF (theo arch, đo từ bản xanh): riscv64 ≤ 6,
+  aarch64 ≤ 7, x86_64 ≤ 8**. Mỗi trang client bị staging cấp 1 Frame lúc boot;
+  vượt ngân sách sẽ làm demo `PREEMPT OK` timeout (đã xảy ra ở vòng 116).
+  `scripts/build.sh` **chặn ngay** với thông báo `CLIENT ELF <arch> VƯỢT NGÂN
+  SÁCH TRANG`.
+- `scripts/diag.sh` in nhanh: HEAD, cây sạch/bẩn, kích thước + số trang từng
+  module, headroom kernel riscv, trạng thái cổng gần nhất, số QEMU đang chạy.
 - Ngưỡng build: headroom kernel riscv phải ≥ **192 KiB** cho cả bản thường và
   bản `test-destroy-smp`; hiện 203 120 B (thường) và 199 024 B (destroy-smp).
 

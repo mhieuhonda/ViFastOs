@@ -72,14 +72,25 @@ scripts/check-root-elf.sh "$ROOT_RV.stripped" riscv64imac-unknown-none-elf 243
 # Ngân sách trang cho client ELF: mỗi trang client bị staging cấp 1 Frame lúc
 # boot, và Untyped dữ liệu chỉ còn ~6 trang. Vượt 6 trang sẽ làm demo PREEMPT
 # OK timeout (bài học vòng 116) — chặn ngay ở build thay vì để QEMU đỏ khó hiểu.
-CLIENT_RV_SIZE=$(wc -c < "${CLIENT_RV}.stripped" | tr -d ' ')
-CLIENT_RV_PAGES=$(( (CLIENT_RV_SIZE + 4095) / 4096 ))
-echo "client(riscv64) ${CLIENT_RV_SIZE} B = ${CLIENT_RV_PAGES} trang (ngân sách 6)"
-if (( CLIENT_RV_PAGES > 6 )); then
-    echo "CLIENT ELF VƯỢT NGÂN SÁCH TRANG (tối đa 6): ${CLIENT_RV_PAGES} trang" >&2
-    echo "Thu gọn vifast-client hoặc nới ngân sách Untyped trước khi tăng." >&2
-    exit 1
-fi
+# Ngân sách trang theo từng arch (đo từ bản đang xanh): riscv 6, aarch64 7,
+# x86_64 8. Mỗi trang client bị staging cấp 1 Frame lúc boot; vượt ngân sách
+# sẽ làm demo PREEMPT OK timeout như vòng 116.
+check_client_budget() {
+    local arch="$1" file="$2" limit="$3"
+    if [ ! -f "$file" ]; then
+        return 0
+    fi
+    local size pages
+    size=$(wc -c < "$file" | tr -d ' ')
+    pages=$(( (size + 4095) / 4096 ))
+    echo "client(${arch}) ${size} B = ${pages} trang (ngân sách ${limit})"
+    if (( pages > limit )); then
+        echo "CLIENT ELF ${arch} VƯỢT NGÂN SÁCH TRANG (tối đa ${limit}): ${pages} trang" >&2
+        echo "Thu gọn vifast-client hoặc nới ngân sách Untyped trước khi tăng." >&2
+        exit 1
+    fi
+}
+check_client_budget riscv64 "${CLIENT_RV}.stripped" 6
 
 cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
     -C relocation-model=static \
@@ -89,6 +100,7 @@ cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-sof
     -C link-arg=-z -C link-arg=separate-code
 "$OBJCOPY" --strip-all "$ROOT_ARM" "$ROOT_ARM.stripped"
 scripts/check-root-elf.sh "$ROOT_ARM.stripped" aarch64-unknown-none-softfloat 183
+check_client_budget aarch64 "${CLIENT_ARM}.stripped" 7
 
 cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
     -C relocation-model=pic \
@@ -99,6 +111,7 @@ cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
     -C link-arg=-no-pie
 "$OBJCOPY" --strip-all "$ROOT_X86" "$ROOT_X86.stripped"
 scripts/check-root-elf.sh "$ROOT_X86.stripped" x86_64-unknown-none 62
+check_client_budget x86_64 "${CLIENT_X86}.stripped" 8
 
 echo "== destroy-smp root variants =="
 cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf --features test-destroy-smp -- \

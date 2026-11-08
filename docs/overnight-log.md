@@ -2223,3 +2223,15 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
 - Điều tra lỗi "exec không đọc được trang stack" **tạm dừng** (báo cáo đã đủ
   dữ kiện); quay lại khi có cách quan sát kernel tốt hơn.
 - Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, build 0 warning.
+
+## 9.124 — Vòng 127: script chẩn đoán + ngân sách trang theo từng arch
+
+- Thêm `scripts/diag.sh`: in nhanh HEAD, cây sạch/bẩn, kích thước + số trang
+  của client/root cho từng arch, headroom kernel riscv (cả bản destroy-smp),
+  trạng thái cổng gần nhất và số QEMU đang chạy. Không build, không chạy QEMU.
+- Nhờ diag phát hiện ngân sách trang là **theo arch**, không phải 6 cho tất cả:
+  `riscv 6 / aarch64 7 / x86_64 8` (đều là bản đang xanh). Guard trong
+  `build.sh` đổi thành `check_client_budget` cho cả ba arch, in số trang và
+  fail nếu vượt.
+- Cập nhật runbook: ngân sách theo arch + giới thiệu `scripts/diag.sh`.
+- Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, fmt sạch, 0 warning.
