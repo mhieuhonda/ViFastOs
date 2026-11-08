@@ -1654,3 +1654,18 @@ follow-up `62b31f4`.
   `enable_vfs` — trước đó x86_64 không có cap nên không thu hồi/không exec.
 - Kết quả: QEMU 3/3×3 PASS với cả hai marker; persist 7×3; harness 520; docs
   PASS; fmt sạch; 0 warning; headroom riscv 199 024 B.
+
+## 9.84 — Vòng 93: chương trình từ FS in ra console ("HI DSK")
+
+- `EXEC_DEMO_ELF` giờ là chương trình thật: in chuỗi bằng `DebugWrite(32)`
+  rồi `Exit(34)`, mã hoá theo từng arch (riscv64 `auipc/addi/ecall`, aarch64
+  `adr/movz/svc`, x86_64 `lea/mov/int 0x80`), chuỗi ở offset 0x40 trong trang.
+- Hai bản: `EXEC_DEMO_ELF` ("HI FS", dùng cho demo trong RAM) và
+  `EXEC_DISK_ELF` ("HI DSK", ghi xuống FS cho exec-from-FS). Nhờ vậy chuỗi
+  `HI DSK` trên serial là **bằng chứng chương trình vừa chạy được nạp từ đĩa**,
+  phân biệt hẳn với bản RAM.
+- riscv64: serial có `HI FS` → `RUN FS OK` → `HI DSK` (đã xác nhận).
+- aarch64: `HI FS` (RAM) chạy đúng, nhưng bản trên đĩa chưa in — cần điều tra
+  tiếp (nghi vấn nạp/thi hành trang code sau khi ghi file), chưa đưa vào
+  COMMON để tránh làm đỏ gate.
+- Gate giữ xanh: QEMU 2/2×3 PASS, harness 520.

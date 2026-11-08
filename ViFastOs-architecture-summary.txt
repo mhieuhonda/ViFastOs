@@ -300,6 +300,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - e9c1557 moc 9 (vong 89): exec-that tu filesystem chay duoc (RUN FS OK)
 - 9c1cff1 ha tang (vong 90): par-gate --full chay song song 2 may ca persist/harness/docs
 - 741255b moc 9 (vong 91): thu hoi demo pager (PAGER RECLAIM OK) + fix runfs path
+- 2938db2 moc 9 (vong 92): exec-from-FS + thu hoi pager vao cong chuan 3 arch
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

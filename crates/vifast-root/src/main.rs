@@ -984,8 +984,10 @@ fn map_frame_fallible(
 /// gốc). Không dùng `wfi`: ở U-mode nó trap illegal khi TW=1 (vòng 33 riscv
 /// fault addr=0x10500073, system_opcode_insn). Entry = CODE_VA.
 const EXEC_DEMO_CODE: u64 = CODE_VA as u64 + 0x1000;
-const EXEC_DEMO_ELF: &[u8] = &{
-    let mut elf = [0u8; 0x1000 + 16];
+/// Dựng ELF demo nhỏ: 1 trang code in `msg` (DebugWrite) rồi exit.
+/// `len` là độ dài chuỗi, được nhúng thẳng vào lệnh nạp tham số độ dài.
+const fn exec_demo_elf(msg: &[u8], len: u32) -> [u8; 0x1000 + 0x48] {
+    let mut elf = [0u8; 0x1000 + 0x48];
     // ELF header.
     elf[0] = 0x7f;
     elf[1] = b'E';
@@ -994,13 +996,10 @@ const EXEC_DEMO_ELF: &[u8] = &{
     elf[4] = 2; // 64-bit
     elf[5] = 1; // LE
     elf[6] = 1; // version
-                // e_type ET_EXEC(2), e_machine EM_RISCV(243) — parse theo arch build.
-    elf[16] = 2;
-    elf[17] = 0;
+    elf[16] = 2; // ET_EXEC
     elf[18] = (USER_ELF_MACHINE & 0xff) as u8;
     elf[19] = (USER_ELF_MACHINE >> 8) as u8;
     elf[20] = 1; // e_version
-                 // e_entry, e_phoff.
     let entry = EXEC_DEMO_CODE.to_le_bytes();
     let mut i = 0;
     while i < 8 {
@@ -1013,7 +1012,6 @@ const EXEC_DEMO_ELF: &[u8] = &{
         elf[32 + i] = phoff[i];
         i += 1;
     }
-    // e_ehsize, e_phentsize, e_phnum.
     elf[52] = 64;
     elf[54] = 56;
     elf[56] = 1;
@@ -1028,28 +1026,92 @@ const EXEC_DEMO_ELF: &[u8] = &{
         elf[88 + i] = entry[i];
         i += 1;
     }
-    elf[96] = 8; // filesz
-    elf[104] = 8; // memsz
+    elf[96] = 0x48; // filesz
+    elf[104] = 0x48; // memsz
     let align = 0x1000u64.to_le_bytes();
     i = 0;
     while i < 8 {
         elf[112 + i] = align[i];
         i += 1;
     }
-    // Code (8B): li a7,34 (exit) + ecall -> task thoát ngay sau khi chạy
-    // (giống worker F). Không busy/yield loop: vòng 33 busy loop đốt BKL
-    // (h0_acq tăng 4x) làm boot quá 20s timeout; wfi thì trap ở U-mode.
-    // addi a7,x0,34 = 93 08 20 02; ecall = 73 00 00 00.
-    elf[0x1000] = 0x93;
-    elf[0x1001] = 0x08;
-    elf[0x1002] = 0x20;
-    elf[0x1003] = 0x02;
-    elf[0x1004] = 0x73;
-    elf[0x1005] = 0x00;
-    elf[0x1006] = 0x00;
-    elf[0x1007] = 0x00;
+    // Code: in msg bằng DebugWrite rồi Exit. Chuỗi ở offset 0x40 trong trang.
+    if cfg!(target_arch = "riscv64") {
+        let code: [u32; 7] = [
+            0x0000_0517,                    // auipc a0, 0
+            0x0405_0513,                    // addi a0, a0, 0x40
+            (len << 20) | (11 << 7) | 0x13, // addi a1, x0, len
+            0x0200_0893,                    // addi a7, x0, 32
+            0x0000_0073,                    // ecall
+            0x0220_0893,                    // addi a7, x0, 34
+            0x0000_0073,                    // ecall
+        ];
+        let mut i = 0;
+        while i < code.len() {
+            let bytes = code[i].to_le_bytes();
+            let mut j = 0;
+            while j < 4 {
+                elf[0x1000 + i * 4 + j] = bytes[j];
+                j += 1;
+            }
+            i += 1;
+        }
+    } else if cfg!(target_arch = "aarch64") {
+        let code: [u32; 6] = [
+            0x1000_0200,                  // adr x0, #0x40
+            0xD280_0000 | (len << 5) | 1, // movz x1, #len
+            0xD280_0408,                  // movz x8, #32
+            0xD400_0001,                  // svc #0
+            0xD280_0448,                  // movz x8, #34
+            0xD400_0001,                  // svc #0
+        ];
+        let mut i = 0;
+        while i < code.len() {
+            let bytes = code[i].to_le_bytes();
+            let mut j = 0;
+            while j < 4 {
+                elf[0x1000 + i * 4 + j] = bytes[j];
+                j += 1;
+            }
+            i += 1;
+        }
+    } else {
+        // x86_64: lea rdi,[rip+0x39] ; mov esi,len ; mov eax,32 ; int 0x80 ;
+        // mov eax,34 ; int 0x80
+        let mut i = 0;
+        let prefix: [u8; 7] = [0x48, 0x8D, 0x3D, 0x39, 0x00, 0x00, 0x00];
+        while i < prefix.len() {
+            elf[0x1000 + i] = prefix[i];
+            i += 1;
+        }
+        elf[0x1007] = 0xBE;
+        elf[0x1008] = (len & 0xff) as u8;
+        elf[0x1009] = 0;
+        elf[0x100A] = 0;
+        elf[0x100B] = 0;
+        let tail: [u8; 14] = [
+            0xB8, 0x20, 0x00, 0x00, 0x00, // mov eax,32
+            0xCD, 0x80, // int 0x80
+            0xB8, 0x22, 0x00, 0x00, 0x00, // mov eax,34
+            0xCD, 0x80, // int 0x80
+        ];
+        let mut j = 0;
+        while j < tail.len() {
+            elf[0x100C + j] = tail[j];
+            j += 1;
+        }
+    }
+    let mut k = 0;
+    while k < msg.len() {
+        elf[0x1040 + k] = msg[k];
+        k += 1;
+    }
     elf
-};
+}
+
+/// Bản chạy từ RAM (boot EXEC demo) — in "HI FS".
+const EXEC_DEMO_ELF: &[u8] = &exec_demo_elf(b"HI FS\n", 6);
+/// Bản ghi xuống FS cho exec-from-FS — in "HI DSK" (chứng minh nạp từ đĩa).
+const EXEC_DISK_ELF: &[u8] = &exec_demo_elf(b"HI DSK\n", 7);
 
 /// Số slot tối đa spawn_elf_copy cấp cho ELF demo (tcb + vspace + stack +
 /// frame code + page tables). ELF demo cố định 1 page code nên 8 là dư;
@@ -2606,6 +2668,31 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                         off += n;
                     }
+                    // Vòng 93: vá bản trên đĩa để CHỨNG MINH chương trình chạy
+                    // thật sự được nạp từ file: đổi độ dài in thành 7 và chuỗi
+                    // thành "HI DSK\n" (bản trong RAM in "HI FS\n").
+                    let mut patch = [0u8; vifast_abi::vfs::MAX_IO];
+                    let mut j = 0;
+                    let insn = 0x0070_0593u32.to_le_bytes(); // addi a1,x0,7
+                    while j < 4 {
+                        patch[j] = insn[j];
+                        j += 1;
+                    }
+                    let _ =
+                        root_vfs_write_at(root_vfs_slot, b"/prog.elf", 0x1008, &patch[..4], false);
+                    let disk_msg = b"HI DSK\n";
+                    j = 0;
+                    while j < disk_msg.len() {
+                        patch[j] = disk_msg[j];
+                        j += 1;
+                    }
+                    let _ = root_vfs_write_at(
+                        root_vfs_slot,
+                        b"/prog.elf",
+                        0x1040,
+                        &patch[..disk_msg.len()],
+                        false,
+                    );
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
