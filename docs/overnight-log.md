@@ -2832,3 +2832,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Runbook thêm mục **5w** mô tả đường tiến trình cơ bản đã khoá.
 - Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 186, FS 28, docs PASS,
   fmt sạch, 0 warning.
+
+## 9.163 — Vòng 166: driver block có test biên, và FS test vào cổng
+
+- Thêm 3 host test trong `vifast-fs` (28 → **31**):
+  - `mount_rejects_device_smaller_than_superblock_needs` — đĩa nhỏ hơn
+    `DATA_START + 2` ⇒ `NoSpace`, không panic;
+  - `format_rejects_device_without_data_blocks` — không có block dữ liệu ⇒ lỗi;
+  - `writes_land_in_the_right_block_at_both_edges` — ghi/đọc đúng ở block
+    **cuối**, và superblock (`VF04`) vẫn nguyên sau khi ghi block cuối.
+- Hai lần sai khi viết test (giữ lại làm bài học): tôi đoán `format` trả
+  `Invalid` (thực tế `NoSpace`) và đoán magic `ViFs` (thực tế `VF04`) — sửa
+  theo **mã nguồn**, không theo trí nhớ.
+- `scripts/build.sh` giờ chạy **`cargo test -p vifast-fs`**: trước đây FS test
+  không nằm trong cổng nên sửa định dạng đĩa có thể phá ngầm mà vẫn xanh.
+- Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 186, **FS 31**, docs PASS,
+  fmt sạch, 0 warning.

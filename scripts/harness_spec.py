@@ -56,6 +56,10 @@ COMMON = [
         "STATFS reported a sane used/total block count with 512-byte blocks",
     ),
     (
+        "KILL OK",
+        "tcb_destroy killed a freshly retyped TCB and rejected an invalid slot",
+    ),
+    (
         "SLOT REUSE OK",
         "a slot destroyed and immediately retyped worked again (no leaked cap)",
     ),
@@ -66,6 +70,10 @@ COMMON = [
     (
         "IPC JUNK OK",
         "unknown VFS opcode got an error reply and the channel kept working",
+    ),
+    (
+        "SEC PROBE OK",
+        "kernel refused to read user buffers outside the copy windows",
     ),
     (
         "SYS REJECT OK",

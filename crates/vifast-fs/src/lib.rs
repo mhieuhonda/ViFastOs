@@ -3099,6 +3099,44 @@ mod tests {
     }
 
     #[test]
+    fn mount_rejects_device_smaller_than_superblock_needs() {
+        // Vòng 166 (driver block): đĩa nhỏ hơn yêu cầu tối thiểu phải bị từ
+        // chối ngay, không được panic hay ghi bừa ra ngoài phạm vi.
+        let mut small = MemDev::with_blocks(DATA_START as u32 + 1);
+        // format cần ít nhất DATA_START + 2 block (superblock + bitmap + dữ liệu).
+        assert_eq!(format(&mut small), Err(FsError::NoSpace));
+        assert!(Fs::mount(small).is_err());
+    }
+
+    #[test]
+    fn format_rejects_device_without_data_blocks() {
+        // Đĩa chỉ đủ cho superblock + bitmap nhưng không có block dữ liệu.
+        let mut tiny = MemDev::with_blocks(DATA_START as u32);
+        assert!(format(&mut tiny).is_err());
+    }
+
+    #[test]
+    fn writes_land_in_the_right_block_at_both_edges() {
+        // Vòng 166: driver phải đúng ở hai biên — block 0 (superblock) và
+        // block dữ liệu cuối cùng; ghi rồi đọc lại phải khớp.
+        let mut dev = MemDev::new();
+        format(&mut dev).unwrap();
+        let last = dev.block_count() - 1;
+        let mut pattern = [0u8; BLOCK_SIZE];
+        for (i, byte) in pattern.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(7).wrapping_add(3);
+        }
+        dev.write(last, &pattern).unwrap();
+        let mut back = [0u8; BLOCK_SIZE];
+        dev.read(last, &mut back).unwrap();
+        assert_eq!(back, pattern);
+        // Superblock vẫn đọc được sau khi ghi block cuối.
+        let mut sb = [0u8; BLOCK_SIZE];
+        dev.read(1, &mut sb).unwrap();
+        assert_eq!(&sb[0..4], b"VF04");
+    }
+
+    #[test]
     fn root_is_empty_reports_user_entries_only() {
         // Vòng 163: quyết định "được phép format lại khi fsck lỗi" dựa vào
         // việc thư mục gốc có dữ liệu người dùng hay không.

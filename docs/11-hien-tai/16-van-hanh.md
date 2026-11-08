@@ -194,6 +194,15 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5v. Driver block: biên đĩa đã có test
+
+`cargo test -p vifast-fs` (nay **trong cổng**) khoá ba tính chất dễ hỏng nhất:
+- `mount_rejects_device_smaller_than_superblock_needs` — đĩa quá nhỏ ⇒ từ chối
+  (`NoSpace`), không panic;
+- `format_rejects_device_without_data_blocks` — không có block dữ liệu ⇒ từ chối;
+- `writes_land_in_the_right_block_at_both_edges` — ghi/đọc đúng ở block **cuối**
+  và superblock vẫn nguyên sau đó.
+
 ### 5w. Tiến trình: huỷ TCB đã được khoá
 
 `KILL OK` — root retype một TCB vào slot vừa trống rồi `tcb_destroy` (phải
