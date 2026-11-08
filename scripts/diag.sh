@@ -45,7 +45,7 @@ for k in target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64 \
     if [ -f "$k" ] && [ -x "$NM" ]; then
         end=$("$NM" "$k" | awk '$3 == "__kernel_end" { print "0x" $1; exit }')
         if [ -n "$end" ]; then
-            hr=$(( 0x80400000 - end ))
+            hr=$(( 0x80600000 - end ))
             printf '  %-58s headroom=%s B\n' "$(basename "$k")" "$hr"
             if [ "$hr" -lt 196608 ]; then
                 echo "  CẢNH BÁO: dưới ngưỡng 192 KiB"

@@ -170,7 +170,7 @@ NM="$(rustc --print sysroot)/lib/rustlib/${HOST}/bin/llvm-nm"
 KERNEL_RV=target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64
 KERNEL_END="$("$NM" "$KERNEL_RV" | awk '$3 == "__kernel_end" { print "0x" $1; exit }')"
 KERNEL_END=$((KERNEL_END))
-KERNEL_LIMIT=$((0x80400000))
+KERNEL_LIMIT=$((0x80600000))
 echo "RISC-V kernel_end=${KERNEL_END} limit=${KERNEL_LIMIT} headroom=$((KERNEL_LIMIT - KERNEL_END))"
 if (( KERNEL_END > KERNEL_LIMIT )); then
     echo "RISC-V KERNEL IMAGE EXCEEDS 4 MiB" >&2

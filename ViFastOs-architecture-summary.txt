@@ -400,6 +400,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 12fe7f8 tinh nang (vong 154): lenh free qua syscall MemInfo bao dung luong arena
 - f9bf3c4 moc 9 (vong 155): MEM FREE OK — bo nho phai nhat quan sau chuoi thao tac FS
 - 1413943 tinh nang (vong 156): nhip timer vao kernel (Platform::tick_hz) + uptime giay
+- f334710 tai lieu (vong 157): thu history/!! bi ngan sach chan — ghi bang ngan sach do duoc
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -458,7 +459,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 199024 byte (`kernel_end=0x803cf690`)
+- RISC-V headroom: 2296176 byte (`kernel_end=0x803cf690`)
 - `Kernel = 550304`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status

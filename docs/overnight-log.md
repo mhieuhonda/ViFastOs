@@ -2697,3 +2697,24 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   tĩnh, nới ngưỡng phải có kỷ luật và ghi log).
 - Gate: QEMU 3/3×3, persist 3/3, harness 574, docs PASS, fmt sạch, 0 warning,
   headroom 199 024 B (cả hai bản), client riscv 22 552 B (6 trang).
+
+## 9.155 — Vòng 158: NỚI CỬA SỔ KERNEL RISC-V 2 MiB → 6 MiB (headroom ×11.5)
+
+- Vấn đề: headroom kernel riscv chỉ ~199 KB; mọi thay đổi nhỏ ở root/client đều
+  có thể làm build đỏ toàn cục (đã xảy ra ở vòng 157).
+- Kiểm chứng vì sao nới được: OpenSBI ở `0x8000_0000..0x8020_0000`, kernel nạp
+  tại `0x8020_0000` đi lên; `0x8040_0000..0x8060_0000` là RAM trống (QEMU
+  `-m 128M` ⇒ RAM tới `0x8800_0000`); Sv39 entry 0 đã identity-map 1 GiB đầu
+  nên không cần bảng trang cấp mới — chỉ cần **thêm một superpage 2 MiB** cho
+  `KERNEL_L1` (entry 2 → `0x8040_0000`).
+- Đã sửa: `kernel_accessible_range()` → `(0x8000_0000, 0x8060_0000)`;
+  `KERNEL_L1[2] = pte(0x8040_0000, RWX)`; `build.sh` + `diag.sh` dùng limit
+  `0x80600000`.
+- Kết quả: headroom **199 024 → 2 296 176 B** (~2.2 MiB, ×11.5); cổng
+  **3/3 × 3 arch** xanh (riscv 3/3 chứng minh bảng trang mới hoạt động thật, vì
+  `check_kernel_mappings` duyệt TỪNG trang trong cửa sổ).
+- Thử ngay việc từng bị chặn (`history`/`!!`): client riscv 22 552 → 25 088 B
+  = 7 trang nên cần nới ngân sách **cả ba arch** (aarch64 8 trang, x86_64 9
+  trang) — chưa làm vội, đã revert phần client; để vòng sau đo arena từng arch
+  rồi nới có kỷ luật.
+- Gate: QEMU 3/3×3, persist 3/3, harness 574, docs PASS, fmt sạch, 0 warning.

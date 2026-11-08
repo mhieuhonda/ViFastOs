@@ -197,8 +197,8 @@ Số đo tại vòng 157 trên cây xanh:
 | `vifast-client.stripped` (riscv) | **22 552 B = 6 trang** | ngân sách 6; +~100 B code là có thể vượt trang |
 | `vifast-root.stripped` (riscv) | **37 376 B** | |
 | `vifast-root.smp.stripped` | **37 376 B** (bình thường) | **+6 dòng code ⇒ 41 472 B (+1 trang)** |
-| headroom kernel riscv (cả 2 bản) | **199 024 B** | ngưỡng 192 KiB (196 608) |
-| -> khi `.smp` root tăng 1 trang | headroom rơi còn **194 928 B** | **build đỏ toàn cục** |
+| headroom kernel riscv (cả 2 bản) | **2 296 176 B** (từ vòng 158) | ngưỡng 192 KiB (196 608) |
+| ghi chú | cửa sổ kernel riscv đã nới 2 MiB → 6 MiB ở vòng 158 | thêm superpage 0x8040_0000 |
 
 Hệ quả thực tế: một thay đổi "nhỏ" ở root hoặc client có thể **vượt biên trang**
 và làm kernel nhúng ELF phình thêm 4 KiB, đủ phá ngưỡng headroom. Vì vậy:

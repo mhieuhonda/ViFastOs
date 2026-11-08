@@ -489,6 +489,10 @@ unsafe fn build_kernel_page_tables() {
     (*root).0[2] = pte(table_pa(kernel_l1), PTE_V);
     (*kernel_l1).0[0] = pte(0x8000_0000, PTE_V | PTE_R | PTE_W | PTE_X);
     (*kernel_l1).0[1] = pte(0x8020_0000, PTE_V | PTE_R | PTE_W | PTE_X);
+    // Vòng 158: superpage thứ ba để kernel dùng tới 0x8060_0000 (RAM trống,
+    // OpenSBI ở 0x8000_0000..0x8020_0000). Cần cho `kernel_accessible_range`
+    // và mọi leaf mà kernel kiểm lúc switch root.
+    (*kernel_l1).0[2] = pte(0x8040_0000, PTE_V | PTE_R | PTE_W | PTE_X);
     (*device_l1).0[0] = pte(0x0, PTE_V | PTE_R | PTE_W);
     (*device_l1).0[96] = pte(PLIC_BASE as u64, PTE_V | PTE_R | PTE_W);
     // PLIC context registers start at +2 MiB (a second 2 MiB block).
@@ -754,7 +758,13 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn kernel_accessible_range(&self) -> (u64, u64) {
-        (0x8000_0000, 0x8040_0000)
+        // Vòng 158: nới cửa sổ kernel từ 2 MiB lên 6 MiB. OpenSBI chiếm
+        // 0x8000_0000..0x8020_0000, kernel nạp tại 0x8020_0000 và đi lên;
+        // 0x8040_0000..0x8060_0000 là RAM trống (QEMU -m 128M ⇒ RAM tới
+        // 0x8800_0000), và Sv39 entry 0 đã identity-map cả 1 GiB đầu nên
+        // KHÔNG cần bảng trang mới. Đây là chỗ lấy thêm headroom cho các
+        // tính năng người dùng sắp tới.
+        (0x8000_0000, 0x8060_0000)
     }
 
     fn user_va_range(&self) -> (u64, u64) {
