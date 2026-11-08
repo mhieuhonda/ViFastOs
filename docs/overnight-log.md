@@ -1995,3 +1995,17 @@ Thí nghiệm tách đôi (giữ nguyên chương trình cũ ở bước 1):
   Ok mà vẫn fault thì nghi vấn đề **gắn page table vào vspace/TLB** khi map
   trang thứ hai trong cùng vspace.
 - Đã revert; cây về HEAD `e2a376c`, build 0 warning.
+
+## 9.109 — Vòng 113: bài học mã hoá + thí nghiệm gắn fault endpoint
+
+- **Bài học quan trọng về viết test trong asm tay**: `auipc` lấy địa chỉ **của
+  chính lệnh đó**, không phải `entry`. Các test trước đặt `auipc a0, 0` ở giữa
+  chương trình nên `a0 = entry + n*4 + off` → in ra NUL (vô hình) hoặc sai
+  vùng, khiến ta tưởng "không truy cập được". Từ nay mọi test phải đặt `auipc`
+  ở **lệnh đầu tiên** hoặc trừ bù đúng số byte đã trôi.
+- Thử gắn fault endpoint cho TCB exec (`tcb_configure_fault`) để mọi lỗi bộ
+  nhớ được báo về root: **không dùng được** vì TCB exec không có cspace/cap
+  chứa endpoint (các demo fault phải `copy()` endpoint vào cspace nạn nhân
+  trước). Muốn làm phải cấp cspace cho exec — việc lớn hơn, hoãn.
+- Trạng thái cây: revert toàn bộ, về HEAD `002ab78`; gate xanh (QEMU 2/2×3,
+  0 warning, headroom 199 024 B cả hai bản).
