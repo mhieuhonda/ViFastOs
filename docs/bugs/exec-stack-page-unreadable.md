@@ -55,3 +55,18 @@ chỉ đó không in gì, task chết im lặng (exec TCB không có fault endpo
 python3 scripts/test-qemu.py --interactive --arch riscv64   # rồi dùng monitor
 # 2) Hoặc thêm klog trong platform riscv map_leaf: in va, pte, table_pa
 ```
+
+## Bổ sung vòng 120
+
+- ASID: `take_asid` cấp ASID **duy nhất** cho mỗi vspace, không bao giờ 0, và
+  vòng đời ASID gắn với VSpace còn sống ⇒ khó xảy ra TLB stale do trùng ASID.
+- `frame_map` lần hai trả `AlreadyMapped` ⇒ cả sổ mapping **và** đường
+  `map_leaf` đều chạy đúng; nghi vấn dồn về **giá trị PTE mà CPU đọc** (encode
+  RW của platform) hoặc **cửa sổ VA của VSpace** (`space.end`).
+
+### Đề xuất kiểm tra kế tiếp (rẻ nhất trước)
+
+1. Trong platform riscv, tạm thời `klog` (hoặc ghi ra serial trực tiếp bằng
+   `putc`) ngay sau `write_pte` trong `map_leaf`: in `table_pa`, `idx`, `pte`.
+2. So `pte` nhận được với PTE mong đợi `0x10_0002_3xxx`.
+3. Nếu PTE đúng → vấn đề ở `satp`/switch vspace; nếu sai → lỗi encode.
