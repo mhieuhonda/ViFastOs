@@ -281,9 +281,17 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
 - Số liệu chỉ về **bộ nhớ**: ngay sau 3 chu kỳ, `free` chỉ còn **16/344 KiB**
   (4 trang) trong khi một lần exec cần ~7 trang ⇒ lần thứ 4 hết trang. Nghĩa là
   `destroy_exec` **chưa trả đủ trang về free list tái dùng được**.
-- Việc cần làm (vòng sau): log số trang đã cấp/đã trả theo từng loại object
-  (stack, code frame, page table, vspace) trước–sau mỗi chu kỳ để tìm loại không
-  được trả.
+- **Đã tìm ra nguyên nhân (vòng 192)**: thêm chẩn đoán đếm slot **không huỷ
+  được** sau hai lượt `object_destroy` ⇒ in `DESTROY DIAG stuck=6` **mỗi chu kỳ**
+  ⇒ đúng **6 object bị kẹt** sau mỗi lần exec. Đó là nguồn rò rỉ (~3 trang/chu
+  kỳ, khớp số đo vòng 190).
+- Đồng thời sửa một lỗi thật trong `destroy_exec`: bản cũ chỉ `slots.release()`
+  ở **pass 1**, nhưng phần lớn object huỷ xong ngay **pass 0** ⇒ pass 1 trả lỗi
+  ⇒ nhánh release **không bao giờ chạy** ⇒ mỗi chu kỳ mất ~7 slot allocator. Giờ
+  trả slot ngay khi huỷ thành công ở bất kỳ pass nào.
+- Việc cần làm (vòng sau): xác định **6 object kẹt là loại gì** (frame? VSpace?
+  page table?) và sửa thứ tự/đường huỷ để chúng được giải phóng — mục tiêu là
+  `DESTROY DIAG stuck=0` và `EXEC MEM STABLE`.
 
 ### 5p-b. Đo rò rỉ qua NHIỀU lần exec (vòng 187)
 

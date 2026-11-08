@@ -3248,3 +3248,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   trang theo từng loại object: stack, code frame, page table, vspace).
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
   sạch.
+
+## 9.189 — Vòng 192: TÌM RA 6 OBJECT BỊ KẸT mỗi chu kỳ exec (+ sửa lỗi rò rỉ slot)
+
+- Thêm chẩn đoán đếm slot không huỷ được sau hai lượt `object_destroy`:
+  **`DESTROY DIAG stuck=6`** xuất hiện **mỗi chu kỳ** ⇒ đúng 6 object bị kẹt sau
+  mỗi lần exec — khớp với mức tăng ~3 trang/chu kỳ đo ở vòng 190.
+- **Sửa lỗi thật trong `destroy_exec`**: bản cũ chỉ `slots.release()` ở **pass 1**,
+  nhưng phần lớn object huỷ xong ngay **pass 0**; sang pass 1 `object_destroy`
+  trả lỗi nên nhánh release **không bao giờ chạy** ⇒ mỗi chu kỳ mất ~7 slot
+  allocator. Giờ trả slot ngay khi huỷ thành công ở bất kỳ pass nào.
+- Chưa hết lỗi (thẳng thắn): 4 lần `runfs` liên tiếp vẫn chỉ 3 lần thành công,
+  vì nút thắt là **bộ nhớ** (free còn 16/344 KiB) chứ không phải slot.
+- Việc cần làm (vòng sau): xác định **6 object kẹt là loại gì** (frame/VSpace/
+  page table) rồi sửa thứ tự huỷ; mục tiêu `stuck=0` + `EXEC MEM STABLE`.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
+  sạch.

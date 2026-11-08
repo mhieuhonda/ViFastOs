@@ -1111,28 +1111,40 @@ const EXEC_DEMO_ELF: &[u8] = &exec_demo_elf();
 /// trong vòng đời root — chấp nhận được vì mỗi `run` tốn ≤ 8 slots trên
 /// 128 slot root và đây là demo.
 fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usize) {
-    // Một pass là đủ: kernel xử lý phụ thuộc khi destroy (VSpace
-    // destroy Faulted TCB còn trỏ; TCB destroy detach khỏi mọi hàng chờ).
-    // Destroy TCB trước để nó không chạy trong lúc dọn VSpace/frame.
-    // Sắp xếp: used[0] là vspace... — không đảm bảo thứ tự, nên destroy TCB
-    // riêng trước: tìm slot TCB bằng cách thử? Không — đơn giản: destroy
-    // tất cả 2 lượt, lượt 1 bỏ qua lỗi, lượt 2 dọn nốt.
+    // Vòng 192: SỬA LỖI RÒ RỈ SLOT. Bản cũ chỉ `slots.release()` ở **pass 1**,
+    // nhưng phần lớn object được huỷ thành công ngay **pass 0** — sang pass 1
+    // `object_destroy` trả lỗi (slot đã trống) nên nhánh release **không bao
+    // giờ chạy**. Hệ quả: mỗi chu kỳ exec mất ~7 slot của allocator dù object
+    // đã được giải phóng; sau vài chu kỳ `run`/`runfs` tiếp theo fail.
+    // Giờ: huỷ xong ở BẤT KỲ pass nào thì trả slot NGAY (trong hàm này không
+    // cấp phát mới nên không thể bị cấp lại giữa chừng).
+    let mut done = [false; MAX_EXEC_SLOTS];
     let mut pass = 0;
     while pass < 2 {
         let mut i = 0;
         while i < len {
-            if vifast_user::object_destroy(used[i]).error == KError::Ok {
-                // Slot đã trống thật mới trả về allocator; nếu destroy
-                // fail (slot còn object lạ) giữ nguyên để lần sau thử lại.
-                // Chỉ release ở pass cuối để slot không bị cấp lại giữa
-                // chừng khi pass 1 chưa dọn xong phụ thuộc.
-                if pass == 1 {
-                    slots.release(used[i]);
-                }
+            if !done[i] && vifast_user::object_destroy(used[i]).error == KError::Ok {
+                done[i] = true;
+                slots.release(used[i]);
             }
             i += 1;
         }
         pass += 1;
+    }
+    // Vòng 192: chẩn đoán TẠM THỜI — đếm slot không huỷ được (nếu > 0 thì tài
+    // nguyên còn kẹt và đó chính là nguồn rò rỉ bộ nhớ qua các chu kỳ).
+    let mut stuck = 0u64;
+    let mut i = 0;
+    while i < len {
+        if !done[i] {
+            stuck += 1;
+        }
+        i += 1;
+    }
+    if stuck > 0 {
+        write(b"DESTROY DIAG stuck=");
+        write_decimal(stuck);
+        write(b"\n");
     }
 }
 
