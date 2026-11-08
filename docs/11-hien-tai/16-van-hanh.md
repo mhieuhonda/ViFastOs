@@ -285,6 +285,16 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 - `pick_skips_tasks_whose_affinity_excludes_the_hart` — task ghim hart 1 **không
   bao giờ** được chọn trên hart 0, kể cả khi nó là task duy nhất.
 
+### 5u-c. Net stack: payload ỨNG DỤNG cả hai chiều (vòng 180)
+
+- Guest gửi **`PING-FROM-GUEST`** (ACK|PSH) sau handshake ⇒ in `NET TCP SEND OK`;
+  host `recv()` và **xác nhận đúng nội dung** (`TCP PROBE: host received
+  PING-FROM-GUEST from guest`) — nếu không, cổng đỏ.
+- Host gửi lại `VIFAST-ECHO` ⇒ guest đọc được ⇒ `NET TCP ECHO OK`.
+- Lưu ý thời điểm: host trả lời **rất nhanh**, khi guest còn ở đường gửi ⇒ phải
+  **thử nhận nhiều lần** (4 lần, bound nhỏ) mới thấy payload; nhận một lần rồi
+  bỏ sẽ ra `ECHO SKIP` oan (đúng như đã gặp).
+
 ### 5u-b. Net stack: echo HAI CHIỀU (vòng 179)
 
 Sau bắt tay, guest gửi **ACK** hoàn tất handshake; harness gửi `VIFAST-ECHO` về

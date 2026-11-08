@@ -573,6 +573,7 @@ class TcpProbeListener:
         import threading
 
         self.accepted = 0
+        self.payload_seen = False
         self.error: str | None = None
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -589,8 +590,15 @@ class TcpProbeListener:
             try:
                 conn, _ = self._sock.accept()
                 self.accepted += 1
-                # Vòng 179: gửi dữ liệu về guest để chứng minh echo HAI CHIỀU,
-                # không chỉ bắt tay TCP.
+                conn.settimeout(10)
+                # Vòng 180: phải NHẬN được dữ liệu ứng dụng do guest gửi.
+                try:
+                    data = conn.recv(64)
+                except OSError:
+                    data = b""
+                if b"PING-FROM-GUEST" in data:
+                    self.payload_seen = True
+                # Rồi gửi dữ liệu về để chứng minh chiều ngược lại.
                 try:
                     conn.sendall(b"VIFAST-ECHO")
                 except OSError:
@@ -691,6 +699,11 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         listener.close()
         if accepted:
             print("TCP PROBE: host accepted the guest connection")
+            if listener.payload_seen:
+                print("TCP PROBE: host received PING-FROM-GUEST from guest")
+            else:
+                print("FAIL: host KHÔNG nhận được payload ứng dụng từ guest")
+                ok = False
         elif listener.error:
             print(f"TCP PROBE: không mở được listener ({listener.error}) — guest in SKIP")
         else:

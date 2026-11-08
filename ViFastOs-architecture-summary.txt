@@ -422,6 +422,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 2893cb7 test (vong 176): ABI test + bang so test host sinh tu dong
 - 6874828 sua loi (vong 177): tu thu lai khi du marker nhung QEMU thoat ma la
 - 6dd6454 tinh nang (vong 178): bat tay TCP that guest -> host + sua loi boot khi khong co net
+- 926a1bd tinh nang (vong 179): TCP echo hai chieu — guest nhan du lieu that tu host
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

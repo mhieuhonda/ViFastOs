@@ -1557,14 +1557,35 @@ impl Platform for RiscvPlatform {
                 if !ack_ok {
                     vifast_kernel::klog!(RiscvPlatform, "NET TCP ACK FAIL");
                 }
+                // Vòng 180: gửi DỮ LIỆU ỨNG DỤNG thật từ guest. Trước đây chỉ
+                // có ACK (header), nên chưa chứng minh được chiều TX có payload.
+                let probe_payload = b"PING-FROM-GUEST";
+                match vifast_virtio::net_send_tcp_bounded(
+                    [10u8, 0, 2, 2],
+                    TCP_PROBE_PORT,
+                    TCP_PROBE_LOCAL,
+                    isn.wrapping_add(1),
+                    server_seq.wrapping_add(1),
+                    vifast_virtio::TCP_ACK | vifast_virtio::TCP_PSH,
+                    probe_payload,
+                    250_000,
+                ) {
+                    Some(_) => vifast_kernel::klog!(RiscvPlatform, "NET TCP SEND OK"),
+                    None => vifast_kernel::klog!(RiscvPlatform, "NET TCP SEND FAIL"),
+                }
                 let mut echo = [0u8; 64];
                 let mut echoed = false;
-                if let Some(seg) =
-                    vifast_virtio::net_recv_tcp_bounded(TCP_PROBE_LOCAL, &mut echo, 2_000_000)
-                {
-                    let want = b"VIFAST-ECHO";
-                    if seg.payload_len >= want.len() && &echo[..want.len()] == want {
-                        echoed = true;
+                let want = b"VIFAST-ECHO";
+                // Vòng 180: host gửi echo NGAY sau khi nhận payload, khi guest
+                // còn ở đường gửi ⇒ thử nhận nhiều lần với bound nhỏ.
+                for _ in 0..4 {
+                    if let Some(seg) =
+                        vifast_virtio::net_recv_tcp_bounded(TCP_PROBE_LOCAL, &mut echo, 500_000)
+                    {
+                        if seg.payload_len >= want.len() && &echo[..want.len()] == want {
+                            echoed = true;
+                            break;
+                        }
                     }
                 }
                 if echoed {

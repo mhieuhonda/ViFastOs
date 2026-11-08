@@ -3072,3 +3072,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `payload_len`; kiểm echo dựa trên buffer đích + `payload_len`.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
   sạch.
+
+## 9.177 — Vòng 180: payload ỨNG DỤNG hai chiều qua TCP
+
+- Guest gửi **`PING-FROM-GUEST`** (ACK|PSH) sau handshake ⇒ `NET TCP SEND OK`;
+  host `recv()` và **kiểm đúng nội dung** ⇒ `TCP PROBE: host received
+  PING-FROM-GUEST from guest` (cổng ĐỎ nếu không nhận được).
+- Host gửi lại `VIFAST-ECHO` ⇒ guest đọc ⇒ `NET TCP ECHO OK`.
+- **Lỗi gặp**: lần đầu guest in `ECHO SKIP` vì host trả lời **rất nhanh**, lúc
+  guest còn ở đường gửi, và guest chỉ thử nhận MỘT lần. Sửa: thử nhận 4 lần với
+  bound nhỏ.
+- Một lần sửa hụt nữa: patch theo chuỗi đã bị `cargo fmt` reflow ⇒
+  `AssertionError`, phải đọc lại file để lấy đúng đoạn hiện tại (bài học cũ,
+  lặp lại).
+- Gate: build 0 warning, QEMU 3/3×3 (3/3 lần host nhận payload), persist 3/3,
+  harness 583, docs PASS, fmt sạch.
