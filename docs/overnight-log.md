@@ -2777,3 +2777,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Client sau thay đổi: riscv 7 trang / aarch64 8 / x86_64 9 (ngân sách 7/8/9).
 - Gate: QEMU 3/3×3, persist 3/3, harness 574, kernel 186, docs PASS, fmt sạch,
   0 warning.
+
+## 9.159 — Vòng 162: fsck ngay khi mount (`FS MOUNT CLEAN`) + tự thử lại khi guest không boot
+
+- **Lõi FS bền**: server giờ chạy `fsck()` **ngay sau khi nạp FS** và in
+  `FS MOUNT CLEAN` (hoặc `FS MOUNT DIRTY` nếu bất nhất). Marker vào `COMMON`
+  ⇒ harness **574 → 577 ca**. Giá trị: một thay đổi làm hỏng cấu trúc đĩa sẽ
+  đỏ **ngay ở dòng này**, thay vì lộ ra muộn dưới dạng lỗi FS khó lần.
+- **Chống flake hạ tầng**: `test-qemu.py` tự thử lại **một lần** khi lần chạy
+  trước guest **không boot được dòng nào** (UEFI/QEMU flake đã gặp ở x86_64),
+  KHÔNG áp dụng cho lỗi marker. Cài bằng cờ `NEVER_BOOTED` + vòng `while` có
+  ngân sách thử lại; lỗi timeout vẫn theo `VIFAST_RETRY_TIMEOUT` như cũ.
+- Lần gặp thật trong vòng: x86_64 2/3 (timeout, thiếu 50 marker) → chạy lại
+  **3/3 PASS** ⇒ đúng là flake hạ tầng, giờ đã có cơ chế tự xử lý.
+- Gate: QEMU 3/3×3, persist 3/3, harness 577, kernel 186, docs PASS, fmt sạch,
+  0 warning.

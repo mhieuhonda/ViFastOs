@@ -269,6 +269,12 @@ fn init_fs() {
             _ => {}
         }
     }
+    // Vòng 162: kiểm tra toàn vẹn NGAY khi mount. Đây là thứ người dùng cần
+    // biết trước khi tin dữ liệu: đĩa vừa nạp có nhất quán hay không.
+    match fs().fsck() {
+        Ok(()) => write(b"FS MOUNT CLEAN\n"),
+        Err(_) => write(b"FS MOUNT DIRTY\n"),
+    }
     if ensure_file(b"/motd", MOTD).is_err() {
         write(b"FS CORRUPT\n");
     }

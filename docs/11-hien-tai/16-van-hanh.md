@@ -194,6 +194,13 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5y. Kiểm tra đĩa ngay khi mount
+
+Server chạy `fsck()` ngay sau khi nạp FS và in **`FS MOUNT CLEAN`** (hoặc
+`FS MOUNT DIRTY` nếu phát hiện bất nhất). Đây là marker của cổng: nếu một thay
+đổi làm cấu trúc đĩa hỏng, sẽ thấy ngay ở dòng này thay vì đoán qua lỗi FS về
+sau.
+
 ### 5z. Ngân sách cứng đã đo (đừng đoán)
 
 Số đo tại vòng 157 trên cây xanh:

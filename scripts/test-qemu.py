@@ -364,7 +364,11 @@ def run_qemu(
     """Chạy một lần; nếu timeout và `VIFAST_RETRY_TIMEOUT` > 0 thì thử lại
     (chỉ dùng cho vòng phát triển — cổng chuẩn để mặc định 0)."""
     attempts = 1 + max(0, int(os.environ.get("VIFAST_RETRY_TIMEOUT", "0")))
-    for attempt in range(attempts):
+    # Vòng 162: cộng thêm 1 lần thử nếu lần trước guest KHÔNG boot chút nào
+    # (flake UEFI/QEMU đã gặp ở x86_64) — không áp dụng cho lỗi marker.
+    bonus = 1
+    attempt = 0
+    while attempt < attempts + 1:
         ok, timed_out = run_qemu_once(
             name,
             cmd,
@@ -380,12 +384,26 @@ def run_qemu(
         )
         if ok:
             if attempt:
-                print(f"PASS (sau {attempt} lần timeout trước đó)")
+                print(f"PASS (sau {attempt} lần thử lại)")
             return True
-        if not timed_out or attempt + 1 >= attempts:
+        # Vòng 162: chỉ tự thử lại khi lỗi là hạ tầng — hoặc timeout (xem
+        # VIFAST_RETRY_TIMEOUT) hoặc guest chưa boot được dòng nào.
+        retry_timeout = timed_out and attempt + 1 < attempts
+        retry_boot = NEVER_BOOTED["flag"] and bonus > 0
+        if not (retry_timeout or retry_boot):
             return False
-        print(f"RETRY {name}: timeout, chạy lại (lần {attempt + 2}/{attempts})")
+        if retry_boot and not retry_timeout:
+            bonus -= 1
+            print(f"RETRY {name}: guest không boot (nghi flake UEFI/QEMU), chạy lại MỘT lần")
+        else:
+            print(f"RETRY {name}: timeout, chạy lại (lần {attempt + 2}/{attempts})")
+        attempt += 1
     return False
+
+
+# Vòng 162: đánh dấu lần chạy vừa rồi có "guest chưa hề boot" hay không.
+# Khi đó flake là của QEMU/UEFI (không phải sản phẩm) nên tự thử lại MỘT lần.
+NEVER_BOOTED = {"flag": False}
 
 
 def run_qemu_once(
@@ -426,6 +444,7 @@ def run_qemu_once(
         shutil.copyfile(
             serial, f"{tempfile.gettempdir()}/vifast-keep-{name}-{index}.serial"
         )
+    NEVER_BOOTED["flag"] = len(output.splitlines()) < 20
     print(f"\n--- {name} (rc={rc}, {elapsed:.1f}s) ---")
     print(output[-1800:])
     faults = fault_addresses(output)

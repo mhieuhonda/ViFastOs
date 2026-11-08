@@ -76,6 +76,10 @@ COMMON = [
         "arena usage stayed consistent (used < size) after the whole FS op chain",
     ),
     (
+        "FS MOUNT CLEAN",
+        "fsck ran at mount time and the loaded disk was consistent",
+    ),
+    (
         "FS OPS FSCK OK",
         "fsck stayed clean after create/unlink/truncate/rename/link operations",
     ),
