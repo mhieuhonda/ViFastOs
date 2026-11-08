@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 400" width="1400" height="400" role="img" aria-labelledby="vifastos-lockup-title">
+  <title id="vifastos-lockup-title">ViFastOs · bản sáng cho nền tối</title>
+  <defs>
+    <linearGradient id="vifastos-l-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E8352B"/><stop offset="1" stop-color="#B3150F"/>
+    </linearGradient>
+    <linearGradient id="vifastos-l-star" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFE04A"/><stop offset="1" stop-color="#FFB800"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(44,44) scale(0.609)">
+    <rect width="512" height="512" rx="112" fill="url(#vifastos-l-bg)"/>
+    <g stroke="#FFD84D" stroke-linecap="round" opacity="0.85">
+      <line x1="40" y1="215" x2="92" y2="215" stroke-width="14"/>
+      <line x1="58" y1="262" x2="92" y2="262" stroke-width="14"/>
+      <line x1="40" y1="309" x2="92" y2="309" stroke-width="14"/>
+    </g>
+    <g transform="translate(206,252) scale(0.94) translate(-206,-252)">
+      <polygon points="210.0,144.0 236.5,225.5 322.2,225.5 252.9,275.9 279.4,357.5 210.0,307.1 140.6,357.5 167.1,275.9 97.8,225.5 183.5,225.5"
+               fill="url(#vifastos-l-star)" stroke="#FFE680" stroke-width="4" stroke-linejoin="round"/>
+    </g>
+    <g fill="none" stroke-linejoin="round">
+      <polygon points="498,256 456,183.3 372,183.3 330,256 372,328.7 456,328.7"
+               stroke="#FFF8EC" stroke-width="14" opacity="0.95"/>
+      <polygon points="464,256 439,212.7 389,212.7 364,256 389,299.3 439,299.3"
+               stroke="#FFD84D" stroke-width="12" opacity="0.9"/>
+    </g>
+    <circle cx="414" cy="256" r="17" fill="#FFF8EC"/>
+  </g>
+  <text x="420" y="240" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
+        font-size="170" font-weight="800" letter-spacing="-4"><tspan fill="#FF6B5E">Vi</tspan><tspan fill="#FFF8EC" font-style="italic">Fast</tspan><tspan fill="#FF6B5E">Os</tspan></text>
+  <text x="426" y="318" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
+        font-size="44" font-weight="500" fill="#F3C7B8" letter-spacing="6">MICROKERNEL RUST · CAPABILITY</text>
+</svg>
