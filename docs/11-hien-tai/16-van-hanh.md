@@ -262,6 +262,26 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 - `message_rejects_too_many_words_and_keeps_cap` — `Message::new` từ chối quá
   `MSG_MAX_WORDS`; `with_cap` giữ đúng slot để kernel biết chuyển cap nào.
 
+### 5p-b. Đo rò rỉ qua NHIỀU lần exec (vòng 187)
+
+Kịch bản tái lập (kernel **không** `test-exit`, build sang target dir riêng):
+
+```bash
+cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf \
+  --release --no-default-features --target-dir /tmp/tgt-noexit
+# rồi dùng driver QEMU tương tác gõ lần lượt:
+free ; runfs /prog.elf A ; free ; runfs /prog.elf B ; free ; runfs /prog.elf C ; free
+```
+
+Kết quả đo (riscv64): `free` = **16/344 KiB** ở **mọi** lần đọc, trong khi
+`RUN FS OK` xuất hiện **3 lần** ⇒ **không rò rỉ** qua chu kỳ spawn/destroy lặp
+lại. Lần chạy thứ 4 không spawn (giới hạn tài nguyên exec) nhưng `free` không
+đổi.
+
+Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng — cổng chỉ khoá
+chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
+self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
+
 ### 5p-a. Thu hồi bộ nhớ qua vòng đời exec (`EXEC MEM OK`)
 
 Trước khi destroy task exec cũ, root đọc `MemInfo.used`; sau khi destroy đọc

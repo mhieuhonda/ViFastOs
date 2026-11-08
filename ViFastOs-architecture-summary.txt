@@ -429,6 +429,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6a93ebf test (vong 183): notification — block, khong mat bit, danh thuc moi waiter
 - 79761e8 test (vong 184): IRQ — so duy nhat, tai dung sau huy, chan so >= 64
 - 7368278 moc 9 (vong 185): FP/vector cua user tat co chu y — bat bien hoa bang assert
+- 3e89787 moc 9 (vong 186): EXEC MEM OK — do thu hoi bo nho qua vong doi exec
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

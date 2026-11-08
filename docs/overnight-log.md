@@ -3173,3 +3173,16 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   lỗi** với lần `rc` ở vòng 177 — đã ghi vào `17-su-co.md` là lỗi cần soát.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness **586**, docs PASS,
   fmt sạch.
+
+## 9.184 — Vòng 187: đo rò rỉ qua NHIỀU lần exec (kết quả: KHÔNG rò rỉ)
+
+- Kịch bản: kernel không `test-exit` (build sang `/tmp/tgt-noexit`), gõ lần lượt
+  `free` / `runfs /prog.elf A` / `free` / `… B` / `free` / `… C` / `free`.
+- Kết quả: `free` = **16/344 KiB** ở **cả 4 lần đọc**, trong khi `RUN FS OK`
+  xuất hiện **3 lần** (lần 4 không spawn do giới hạn tài nguyên) ⇒ **không rò
+  rỉ** qua chu kỳ spawn/destroy lặp lại.
+- Đã ghi vào runbook **5p-b** kèm lệnh tái lập và ghi rõ: đây là phép đo **thủ
+  công**, cổng chỉ khoá chu kỳ **một lần** (`EXEC MEM OK`); tự động hoá nhiều
+  vòng cần self-test boot-time riêng (chưa làm để không xáo trộn nhịp boot).
+- Gate (xác nhận trạng thái không đổi): build 0 warning, QEMU 3/3×3, persist
+  3/3, harness 586, docs PASS, fmt sạch.
