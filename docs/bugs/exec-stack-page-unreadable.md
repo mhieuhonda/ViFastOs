@@ -21,6 +21,7 @@ chỉ đó không in gì, task chết im lặng (exec TCB không có fault endpo
 | 6 | Đổi VA stack sang `0x10_0000_2000` (kề trang code) | **không in** |
 | 7 | Dùng `map_with_tables` (đường client) thay `map_frame_fallible` | **không in** |
 | 8 | Map stack TRƯỚC code (đảo thứ tự) | **không in** |
+| 9 | Map LẠI đúng VA/frame sau khi map (`frame_map` lần 2) | trả **`AlreadyMapped (8)`** ⇒ kernel **có** ghi nhận mapping |
 
 ## Đã loại trừ
 
@@ -33,6 +34,8 @@ chỉ đó không in gì, task chết im lặng (exec TCB không có fault endpo
 - **Lỗi do `map_frame_fallible`**: thay bằng `map_with_tables` vẫn hỏng.
 - **Lỗi do thứ tự map**: đảo thứ tự vẫn hỏng.
 - **Thiếu bit A/D**: đã set `PTE_A|PTE_D` (vòng 115) — không đổi gì.
+- **Kernel không ghi nhận mapping**: `frame_map` lần hai trả `AlreadyMapped`
+  ⇒ sổ mapping có entry; `map_leaf` đã chạy không lỗi (mọi lỗi đều propagate).
 
 ## Giả thuyết còn lại (ưu tiên giảm dần)
 
