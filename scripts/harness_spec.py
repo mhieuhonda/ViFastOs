@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "FS TRUNC OK",
+        "truncate to 4 bytes kept exactly the first 4 bytes on disk",
+    ),
+    (
         "FS RM OK",
         "create + stat + unlink + stat cycle on the filesystem succeeded",
     ),

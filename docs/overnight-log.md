@@ -2247,3 +2247,15 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   cả 3 arch đều in.
 - Gate: QEMU 3/3×3, persist 3/3, harness 538, docs PASS, fmt sạch, 0 warning,
   headroom 199 024 B.
+
+## 9.126 — Vòng 129: self-test TRUNCATE (cắt file + kiểm nội dung còn lại)
+
+- Thêm `root_vfs_stat_fd()` (STAT theo fd) và `root_vfs_truncate()` (TRUNCATE
+  theo fd + size).
+- Self-test: ghi `/trunc-test` 8 byte `"12345678"` → mở fd → truncate còn 4 →
+  `stat(fd)` phải bằng 4 → `read(fd, 0, 4)` phải là `"1234"` → đóng + xoá. In
+  `FS TRUNC OK` / `FS TRUNC BAD`.
+- Marker `FS TRUNC OK` vào `COMMON`: harness **538 → 541 ca**; cả 3 arch in.
+- Bài học nhỏ: `cargo fmt` gộp `write(if …);` thành một dòng nên mẫu nhiều dòng
+  không khớp — lần này chèn theo **chỉ số dòng** và thêm helper riêng.
+- Gate: QEMU 3/3×3, persist 3/3, harness 541, docs PASS, fmt sạch, 0 warning.

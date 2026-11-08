@@ -1548,6 +1548,22 @@ fn root_vfs_unlink(endpoint_slot: u8, path: &[u8]) -> bool {
     reply.error == KError::Ok && reply.label == vfs_abi::OK
 }
 
+/// Vòng 129: đọc kích thước theo fd (STAT fd-based, data[0] = size).
+fn root_vfs_stat_fd(endpoint_slot: u8, fd: u64) -> Option<u64> {
+    let reply = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::STAT, fd, 0, 0) };
+    if reply.error == KError::Ok && reply.label == vfs_abi::OK {
+        Some(reply.data[0])
+    } else {
+        None
+    }
+}
+
+/// Vòng 129: cắt file về `size` byte qua fd.
+fn root_vfs_truncate(endpoint_slot: u8, fd: u64, size: u64) -> bool {
+    let reply = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::TRUNCATE, fd, size, 0) };
+    reply.error == KError::Ok && reply.label == vfs_abi::OK
+}
+
 fn root_vfs_stat(endpoint_slot: u8, path: &[u8]) -> Option<u64> {
     if path.is_empty() || path.len() > vifast_abi::vfs::MAX_PATH {
         return None;
@@ -2850,6 +2866,44 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         && root_vfs_unlink(root_vfs_slot, b"/rm-test")
                         && root_vfs_stat(root_vfs_slot, b"/rm-test").is_none();
                     write(if rm_ok { b"FS RM OK\n" } else { b"FS RM BAD\n" });
+                    // Vòng 129: đường TRUNCATE — ghi 8 byte, cắt còn 4, kiểm
+                    // kích thước và nội dung còn lại đúng "1234".
+                    let mut trunc_ok =
+                        root_vfs_write_at(root_vfs_slot, b"/trunc-test", 0, b"12345678", true);
+                    if trunc_ok {
+                        if let Some(fd) = root_vfs_open(root_vfs_slot, b"/trunc-test") {
+                            trunc_ok = root_vfs_truncate(root_vfs_slot, fd, 4)
+                                && root_vfs_stat_fd(root_vfs_slot, fd) == Some(4);
+                            if trunc_ok {
+                                let n = root_vfs_read_at(root_vfs_slot, fd, 0, 4);
+                                trunc_ok = n == 4;
+                                if trunc_ok {
+                                    let mut i = 0;
+                                    while i < 4 {
+                                        let b = unsafe {
+                                            core::ptr::read_volatile(
+                                                (ROOT_IPC_BUF_VA as *const u8).add(i),
+                                            )
+                                        };
+                                        if b != b"1234"[i] {
+                                            trunc_ok = false;
+                                            break;
+                                        }
+                                        i += 1;
+                                    }
+                                }
+                            }
+                            root_vfs_close(root_vfs_slot, fd);
+                        } else {
+                            trunc_ok = false;
+                        }
+                    }
+                    let _ = root_vfs_unlink(root_vfs_slot, b"/trunc-test");
+                    write(if trunc_ok {
+                        b"FS TRUNC OK\n"
+                    } else {
+                        b"FS TRUNC BAD\n"
+                    });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
