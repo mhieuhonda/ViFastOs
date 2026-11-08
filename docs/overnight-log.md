@@ -2463,3 +2463,16 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   cần làm: cấp **cspace tối thiểu + fault endpoint cho exec TCB** để fault được
   báo về root thay vì nuốt im lặng.
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.
+
+## 9.141 — Vòng 144: gắn fault endpoint cho exec TCB — không fault, task treo trong syscall
+
+- Thử nghiệm (không commit vào cây chính): thêm `fault_ep` cho `spawn_elf_copy`,
+  `copy()` vé endpoint vào slot 1 của TCB nạn nhân rồi `tcb_configure_fault(..., 1)`
+  theo đúng luật kernel. `EXEC OK` vẫn in ⇒ cấu hình thành công.
+- Khi chương trình đọc `EXEC_STACK_BASE + 0x100`: **không có `USER FAULT`**, cũng
+  **không có output** ⇒ task **không fault** mà **không trở về** từ `DebugWrite`.
+- Giả thuyết mạnh nhất: task **treo/block trong syscall** khi con trỏ thuộc trang
+  stack. Hướng kiểm: xem đường `UserAction::Debug` của runtime (vòng copy có thể
+  quay vô hạn), và thêm đếm/timeout để biến treo im lặng thành lỗi thấy được.
+- Dọn 1 cảnh báo `unused variable: root` trong test kernel (build về 0 warning).
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch.

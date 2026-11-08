@@ -7864,7 +7864,6 @@ mod tests {
         set_map_range(0x4000_0000, 0x8000_0000);
         let mut kernel = Kernel::new();
         kernel.set_page_table_ops(&MAP_OPS);
-        let root = kernel.root().unwrap();
         let space = kernel
             .create_vspace_with_page_size(0, 0x4000_0000, 0x4000_0000, 4096)
             .unwrap();

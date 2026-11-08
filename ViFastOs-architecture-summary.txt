@@ -380,6 +380,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 52f7b94 brand(os): nen do + vien luc giac 2 tang, dua 3 gach va sao vao giua
 - cf89a47 tai lieu (vong 142): kiem chung loi exec-stack trong moi truong sach — van hong
 - a234955 web: header 40px + thanh mau tren cung; muc San pham cung he 3 the (link website + GitHub)
+- 1029ae3 tai lieu (vong 143): tach bach ghi stack vs doc stack — task chet trong syscall
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

@@ -227,3 +227,29 @@ Hai thí nghiệm liên tiếp trên cùng một bản build riscv:
   toàn bộ triệu chứng từ vòng 112.
 - Bước tiếp theo tối thiểu: gắn **fault endpoint cho exec TCB** (cần cấp cspace
   tối thiểu cho nó) để thấy `cause`/`addr` thật; hiện đây là điểm mù duy nhất.
+
+## Vòng 144 — đã gắn fault endpoint cho exec TCB: KHÔNG có fault, task cũng không in
+
+Đã làm (thử nghiệm, chưa commit vào cây chính):
+- Thêm tham số `fault_ep` cho `spawn_elf_copy`; sau khi tạo TCB thì
+  `copy(fault_ep, tcb, slot 1)` rồi `tcb_configure_fault(tcb, entry, sp, vspace,
+  5, 1)` đúng quy tắc kernel: slot phía nạn nhân phải có vé Endpoint sống và
+  caller phải giữ vé tới cùng endpoint.
+- `configured = true` (vì vẫn in `EXEC OK`), tức cấu hình fault **thành công**.
+
+Kết quả khi chương trình đọc `EXEC_STACK_BASE + 0x100`:
+- **Không có dòng `USER FAULT` nào** cho TCB exec.
+- **Không có output** nào từ chương trình.
+- ⇒ Task **không fault**; nó **không trở về** khỏi lời gọi `DebugWrite` đầu tiên.
+
+### Giả thuyết mới (mạnh nhất từ trước tới nay)
+
+Task **bị treo/bị block trong syscall** `DebugWrite` khi con trỏ nằm trong trang
+stack, chứ không phải fault bộ nhớ. Hướng kiểm tra kế tiếp:
+1. Xem `DebugWrite` → `UserAction::Debug` được runtime xử lý thế nào (có vòng
+   lặp copy nào có thể quay vô hạn khi PTE không map?).
+2. Kiểm tra `validate_user_range` với `need_write=false` trên VA stack — nếu nó
+   Ok mà bản copy của runtime lại dùng đường khác (ví dụ `copy_from_user` tự
+   walk), thì đó là chỗ treo.
+3. Thêm timeout/đếm cho vòng copy của runtime để biến "treo im lặng" thành lỗi
+   nhìn thấy được.
