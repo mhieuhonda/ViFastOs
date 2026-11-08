@@ -3200,3 +3200,21 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   (v176), markers (v188) — mọi con số trong tài liệu đều có nguồn máy sinh.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
   sạch.
+
+## 9.186 — Vòng 189: mutation test cho `check_invariants()` (công cụ chẩn đoán)
+
+- Câu hỏi đặt ra: mọi test khác đều dựa vào `check_invariants()` để phát hiện
+  sai lệch — nhưng **chưa từng chứng minh nó bắt được lỗi**. Nếu nó im lặng,
+  toàn bộ lưới an toàn là giả.
+- Thêm 3 mutation test (**201 → 204**):
+  - TCB `Ready` **không** nằm trong runqueue ⇒ `Err(IllegalOperation)`;
+  - cắt `runq_len` khi hàng còn phần tử ⇒ `Err`;
+  - mapping **không có quyền READ** ⇒ `Err`.
+- Cả ba **bắt được ngay** (test xanh nghĩa là `check_invariants` trả Err đúng
+  như kỳ vọng) ⇒ công cụ chẩn đoán có giá trị thật, không phải hình thức.
+- Sửa một docstring sai của chính mình: test thứ ba ban đầu tôi mô tả là "hai
+  mapping chồng VA", nhưng thực tế nó kích hoạt luật **thiếu quyền READ** — đã
+  sửa mô tả cho đúng bản chất.
+- Bảng test host tự cập nhật: tổng **295 test**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
+  sạch.

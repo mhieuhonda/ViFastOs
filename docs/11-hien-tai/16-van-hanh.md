@@ -282,6 +282,17 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5p-d. `check_invariants()` có mutation test (vòng 189)
+
+Công cụ chẩn đoán chỉ đáng tin nếu **chứng minh được nó bắt lỗi**. Ba test cố ý
+tạo trạng thái hỏng và **yêu cầu** `check_invariants()` trả `Err`:
+- `check_invariants_detects_ready_tcb_without_queue_entry` — TCB `Ready` nhưng
+  không nằm trong runqueue (lớp lỗi K1/K4);
+- `check_invariants_detects_garbage_in_runqueue_tail` — phần tử nằm ngoài
+  `runq_len` (cắt con trỏ độ dài khi hàng còn dữ liệu);
+- `check_invariants_detects_mapping_without_read_right` — mapping không có
+  quyền `READ` (bất biến: mọi mapping phải đọc được; W^X chỉ cấm W+X).
+
 ### 5p-a. Thu hồi bộ nhớ qua vòng đời exec (`EXEC MEM OK`)
 
 Trước khi destroy task exec cũ, root đọc `MemInfo.used`; sau khi destroy đọc

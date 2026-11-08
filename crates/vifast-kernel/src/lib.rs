@@ -12550,6 +12550,55 @@ mod tests {
     }
 
     #[test]
+    fn check_invariants_detects_ready_tcb_without_queue_entry() {
+        // Vòng 189 (mutation): `check_invariants` phải BẮT được TCB ở trạng
+        // thái Ready mà không nằm trong runqueue — lớp lỗi K1/K4. Nếu công cụ
+        // chẩn đoán im lặng ở đây thì mọi test khác dựa vào nó đều vô nghĩa.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("orphan", 5).unwrap();
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::Ready;
+        assert_eq!(kernel.check_invariants(), Err(KError::IllegalOperation));
+    }
+
+    #[test]
+    fn check_invariants_detects_garbage_in_runqueue_tail() {
+        // Vòng 189: phần tử nằm NGOÀI `runq_len` là rác — phải bị bắt.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("queued", 5).unwrap();
+        kernel.enqueue(tcb);
+        assert!(kernel.check_invariants().is_ok());
+        // Cắt con trỏ độ dài trong khi hàng vẫn còn phần tử.
+        kernel.runq_len[0] = 0;
+        assert_eq!(kernel.check_invariants(), Err(KError::IllegalOperation));
+    }
+
+    #[test]
+    fn check_invariants_detects_mapping_without_read_right() {
+        // Vòng 189: một mapping KHÔNG có quyền READ là bất biến bị phá (mọi
+        // mapping phải đọc được — W^X chỉ cấm W+X, không cấm thiếu R). Đây là
+        // loại sai lệch sẽ làm user fault mọi lần truy cập nhưng rất khó thấy
+        // khi chỉ nhìn log.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_vspace_with_page_size(0x1000, 0x4000_0000, 0x4000, 4096)
+            .unwrap();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        kernel
+            .map_frame(space, frame, 0x4000_0000, Rights::READ)
+            .unwrap();
+        // Chèn thủ công một mapping thứ hai chồng lên cùng VA.
+        if let Some(space) = kernel.vspace_mut(space) {
+            let victim = space.mappings.iter().position(Option::is_some).unwrap();
+            if let Some(mapping) = space.mappings[victim] {
+                let mut copy = mapping;
+                copy.rights = Rights::WRITE;
+                space.mappings[victim] = Some(copy);
+            }
+        }
+        assert_eq!(kernel.check_invariants(), Err(KError::IllegalOperation));
+    }
+
+    #[test]
     fn irq_numbers_are_unique_and_reusable_after_destroy() {
         // Vòng 184 (IRQ): mỗi số IRQ chỉ có MỘT object; huỷ rồi thì số đó dùng
         // lại được. Nếu không, driver nạp lại sẽ không lấy lại được ngắt.
