@@ -271,3 +271,20 @@ bare-metal này.
   multiboot crate đã được xoá khỏi workspace.
 - QEMU x86 dùng `isa-debug-exit`; kernel ghi port `0x501`, QEMU thoát với mã 3.
   RISC-V dùng SBI SRST; AArch64 dùng PSCI SYSTEM_OFF.
+
+## Trang web (os.vifast.org)
+
+Trang giới thiệu + **đăng ký nhận tin sớm** nằm ngay trong repo này, ở
+`deploy/vifastos_web/` (FastAPI + SQLite, không ORM, không analytics).
+
+```bash
+cd deploy/vifastos_web
+docker compose up -d --build       # đứng sau Traefik của Coolify (network `coolify`)
+```
+
+Biến môi trường: `ADMIN_PASSWORD` (bảo vệ `/admin`), `STATS_SALT`, `DATA_DIR`,
+`ALLOWED_HOSTS`. Đăng ký được lưu ở `data/vifastos.sqlite3`; xem/xuất CSV tại
+`/admin` và `/admin/export.csv`.
+
+Trang lấy danh sách bản phát hành công khai từ GitHub Releases của repo này qua
+`/api/releases` (cache 10 phút).
