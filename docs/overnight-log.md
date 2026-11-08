@@ -2180,3 +2180,20 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
 - Đề xuất thí nghiệm dứt điểm (vòng sau): ghi giá trị đặc trưng `0x41424344`
   vào frame stack rồi cho **worker chắc chắn chạy** đọc cùng VA để đối chiếu.
 - Gate: QEMU 2/2×3, persist 3/3, build 0 warning, headroom 199 024 B.
+
+## 9.121 — Vòng 124: task exec CHẠY đúng vspace của nó (bằng chứng dương)
+
+- Ghi `"TEST"` vào **trang code** của exec tại offset `0x1a0` (ngoài vùng code
+  và ngoài vùng tham số 0x140/0x160), chương trình 8 lệnh đọc 4 byte ở
+  `entry+0x80` rồi in.
+- Serial: `TESTPAGER OK` — `TEST` in ra dính liền `PAGER OK` ⇒ **task exec chạy
+  trong vspace của chính nó** và đọc được trang code của nó.
+- Nhờ vậy loại bỏ hai khả năng cuối: "task chạy sai vspace" và "chương trình
+  không chạy". Khác biệt duy nhất còn lại giữa hai trang là **quyền RW** (đã
+  thử R|X cho stack và vẫn hỏng ⇒ không phải bit W; nhưng R|X cho *code* thì
+  chạy).
+- Thử thêm chương trình in `O`/`E` theo mã trả về của `DebugWrite` (để biết
+  `validate_user_range` có từ chối): không in gì — do chương trình 18 lệnh lại
+  chạm vùng bị ghi đè/đệm 0 (bẫy cũ). Đã ghi chú để lần sau dùng chương trình
+  ngắn hơn hoặc tách vùng code.
+- Gate: QEMU 2/2×3, harness 535, build 0 warning, headroom 199 024 B.
