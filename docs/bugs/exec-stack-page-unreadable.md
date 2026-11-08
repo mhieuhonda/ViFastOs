@@ -70,3 +70,31 @@ python3 scripts/test-qemu.py --interactive --arch riscv64   # rồi dùng monito
    `putc`) ngay sau `write_pte` trong `map_leaf`: in `table_pa`, `idx`, `pte`.
 2. So `pte` nhận được với PTE mong đợi `0x10_0002_3xxx`.
 3. Nếu PTE đúng → vấn đề ở `satp`/switch vspace; nếu sai → lỗi encode.
+
+## Bổ sung vòng 121 — PTE THẬT (trace trong platform)
+
+Bật in PTE ngay trong `PageOps::write_pte` khi `idx == 1` (trang code) hoặc
+`idx == 0x23` (trang stack). Kết quả một lần boot:
+
+```
+T:0000000080382000 I:0000000000000001 P:00000000200dc4db   ← code (R|X|U|A|D)
+T:0000000080382000 I:0000000000000023 P:00000000200e0cd7   ← stack (R|W|U|A|D)
+```
+
+- Cùng một bảng (0x80382000), hai entry 1 và 0x23, **hai PTE đều hợp lệ**:
+  PPN trỏ PA 0x80371000 / 0x80383000, cờ `V|R|~~W~~|X|U|A|D` đúng như thiết kế.
+- ⇒ **Không phải PTE hỏng**. Giả thuyết "trang không được map" coi như bị bác.
+- Đáng chú ý: trace còn bắt được một lần ghi **PTE = 0** vào `idx 1`
+  (`P:0000000000000000`) ở bảng khác (0x8036c000) — tức có thao tác **unmap**
+  trang code của một vspace nào đó trong lúc boot. Cần đối chiếu xem unmap này
+  có rơi vào vspace của task exec đang chạy hay không.
+- Thêm dữ kiện: serial có `USER FAULT ... cause=0x2 addr=0x0` (illegal
+  instruction) ngay sau khi chương trình in byte đầu — gợi ý luồng thực thi bị
+  lạc sau một syscall, không phải lỗi đọc bộ nhớ.
+
+### Hướng đi tiếp (hẹp)
+
+1. Đối chiếu thời điểm `destroy_exec`/`object_destroy` với thời điểm task exec
+   chạy (thêm trace unmap kèm VA/table).
+2. Kiểm tra `cause=0x2`: task exec có bị `tcb_configure` lại entry sai không
+   (gen=3 cho thấy TCB được tái dùng).
