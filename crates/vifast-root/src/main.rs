@@ -986,21 +986,23 @@ fn map_frame_fallible(
 const EXEC_DEMO_CODE: u64 = CODE_VA as u64 + 0x1000;
 /// Dựng ELF demo nhỏ: 1 trang code in `msg` (DebugWrite) rồi exit.
 /// `len` là độ dài chuỗi, được nhúng thẳng vào lệnh nạp tham số độ dài.
-const fn exec_demo_elf() -> [u8; 0x1000 + 0x48] {
-    let mut elf = [0u8; 0x1000 + 0x48];
-    // ELF header.
+const fn exec_demo_elf() -> [u8; 0x180] {
+    // Ảnh nhỏ 0x180: header (0x40) + phdr (0x38) ở đầu; segment đặt tại
+    // offset 0x120 với vaddr = EXEC_DEMO_CODE + 0x120 (congruent mod 0x1000
+    // nên parse chấp nhận). Code ở 0x120, cặp (ptr,len) ở 0x140, chuỗi 0x160.
+    let mut elf = [0u8; 0x180];
     elf[0] = 0x7f;
     elf[1] = b'E';
     elf[2] = b'L';
     elf[3] = b'F';
-    elf[4] = 2; // 64-bit
-    elf[5] = 1; // LE
-    elf[6] = 1; // version
-    elf[16] = 2; // ET_EXEC
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    elf[16] = 2;
     elf[18] = (USER_ELF_MACHINE & 0xff) as u8;
     elf[19] = (USER_ELF_MACHINE >> 8) as u8;
-    elf[20] = 1; // e_version
-    let entry = EXEC_DEMO_CODE.to_le_bytes();
+    elf[20] = 1;
+    let entry = (EXEC_DEMO_CODE + 0x120).to_le_bytes();
     let mut i = 0;
     while i < 8 {
         elf[24 + i] = entry[i];
@@ -1015,36 +1017,33 @@ const fn exec_demo_elf() -> [u8; 0x1000 + 0x48] {
     elf[52] = 64;
     elf[54] = 56;
     elf[56] = 1;
-    // Program header: PT_LOAD(1), R+X(5), offset 0x1000, vaddr entry.
     elf[64] = 1;
     elf[68] = 5;
-    let off = 0x1000u64.to_le_bytes();
+    let off = 0x120u64.to_le_bytes();
+    let vaddr = (EXEC_DEMO_CODE + 0x120).to_le_bytes();
     i = 0;
     while i < 8 {
         elf[72 + i] = off[i];
-        elf[80 + i] = entry[i];
-        elf[88 + i] = entry[i];
+        elf[80 + i] = vaddr[i];
+        elf[88 + i] = vaddr[i];
         i += 1;
     }
-    elf[96] = 0x48; // filesz
-    elf[104] = 0x48; // memsz
+    elf[96] = 0x60; // filesz
+    elf[104] = 0x60; // memsz
     let align = 0x1000u64.to_le_bytes();
     i = 0;
     while i < 8 {
         elf[112 + i] = align[i];
         i += 1;
     }
-    // Code: in msg bằng DebugWrite rồi Exit. Chuỗi ở offset 0x40 trong trang.
     if cfg!(target_arch = "riscv64") {
-        // auipc a0,0 ; addi a0,a0,0x200 ; addi a1,x0,6 ; addi a7,x0,32 ;
-        // ecall ; addi a7,x0,34 ; ecall
         let code: [u32; 7] = [
             0x0000_0517, // auipc a0, 0
-            0x2005_0513, // addi a0, a0, 0x200 (chuỗi tham số)
+            0x0205_0513, // addi a0, a0, 0x20 (chuỗi)
             0x0060_0593, // addi a1, x0, 6
-            0x0200_0893, // addi a7, x0, 32 (DebugWrite)
+            0x0200_0893, // addi a7, x0, 32
             0x0000_0073, // ecall
-            0x0220_0893, // addi a7, x0, 34 (Exit)
+            0x0220_0893, // addi a7, x0, 34
             0x0000_0073, // ecall
         ];
         let mut i = 0;
@@ -1052,15 +1051,14 @@ const fn exec_demo_elf() -> [u8; 0x1000 + 0x48] {
             let bytes = code[i].to_le_bytes();
             let mut j = 0;
             while j < 4 {
-                elf[0x1000 + i * 4 + j] = bytes[j];
+                elf[0x120 + i * 4 + j] = bytes[j];
                 j += 1;
             }
             i += 1;
         }
     } else if cfg!(target_arch = "aarch64") {
-        // adr x0, #0x200 ; movz x1, #6 ; movz x8, #32 ; svc ; movz x8,34 ; svc
         let code: [u32; 6] = [
-            0x1000_1000, // adr x0, #0x200 (chuỗi tham số)
+            0x1000_0100, // adr x0, #0x20 (chuỗi)
             0xD280_00C1, // movz x1, #6
             0xD280_0408, // movz x8, #32
             0xD400_0001, // svc #0
@@ -1072,18 +1070,14 @@ const fn exec_demo_elf() -> [u8; 0x1000 + 0x48] {
             let bytes = code[i].to_le_bytes();
             let mut j = 0;
             while j < 4 {
-                elf[0x1000 + i * 4 + j] = bytes[j];
+                elf[0x120 + i * 4 + j] = bytes[j];
                 j += 1;
             }
             i += 1;
         }
     } else {
-        // x86_64: lea rdi,[rip+0x39] ; mov esi,len ; mov eax,32 ; int 0x80 ;
-        // mov eax,34 ; int 0x80
-        // lea rdi,[rip+0x1F9] ; mov esi,6 ; mov eax,32 ; int 0x80 ;
-        // mov eax,34 ; int 0x80
         let code: [u8; 26] = [
-            0x48, 0x8D, 0x3D, 0xF9, 0x01, 0x00, 0x00, // lea rdi,[rip+0x1F9]
+            0x48, 0x8D, 0x3D, 0x19, 0x00, 0x00, 0x00, // lea rdi,[rip+0x19]
             0xBE, 0x06, 0x00, 0x00, 0x00, // mov esi,6
             0xB8, 0x20, 0x00, 0x00, 0x00, // mov eax,32
             0xCD, 0x80, // int 0x80
@@ -1092,7 +1086,7 @@ const fn exec_demo_elf() -> [u8; 0x1000 + 0x48] {
         ];
         let mut i = 0;
         while i < code.len() {
-            elf[0x1000 + i] = code[i];
+            elf[0x120 + i] = code[i];
             i += 1;
         }
     }
@@ -1169,7 +1163,7 @@ fn write_program_args(code_frame: u8, msg: &[u8]) -> bool {
         out[i] = msg[i];
         i += 1;
     }
-    vifast_user::frame_write(code_frame, 0x200, out.as_ptr() as u64, i as u64).error == KError::Ok
+    vifast_user::frame_write(code_frame, 0x140, out.as_ptr() as u64, i as u64).error == KError::Ok
 }
 
 fn spawn_elf_copy(
@@ -1202,11 +1196,6 @@ fn spawn_elf_copy(
             if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
                 return None;
             }
-            // Ghi chuỗi tham số vào trang code TRƯỚC khi map (kernel chặn
-            // frame_write lên frame đã map executable — W^X).
-            if page == 0 && segment.executable() && !write_program_args(frame, b"HI FS\n") {
-                return None;
-            }
             // Copy nội dung segment (chunk 256B như load_module).
             let copy_start = core::cmp::max(va, segment.vaddr);
             let copy_end = core::cmp::min(
@@ -1233,6 +1222,11 @@ fn spawn_elf_copy(
                     }
                     done += chunk;
                 }
+            }
+            // Tham số ghi SAU khi copy segment (vùng 0x140 nằm trong segment)
+            // và TRƯỚC khi map (kernel chặn ghi lên frame đã map executable).
+            if page == 0 && segment.executable() && !write_program_args(frame, b"HI FS\n") {
+                return None;
             }
             let mut rights = Rights::READ;
             if segment.writable() {
@@ -1831,6 +1825,10 @@ fn spawn_elf_from_fs(
                     root_vfs_close(endpoint_slot, fd);
                     return None;
                 }
+            }
+            if page == 0 && segment.executable() && !write_program_args(frame, b"HI DK\n") {
+                root_vfs_close(endpoint_slot, fd);
+                return None;
             }
             let mut rights = Rights::READ;
             if segment.writable() {

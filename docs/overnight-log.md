@@ -1782,3 +1782,18 @@ follow-up `62b31f4`.
   của `timeout_hint`: "thiếu marker: SELFTEST PASS, FS DISK OK, ...").
 - Sửa: persist/harness/docs chạy **sau khi remote xong** (tuần tự), QEMU
   song song vẫn giữ. `par-gate --full --repeat 1` PASS cả hai máy.
+
+## 9.93 — Vòng 101: ảnh ELF demo 0x180 (headroom +4 KiB) — tìm ra bug thứ tự ghi
+
+- Ảnh demo thu từ `0x1000+0x48` xuống **0x180 byte**: segment đặt tại file
+  offset `0x120` với `p_vaddr = EXEC_DEMO_CODE + 0x120` (congruent mod 0x1000),
+  code ở 0x120, chuỗi tham số ở 0x140. Headroom riscv **199 024 → 203 120 B**
+  (destroy-smp cũng 203 120, hết đỏ).
+- Nguyên nhân các lần trước ảnh nhỏ "không chạy": **ghi tham số TRƯỚC copy
+  segment**, nên nội dung file (toàn 0) ghi đè chuỗi → chương trình in 6 byte
+  NUL (vô hình). Sửa: ghi tham số **sau copy, trước frame_map** (W^X).
+  Sau khi sửa, cả 3 arch in `HI FS` (RAM) và `HI DK` (nạp từ FS).
+- Bài học: với ảnh nhỏ, vùng tham số nằm TRONG segment — thứ tự copy/args là
+  hợp đồng bắt buộc, không phải chi tiết phụ.
+- Gate: QEMU 3/3×3, persist 3/3, harness 523, elf 19 test, docs PASS, fmt
+  sạch, 0 warning, headroom 203 120 B.
