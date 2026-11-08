@@ -1110,8 +1110,6 @@ const fn exec_demo_elf(msg: &[u8], len: u32) -> [u8; 0x1000 + 0x48] {
 
 /// Bản chạy từ RAM (boot EXEC demo) — in "HI FS".
 const EXEC_DEMO_ELF: &[u8] = &exec_demo_elf(b"HI FS\n", 6);
-/// Bản ghi xuống FS cho exec-from-FS — in "HI DSK" (chứng minh nạp từ đĩa).
-const EXEC_DISK_ELF: &[u8] = &exec_demo_elf(b"HI DSK\n", 7);
 
 /// Số slot tối đa spawn_elf_copy cấp cho ELF demo (tcb + vspace + stack +
 /// frame code + page tables). ELF demo cố định 1 page code nên 8 là dư;
@@ -2668,18 +2666,25 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                         off += n;
                     }
-                    // Vòng 93: vá bản trên đĩa để CHỨNG MINH chương trình chạy
-                    // thật sự được nạp từ file: đổi độ dài in thành 7 và chuỗi
-                    // thành "HI DSK\n" (bản trong RAM in "HI FS\n").
+                    // Vòng 93/94: vá bản trên đĩa thành "HI DSK" (7 byte) để
+                    // chuỗi in ra chứng minh chương trình nạp TỪ ĐĨA. Chỉ vá
+                    // 2 chỗ (lệnh độ dài + chuỗi) — rẻ hơn giữ ảnh ELF thứ hai
+                    // (headroom kernel riscv chỉ còn ~2.4 KiB).
                     let mut patch = [0u8; vifast_abi::vfs::MAX_IO];
+                    let (len_at, len_bytes): (u64, [u8; 4]) = if cfg!(target_arch = "riscv64") {
+                        (0x1008, (0x0070_0593u32).to_le_bytes()) // addi a1,x0,7
+                    } else if cfg!(target_arch = "aarch64") {
+                        (0x1004, (0xD280_00E1u32).to_le_bytes()) // movz x1,#7
+                    } else {
+                        (0x1007, [0xBE, 0x07, 0x00, 0x00]) // mov esi,7
+                    };
                     let mut j = 0;
-                    let insn = 0x0070_0593u32.to_le_bytes(); // addi a1,x0,7
-                    while j < 4 {
-                        patch[j] = insn[j];
+                    while j < len_bytes.len() {
+                        patch[j] = len_bytes[j];
                         j += 1;
                     }
                     let _ =
-                        root_vfs_write_at(root_vfs_slot, b"/prog.elf", 0x1008, &patch[..4], false);
+                        root_vfs_write_at(root_vfs_slot, b"/prog.elf", len_at, &patch[..4], false);
                     let disk_msg = b"HI DSK\n";
                     j = 0;
                     while j < disk_msg.len() {

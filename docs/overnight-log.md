@@ -1669,3 +1669,16 @@ follow-up `62b31f4`.
   tiếp (nghi vấn nạp/thi hành trang code sau khi ghi file), chưa đưa vào
   COMMON để tránh làm đỏ gate.
 - Gate giữ xanh: QEMU 2/2×3 PASS, harness 520.
+
+## 9.85 — Vòng 94: `HI DSK` vào cổng chuẩn — exec từ đĩa in ra trên cả 3 arch
+
+- Vá bản ghi xuống FS thay vì giữ ảnh ELF thứ hai (headroom riscv chỉ còn
+  ~2.4 KiB, thêm 4 KiB là vượt ngưỡng 192 KiB): chỉ sửa 2 chỗ — lệnh nạp độ
+  dài (riscv `addi a1`, aarch64 `movz x1`, x86 `mov esi`) và chuỗi ở 0x1040.
+- Kết quả: riscv64, aarch64, x86_64 đều in `HI FS` (bản RAM) rồi `HI DSK`
+  (bản nạp từ filesystem) — chứng minh chương trình thực thi được đọc lên
+  từ đĩa theo từng trang.
+- `HI DSK` vào `harness_spec.COMMON`: harness 520 → 523 ca; mọi lần chạy
+  QEMU trên mọi arch giờ đều phải thấy marker này.
+- Gate: QEMU 3/3×3 PASS, persist 7×3 PASS, harness 523, docs PASS, fmt sạch,
+  0 warning, headroom riscv 199 024 B.

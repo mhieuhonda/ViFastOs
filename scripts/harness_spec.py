@@ -42,6 +42,7 @@ COMMON = [
     ("FS DISK OK", "filesystem disk path responded"),
     ("PAGER RECLAIM OK", "pager demo frames/TCBs returned to untyped"),
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
+    ("HI DSK", "program executed from the filesystem printed its marker"),
 ]
 
 # Exactly one occurrence is required for each of these lines.
