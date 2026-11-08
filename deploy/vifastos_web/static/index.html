@@ -37,15 +37,19 @@
         <img class="brand-mark" src="/static/brand/vifastos-icon.svg" alt="" width="40" height="40">
         <span class="brand-word"><span class="red">Vi</span><em>Fast</em><span class="red">Os</span></span>
       </a>
-      <nav class="site-nav" aria-label="Điều hướng chính">
-      <a class="nav-home" href="https://vifast.org" title="Về vifast.org">← ViFast</a>
+      <nav class="site-nav" id="site-nav" aria-label="Điều hướng chính">
         <a href="#la-gi">Nó là gì</a>
         <a href="#hien-trang">Hiện trạng</a>
-        <a href="#lo-trinh">Lộ trình</a>
-        <a href="#ban-phat-hanh">Bản phát hành</a>
         <a href="#san-pham">Sản phẩm</a>
         <a class="nav-cta" href="#dang-ky">Đăng ký sớm</a>
+        <a class="nav-home" href="https://vifast.org" title="Về vifast.org">← ViFast</a>
       </nav>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Mở menu">
+        <span class="nav-toggle__bars" aria-hidden="true"></span>
+      </button>
+      <a class="ghost-btn" href="https://github.com/vifast-oss/ViFastOs" target="_blank" rel="noopener noreferrer">
+        <svg class="gh-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 1.8a10.2 10.2 0 0 0-3.2 19.9c.5.1.7-.2.7-.5v-1.9c-2.8.6-3.4-1.2-3.4-1.2-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.6 1.1 1.6 1.1.9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.7-1.4-2.3-.3-4.7-1.1-4.7-5.1 0-1.1.4-2 1.1-2.7-.1-.3-.5-1.3.1-2.7 0 0 .9-.3 2.8 1.1a9.8 9.8 0 0 1 5.2 0c1.9-1.4 2.8-1.1 2.8-1.1.6 1.4.2 2.4.1 2.7.7.7 1.1 1.6 1.1 2.7 0 4-2.4 4.8-4.7 5.1.4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10.2 10.2 0 0 0 12 1.8z"/></svg> GitHub
+      </a>
     </div>
   </header>
 
@@ -330,5 +334,14 @@
   </footer>
 
   <script src="/static/app.js" defer></script>
+<script>
+(function(){var b=document.querySelector('.nav-toggle'),n=document.getElementById('site-nav');
+if(!b||!n)return;
+function s(o){n.classList.toggle('is-open',o);b.setAttribute('aria-expanded',o?'true':'false');b.setAttribute('aria-label',o?'Đóng menu':'Mở menu');}
+b.addEventListener('click',function(){s(!n.classList.contains('is-open'));});
+n.addEventListener('click',function(e){if(e.target.closest('a'))s(false);});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')s(false);});
+window.addEventListener('resize',function(){if(window.innerWidth>780)s(false);});})();
+</script>
 </body>
 </html>
