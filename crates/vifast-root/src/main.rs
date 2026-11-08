@@ -1637,21 +1637,28 @@ fn root_vfs_copy_to_frame(
         if n == 0 {
             return false;
         }
+        // Copy IPC buffer -> buffer cục bộ rồi frame_write từ đó: kernel từ
+        // chối nguồn là chính IPC buffer (validate_user_range thấy leaf
+        // không hợp lệ — vòng 89), còn nguồn tĩnh/stack thì hợp lệ.
+        let mut chunk = [0u8; 256];
+        let mut i = 0;
+        while i < n as usize {
+            chunk[i] = unsafe { core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i)) };
+            i += 1;
+        }
         let mut inner = 0u64;
         while inner < n {
-            let chunk = core::cmp::min(256, n - inner);
-            if vifast_user::frame_write(
+            let part = core::cmp::min(256, n - inner) as usize;
+            let fw = vifast_user::frame_write(
                 frame,
                 frame_offset + done + inner,
-                ROOT_IPC_BUF_VA as u64 + inner,
-                chunk,
-            )
-            .error
-                != KError::Ok
-            {
+                chunk.as_ptr() as u64,
+                part as u64,
+            );
+            if fw.error != KError::Ok {
                 return false;
             }
-            inner += chunk;
+            inner += part as u64;
         }
         done += n;
     }
@@ -1671,9 +1678,7 @@ fn spawn_elf_from_fs(
     used: &mut [u8; MAX_EXEC_SLOTS],
 ) -> Option<u8> {
     let mut used_len = 0usize;
-    let Some(fd) = root_vfs_open(endpoint_slot, path) else {
-        return None;
-    };
+    let fd = root_vfs_open(endpoint_slot, path)?;
     // 1KiB đủ ELF header (64B) + tới 16 phdr (56B mỗi cái).
     let mut head = [0u8; 1024];
     let got = root_vfs_read_prefix(endpoint_slot, fd, &mut head);
@@ -1690,7 +1695,8 @@ fn spawn_elf_from_fs(
         }
     };
     let vspace = track_alloc(slots, used, &mut used_len)?;
-    if vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace).error != KError::Ok {
+    let vspace_r = vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace);
+    if vspace_r.error != KError::Ok {
         root_vfs_close(endpoint_slot, fd);
         return None;
     }
@@ -1700,7 +1706,8 @@ fn spawn_elf_from_fs(
         while page < segment.page_count() {
             let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
             let frame = track_alloc(slots, used, &mut used_len)?;
-            if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+            let frame_r = vifast_user::retype(data_untyped, ObjType::Frame as u64, frame);
+            if frame_r.error != KError::Ok {
                 root_vfs_close(endpoint_slot, fd);
                 return None;
             }
@@ -1750,7 +1757,10 @@ fn spawn_elf_from_fs(
     root_vfs_close(endpoint_slot, fd);
     // Stack riêng như spawn_elf_copy.
     let stack_frame = track_alloc(slots, used, &mut used_len)?;
-    if vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame).error != KError::Ok {}
+    let stack_r = vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame);
+    if stack_r.error != KError::Ok {
+        return None;
+    }
     if !map_frame_fallible(
         data_untyped,
         vspace,
@@ -1760,14 +1770,24 @@ fn spawn_elf_from_fs(
         slots,
         used,
         &mut used_len,
-    ) {}
+    ) {
+        return None;
+    }
     let tcb = track_alloc(slots, used, &mut used_len)?;
-    if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {}
+    if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
+        return None;
+    }
     if vifast_user::tcb_configure(tcb, image.entry as u64, EXEC_STACK_TOP as u64, vspace, 5).error
         != KError::Ok
-    {}
-    if vifast_user::tcb_set_affinity(tcb, affinity).error != KError::Ok {}
-    if vifast_user::tcb_resume(tcb).error != KError::Ok {}
+    {
+        return None;
+    }
+    if vifast_user::tcb_set_affinity(tcb, affinity).error != KError::Ok {
+        return None;
+    }
+    if vifast_user::tcb_resume(tcb).error != KError::Ok {
+        return None;
+    }
     Some(tcb)
 }
 
@@ -2492,20 +2512,23 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                         plen += 1;
                     }
+                    // Copy path NGAY (trước mọi call VFS): các call dưới đây
+                    // ghi đè IPC buffer, copy muộn sẽ nhận dữ liệu file
+                    // (vòng 89 — bug OPEN EINVAL).
+                    let mut path = [0u8; vifast_abi::vfs::MAX_PATH];
+                    let mut i = 0;
+                    while i < plen {
+                        path[i] = unsafe {
+                            core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i))
+                        };
+                        i += 1;
+                    }
                     let mut stat_ok = plen == 0;
                     // Vòng 75: chỉ STAT/READ khi có cap VFS badge SUPERUSER
                     // (root_vfs_slot != 0) — cap gốc badge 0 bị server từ
                     // chối EACCES. Không có slot thì bỏ qua STAT (fail-êm,
                     // x86) và spawn như cũ.
                     if plen != 0 && root_vfs_slot != 0 {
-                        let mut path = [0u8; vifast_abi::vfs::MAX_PATH];
-                        let mut i = 0;
-                        while i < plen {
-                            path[i] = unsafe {
-                                core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i))
-                            };
-                            i += 1;
-                        }
                         // Vòng 82/83: vòng tròn ghi→đọc→verify ELF on-demand
                         // (tránh call blocking cuối boot như vòng 75).
                         // Đảm bảo /elf-test từ 1KiB đầu client ELF rồi đọc
@@ -2540,6 +2563,44 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         ) {
                             write(b"ROOT ELF OK\n");
                         }
+                        // Vòng 89: lệnh `runfs` — nếu /prog.elf chưa có thì
+                        // tạo từ ảnh ELF dựng sẵn NGAY tại đây (on-demand,
+                        // không ở boot), rồi để STAT/exec-from-FS xử lý tiếp.
+                        if plen == b"/prog.elf".len()
+                            && root_vfs_stat(root_vfs_slot, b"/prog.elf").is_none()
+                        {
+                            let mut off = 0usize;
+                            while off < EXEC_DEMO_ELF.len() {
+                                let n = core::cmp::min(
+                                    vifast_abi::vfs::MAX_IO,
+                                    EXEC_DEMO_ELF.len() - off,
+                                );
+                                let mut chunk = [0u8; vifast_abi::vfs::MAX_IO];
+                                let mut j = 0;
+                                while j < n {
+                                    chunk[j] = EXEC_DEMO_ELF[off + j];
+                                    j += 1;
+                                }
+                                if !root_vfs_write_at(
+                                    root_vfs_slot,
+                                    b"/prog.elf",
+                                    off as u64,
+                                    &chunk[..n],
+                                    off == 0,
+                                ) {
+                                    break;
+                                }
+                                off += n;
+                            }
+                            let head = core::cmp::min(64, EXEC_DEMO_ELF.len());
+                            if root_vfs_verify_prefix(
+                                root_vfs_slot,
+                                b"/prog.elf",
+                                &EXEC_DEMO_ELF[..head],
+                            ) {
+                                write(b"ROOT PROG OK\n");
+                            }
+                        }
                         if root_vfs_stat(root_vfs_slot, &path[..plen]).is_some() {
                             stat_ok = true;
                             // Vòng 74: verify nội dung đọc được (OPEN/READ/
@@ -2568,17 +2629,12 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         // gate không đổi.
                         let mut tcb_opt = None;
                         if plen != 0 && root_vfs_slot != 0 {
-                            let mut path_copy = [0u8; vifast_abi::vfs::MAX_PATH];
-                            let mut i = 0;
-                            while i < plen {
-                                path_copy[i] = unsafe {
-                                    core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i))
-                                };
-                                i += 1;
-                            }
+                            // Dùng `path` đã copy từ buffer ĐẦU dispatch:
+                            // verify_prefix ở trên đã ghi đè IPC buffer bằng
+                            // dữ liệu file (vòng 89 — bug OPEN EINVAL).
                             tcb_opt = spawn_elf_from_fs(
                                 root_vfs_slot,
-                                &path_copy[..plen],
+                                &path[..plen],
                                 meta_untyped,
                                 data_untyped,
                                 0b01,
@@ -2616,44 +2672,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                                 }
                             }
                             None => write(b"RUN SKIP\n"),
-                        }
-                        // Mốc 9 (vòng 84): đảm bảo /prog.elf có trên FS để lần `run`
-                        // sau exec-thật từ filesystem (tạo on-demand ở đây, KHÔNG ở
-                        // boot — call VFS blocking trong boot làm mất toàn bộ task).
-                        if root_vfs_slot != 0
-                            && root_vfs_stat(root_vfs_slot, b"/prog.elf").is_none()
-                        {
-                            let mut off = 0usize;
-                            while off < EXEC_DEMO_ELF.len() {
-                                let n = core::cmp::min(
-                                    vifast_abi::vfs::MAX_IO,
-                                    EXEC_DEMO_ELF.len() - off,
-                                );
-                                let mut chunk = [0u8; vifast_abi::vfs::MAX_IO];
-                                let mut j = 0;
-                                while j < n {
-                                    chunk[j] = EXEC_DEMO_ELF[off + j];
-                                    j += 1;
-                                }
-                                if !root_vfs_write_at(
-                                    root_vfs_slot,
-                                    b"/prog.elf",
-                                    off as u64,
-                                    &chunk[..n],
-                                    off == 0,
-                                ) {
-                                    break;
-                                }
-                                off += n;
-                            }
-                            let head = core::cmp::min(64, EXEC_DEMO_ELF.len());
-                            if root_vfs_verify_prefix(
-                                root_vfs_slot,
-                                b"/prog.elf",
-                                &EXEC_DEMO_ELF[..head],
-                            ) {
-                                write(b"ROOT PROG OK\n");
-                            }
                         }
                     } // if stat_ok
                 } else {

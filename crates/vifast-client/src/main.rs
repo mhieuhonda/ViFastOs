@@ -464,6 +464,22 @@ fn shell_command(line: &[u8]) {
         } else {
             write(b"usage: truncate <path> <size>\n");
         }
+    } else if line == b"runfs" || line.starts_with(b"runfs ") {
+        // Mốc 9 (vòng 89): exec-thật từ FS, KHÔNG kiểm tra file tồn tại
+        // trước (root tự tạo /prog.elf từ ảnh ELF dựng sẵn rồi nạp từ
+        // filesystem). Dùng để kiểm chứng đường exec-from-FS.
+        let arg = if line.len() > 6 {
+            &line[7..]
+        } else {
+            b"/prog.elf"
+        };
+        copy_path(arg);
+        let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_RUN, 0, 0, 0);
+        write(if r.error == KError::Ok {
+            b"runfs sent\n"
+        } else {
+            b"runfs failed\n"
+        });
     } else if line == b"run" || line.starts_with(b"run ") {
         // Mốc 9 (vòng 33/38/46): yêu cầu root exec qua cap lệnh.
         // Fire-and-forget: root in RUN OK/SKIP; shell không block chờ reply

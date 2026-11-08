@@ -1592,3 +1592,21 @@ follow-up `62b31f4`.
   qemu-system-{riscv64,aarch64,x86_64}, OVMF symlink; `scripts/par-gate.sh`
   chia việc local (riscv64+aarch64) / remote (x86_64), rsync trừ `target/`.
   Gate 3/3×3 hai máy song song xanh.
+
+## 9.80 — Vòng 89: EXEC-THẬT TỪ FILESYSTEM chạy được (`RUN FS OK`)
+
+- `runfs [path]` (shell) → root tạo `/prog.elf` on-demand rồi `spawn_elf_from_fs`
+  nạp **từng page** từ file vào frame đích, map quyền theo segment, tạo TCB và
+  resume: riscv64 + aarch64 in `ROOT PROG OK` rồi `RUN FS OK`.
+- Hai bug thật đã tìm ra (đều là bug hợp đồng ABI, không phải flake):
+  1. Copy path từ IPC buffer **sau** khi các call VFS khác đã ghi đè buffer →
+     server nhận `ELF…` thay vì đường dẫn → OPEN trả EINVAL(8). Sửa: copy path
+     NGAY đầu dispatch, trước mọi call VFS.
+  2. `frame_write` từ chính IPC buffer bị `validate_user_range` từ chối
+     (InvalidArg 6) dù đọc/ghi buffer ở userspace bình thường; nguồn tĩnh hợp lệ.
+     Sửa: READ → buffer cục bộ 256B → `frame_write` từ buffer đó.
+- Giới hạn bộ nhớ xác nhận lại: DATA untyped còn ~6 page cuối boot; exec-thật
+  ELF demo (1 page code + stack) vừa đủ. Vòng sau: thu hồi demo TCB/VSpace để
+  nâng trần trước khi exec client ELF đầy đủ (5 page).
+- `--interactive` gửi thêm `runfs` (best-effort vì riscv64 có flake nhận byte
+  UART ở chế độ socket, tái hiện cả trên HEAD).

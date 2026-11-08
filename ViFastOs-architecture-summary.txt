@@ -296,6 +296,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 7d7e0d4 moc 9 (vong 75): root mint cap VFS badge SUPERUSER + OPEN/READ verify
 - c941ce9 moc 9 (vong 79): tach open/read_at/close root thanh ham tai dung
 - 437d907 moc 9 (vong 82/83): vong tron FS ghi-doc-verify 1KiB on-demand
+- 120f95d moc 9 (vong 84): parse ELF metadata + exec-from-FS + gate song song 2 may
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
