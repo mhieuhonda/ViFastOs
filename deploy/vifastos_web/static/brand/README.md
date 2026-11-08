@@ -1,15 +1,17 @@
 # ViFastOs — bộ nhận diện
 
-Logo cho sản phẩm **ViFastOs** (dùng cho `os.vifast.org`), cùng hệ với ViFastKey/ViFastTts.
+Logo cho sản phẩm **ViFastOs** (dùng cho `os.vifast.org`), cùng hệ với ViFast, ViFastKey, ViFastTts.
 
 ## Ý nghĩa hình
 
-- **Nền trong suốt** — dùng được trên nền sáng, nền tối, avatar tròn hay favicon.
-- **Sao vàng** (Việt Nam) + **3 vệt tốc độ** (Fast): vẽ lại đúng tỉ lệ của ViFastKey / ViFastTts,
-  gạch giữa thụt vào, mép phải thẳng hàng.
-- **Lục giác bao ngoài**: *microkernel* — một lõi nhỏ (sao) nằm gọn trong ranh giới kernel;
-  mọi thứ bên trong đều do kernel kiểm soát, mọi quyền phải đi qua vành này. Hình lục giác gợi
-  tinh thể silicon và tổ ong — nhiều ô rời rạc khớp với cách capability chia quyền thành từng ô.
+- **Ô đỏ bo góc** (`#E8352B` → `#B3150F`, bán kính 112) — giống ô icon của ViFast / ViFastKey / ViFastTts,
+  để bốn logo đứng cạnh nhau trên GitHub, App Store hay dock đều là một họ.
+- **Sao vàng** (Việt Nam) + **3 vệt tốc độ** (Fast) đặt **chính giữa** ô: cụm rộng 232 trên 512,
+  canh giữa theo cả hai chiều; gạch giữa thụt vào, mép phải ba gạch thẳng hàng — đúng kiểu của ViFast.
+- **Lục giác 2 tầng** bao quanh: vòng ngoài vàng `#FFD84D` (dày 14), vòng trong kem `#FFF8EC`
+  (dày 8, mờ 60%). Hai vòng là **ranh giới kernel**: tầng ngoài là biên giới cách ly, tầng trong là
+  vùng capability — muốn chạm vào lõi (sao) thì phải đi qua cả hai. Hình lục giác gợi tinh thể silicon,
+  tổ ong — nhiều ô rời rạc khớp với cách capability chia quyền thành từng ô.
 
 ## Tệp
 

@@ -1,23 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 400" width="1400" height="400" role="img" aria-labelledby="vifastos-lockup-light-title">
   <title id="vifastos-lockup-light-title">ViFastOs</title>
-  <g transform="translate(44,44) scale(0.609)">
-  <title id="vifastos-icon-title">ViFastOs</title>
   <defs>
-    <linearGradient id="osis-star" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="osl-bg-light" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E8352B"/><stop offset="1" stop-color="#B3150F"/>
+    </linearGradient>
+    <linearGradient id="osl-star-light" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFE04A"/><stop offset="1" stop-color="#FFB800"/>
     </linearGradient>
-    <linearGradient id="osis-star-cream" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFED8A"/><stop offset="1" stop-color="#FFC133"/>
-    </linearGradient>
   </defs>
-  <polygon points="452.0,256.0 354.0,425.7 158.0,425.7 60.0,256.0 158.0,86.3 354.0,86.3" fill="none" stroke="#E8352B" stroke-width="18" stroke-linejoin="round"/>
-  <g stroke="#E8352B" stroke-linecap="round" opacity="0.95">
-      <line x1="118" y1="205" x2="166" y2="205" stroke-width="15"/>
-      <line x1="142" y1="256" x2="166" y2="256" stroke-width="15"/>
-      <line x1="118" y1="307" x2="166" y2="307" stroke-width="15"/>
+  <g transform="translate(44,44) scale(0.609)">
+      <rect width="512" height="512" rx="112" fill="url(#osl-bg-light)"/>
+      <polygon points="454.0,256.0 355.0,427.5 157.0,427.5 58.0,256.0 157.0,84.5 355.0,84.5" fill="none" stroke="#FFD84D" stroke-width="14.0" stroke-linejoin="round" opacity="0.95"/>
+      <polygon points="426.0,256.0 341.0,403.2 171.0,403.2 86.0,256.0 171.0,108.8 341.0,108.8" fill="none" stroke="#FFF8EC" stroke-width="8.0" stroke-linejoin="round" opacity="0.6"/>
+      <g stroke="#FFD84D" stroke-linecap="round" opacity="0.95">
+        <line x1="139.8" y1="208" x2="203.8" y2="208" stroke-width="14.0"/>
+        <line x1="157.8" y1="256" x2="203.8" y2="256" stroke-width="14.0"/>
+        <line x1="139.8" y1="304" x2="203.8" y2="304" stroke-width="14.0"/>
+      </g>
+      <polygon points="298.0,178.0 315.5,231.9 372.2,231.9 326.3,265.2 343.8,319.1 298.0,285.8 252.2,319.1 269.7,265.2 223.8,231.9 280.5,231.9" fill="url(#osl-star-light)" stroke="#FFE680" stroke-width="5" stroke-linejoin="round"/>
   </g>
-  <polygon points="300.0,164.0 320.7,227.6 387.5,227.6 333.4,266.9 354.1,330.4 300.0,291.1 245.9,330.4 266.6,266.9 212.5,227.6 279.3,227.6" fill="url(#osis-star)" stroke="#B3150F" stroke-width="6" stroke-linejoin="round"/>
-</g>
   <text x="420" y="240" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
         font-size="170" font-weight="800" letter-spacing="-4"><tspan fill="#D42A20">Vi</tspan><tspan fill="#1F2430" font-style="italic">Fast</tspan><tspan fill="#D42A20">Os</tspan></text>
   <text x="426" y="318" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
