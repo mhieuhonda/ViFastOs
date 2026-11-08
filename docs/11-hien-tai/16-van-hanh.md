@@ -315,9 +315,20 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
 - Nghi vấn cụ thể: helper `map_frame(...)` nhận `&mut used_len` — nếu nó ghi đè
   hoặc không tăng `used_len` cho slot của nó thì các slot sau (stack, TCB) bị
   ghi đè lên nhau ⇒ tổng cuối = 6.
-- Việc cần làm (vòng sau): in `used_len` tại **từng** `track_alloc` trong hàm
-  spawn (hoặc kiểm tra helper `map_frame` có ghi `used_len` đúng không), rồi sửa
-  để `SPAWN LEN=7`; khi đó `DESTROY DIAG` mới có thể về 0.
+- **Đo tiếp (vòng 196)**: in `used_len` ngay sau khi track TCB ⇒
+  `TCB TRACK len=6 slot=108`, nhưng mảng của **caller** vẫn là
+  `[110 111 112 113 114 115 0 0]`. Tức spawn ghi vào một mảng **khác** với
+  `exec_used` mà chỗ huỷ đọc (hoặc giá trị bị ghi đè sau đó), và số slot khớp
+  lệch (5 trước TCB thay vì 6) ⇒ có một đường cấp phát **không** đi qua
+  `track_alloc` của caller.
+- Việc cần làm (vòng sau): soát mọi khai báo mảng được truyền vào
+  `spawn_elf_from_fs`/`spawn_elf_copy` (nghi có hai mảng `used`/`exec_used` song
+  song) và mọi chỗ reset mảng giữa spawn và destroy.
+- **Bài học vận hành (vòng 196)**: thêm 2 dòng in chẩn đoán ở boot làm riscv
+  **2/3** — một lần guest dừng trước `SHELL READY` và lần retry **không nhận được
+  TCP echo** (cửa sổ chờ quá ngắn khi boot chậm đi). Đã gỡ chẩn đoán ⇒ 3/3 trở
+  lại. Kết luận: **in thêm ở boot có thể làm đỏ cổng**, phải chạy 3×3 sau mỗi lần
+  thêm, và không giữ chẩn đoán trong cây.
 
 ### 5p-b. Đo rò rỉ qua NHIỀU lần exec (vòng 187)
 

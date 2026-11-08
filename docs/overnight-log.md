@@ -3308,3 +3308,21 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Việc cần làm (vòng sau): in `used_len` tại **từng** `track_alloc`, kiểm helper
   `map_frame`, sửa để `SPAWN LEN=7`; khi đó mới có thể đạt `DESTROY DIAG` = 0.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt sạch.
+
+## 9.193 — Vòng 196: spawn ghi vào mảng KHÁC + bài học "in thêm ở boot làm đỏ cổng"
+
+- In `used_len` ngay sau khi track TCB: **`TCB TRACK len=6 slot=108`**, nhưng mảng
+  của **caller** vẫn `[110 111 112 113 114 115 0 0]` ⇒ spawn ghi vào một mảng
+  **khác** với `exec_used` mà chỗ huỷ đọc (hoặc bị ghi đè sau đó). Số slot cũng
+  lệch (5 trước TCB thay vì 6) ⇒ có đường cấp phát **không** đi qua
+  `track_alloc` của caller.
+- Việc cần làm (vòng sau): soát mọi mảng truyền vào `spawn_elf_from_fs`/
+  `spawn_elf_copy` (nghi hai mảng `used`/`exec_used` song song) và mọi chỗ reset
+  mảng giữa spawn và destroy.
+- **Sự cố tự gây (quan trọng)**: 2 dòng in chẩn đoán ở boot làm riscv **2/3** —
+  lần đầu guest dừng trước `SHELL READY` (flake, đã retry), lần retry **không
+  nhận được TCP echo** (cửa sổ chờ quá ngắn khi boot chậm đi). Gỡ chẩn đoán ⇒
+  **3/3** trở lại. Bài học: **in thêm ở boot có thể làm đỏ cổng** — phải chạy
+  3×3 sau mỗi lần thêm và không giữ chẩn đoán trong cây.
+- Gate sau khi gỡ: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs
+  PASS, fmt sạch.

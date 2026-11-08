@@ -3208,10 +3208,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             exec_len = n;
                             exec_vspace = exec_used[0];
                             write(b"RUN FS OK\n");
-                            // Vòng 195: chẩn đoán TẠM — độ dài ngay sau spawn.
-                            write(b"SPAWN LEN=");
-                            write_decimal(n as u64);
-                            write(b"\n");
                         }
                         None => write(b"RUN FS FAIL\n"),
                     }
