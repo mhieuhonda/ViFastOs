@@ -25,7 +25,7 @@
   <meta name="twitter:title" content="ViFastOs — microkernel nhỏ, viết bằng Rust">
   <meta name="twitter:description" content="seL4-style, capability-based, no_std. Chạy trên QEMU với riscv64 / aarch64 / x86_64.">
   <meta name="twitter:image" content="https://os.vifast.org/static/brand/og-1200.png">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=20261108b">
 </head>
 <body>
   <div class="topline" aria-hidden="true"></div>
@@ -240,7 +240,7 @@
             <li>Đang phát triển — chưa có bản phát hành</li>
             </ul>
             <div class="prod-actions">
-              <a class="prod-btn" href="https://os.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-btn" href="https://os.vifast.org/">Website ↗</a>
               <a class="prod-link" href="https://github.com/vifast-oss/ViFastOs" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
             </div>
           </article>
@@ -254,7 +254,7 @@
             <li>Windows, macOS, Linux, Android, iOS và demo UEFI</li>
             </ul>
             <div class="prod-actions">
-              <a class="prod-btn" href="https://key.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-btn" href="https://key.vifast.org/">Website ↗</a>
               <a class="prod-link" href="https://github.com/vifast-oss/ViFastKey" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
             </div>
           </article>
@@ -268,7 +268,7 @@
             <li>API REST/stream, CLI server, Python, ONNX</li>
             </ul>
             <div class="prod-actions">
-              <a class="prod-btn" href="https://tts.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-btn" href="https://tts.vifast.org/">Website ↗</a>
               <a class="prod-link" href="https://github.com/vifast-oss/ViFastTts" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
             </div>
           </article>
@@ -325,23 +325,15 @@
     <div class="wrap footer-inner">
       <p class="footer-copy">© 2026 ViFastOs · MIT License</p>
       <nav class="footer-nav" aria-label="Liên kết">
-        <a href="https://vifast.org" target="_blank" rel="noopener noreferrer">vifast.org</a>
-        <a href="https://key.vifast.org" target="_blank" rel="noopener noreferrer">key.vifast.org</a>
-        <a href="https://tts.vifast.org" target="_blank" rel="noopener noreferrer">tts.vifast.org</a>
+        <a href="https://vifast.org">vifast.org</a>
+        <a href="https://key.vifast.org">key.vifast.org</a>
+        <a href="https://tts.vifast.org">tts.vifast.org</a>
         <a href="https://github.com/vifast-oss/ViFastOs" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
     </div>
   </footer>
 
-  <script src="/static/app.js" defer></script>
-<script>
-(function(){var b=document.querySelector('.nav-toggle'),n=document.getElementById('site-nav');
-if(!b||!n)return;
-function s(o){n.classList.toggle('is-open',o);b.setAttribute('aria-expanded',o?'true':'false');b.setAttribute('aria-label',o?'Đóng menu':'Mở menu');}
-b.addEventListener('click',function(){s(!n.classList.contains('is-open'));});
-n.addEventListener('click',function(e){if(e.target.closest('a'))s(false);});
-document.addEventListener('keydown',function(e){if(e.key==='Escape')s(false);});
-window.addEventListener('resize',function(){if(window.innerWidth>780)s(false);});})();
-</script>
+  <script src="/static/app.js?v=20261108b" defer></script>
+<script src="/static/nav.js?v=20261108b" defer></script>
 </body>
 </html>

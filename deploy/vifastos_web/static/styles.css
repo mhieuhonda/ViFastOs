@@ -783,3 +783,13 @@ img.brand-mark {
 @media (max-width: 780px) {
   .nav-toggle { display: inline-flex; margin-left: auto; }
 }
+
+/* Đầu trang mobile: logo — GitHub — nút menu (đúng thứ tự này) ----------- */
+.site-nav { margin-left: auto; }
+
+@media (max-width: 780px) {
+  .header-inner { gap: 8px; }
+  .header-inner .brand { order: 1; margin-right: auto; }
+  .header-inner .ghost-btn { order: 2; margin-left: 0; display: inline-flex; }
+  .header-inner .nav-toggle { order: 3; margin-left: 0; }
+}
