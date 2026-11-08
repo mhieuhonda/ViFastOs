@@ -2298,3 +2298,15 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   test đổi theo và ghi lại bài học.
 - Marker `SYS REJECT OK` vào `COMMON`: harness **550 → 553 ca**, cả 3 arch in.
 - Gate: QEMU 3/3×3, persist 3/3, harness 553, docs PASS, fmt sạch, 0 warning.
+
+## 9.130 — Vòng 133: IPC phải chịu được yêu cầu rác
+
+- Self-test: gửi yêu cầu với **opcode lạ (0xffff)** tới server VFS, sau đó kiểm
+  kênh VFS **vẫn dùng được** (`stat("/")` trả về). In `IPC JUNK OK` / `BAD`.
+- Ý nghĩa: server không được treo/sập vì request sai định dạng, và kênh IPC
+  không bị kẹt sau lỗi — đúng phần "IPC ổn định" của mục tiêu lõi.
+- Marker vào `COMMON`: harness **553 → 556 ca**.
+- Ghi nhận flake: một lần chạy riscv báo `banner or SELFTEST PASS missing`;
+  chạy lại 3 lần liền đều PASS và `--repeat 3` xanh ⇒ flake lúc boot, không
+  phải lỗi mới (VIFAST_RETRY_TIMEOUT chỉ retry timeout, không retry mất marker).
+- Gate: QEMU 3/3×3, persist 3/3, harness 556, docs PASS, fmt sạch, 0 warning.

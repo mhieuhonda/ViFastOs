@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "IPC JUNK OK",
+        "unknown VFS opcode got an error reply and the channel kept working",
+    ),
+    (
         "SYS REJECT OK",
         "invalid handles and out-of-range user pointers were all refused",
     ),

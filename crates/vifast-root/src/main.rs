@@ -3007,6 +3007,16 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"SYS REJECT BAD\n"
                     });
+                    // Vòng 133: IPC phải chịu được yêu cầu rác — server trả
+                    // lỗi EINVAL thay vì treo hoặc sập, và kênh VFS vẫn dùng
+                    // được ngay sau đó.
+                    let junk = unsafe { vifast_user::call_message(root_vfs_slot, 0xffff, 0, 0, 0) };
+                    let still_ok = root_vfs_stat(root_vfs_slot, b"/").is_some();
+                    write(if junk.label == vfs_abi::ERR && still_ok {
+                        b"IPC JUNK OK\n"
+                    } else {
+                        b"IPC JUNK BAD\n"
+                    });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
