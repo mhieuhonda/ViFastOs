@@ -555,15 +555,13 @@ fn shell_command(line: &[u8]) {
             });
         }
     } else if line == b"df" {
-        // Vòng 139: dung lượng FS (data area).
+        // Vòng 139: dung lượng FS (vùng data): "used/total" theo block.
         let reply = unsafe { vifast_user::call_message(1, vfs::STATFS, 0, 0, 0) };
         if reply.error == KError::Ok && reply.label == vfs::OK {
             write_u64(reply.data[0]);
             write(b"/");
             write_u64(reply.data[1]);
-            write(b" blocks, ");
-            write_u64(reply.data[2]);
-            write(b" B/block\n");
+            write(b"\n");
         } else {
             write(b"df: error\n");
         }

@@ -3070,19 +3070,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         && usage.data[1] > 0
                         && usage.data[0] <= usage.data[1]
                         && usage.data[2] == 512;
-                    if !usage_ok {
-                        write(b"FSUS ");
-                        write_decimal(usage.error as u64);
-                        write(b" ");
-                        write_decimal(usage.label);
-                        write(b" ");
-                        write_decimal(usage.data[0]);
-                        write(b" ");
-                        write_decimal(usage.data[1]);
-                        write(b" ");
-                        write_decimal(usage.data[2]);
-                        write(b"\n");
-                    }
                     write(if usage_ok {
                         b"FS USAGE OK\n"
                     } else {

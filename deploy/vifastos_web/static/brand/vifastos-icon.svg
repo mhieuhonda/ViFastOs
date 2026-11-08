@@ -10,9 +10,9 @@
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#vifastos-bg)"/>
   <g stroke="#FFD84D" stroke-linecap="round" opacity="0.85">
-      <line x1="40" y1="215" x2="92" y2="215" stroke-width="14"/>
-      <line x1="58" y1="262" x2="92" y2="262" stroke-width="14"/>
-      <line x1="40" y1="309" x2="92" y2="309" stroke-width="14"/>
+      <line x1="42" y1="198" x2="116" y2="198" stroke-width="18"/>
+      <line x1="42" y1="256" x2="116" y2="256" stroke-width="18"/>
+      <line x1="42" y1="314" x2="116" y2="314" stroke-width="18"/>
   </g>
   <g transform="translate(206,252) scale(0.94) translate(-206,-252)">
     <polygon points="210.0,144.0 236.5,225.5 322.2,225.5 252.9,275.9 279.4,357.5 210.0,307.1 140.6,357.5 167.1,275.9 97.8,225.5 183.5,225.5"
