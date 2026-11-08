@@ -3186,3 +3186,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   vòng cần self-test boot-time riêng (chưa làm để không xáo trộn nhịp boot).
 - Gate (xác nhận trạng thái không đổi): build 0 warning, QEMU 3/3×3, persist
   3/3, harness 586, docs PASS, fmt sạch.
+
+## 9.185 — Vòng 188: bảng marker sinh tự động (nguồn duy nhất: harness_spec)
+
+- Vấn đề: runbook có nhiều mục "5x" viết tay mô tả marker rải rác — đúng loại
+  tài liệu đã lệch âm thầm ở bảng test host (vòng 176).
+- `scripts/gen-marker-table.py`: sinh bảng **96 dòng** (53 bắt buộc + 25 đúng
+  một lần + marker riêng arch, gộp theo arch yêu cầu), chèn giữa hai mốc
+  `MARKER-TABLE` trong `16-van-hanh.md`; có `--check`.
+- `build.sh` chạy `--check` ⇒ **không thể lệch**: build in ra ba dòng xác nhận
+  "bảng lệnh shell / bảng host test / bảng marker … khớp".
+- Ba cơ chế sinh bảng giờ chạy trong cổng: shell commands (v175), test counts
+  (v176), markers (v188) — mọi con số trong tài liệu đều có nguồn máy sinh.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
+  sạch.

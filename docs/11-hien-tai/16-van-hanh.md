@@ -426,6 +426,114 @@ Nếu phát hiện bất nhất:
 đổi làm cấu trúc đĩa hỏng, sẽ thấy ngay ở dòng này thay vì đoán qua lỗi FS về
 sau.
 
+<!-- MARKER-TABLE:BEGIN -->
+### 5. Bảng marker của cổng (sinh tự động)
+
+Sinh bằng `python3 scripts/gen-marker-table.py` từ `scripts/harness_spec.py`
+— **đừng sửa tay**. Cột *Nhóm*: **bắt buộc** = phải có trên mọi arch;
+**đúng 1 lần** = không được lặp và không được thiếu; **riêng arch** = chỉ
+arch liệt kê mới cần.
+
+| Marker | Nhóm | Ý nghĩa |
+|---|---|---|
+| `SELFTEST PASS` | bắt buộc | kernel host self-test passed in guest |
+| `booting on` | bắt buộc | architecture banner printed |
+| `BOOT UNTYPED` | bắt buộc | boot untyped accounting printed |
+| `PREEMPT OK` | bắt buộc | timer preemption progressed |
+| `Isolation` | bắt buộc | fault isolation demo ran |
+| `Server` | bắt buộc | user VFS server ran |
+| `Client` | bắt buộc | user VFS client ran |
+| `SLEEP OK` | bắt buộc | sleep observed the timer deadline |
+| `Mapped` | bắt buộc | client VSpace mapping succeeded |
+| `Cap OK` | bắt buộc | capability transfer demo succeeded |
+| `ViFastOs ramfs` | bắt buộc | ramfs read path ran |
+| `ViFastOs write` | bắt buộc | ramfs write path ran |
+| `FS V2 OK` | bắt buộc | FS v2 namespace/data demo completed |
+| `FS FSCK OK` | bắt buộc | server fsck passed after demo |
+| `FS PERM OK` | bắt buộc | badge-based FS permissions behaved |
+| `BADGE SPOOF DENIED OK` | bắt buộc | rebadging and badge spoofing were denied |
+| `IPC BUF OK` | bắt buộc | IPC buffer transfer succeeded |
+| `BLOCK DENIED OK` | bắt buộc | client was denied BlockWrite without a device cap |
+| `Reply OK` | bắt buộc | reply path succeeded |
+| `ROOT RUST` | bắt buộc | root Rust ELF entered user mode |
+| `BOOTINFO OK` | bắt buộc | root validated BootInfo v3 |
+| `SCHED CTX OK` | bắt buộc | scheduler context configured and bound |
+| `RUST MODULES OK` | bắt buộc | server/client Rust ELF modules loaded |
+| `CLIENT VSPACE OK` | bắt buộc | client VSpace built |
+| `FAULT EP OK` | bắt buộc | fault endpoint delivered all fault records |
+| `ROOT READY` | bắt buộc | root finished initialisation |
+| `Zero OK` | bắt buộc | zero page / BSS path verified |
+| `BLOCK OK` | bắt buộc | block device backend responded |
+| `FS DISK OK` | bắt buộc | filesystem disk path responded |
+| `PAGER RECLAIM OK` | bắt buộc | pager demo frames/TCBs returned to untyped |
+| `RUN FS OK` | bắt buộc | exec-from-filesystem loaded an ELF page-by-page and ran it |
+| `HIARG` | bắt buộc | program executed from the filesystem printed an argv-only marker |
+| `WX OK` | bắt buộc | writing an executable-mapped frame was denied while the RW stack stayed writable |
+| `MEM OOM OK` | bắt buộc | oversized untyped request was refused with OutOfMemory and size 0 rejected |
+| `FS USAGE OK` | bắt buộc | STATFS reported a sane used/total block count with 512-byte blocks |
+| `KILL OK` | bắt buộc | tcb_destroy killed a freshly retyped TCB and rejected an invalid slot |
+| `SLOT REUSE OK` | bắt buộc | a slot destroyed and immediately retyped worked again (no leaked cap) |
+| `IPC DEAD OK` | bắt buộc | calling a destroyed endpoint returned an error instead of blocking |
+| `IPC JUNK OK` | bắt buộc | unknown VFS opcode got an error reply and the channel kept working |
+| `SEC PROBE OK` | bắt buộc | kernel refused to read user buffers outside the copy windows |
+| `SYS REJECT OK` | bắt buộc | invalid handles and out-of-range user pointers were all refused |
+| `EXEC MEM OK` | bắt buộc | destroying the previous exec task returned its pages (arena not growing) |
+| `MEM FREE OK` | bắt buộc | arena usage stayed consistent (used < size) after the whole FS op chain |
+| `FS MOUNT CLEAN` | bắt buộc | fsck ran at mount time and the loaded disk was consistent |
+| `FS OPS FSCK OK` | bắt buộc | fsck stayed clean after create/unlink/truncate/rename/link operations |
+| `FS RENAME OK` | bắt buộc | rename made the old name disappear and kept the new name's size |
+| `FS LINK OK` | bắt buộc | hard link produced two names with the same inode/size |
+| `FS TRUNC OK` | bắt buộc | truncate to 4 bytes kept exactly the first 4 bytes on disk |
+| `FS RM OK` | bắt buộc | create + stat + unlink + stat cycle on the filesystem succeeded |
+| `PROG MID OK` | bắt buộc | a 16-byte window at the middle of /prog.elf matches the source image |
+| `PROG TAIL OK` | bắt buộc | the last 32 bytes of /prog.elf match the source ELF image |
+| `PROG SIZE OK` | bắt buộc | the ELF written to /prog.elf has exactly the expected byte size |
+| `PAGER SRV 0/0/0` | bắt buộc | pager server was reclaimed (tcb, stack frame, ipc frame destroyed) |
+| `VFS SERVER OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `VFS OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `VFS STAT OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `IOMMU OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `PERCPU CLOBBER OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `TIME MONOTONIC OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `TLB REMAP OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `CAP DELETE OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `TCB SUSPEND OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `FS LARGE OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `FS APPEND OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `FS OPEN FLAGS OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `FS STAT PATH OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `HARD LINK OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `SYMLINK OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `IRQ OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `CNODE OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `TCB REAP OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `WAIT REAP OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `PAGER OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `PAGER2 OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `PAGER EVICT OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `PAGER3 OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `SHELL READY` | đúng 1 lần | không được thiếu hoặc lặp |
+| `DESTROY OK` | đúng 1 lần | không được thiếu hoặc lặp |
+| `ACPI MADT OK` | riêng arch (x86_64) | chỉ arch này mới cần |
+| `AP LONG MODE OK` | riêng arch (x86_64) | chỉ arch này mới cần |
+| `AP REAL MODE OK` | riêng arch (x86_64) | chỉ arch này mới cần |
+| `AP TRAMPOLINE OK` | riêng arch (x86_64) | chỉ arch này mới cần |
+| `EL0 FP TRAP` | riêng arch (aarch64) | chỉ arch này mới cần |
+| `KERNEL DATA NX OK` | riêng arch (x86_64) | chỉ arch này mới cần |
+| `LAPIC OK` | riêng arch (x86_64) | chỉ arch này mới cần |
+| `SMP IDLE OK` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+| `SMP IPI COUNT` | riêng arch (x86_64) | chỉ arch này mới cần |
+| `SMP OK` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+| `SMP POST IDLE OK` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+| `SMP PREEMPT OK` | riêng arch (riscv64, aarch64) | chỉ arch này mới cần |
+| `SMP SCHED OK` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+| `SMP TIMER OK` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+| `SMP TIMER RATE` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+| `SMP WORKERS OK` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+| `TLB STATS` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+| `ipi=1` | riêng arch (riscv64, aarch64, x86_64) | chỉ arch này mới cần |
+<!-- MARKER-TABLE:END -->
+
 ### 5z. Ngân sách cứng đã đo (đừng đoán)
 
 Số đo tại vòng 157 trên cây xanh:

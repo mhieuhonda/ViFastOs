@@ -23,6 +23,8 @@ cargo test -p vifast-virtio
 python3 scripts/gen-shell-table.py --check
 # Vòng 176: bảng số test host cũng phải khớp kết quả thật.
 python3 scripts/gen-test-counts.py --check
+# Vòng 188: bảng marker trong runbook phải khớp harness_spec.
+python3 scripts/gen-marker-table.py --check
 cargo test -p vifast-runtime
 cargo test -p vifast-user
 cargo test -p vifast-acpi
