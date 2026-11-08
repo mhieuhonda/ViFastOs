@@ -1978,3 +1978,20 @@ Thí nghiệm tách đôi (giữ nguyên chương trình cũ ở bước 1):
   `EXEC_STACK_BASE + 0x100`; nếu cả hai đều fault thì lỗi ở `frame_map` cho
   trang thứ hai của cùng vspace — một bug thật đáng sửa.
 - Đã revert B1/B2; cây về HEAD `6fdad21`, gate xanh (QEMU 2/2×3, build 0 warning).
+
+## 9.108 — Vòng 112b: đọc ĐỈNH stack cũng fault ⇒ nghi vấn lớn hơn
+
+- Thí nghiệm quyết định: root ghi `"HI FS\n"` vào **offset 0xFF8** của frame
+  stack (tức `EXEC_STACK_TOP - 8`, nơi SP trỏ tới) và chương trình đọc đúng
+  địa chỉ đó (`auipc 0x23; addi -0x128` → `0x10_0002_3FF8`).
+- Kết quả: `EXEC OK`, **không** có `TOP WRITE BAD` (frame_write Ok) nhưng
+  chương trình **vẫn không in gì** — giống hệt trường hợp đọc `base+0x100`.
+- Ý nghĩa: không phải "sai offset trong trang" mà là **trang stack không truy
+  cập được từ chương trình exec** (đọc → fault → task chết im lặng vì exec
+  TCB không có fault endpoint). Đây là **bug thật**: mọi chương trình thật
+  dùng stack sẽ chết ngay, dù demo hiện tại (không dùng stack) vẫn in được.
+- Bước tiếp theo (vòng sau): in kết quả `map_frame_fallible` cho trang stack
+  ngay trong spawn, và kiểm tra `tcb_configure` có đúng vspace không — nếu map
+  Ok mà vẫn fault thì nghi vấn đề **gắn page table vào vspace/TLB** khi map
+  trang thứ hai trong cùng vspace.
+- Đã revert; cây về HEAD `e2a376c`, build 0 warning.
