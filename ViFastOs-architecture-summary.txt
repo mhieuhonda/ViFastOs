@@ -310,6 +310,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 845a112 ha tang (vong 99): chan doan timeout cho persist + bo thu nghiem giu slot exec
 - 207ad61 moc 9 (vong 100): test parse cho entry lech trang + bo thu thu hoi server
 - 1975ea5 ha tang (vong 100b): serialize persist trong par-gate
+- 2c78288 moc 9 (vong 101): anh ELF demo 0x180 — headroom +4 KiB, sua thu tu ghi tham so
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

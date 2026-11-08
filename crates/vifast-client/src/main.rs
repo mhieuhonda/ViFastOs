@@ -92,6 +92,20 @@ fn percpu_clobber_ok() -> bool {
     }
 }
 
+/// Copy `path\0args\0` để root tách được cả hai (vòng 102).
+fn copy_path_args(path: &[u8], args: &[u8]) -> usize {
+    let plen = core::cmp::min(path.len(), vfs::MAX_PATH - 1);
+    let alen = core::cmp::min(args.len(), 31);
+    unsafe {
+        let base = IPC_BUF_CLIENT_VA as *mut u8;
+        core::ptr::copy_nonoverlapping(path.as_ptr(), base, plen);
+        core::ptr::write_volatile(base.add(plen), 0);
+        core::ptr::copy_nonoverlapping(args.as_ptr(), base.add(plen + 1), alen);
+        core::ptr::write_volatile(base.add(plen + 1 + alen), 0);
+    }
+    plen
+}
+
 fn copy_path(path: &[u8]) -> usize {
     let len = core::cmp::min(path.len(), vfs::MAX_PATH - 1);
     unsafe {
@@ -468,13 +482,28 @@ fn shell_command(line: &[u8]) {
         // Mốc 9 (vòng 89): exec-thật từ FS, KHÔNG kiểm tra file tồn tại
         // trước (root tự tạo /prog.elf từ ảnh ELF dựng sẵn rồi nạp từ
         // filesystem). Dùng để kiểm chứng đường exec-from-FS.
-        // "runfs " dài 6 byte → path bắt đầu ở index 6 (giữ dấu '/').
-        let arg = if line.len() > 6 {
+        // "runfs " dài 6 byte → phần còn lại là "<path> [args...]".
+        let rest: &[u8] = if line.len() > 6 {
             &line[6..]
         } else {
             b"/prog.elf"
         };
-        copy_path(arg);
+        let mut split = rest.len();
+        let mut k = 0;
+        while k < rest.len() {
+            if rest[k] == b' ' {
+                split = k;
+                break;
+            }
+            k += 1;
+        }
+        let path = &rest[..split];
+        let args: &[u8] = if split < rest.len() {
+            &rest[split + 1..]
+        } else {
+            b""
+        };
+        copy_path_args(path, args);
         let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_RUN, 0, 0, 0);
         write(if r.error == KError::Ok {
             b"runfs sent\n"

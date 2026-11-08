@@ -1797,3 +1797,19 @@ follow-up `62b31f4`.
   hợp đồng bắt buộc, không phải chi tiết phụ.
 - Gate: QEMU 3/3×3, persist 3/3, harness 523, elf 19 test, docs PASS, fmt
   sạch, 0 warning, headroom 203 120 B.
+
+## 9.94 — Vòng 102: argv động (`runfs <path> <args>` → chương trình in tham số)
+
+- Chương trình demo đọc **cặp (ptr, len)** ở `entry+0x20` rồi `DebugWrite`,
+  nên độ dài là động; root ghi cặp ở frame 0x140 và chuỗi ở 0x160.
+- Shell: `runfs <path> <args>` gửi `path\0args\0`; root tách args sau NUL và
+  truyền vào `spawn_elf_from_fs`. Nhánh restart cũng exec-thật từ FS khi path
+  tồn tại (trước chỉ restart TCB cũ), kèm args.
+- Kiểm chứng: `runfs /prog.elf hello` → serial in `RUN FS OK` rồi **`hello`**
+  (cùng binary trên đĩa, nội dung do tham số quyết định).
+- Hai bug tự gây trong vòng, đều do thứ tự ghi:
+  1. `write_program_args` gọi TRƯỚC copy segment → bị nội dung file ghi đè;
+  2. trong `spawn_elf_from_fs` có HAI lời gọi (một với `msg`, một với default)
+     → bản default ghi đè sau. Sửa: một lời gọi duy nhất, sau copy, trước map.
+- Gate: QEMU 3/3×3, persist 3/3, harness 523, docs PASS, fmt sạch,
+  headroom riscv 203 120 B (destroy-smp 199 024 B).
