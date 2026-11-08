@@ -188,6 +188,28 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5z. Ngân sách cứng đã đo (đừng đoán)
+
+Số đo tại vòng 157 trên cây xanh:
+
+| Hạng mục | Giá trị | Ghi chú |
+|---|---|---|
+| `vifast-client.stripped` (riscv) | **22 552 B = 6 trang** | ngân sách 6; +~100 B code là có thể vượt trang |
+| `vifast-root.stripped` (riscv) | **37 376 B** | |
+| `vifast-root.smp.stripped` | **37 376 B** (bình thường) | **+6 dòng code ⇒ 41 472 B (+1 trang)** |
+| headroom kernel riscv (cả 2 bản) | **199 024 B** | ngưỡng 192 KiB (196 608) |
+| -> khi `.smp` root tăng 1 trang | headroom rơi còn **194 928 B** | **build đỏ toàn cục** |
+
+Hệ quả thực tế: một thay đổi "nhỏ" ở root hoặc client có thể **vượt biên trang**
+và làm kernel nhúng ELF phình thêm 4 KiB, đủ phá ngưỡng headroom. Vì vậy:
+
+1. Đo ngay sau mỗi lần sửa: `./scripts/diag.sh` (in số trang + headroom).
+2. Thêm tính năng shell phải tính **cả code lẫn bảng tĩnh** (ví dụ bộ đệm lịch sử
+   4×32 B đã đẩy client 22 552 → 25 088 B = **7 trang**, vượt ngân sách và bị
+   guard chặn — đã bỏ tính năng đó ở vòng 157).
+3. Nếu buộc phải tăng, nới **có kỷ luật**: đo lại 3 arch, cập nhật ngưỡng trong
+   `scripts/build.sh` và ghi vào log — không nới ngầm.
+
 ### 5a. TUYỆT ĐỐI không build tay đè kernel của cổng
 
 `scripts/build.sh` build kernel **có feature `test-exit`** (mặc định của crate)

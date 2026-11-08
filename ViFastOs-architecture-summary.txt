@@ -399,6 +399,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a30164f sua loi (vong 153): chan build tay de kernel cong + ps hien thi ten/affinity
 - 12fe7f8 tinh nang (vong 154): lenh free qua syscall MemInfo bao dung luong arena
 - f9bf3c4 moc 9 (vong 155): MEM FREE OK — bo nho phai nhat quan sau chuoi thao tac FS
+- 1413943 tinh nang (vong 156): nhip timer vao kernel (Platform::tick_hz) + uptime giay
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

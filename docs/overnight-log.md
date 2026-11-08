@@ -2681,3 +2681,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Gate: QEMU 3/3×3, persist 3/3, harness 574, kernel 186, docs PASS, fmt sạch,
   0 warning, headroom 199 024 B, client riscv 22552 B (6 trang), binary cổng có
   feature `test-exit` (2 chuỗi PREEMPT OK) — đúng như guard mới yêu cầu.
+
+## 9.154 — Vòng 157: thử `history`/`!!` — bị ngân sách trang chặn; ghi bảng ngân sách đo được
+
+- Thử thêm **lịch sử lệnh + `!!`** vào client: bộ đệm 4×32 B + code ⇒ client
+  **22 552 → 25 088 B = 7 trang** ⇒ guard `check_client_budget` chặn build
+  (đúng như thiết kế). Bản gọn (1 ô 32 B) vẫn 25 088 B ⇒ **không vừa ngân sách**
+  ⇒ đã **bỏ tính năng** thay vì nới ngân sách ngầm.
+- Thử thay bằng self-test `PS OK` trong **root** (kiểm `TcbInfo` trả slot/state
+  hợp lệ): chỉ **+6 dòng** làm `vifast-root.smp.stripped` **37 376 → 41 472 B
+  (+1 trang)**, kéo headroom `destroy-smp` từ **199 024 → 194 928 B**, dưới
+  ngưỡng 196 608 ⇒ **build đỏ toàn cục**. Đã revert.
+- Vì vậy vòng này **không thêm code**; thay vào đó ghi vào runbook mục **5z**
+  bảng ngân sách đo được + 3 quy tắc (đo ngay bằng `diag.sh`, tính cả bảng
+  tĩnh, nới ngưỡng phải có kỷ luật và ghi log).
+- Gate: QEMU 3/3×3, persist 3/3, harness 574, docs PASS, fmt sạch, 0 warning,
+  headroom 199 024 B (cả hai bản), client riscv 22 552 B (6 trang).
