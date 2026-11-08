@@ -358,7 +358,7 @@ fn shell_command(line: &[u8]) {
         return;
     }
     if line == b"help" {
-        write(b"help ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+        write(b"help free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...] exec <path> [args...]\n");
@@ -373,6 +373,20 @@ fn shell_command(line: &[u8]) {
             b"x86_64"
         });
         write(b" bootinfo-v3\n");
+    } else if line == b"free" {
+        // Vòng 154: dung lượng Untyped còn trống (KiB).
+        let info = vifast_user::mem_info();
+        if info.error == KError::Ok {
+            let used_kib = (info.value & 0xffff_ffff) / 1024;
+            let total_kib = (info.value >> 32) / 1024;
+            let free_kib = total_kib.saturating_sub(used_kib);
+            write_u64(free_kib);
+            write(b"/");
+            write_u64(total_kib);
+            write(b" KiB free\n");
+        } else {
+            write(b"free: error\n");
+        }
     } else if line == b"ps" {
         // Vòng 152: liệt kê TCB đang sống: "<slot> <prio> <state>".
         let mut index = 0u64;

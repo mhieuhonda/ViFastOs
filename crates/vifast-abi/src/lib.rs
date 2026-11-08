@@ -914,6 +914,8 @@ pub enum SyscallId {
     /// Vòng 152: liệt kê TCB đang sống (a0 = thứ tự). value = slot | prio<<8
     /// | state<<16; NotFound khi hết.
     TcbInfo = 52,
+    /// Vòng 154: bộ nhớ Untyped — value = free_bytes | total_bytes << 32.
+    MemInfo = 53,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -973,6 +975,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::ObjectDestroy, true),
     (SyscallId::TcbWait, true),
     (SyscallId::TcbInfo, true),
+    (SyscallId::MemInfo, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

@@ -2634,3 +2634,21 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `0 15 4 aff=1 root`, `110 5 12 aff=1 rety`.
 - Runbook thêm mục **5a** cảnh báo không build tay đè kernel cổng.
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.
+
+## 9.151 — Vòng 154: lệnh `free` (dung lượng bộ nhớ) qua syscall `MemInfo`
+
+- Thêm `SyscallId::MemInfo = 53`; helper `vifast_user::mem_info()`; lệnh shell
+  `free` in `<trống>/<tổng> KiB` của **arena lớn nhất** (Untyped gốc).
+- Hai lần sai và cách sửa (ghi lại để không lặp):
+  1. Cộng dồn mọi Untyped (kể cả đã trả về `free` list) ⇒ `free > total`
+     (`640/604`). Sửa: chỉ tính `size - bump` cho từng Untyped.
+  2. Vẫn ra `604/604` vì arena gốc không phải nơi cấp phát thực tế, và các
+     Untyped con bị đếm trùng. Sửa: **chọn Untyped lớn nhất** và báo
+     `used | size<<32`.
+- Kết quả đo thật trong shell: **`24/344 KiB free`** ≈ 6 trang còn trống, khớp
+  với `DATA UNTYPED pages=80/86` mà cổng vẫn in.
+- Bẫy đã dính: khi thay khối `MemInfo` tôi cắt mất luôn handler `TcbInfo`
+  (chèn giữa hai mốc) ⇒ build 101; đã khôi phục nguyên vẹn và build lại sạch.
+- Runbook cập nhật (`free` trong mục lệnh shell).
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch,
+  0 warning, headroom 199 024 B, client riscv 22536 B (6 trang).

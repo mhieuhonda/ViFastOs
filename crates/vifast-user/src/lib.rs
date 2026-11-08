@@ -654,6 +654,12 @@ pub fn tcb_info(index: u64) -> SyscallResult {
     result(e, v)
 }
 
+/// Vòng 154: bộ nhớ Untyped còn trống — `value = free_bytes | total_bytes << 32`.
+pub fn mem_info() -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::MemInfo as u64, [0, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn tcb_set_affinity(tcb_slot: u8, mask: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

@@ -6084,9 +6084,35 @@ impl Kernel {
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
+            n if n == SyscallId::MemInfo as u64 => {
+                // Vòng 154: báo dung lượng **arena lớn nhất** (Untyped gốc của
+                // pool) — đây là con số người dùng cần: `value = used | size<<32`.
+                // Bản đầu cộng dồn mọi Untyped nên cho ra "free > total" và
+                // "604/604" vô nghĩa (đã ghi lại trong log).
+                let mut best: Option<(usize, usize)> = None;
+                let mut index = 0usize;
+                while index < self.objs.len() {
+                    let reference = ObjRef {
+                        index: index as u8,
+                        gen: self.objs[index].gen,
+                    };
+                    if let Some(untyped) = self.untyped(reference) {
+                        if best.map_or(true, |(size, _)| untyped.size > size) {
+                            best = Some((untyped.size, untyped.bump));
+                        }
+                    }
+                    index += 1;
+                }
+                let (size, used) = best.unwrap_or((0, 0));
+                let value = (used as u64 & 0xffff_ffff) | ((size as u64 & 0xffff_ffff) << 32);
+                UserAction::Return {
+                    value,
+                    error: KError::Ok,
+                }
+            }
             n if n == SyscallId::TcbInfo as u64 => {
-                // Vòng 152: liệt kê TCB đang sống theo thứ tự slot (a0 = chỉ
-                // số thứ tự). Chỉ trả thông tin tổng hợp; hết ⇒ NotFound.
+                // Vòng 152/153: liệt kê TCB đang sống (a0 = chỉ số thứ tự).
+                // value = slot | prio<<8 | state<<16 | 4 ký tự tên << 24 | aff<<56.
                 let wanted = a0 as usize;
                 let mut seen = 0usize;
                 let mut index = 0usize;
@@ -6097,8 +6123,6 @@ impl Kernel {
                     };
                     if let Some(table) = self.tcb(reference) {
                         if seen == wanted {
-                            // Vòng 153: đóng gói thêm 4 ký tự đầu của tên và
-                            // affinity để `ps` hiển thị được danh tính.
                             let state = table.state as u64;
                             let name = table.name.as_bytes();
                             let mut tag = 0u64;
@@ -6126,7 +6150,6 @@ impl Kernel {
                     error: KError::NotFound,
                 }
             }
-
             n if n == SyscallId::TcbWait as u64 => {
                 let target = match self.lookup_cap(
                     tcb,

@@ -395,6 +395,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - dc91a31 web: moi lien ket mo tab moi (tru anchor trong trang)
 - 743e103 chan doan (vong 151): them SMP IDLE STALL + ghi nhan ps bi chan boi test idle
 - 525e314 sua loi (vong 152): dem idle cua HART PHU cho pha POST + them lenh ps
+- 8e37a41 web: trang os day hon (hero co so do kien truc, icon, lo trinh luoi); README them logo
+- a30164f sua loi (vong 153): chan build tay de kernel cong + ps hien thi ten/affinity
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1128,6 +1130,7 @@ Số syscall chính:
 50 ObjectDestroy — implemented
 51 TcbWait — implemented
 52 TcbInfo — implemented
+53 MemInfo — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,
