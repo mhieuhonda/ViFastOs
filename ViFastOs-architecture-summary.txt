@@ -448,6 +448,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 2ea9a7b sua loi (vong 202): go marker LOOP OK khoi cong (IPC luc boot khong on dinh)
 - 23b3c3c tai lieu (vong 203): soak 15/15 sau khi sua ro ri — moc on dinh moi
 - 9da0f5d tinh nang (vong 204): uptime dang 1m05s (da kiem chung that)
+- b993bf8 test (vong 205): khoa hoi quy chuoi don task exec (TCB -> VSpace -> frame)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -506,7 +507,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 2287984 byte (`kernel_end=0x803d1690`)
+- RISC-V headroom: 2283888 byte (`kernel_end=0x803d2690`)
 - `Kernel = 551328`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status

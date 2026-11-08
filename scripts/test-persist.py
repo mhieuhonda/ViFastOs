@@ -169,6 +169,16 @@ def boot_retry(boot, disk: str, serial: str) -> tuple[int, str, bool]:
             file=sys.stderr,
         )
         rc, output, timeout = boot(disk, serial)
+    # Vòng 206: flake thứ hai đã gặp thật — guest boot tới SHELL READY nhưng
+    # KHÔNG in `FS FORMAT OK` trên đĩa trắng (vòng sau chạy lại thì đúng).
+    # Chỉ thử lại khi guest cũng KHÔNG in bất kỳ marker PERSIST nào, để không
+    # che lỗi logic FS thật.
+    elif "FS FORMAT OK" not in output and "FS PERSIST" not in output:
+        print(
+            "note: guest đạt SHELL READY nhưng thiếu FS FORMAT OK (đĩa trắng) — thử lại một lần",
+            file=sys.stderr,
+        )
+        rc, output, timeout = boot(disk, serial)
     return rc, output, timeout
 
 def run_phases(name: str, tmp: str, boot) -> None:

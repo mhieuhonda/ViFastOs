@@ -742,10 +742,24 @@ fn shell_command(line: &[u8]) {
         // Vòng 139: dung lượng FS (vùng data): "used/total" theo block.
         let reply = unsafe { vifast_user::call_message(1, vfs::STATFS, 0, 0, 0) };
         if reply.error == KError::Ok && reply.label == vfs::OK {
-            write_u64(reply.data[0]);
+            let used = reply.data[0];
+            let total = reply.data[1].max(1);
+            write_u64(used);
             write(b"/");
-            write_u64(reply.data[1]);
-            write(b"\n");
+            write_u64(total);
+            write(b" blocks [");
+            // Luôn hiện ít nhất 1 ô khi đã dùng >0 (12/8162 vẫn phải "thấy").
+            let filled = if used == 0 {
+                0
+            } else {
+                core::cmp::max(1, core::cmp::min(20u64, used.saturating_mul(20) / total))
+            };
+            let mut i = 0u64;
+            while i < 20 {
+                write(if i < filled { b"#" } else { b"." });
+                i += 1;
+            }
+            write(b"]\n");
         } else {
             write(b"df: error\n");
         }

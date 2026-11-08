@@ -3443,3 +3443,20 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   (vòng 199: thiếu `ObjType::Tcb`; vòng 200: `vspace_in_use` chặn teardown).
 - Kernel test **205 → 206**, tổng host test **297**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS, fmt sạch.
+
+## 9.203 — Vòng 206: nâng ngân sách client riscv 7→8 (có số đo) + `df` thanh tỷ lệ
+
+- **Đo trước khi nâng**: `DATA UNTYPED pages=69/76` cũ → sau khi đổi cấu hình build
+  đo lại được `77/86` với client 7 trang, và `79/86` với client 8 trang ⇒ **còn 7
+  trang trống**, đủ cho một lần exec (~5 trang) vì exec luôn destroy trước khi
+  spawn lần kế.
+- Nâng `check_client_budget riscv64` **7 → 8** (có ghi chú lý do + số đo trong
+  `build.sh`).
+- Thêm **thanh tỷ lệ vào `df`**: `12/8162 blocks [....#...........]`; luôn hiện
+  ≥1 ô khi đã dùng >0 (12/8162 vẫn phải "thấy").
+- Gặp **flake persist x86** thật: guest đạt `SHELL READY` nhưng thiếu
+  `FS FORMAT OK` trên đĩa trắng; chạy lại thì đúng. Thêm nhánh retry **hẹp**
+  (chỉ khi thiếu `FS FORMAT OK` **và** không có marker `FS PERSIST` nào) để không
+  che lỗi FS thật.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3 (sau retry), harness 589, docs
+  PASS, fmt sạch.

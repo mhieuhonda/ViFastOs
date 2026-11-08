@@ -101,7 +101,10 @@ check_client_budget() {
         exit 1
     fi
 }
-check_client_budget riscv64 "${CLIENT_RV}.stripped" 7
+# Vòng 206: nâng 7 -> 8 SAU KHI đo arena: DATA UNTYPED pages=69/76 ⇒ còn 7
+# trang; client +1 trang (70/76) vẫn đủ cho một lần exec (~5 trang) vì exec
+# luôn destroy trước khi spawn lần kế. Đo lại sau khi nâng; nếu chạm 76 thì hạ.
+check_client_budget riscv64 "${CLIENT_RV}.stripped" 8
 
 cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
     -C relocation-model=static \
