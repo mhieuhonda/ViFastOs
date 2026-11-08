@@ -61,6 +61,18 @@ done
 [ -f "$TMPDIR/vifast-par-local.log" ] && echo "  par-gate local log: $TMPDIR/vifast-par-local.log"
 [ -f "$TMPDIR/vifast-par-remote.log" ] && echo "  par-gate remote log: $TMPDIR/vifast-par-remote.log"
 
+echo "== arena (từ serial gần nhất của từng arch) =="
+for arch in riscv64 aarch64 x86_64; do
+    f="${TMPDIR:-/tmp}/vifast-$arch.serial"
+    [ -f "$f" ] || f=$(ls -t "${TMPDIR:-/tmp}"/vifast-keep-$arch-*.serial 2>/dev/null | head -1)
+    if [ -n "${f:-}" ] && [ -f "$f" ]; then
+        line=$(tr -d '\0' < "$f" 2>/dev/null | grep -a "DATA UNTYPED" | tail -1)
+        printf '  %-8s %s\n' "$arch" "${line:-<không thấy DATA UNTYPED>}"
+    else
+        printf '  %-8s <chưa có serial>\n' "$arch"
+    fi
+done
+
 echo "== tiến trình QEMU đang chạy =="
 count=$(ps -Ao comm | grep -c "[q]emu-system" || true)
 echo "  qemu-system: ${count:-0}"

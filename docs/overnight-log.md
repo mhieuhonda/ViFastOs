@@ -2718,3 +2718,21 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   trang) — chưa làm vội, đã revert phần client; để vòng sau đo arena từng arch
   rồi nới có kỷ luật.
 - Gate: QEMU 3/3×3, persist 3/3, harness 574, docs PASS, fmt sạch, 0 warning.
+
+## 9.156 — Vòng 159: đo arena 3 arch bằng công cụ; thiết kế thu hồi trang staging
+
+- `scripts/diag.sh` thêm mục **arena**: đọc serial gần nhất của từng arch và in
+  dòng `DATA UNTYPED pages=x/86`. Kết quả đo ngay:
+  - riscv64 **80/86** (còn 6 trang)
+  - aarch64 **84/86** (còn 2 trang)
+  - x86_64 **85/86** (còn **1 trang**)
+- Hệ quả: **không thể** nới ngân sách trang client cho aarch64/x86 lúc này —
+  thêm 1 trang staging là chạm trần, exec spawn (cần ~5 trang) sẽ hỏng.
+- Thiết kế đề xuất (vòng sau): **thu hồi trang staging module sau boot** —
+  runtime đã cấp `module_pages()` frame cho server/client ELF rồi map
+  read-only vào root vspace; sau khi root parse xong thì các trang này vô dụng.
+  Kế hoạch: kernel giữ registry `(vspace, va, frame)` khi runtime map
+  (`register_staging`), thêm syscall `ModuleRelease` để root gọi sau khi parse;
+  kernel `unmap_frame` + `destroy_object` từng mục ⇒ trang về `Untyped.free`.
+  Ước tính thu lại 10–25 trang, đủ nới ngân sách client cho cả 3 arch.
+- Gate: xanh như vòng 158 (không đổi kernel).
