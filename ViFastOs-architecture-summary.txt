@@ -292,6 +292,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 130892d moc 2 (vong 69): host test steal ton trong affinity + dem stats
 - 78b307a moc 5 (vong 70): make_ready danh thuc BlockedBudget + host test
 - 46bf1e5 moc 2 (vong 71): host test budget exhaust/wake chu ky day du
+- bdfa460 moc 1 (vong 73): host test suspend waiter that + signal giu bit
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -339,7 +340,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 169/169 PASS
+- `cargo test -p vifast-kernel`: 183/183 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 17/17 PASS

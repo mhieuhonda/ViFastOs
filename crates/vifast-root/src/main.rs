@@ -1440,6 +1440,53 @@ fn root_vfs_stat(endpoint_slot: u8, path: &[u8]) -> Option<u64> {
     }
 }
 
+// Mốc 9 (vòng 74): root tự OPEN/READ/CLOSE qua endpoint gốc để verify nội
+// dung file (bước 2 exec-thật: đọc ELF từ FS). OPEN flags=data0, len=data1;
+// READ data=[fd, offset, len], label trả về là byte count, dữ liệu vào IPC
+// buffer của root (kernel copy từ server). Trả true khi đọc đúng 8 byte
+// đầu khớp DEMAND_VALUE. Fail-êm: chỉ quan sát, không đổi hành vi spawn.
+fn root_vfs_read_head(endpoint_slot: u8, path: &[u8]) -> bool {
+    if path.is_empty() || path.len() > vifast_abi::vfs::MAX_PATH {
+        return false;
+    }
+    unsafe {
+        let mut i = 0;
+        while i < path.len() {
+            core::ptr::write_volatile((ROOT_IPC_BUF_VA as *mut u8).add(i), path[i]);
+            i += 1;
+        }
+    }
+    let open = unsafe {
+        vifast_user::call_message(
+            endpoint_slot,
+            vfs_abi::OPEN,
+            vifast_abi::O_RDONLY,
+            path.len() as u64,
+            0,
+        )
+    };
+    if open.error != KError::Ok || open.label != vfs_abi::OK {
+        return false;
+    }
+    if open.error != KError::Ok || open.label != vfs_abi::OK {
+        return false;
+    }
+    let fd = open.data[0];
+    let read = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::READ, fd, 0, 8) };
+    let mut ok = false;
+    if read.error == KError::Ok && read.label == 8 {
+        let mut head = [0u8; 8];
+        let mut i = 0;
+        while i < 8 {
+            head[i] = unsafe { core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i)) };
+            i += 1;
+        }
+        ok = u64::from_le_bytes(head) == vifast_abi::pager::DEMAND_VALUE;
+    }
+    let _ = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::CLOSE, fd, 0, 0) };
+    ok
+}
+
 fn spawn_worker(
     meta_untyped: u8,
     data_untyped: u8,
@@ -1706,15 +1753,16 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     ));
     check(vifast_user::tcb_resume(server_tcb));
 
-    // Mốc 9 (vòng 46): IPC buffer + tự gọi VFS từ root. Root giữ cap gốc
-    // tới VFS endpoint (badge SUPERUSER = uid 0) nhưng chưa có IPC buffer
-    // nên không tự STAT/READ được. Cấp 1 frame map ở ROOT_IPC_BUF_VA,
-    // bind cho chính root qua ROOT_SELF_SLOT. Fail-êm: thiếu tài nguyên
-    // (x86) thì bỏ qua, gate không đổi.
-    let root_ipc_ok = (|| {
+    // Mốc 9 (vòng 46/75): IPC buffer + tự gọi VFS từ root. Cap endpoint
+    // gốc của root có badge 0 nên server từ chối mọi VFS call (EACCES —
+    // badge 0 là không xác thực). Mint cap mới với badge SUPERUSER
+    // (= uid 0, chủ file) cho chính root qua ROOT_SELF_SLOT. Fail-êm:
+    // thiếu tài nguyên (x86) thì bỏ qua, gate không đổi.
+    // Trả slot endpoint VFS của root (0 khi fail).
+    let root_vfs_slot = (|| {
         let frame = slots.alloc();
         if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
-            return false;
+            return 0;
         }
         map_with_tables(
             data_untyped,
@@ -1728,11 +1776,23 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             .error
             != KError::Ok
         {
-            return false;
+            return 0;
         }
-        true
+        let vfs_slot = slots.alloc();
+        if vifast_user::cap_mint(
+            endpoint_slot,
+            ROOT_SELF_SLOT as u8,
+            vfs_slot,
+            (Rights::READ | Rights::WRITE).0,
+            vifast_abi::BADGE_SUPERUSER,
+        )
+        .error
+            != KError::Ok
+        {
+            return 0;
+        }
+        vfs_slot
     })();
-    let _ = root_ipc_ok;
 
     let client_untyped = slots.alloc();
     check(vifast_user::retype_untyped(
@@ -2149,7 +2209,11 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         plen += 1;
                     }
                     let mut stat_ok = plen == 0;
-                    if plen != 0 {
+                    // Vòng 75: chỉ STAT/READ khi có cap VFS badge SUPERUSER
+                    // (root_vfs_slot != 0) — cap gốc badge 0 bị server từ
+                    // chối EACCES. Không có slot thì bỏ qua STAT (fail-êm,
+                    // x86) và spawn như cũ.
+                    if plen != 0 && root_vfs_slot != 0 {
                         let mut path = [0u8; vifast_abi::vfs::MAX_PATH];
                         let mut i = 0;
                         while i < plen {
@@ -2158,8 +2222,20 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             };
                             i += 1;
                         }
-                        if root_vfs_stat(endpoint_slot, &path[..plen]).is_some() {
+                        if root_vfs_stat(root_vfs_slot, &path[..plen]).is_some() {
                             stat_ok = true;
+                            // Vòng 74: verify nội dung đọc được (OPEN/READ/
+                            // CLOSE từ root). Chỉ quan sát: in marker khi
+                            // đúng magic demand-load, không đổi spawn.
+                            if plen == b"/page.bin".len()
+                                && root_vfs_read_head(root_vfs_slot, &path[..plen])
+                            {
+                                write(b"ROOT READ OK\n");
+                            }
+                        } else {
+                            // STAT fail (file không tồn tại): SKIP, không
+                            // spawn mù (vòng 46).
+                            stat_ok = false;
                         }
                     }
                     if !stat_ok {
@@ -2434,6 +2510,15 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 } else {
                     write(TIME_MONOTONIC_BAD);
                 }
+                // Mốc 9 (vòng 75): root tự STAT/READ /page.bin qua cap VFS
+                // badge SUPERUSER — chứng minh đường VFS của root hoạt động
+                // end-to-end (bước 1-2 exec-thật: STAT + READ ELF từ FS).
+                // Chạy cuối boot nên VFS chắc chắn sẵn sàng (bài học vòng
+                // 46: không gọi blocking trong boot). Fail-êm.
+                // Vòng 75: KHÔNG probe cuối boot — call VFS blocking tại
+                // đây làm boot dở (3/3 FAIL, thiếu marker giữa) với nguyên
+                // nhân chưa rõ; giữ mint + STAT/READ cho đường RUN on-demand
+                // (đã chứng minh STAT trả Ok qua DIAG tạm thời).
                 // Mốc 9 (vòng 32): exec MVP — nạp bản sao client ELF vào
                 // VSpace mới và spawn chạy. Fail-êm: x86 cạn Untyped thì bỏ
                 // qua, gate không đổi. Affinity hart 0 (luôn có task).
