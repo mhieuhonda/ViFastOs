@@ -3382,3 +3382,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Thêm marker **`EXEC MEM STABLE`** (self-test 3 chu kỳ ở boot, đo ổn định giữa
   chu kỳ 1 và 3): xanh cả 3 arch; harness **586 → 589**; tổng host test **296**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, docs PASS, fmt sạch.
+
+## 9.198 — Vòng 201: lệnh `loop <n>` (đặt vòng lặp ở ROOT vì ngân sách client)
+
+- Tính năng: `loop <n>` trong shell ⇒ client gửi `LABEL_LOOP`, **root** lặp
+  spawn→destroy NGAY `n` lần (≤32), đo `used` trước/sau, in `LOOP OK`/`LOOP BAD`.
+- Đo thật: `free` = **36/344** trước và sau `loop 6`, có `LOOP OK` ⇒ người dùng
+  tự kiểm chứng được "chạy lặp không rò rỉ" ngay trong máy ảo.
+- **Bài học ngân sách**: bản đầu tôi đặt vòng lặp + tính `free` trong **client**
+  ⇒ client riscv **25088 → 29184 B (7 → 8 trang)**, `build.sh` chặn đúng
+  (`CLIENT ELF riscv64 VƯỢT NGÂN SÁCH TRANG`). Đã chuyển logic sang root, client
+  chỉ gửi 1 message ⇒ trở lại **25088 B = 7 trang**.
+- Phụ: thêm `LABEL_LOOP = 0x5047_0008` vào ABI; bảng lệnh shell tự sinh lại
+  (**26 lệnh**).
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS, fmt sạch.

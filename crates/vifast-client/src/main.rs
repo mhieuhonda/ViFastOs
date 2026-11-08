@@ -3,7 +3,7 @@
 #![no_main]
 
 use core::panic::PanicInfo;
-use vifast_abi::pager::{LABEL_KILL, LABEL_RUN};
+use vifast_abi::pager::{LABEL_KILL, LABEL_LOOP, LABEL_RUN};
 use vifast_abi::user_layout::{
     CLIENT_CMD_SLOT, CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_UART_IRQ_SLOT,
     CLIENT_UART_NOTIFICATION_SLOT, DATA_VA, IPC_BUF_CLIENT_VA,
@@ -644,6 +644,27 @@ fn shell_command(line: &[u8]) {
             }
         } else {
             write(b"usage: truncate <path> <size>\n");
+        }
+    } else if line == b"loop" || line.starts_with(b"loop ") {
+        // Vòng 201: `loop <n>` — nhờ ROOT lặp spawn/destroy n lần (root in
+        // LOOP OK/BAD). Client không lặp để giữ mã nhỏ (ngân sách 7 trang).
+        let rest: &[u8] = if line.len() > 5 { &line[5..] } else { b"" };
+        let mut n: u64 = 0;
+        for byte in rest {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+            n = n.saturating_mul(10).saturating_add((byte - b'0') as u64);
+        }
+        if n == 0 {
+            write(b"usage: loop <n>\n");
+        } else {
+            let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_LOOP, n, 0, 0);
+            write(if r.error == KError::Ok {
+                b"loop sent\n"
+            } else {
+                b"loop failed\n"
+            });
         }
     } else if line == b"runfs" || line.starts_with(b"runfs ") {
         // Mốc 9 (vòng 89): exec-thật từ FS, KHÔNG kiểm tra file tồn tại

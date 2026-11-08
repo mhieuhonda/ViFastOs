@@ -23,7 +23,7 @@ use vifast_abi::user_layout::{
     WORKER_G_STACK_BASE, WORKER_G_STACK_TOP, WORKER_H_STACK_BASE, WORKER_H_STACK_TOP,
 };
 use vifast_abi::{
-    pager::{LABEL_KILL, LABEL_RUN, RUN_BADGE},
+    pager::{LABEL_KILL, LABEL_LOOP, LABEL_RUN, RUN_BADGE},
     vfs as vfs_abi, BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER,
     IRQ_UART, LABEL_FAULT,
 };
@@ -3262,6 +3262,46 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         None => write(b"RUN FS FAIL\n"),
                     }
                 }
+            }
+            if message.label == LABEL_LOOP {
+                // Vòng 201: lặp spawn→destroy NGAY trong root (không qua IPC),
+                // để người dùng tự kiểm chứng "chạy N lần không rò rỉ" mà
+                // không phải gõ N lệnh. Đo `used` trước/sau để phát hiện rò rỉ.
+                let mut n = message.data[0];
+                if n == 0 {
+                    n = 1;
+                }
+                if n > 32 {
+                    n = 32;
+                }
+                let before = vifast_user::mem_info().value & 0xffff_ffff;
+                let mut ok = 0u64;
+                let mut round = 0u64;
+                while round < n {
+                    round += 1;
+                    if spawn_elf_copy(
+                        meta_untyped,
+                        data_untyped,
+                        EXEC_DEMO_ELF,
+                        b"LOOP\n",
+                        0b01,
+                        &mut slots,
+                        &mut exec_used,
+                    )
+                    .is_some()
+                    {
+                        let len = used_len(&exec_used);
+                        destroy_exec(&mut slots, &exec_used, len);
+                        exec_used = [0u8; MAX_EXEC_SLOTS];
+                        ok += 1;
+                    }
+                }
+                let after = vifast_user::mem_info().value & 0xffff_ffff;
+                write(if ok == n && after <= before {
+                    b"LOOP OK\n"
+                } else {
+                    b"LOOP BAD\n"
+                });
             }
             if message.label == LABEL_KILL {
                 // Vòng 169: `kill` từ shell — dừng TCB exec đang chạy.

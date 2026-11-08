@@ -116,6 +116,7 @@ Sinh bằng `python3 scripts/gen-shell-table.py`; **đừng sửa tay** — sử
 | `jobs` | tcb_info (TcbInfo) | vifast-client + vifast-kernel (TcbInfo) | - |
 | `kill` | send LABEL_KILL | vifast-client + vifast-root (destroy_exec) | KILL OK (self-test) |
 | `ln` | vfs_link (Link) | vifast-client | - |
+| `loop` | *(chưa khai báo)* | vifast-client | - |
 | `ls` | vfs_open + vfs_read_at + vfs_close | vifast-client + vifast-server | - |
 | `mkdir` | vfs_open (create dir) | vifast-client | - |
 | `mv` | vfs_rename (Rename) | vifast-client | - |
@@ -147,6 +148,27 @@ fault_endpoint của root → root `spawn_elf_copy` ELF minimal (exit ngay)
 vào VSpace mới, hoặc `tcb_restart` TCB cũ nếu đã có. `RUN SKIP` =
 hết tài nguyên (fail-êm, không panic). Chạy `run` liên tiếp nhiều lần
 an toàn: VSpace setup một lần, mỗi lần chỉ restart TCB.
+
+### 2c-1. `loop <n>` — tự kiểm chứng chạy lặp không rò rỉ
+
+```
+shell> free
+36/344 KiB free
+shell> loop 6
+loop sent
+shell> LOOP OK
+shell> free
+36/344 KiB free
+```
+
+Root lặp **spawn → destroy NGAY** trong kernel-space user task (không qua IPC
+từng lần), đo `MemInfo.used` trước/sau; in `LOOP OK` khi đủ `n` vòng và **used
+không tăng**, `LOOP BAD` nếu ngược lại. Giới hạn `n ≤ 32`.
+
+Lý do đặt vòng lặp ở **root** chứ không ở client: **ngân sách trang của client
+riscv chỉ 7** — thêm logic lặp + tính `free` vào client làm nó vượt lên 8 trang
+(đã thử và bị `build.sh` chặn). Đây là ví dụ cụ thể của luật "đo ngân sách trước
+khi thêm tính năng vào userspace nhỏ".
 
 ### 2d. Chạy nhiều chương trình với tham số khác nhau
 

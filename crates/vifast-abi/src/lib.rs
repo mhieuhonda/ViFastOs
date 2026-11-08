@@ -35,6 +35,9 @@ pub mod pager {
     /// Vòng 169: shell `kill` -> root dừng TCB exec đang chạy (root giữ cap
     /// nên chỉ root huỷ được; client chỉ gửi tín hiệu).
     pub const LABEL_KILL: u64 = 0x5047_0007;
+    /// Vòng 201: chạy `runfs` lặp N lần (N trong `data[0]`, ≤ 32) để tự kiểm
+    /// chứng chạy lặp không rò rỉ. Root in `LOOP OK`/`LOOP BAD`.
+    pub const LABEL_LOOP: u64 = 0x5047_0008;
     /// Badge của cap lệnh root mint cho client (phân biệt với fault badge 0).
     pub const RUN_BADGE: u64 = 7;
 
