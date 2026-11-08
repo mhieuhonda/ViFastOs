@@ -319,6 +319,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 52a5984 tai lieu (vong 105b): thu dua tham so sang trang stack (chua xong)
 - 477fbb6 tai lieu (vong 106): kiem chung vung args trong trang stack (am tinh)
 - f4e74ce tai lieu (vong 107): thu hep nghi pham sang map_frame_fallible
+- d32354d tai lieu (vong 108): ghi gioi han runfs lap vao runbook
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1438,6 +1439,7 @@ QEMU test:
 - `PAGER RECLAIM OK` — pager demo frames/TCBs returned to untyped
 - `RUN FS OK` — exec-from-filesystem loaded an ELF page-by-page and ran it
 - `HIARG` — program executed from the filesystem printed an argv-only marker
+- `PAGER SRV 0/0/0` — pager server was reclaimed (tcb, stack frame, ipc frame destroyed)
 
 Mỗi dòng sau đúng một lần:
 - `VFS SERVER OK` — exactly once

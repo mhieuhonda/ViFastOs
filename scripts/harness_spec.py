@@ -43,6 +43,10 @@ COMMON = [
     ("PAGER RECLAIM OK", "pager demo frames/TCBs returned to untyped"),
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
+    (
+        "PAGER SRV 0/0/0",
+        "pager server was reclaimed (tcb, stack frame, ipc frame destroyed)",
+    ),
 ]
 
 # Exactly one occurrence is required for each of these lines.

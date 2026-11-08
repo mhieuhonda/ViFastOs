@@ -1920,3 +1920,11 @@ follow-up `62b31f4`.
   trang khi destroy_exec).
 - Gate: QEMU 2/2×3, persist 3/3, harness 523, docs PASS, fmt sạch, 0 warning,
   headroom 203 120/199 024 B.
+
+## 9.103 — Vòng 108b: khoá hành vi thu hồi pager bằng marker cổng chuẩn
+
+- Thêm `("PAGER SRV 0/0/0", …)` vào `harness_spec.COMMON`: cổng chuẩn giờ
+  **bắt buộc** thấy dòng này trên cả 3 arch, tức việc thu hồi pager server
+  (TCB + stack + IPC frame) không thể bị lặng lẽ bỏ qua về sau.
+- Harness 523 → **526 ca** (fixture tự sinh từ COMMON), QEMU 3/3×3, persist
+  3/3, docs PASS, fmt sạch, 0 warning.
