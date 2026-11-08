@@ -17,6 +17,24 @@ cargo fmt --all -- --check            # 0 warning
 
 `./scripts/check-all.sh` chạy toàn bộ cổng trên trong một lệnh.
 
+### 1b. Chạy cổng song song 2 máy (giảm ~½ thời gian)
+
+Máy phụ (`ps`, Linux x86_64) đã dựng sẵn: rustup + dải target bare-metal,
+`qemu-system-{riscv64,aarch64,x86_64}`, OVMF (`/usr/share/OVMF/OVMF_CODE.fd`
+trỏ `OVMF_CODE_4M.fd`), repo ở `~/ViFastOs`.
+
+```bash
+./scripts/par-gate.sh --repeat 3        # local: riscv64+aarch64, remote: x86_64
+VIFAST_REMOTE=user@host ./scripts/par-gate.sh --repeat 3
+./scripts/par-gate.sh --local-only      # fallback một máy
+```
+
+Script `rsync` mã nguồn (trừ `target/`), build lại ở máy xa rồi chạy QEMU
+x86_64; mỗi kiến trúc có serial/disk/socket riêng nên không tranh chấp. Lưu
+ý: `gen-docs.py` cần **một lần** `python3 scripts/test-qemu.py --repeat 3`
+đầy đủ trên máy này để ghi fingerprint (`target/qemu-status-standard.json`).
+
+
 ## 2. Soak (ổn định dài)
 
 ```bash

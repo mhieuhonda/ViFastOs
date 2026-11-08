@@ -1570,3 +1570,25 @@ follow-up `62b31f4`.
 - Soak 10/10×3 arch + harness mỗi vòng (514 cases); kernel 166, FS 27.
 - 2 bài học hạ tầng: x86 cạn data pages cuối boot (spawn tối giản);
   `TcbWait` race Ok/ObjectDestroyed đều đúng.
+
+## 9.79 — Vòng 84: parse ELF metadata + exec-from-FS groundwork + gate 2 máy
+
+- `vifast-elf`: tách `parse_impl` và thêm `parse_metadata` (chỉ cần header +
+  program header table, không cần thân segment) + test
+  `metadata_parse_accepts_header_plus_phdrs_only`; `parse` giữ nguyên hành vi
+  (vẫn `FileRange` khi thiếu bytes).
+- `vifast-root`: `spawn_elf_from_fs` nạp từng page thẳng từ file vào frame
+  đích (`root_vfs_copy_to_frame`, READ 128B → `frame_write`) — KHÔNG staging,
+  không tốn frame ngoài image; wired vào `run <path>` với fallback demo.
+- Bài học bộ nhớ: DATA untyped gần cạn (85/86 page, 82/86 object cuối boot).
+  Staging 8 frame làm spawn fail `map_frame_fallible`; FS-spawn gặp
+  `OutOfMemory` (e=5) vì free pool ≈ 0. Không thể tăng pool: headroom riscv
+  chỉ 2 416 B (cần ≥192 KiB) và gap aarch64 = 8 B. Hướng đúng: thu hồi demo
+  TCB/VSpace sau khi hết demo.
+- Bài học boot: gọi VFS blocking ở cuối boot (tạo `/prog.elf`) làm mất toàn
+  bộ task (`USER EXIT` sau TCB REAP OK); tạo file phải on-demand trong đường
+  `run`.
+- Hạ tầng: `ps` (Linux x86_64, Tailscale) cài rustup + 4 target bare-metal,
+  qemu-system-{riscv64,aarch64,x86_64}, OVMF symlink; `scripts/par-gate.sh`
+  chia việc local (riscv64+aarch64) / remote (x86_64), rsync trừ `target/`.
+  Gate 3/3×3 hai máy song song xanh.

@@ -144,6 +144,29 @@ pub fn parse(
     user_start: u64,
     user_end: u64,
 ) -> Result<ElfImage, ElfError> {
+    parse_impl(bytes, expected_machine, user_start, user_end, true)
+}
+
+/// Parse chỉ ELF header + program header table (không cần toàn bộ nội dung
+/// segment trong `bytes`). Dùng cho exec-from-FS: loader đọc 1KiB đầu file
+/// để lấy entry/segment, rồi nạp từng page trực tiếp từ FS vào frame đích
+/// (mốc 9, vòng 84). Mọi kiểm tra khác giữ nguyên như `parse`.
+pub fn parse_metadata(
+    bytes: &[u8],
+    expected_machine: u16,
+    user_start: u64,
+    user_end: u64,
+) -> Result<ElfImage, ElfError> {
+    parse_impl(bytes, expected_machine, user_start, user_end, false)
+}
+
+fn parse_impl(
+    bytes: &[u8],
+    expected_machine: u16,
+    user_start: u64,
+    user_end: u64,
+    require_file_bytes: bool,
+) -> Result<ElfImage, ElfError> {
     if bytes.len() < ELF_HEADER_SIZE {
         return Err(ElfError::TooSmall);
     }
@@ -246,7 +269,7 @@ pub fn parse(
         let file_end = file_offset
             .checked_add(file_size_usize)
             .ok_or(ElfError::Overflow)?;
-        if file_end > bytes.len() {
+        if require_file_bytes && file_end > bytes.len() {
             return Err(ElfError::FileRange);
         }
 
@@ -329,6 +352,10 @@ mod tests {
         parse(bytes, TEST_MACHINE, TEST_USER_START, TEST_USER_END)
     }
 
+    fn metadata_test(bytes: &[u8]) -> Result<ElfImage, ElfError> {
+        parse_metadata(bytes, TEST_MACHINE, TEST_USER_START, TEST_USER_END)
+    }
+
     fn valid_elf() -> Vec<u8> {
         let mut bytes = vec![0u8; 0x3000];
         bytes[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
@@ -358,6 +385,32 @@ mod tests {
         assert!(segment.readable());
         assert!(segment.executable());
         assert!(!segment.writable());
+    }
+
+    #[test]
+    fn metadata_parse_accepts_header_plus_phdrs_only() {
+        // Mốc 9 (vòng 84): exec-from-FS đọc 1KiB đầu file (header + phdr)
+        // rồi nạp segment theo page. `parse` đòi toàn bộ segment trong
+        // buffer (FileRange), `parse_metadata` chỉ cần header + phdr table.
+        let full = valid_elf();
+        assert!(parse_test(&full).is_ok());
+        // Chỉ 1KiB: đủ header(64) + phdr(56) nhưng thiếu thân segment.
+        let head = &full[..1024];
+        assert_eq!(parse_test(head), Err(ElfError::FileRange));
+        let image = metadata_test(head).expect("metadata parse");
+        assert_eq!(image.entry, u64_at(&full, 24).unwrap());
+        assert_eq!(image.segment_count(), 1);
+        let segment = image.segment(0).unwrap();
+        // Metadata trùng khớp với parse đầy đủ (cùng file).
+        let reference = parse_test(&full).unwrap().segment(0).unwrap().clone();
+        assert_eq!(segment.file_offset, reference.file_offset);
+        assert_eq!(segment.vaddr, reference.vaddr);
+        assert_eq!(segment.file_size, reference.file_size);
+        assert!(segment.executable());
+        // Header hỏng vẫn bị từ chối.
+        let mut bad = full[..1024].to_vec();
+        bad[0] = 0;
+        assert_eq!(metadata_test(&bad), Err(ElfError::BadMagic));
     }
 
     #[test]

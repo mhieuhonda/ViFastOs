@@ -295,6 +295,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - bdfa460 moc 1 (vong 73): host test suspend waiter that + signal giu bit
 - 7d7e0d4 moc 9 (vong 75): root mint cap VFS badge SUPERUSER + OPEN/READ verify
 - c941ce9 moc 9 (vong 79): tach open/read_at/close root thanh ham tai dung
+- 437d907 moc 9 (vong 82/83): vong tron FS ghi-doc-verify 1KiB on-demand
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -345,7 +346,7 @@ Test hiện tại:
 - `cargo test -p vifast-kernel`: 183/183 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
-- `cargo test -p vifast-elf`: 17/17 PASS
+- `cargo test -p vifast-elf`: 18/18 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
@@ -353,7 +354,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 203120 byte (`kernel_end=0x803ce690`)
+- RISC-V headroom: 199024 byte (`kernel_end=0x803cf690`)
 - `Kernel = 550296`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status

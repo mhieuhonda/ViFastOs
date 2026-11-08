@@ -1601,6 +1601,176 @@ fn root_vfs_read_head(endpoint_slot: u8, path: &[u8]) -> bool {
     ok
 }
 
+/// Đọc tối đa `buf.len()` byte đầu file vào `buf` qua READ chunked.
+fn root_vfs_read_prefix(endpoint_slot: u8, fd: u64, buf: &mut [u8]) -> usize {
+    let mut got = 0usize;
+    while got < buf.len() {
+        let n = root_vfs_read_at(endpoint_slot, fd, got as u64, (buf.len() - got) as u64) as usize;
+        if n == 0 {
+            break;
+        }
+        let mut i = 0;
+        while i < n {
+            buf[got + i] =
+                unsafe { core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i)) };
+            i += 1;
+        }
+        got += n;
+    }
+    got
+}
+
+/// Copy `len` byte ở `file_offset` của file vào frame tại `frame_offset`
+/// (mốc 9, vòng 84). Đọc qua IPC buffer từng chunk MAX_IO rồi frame_write —
+/// không cần staging, frame đích chính là frame sẽ map cho chương trình.
+fn root_vfs_copy_to_frame(
+    endpoint_slot: u8,
+    fd: u64,
+    file_offset: u64,
+    frame: u8,
+    frame_offset: u64,
+    len: u64,
+) -> bool {
+    let mut done = 0u64;
+    while done < len {
+        let n = root_vfs_read_at(endpoint_slot, fd, file_offset + done, len - done);
+        if n == 0 {
+            return false;
+        }
+        let mut inner = 0u64;
+        while inner < n {
+            let chunk = core::cmp::min(256, n - inner);
+            if vifast_user::frame_write(
+                frame,
+                frame_offset + done + inner,
+                ROOT_IPC_BUF_VA as u64 + inner,
+                chunk,
+            )
+            .error
+                != KError::Ok
+            {
+                return false;
+            }
+            inner += chunk;
+        }
+        done += n;
+    }
+    true
+}
+
+/// Exec-thật từ FS (mốc 9, vòng 84): đọc ELF header + phdr table (1KiB) để
+/// lấy entry/segment, rồi nạp từng page thẳng từ file vào frame đích và map
+/// — không staging, không tốn frame ngoài image. Trả TCB khi spawn xong.
+fn spawn_elf_from_fs(
+    endpoint_slot: u8,
+    path: &[u8],
+    meta_untyped: u8,
+    data_untyped: u8,
+    affinity: u8,
+    slots: &mut SlotAllocator,
+    used: &mut [u8; MAX_EXEC_SLOTS],
+) -> Option<u8> {
+    let mut used_len = 0usize;
+    let Some(fd) = root_vfs_open(endpoint_slot, path) else {
+        return None;
+    };
+    // 1KiB đủ ELF header (64B) + tới 16 phdr (56B mỗi cái).
+    let mut head = [0u8; 1024];
+    let got = root_vfs_read_prefix(endpoint_slot, fd, &mut head);
+    let image = match vifast_elf::parse_metadata(
+        &head[..got],
+        USER_ELF_MACHINE,
+        CODE_VA as u64,
+        CODE_VA as u64 + MODULE_WINDOW,
+    ) {
+        Ok(image) => image,
+        Err(_) => {
+            root_vfs_close(endpoint_slot, fd);
+            return None;
+        }
+    };
+    let vspace = track_alloc(slots, used, &mut used_len)?;
+    if vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace).error != KError::Ok {
+        root_vfs_close(endpoint_slot, fd);
+        return None;
+    }
+    for segment in image.segments() {
+        let page_base = segment.vaddr & !0xfff;
+        let mut page = 0;
+        while page < segment.page_count() {
+            let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
+            let frame = track_alloc(slots, used, &mut used_len)?;
+            if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+                root_vfs_close(endpoint_slot, fd);
+                return None;
+            }
+            // Nạp phần file rơi vào page này; phần BSS đã zero từ retype.
+            let copy_start = core::cmp::max(va, segment.vaddr);
+            let copy_end = core::cmp::min(
+                va + vifast_abi::DEFAULT_PAGE_SIZE,
+                segment.vaddr + segment.file_size as u64,
+            );
+            if copy_start < copy_end {
+                let source = segment.file_offset + (copy_start - segment.vaddr) as usize;
+                if !root_vfs_copy_to_frame(
+                    endpoint_slot,
+                    fd,
+                    source as u64,
+                    frame,
+                    copy_start - va,
+                    copy_end - copy_start,
+                ) {
+                    root_vfs_close(endpoint_slot, fd);
+                    return None;
+                }
+            }
+            let mut rights = Rights::READ;
+            if segment.writable() {
+                rights = rights | Rights::WRITE;
+            }
+            if segment.executable() {
+                rights = rights | Rights::EXEC;
+            }
+            if !map_frame_fallible(
+                data_untyped,
+                vspace,
+                frame,
+                va,
+                rights.0,
+                slots,
+                used,
+                &mut used_len,
+            ) {
+                root_vfs_close(endpoint_slot, fd);
+                return None;
+            }
+            page += 1;
+        }
+    }
+    root_vfs_close(endpoint_slot, fd);
+    // Stack riêng như spawn_elf_copy.
+    let stack_frame = track_alloc(slots, used, &mut used_len)?;
+    if vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame).error != KError::Ok {}
+    if !map_frame_fallible(
+        data_untyped,
+        vspace,
+        stack_frame,
+        EXEC_STACK_BASE as u64,
+        (Rights::READ | Rights::WRITE).0,
+        slots,
+        used,
+        &mut used_len,
+    ) {}
+    let tcb = track_alloc(slots, used, &mut used_len)?;
+    if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {}
+    if vifast_user::tcb_configure(tcb, image.entry as u64, EXEC_STACK_TOP as u64, vspace, 5).error
+        != KError::Ok
+    {}
+    if vifast_user::tcb_set_affinity(tcb, affinity).error != KError::Ok {}
+    if vifast_user::tcb_resume(tcb).error != KError::Ok {}
+    Some(tcb)
+}
+
 fn spawn_worker(
     meta_untyped: u8,
     data_untyped: u8,
@@ -2392,14 +2562,45 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         destroy_exec(&mut slots, &exec_used, exec_len);
                         exec_len = 0;
                         exec_used = [0u8; MAX_EXEC_SLOTS];
-                        match spawn_elf_copy(
-                            meta_untyped,
-                            data_untyped,
-                            EXEC_DEMO_ELF,
-                            0b01,
-                            &mut slots,
-                            &mut exec_used,
-                        ) {
+                        // Vòng 84: ưu tiên exec-thật từ FS khi path là ELF
+                        // hợp lệ (đọc header+phdr rồi nạp từng page thẳng từ
+                        // file, không staging). Fail-êm: rơi về demo copy để
+                        // gate không đổi.
+                        let mut tcb_opt = None;
+                        if plen != 0 && root_vfs_slot != 0 {
+                            let mut path_copy = [0u8; vifast_abi::vfs::MAX_PATH];
+                            let mut i = 0;
+                            while i < plen {
+                                path_copy[i] = unsafe {
+                                    core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i))
+                                };
+                                i += 1;
+                            }
+                            tcb_opt = spawn_elf_from_fs(
+                                root_vfs_slot,
+                                &path_copy[..plen],
+                                meta_untyped,
+                                data_untyped,
+                                0b01,
+                                &mut slots,
+                                &mut exec_used,
+                            );
+                        }
+                        let spawned = match tcb_opt {
+                            Some(tcb) => {
+                                write(b"RUN FS OK\n");
+                                Some(tcb)
+                            }
+                            None => spawn_elf_copy(
+                                meta_untyped,
+                                data_untyped,
+                                EXEC_DEMO_ELF,
+                                0b01,
+                                &mut slots,
+                                &mut exec_used,
+                            ),
+                        };
+                        match spawned {
                             Some(tcb) => {
                                 let mut n = 0;
                                 while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
@@ -2410,9 +2611,49 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                                 // riêng: vspace là slot đầu tiên được cấp.
                                 exec_vspace = exec_used[0];
                                 exec_tcb = tcb;
-                                write(b"RUN OK\n")
+                                if tcb_opt.is_none() {
+                                    write(b"RUN OK\n");
+                                }
                             }
                             None => write(b"RUN SKIP\n"),
+                        }
+                        // Mốc 9 (vòng 84): đảm bảo /prog.elf có trên FS để lần `run`
+                        // sau exec-thật từ filesystem (tạo on-demand ở đây, KHÔNG ở
+                        // boot — call VFS blocking trong boot làm mất toàn bộ task).
+                        if root_vfs_slot != 0
+                            && root_vfs_stat(root_vfs_slot, b"/prog.elf").is_none()
+                        {
+                            let mut off = 0usize;
+                            while off < EXEC_DEMO_ELF.len() {
+                                let n = core::cmp::min(
+                                    vifast_abi::vfs::MAX_IO,
+                                    EXEC_DEMO_ELF.len() - off,
+                                );
+                                let mut chunk = [0u8; vifast_abi::vfs::MAX_IO];
+                                let mut j = 0;
+                                while j < n {
+                                    chunk[j] = EXEC_DEMO_ELF[off + j];
+                                    j += 1;
+                                }
+                                if !root_vfs_write_at(
+                                    root_vfs_slot,
+                                    b"/prog.elf",
+                                    off as u64,
+                                    &chunk[..n],
+                                    off == 0,
+                                ) {
+                                    break;
+                                }
+                                off += n;
+                            }
+                            let head = core::cmp::min(64, EXEC_DEMO_ELF.len());
+                            if root_vfs_verify_prefix(
+                                root_vfs_slot,
+                                b"/prog.elf",
+                                &EXEC_DEMO_ELF[..head],
+                            ) {
+                                write(b"ROOT PROG OK\n");
+                            }
                         }
                     } // if stat_ok
                 } else {
@@ -2420,7 +2661,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     // Ready nếu `run` dồn dập chưa kịp chạy). Không tốn
                     // object mới, không race với destroy (vòng 35: destroy +
                     // recreate race resume IllegalOperation).
-                    // TCB cũ exit rồi nên restart từ entry/stack đã cấu hình.
                     let rr = vifast_user::tcb_restart(exec_tcb);
                     if rr.error == KError::Ok {
                         write(b"RUN OK\n")
