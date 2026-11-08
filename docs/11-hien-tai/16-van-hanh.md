@@ -285,6 +285,16 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 - `pick_skips_tasks_whose_affinity_excludes_the_hart` — task ghim hart 1 **không
   bao giờ** được chọn trên hart 0, kể cả khi nó là task duy nhất.
 
+### 5u-b. Net stack: echo HAI CHIỀU (vòng 179)
+
+Sau bắt tay, guest gửi **ACK** hoàn tất handshake; harness gửi `VIFAST-ECHO` về
+kết nối đó. Cổng yêu cầu **hai** điều:
+1. host đã `accept()` kết nối của guest (`TCP PROBE: host accepted …`);
+2. serial của guest có **`NET TCP ECHO OK`** (guest THẬT SỰ đọc được dữ liệu).
+
+Marker này **không** đưa vào `ARCH` của `harness_spec` vì nó phụ thuộc listener
+của harness; kiểm ở `test-qemu.py` ngay sau khi chạy.
+
 ### 5u-a. Net stack: bắt tay TCP THẬT guest -> host (vòng 178)
 
 Cổng riscv64 mở một listener TCP trên host (`127.0.0.1:8099`) trước khi boot;

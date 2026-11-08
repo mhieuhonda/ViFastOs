@@ -3055,3 +3055,20 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   ⇒ `NameError` khi retry chạy.
 - Gate: build 0 warning, QEMU 3/3×3 (kèm 3/3 lần host nhận kết nối TCP),
   persist 3/3, harness 583, docs PASS, fmt sạch.
+
+## 9.176 — Vòng 179: TCP echo HAI CHIỀU (guest nhận dữ liệu thật từ host)
+
+- Guest giờ hoàn tất **handshake** (gửi ACK sau SYN-ACK) rồi chờ dữ liệu; harness
+  gửi `VIFAST-ECHO` về kết nối đã accept. Guest in **`NET TCP ECHO OK`**.
+- Đo thật: **3/3 lần** có cả `NET TCP CONNECT OK` và `NET TCP ECHO OK`.
+- Cổng yêu cầu **hai** điều: host `accept()` được kết nối **và** serial của guest
+  chứa `NET TCP ECHO OK`. Kiểm ở `test-qemu.py` (không đưa vào `ARCH` vì phụ
+  thuộc listener của harness).
+- Lỗi tự gây: thêm 2 marker vào `ARCH` làm `test-harness-spec` vỡ
+  (`fixture invalid`) — fixture dựng output bằng danh sách viết tay. Đã (a) sửa
+  fixture để **tự bổ sung** mọi marker ARCH còn thiếu, và (b) **rút** 2 marker
+  khỏi ARCH vì chúng phụ thuộc môi trường, giữ kiểm ở phía harness.
+- Lỗi nhỏ khác: dùng `seg.data` (không tồn tại) — `TcpSegment` chỉ có
+  `payload_len`; kiểm echo dựa trên buffer đích + `payload_len`.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
+  sạch.

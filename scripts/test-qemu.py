@@ -589,6 +589,12 @@ class TcpProbeListener:
             try:
                 conn, _ = self._sock.accept()
                 self.accepted += 1
+                # Vòng 179: gửi dữ liệu về guest để chứng minh echo HAI CHIỀU,
+                # không chỉ bắt tay TCP.
+                try:
+                    conn.sendall(b"VIFAST-ECHO")
+                except OSError:
+                    pass
                 conn.close()
             except OSError:
                 pass
@@ -670,6 +676,16 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         index=index,
         feature_mode=feature,
         )
+    # Vòng 179: yêu cầu guest THẬT SỰ nhận được dữ liệu echo (marker nằm trong
+    # serial; không đưa vào ARCH vì phụ thuộc listener của harness).
+    if ok:
+        try:
+            text = open(serial, "rb").read().decode("utf-8", errors="replace")
+        except OSError:
+            text = ""
+        if "NET TCP ECHO OK" not in text:
+            print("FAIL: guest không nhận được dữ liệu TCP echo từ host")
+            ok = False
     if listener is not None:
         accepted = listener.accepted
         listener.close()

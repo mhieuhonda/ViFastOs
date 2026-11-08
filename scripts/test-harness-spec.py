@@ -84,6 +84,13 @@ def fixture(arch: str) -> str:
             "EL0 FP TRAP",
             "DEMAND LOAD OK",
         ]
+    # Vòng 179: bổ sung mọi marker ARCH mà fixture chưa liệt kê — nếu không,
+    # thêm marker mới vào `harness_spec` sẽ làm fixture "invalid" một cách khó
+    # hiểu (đã xảy ra với NET TCP CONNECT OK / NET TCP ECHO OK).
+    for text, _ in spec.ARCH[arch]:
+        token = text.split(" (")[0]
+        if not any(token in line for line in lines):
+            lines.append(text)
     addresses = list(spec.FAULT_ADDRESSES)
     for address in [0] + addresses:
         lines.append(f"USER FAULT tcb=None cause=0x0 addr=0x{address:x}")

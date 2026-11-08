@@ -1521,6 +1521,7 @@ impl Platform for RiscvPlatform {
             }
             let mut tcp_payload = [0u8; 64];
             let mut connected = false;
+            let mut server_seq: u32 = 0;
             // Vòng 178: CHỈ một lần chờ với bound nhỏ. Chờ dài hoặc lặp 3 lần làm
             // chậm boot khi máy không có listener (persist không mở listener).
             if let Some(seg) =
@@ -1530,12 +1531,48 @@ impl Platform for RiscvPlatform {
                     && seg.flags & vifast_virtio::TCP_ACK != 0
                 {
                     connected = true;
+                    server_seq = seg.seq;
                 }
             }
             if connected {
                 vifast_kernel::klog!(RiscvPlatform, "NET TCP CONNECT OK");
             } else {
                 vifast_kernel::klog!(RiscvPlatform, "NET TCP CONNECT SKIP");
+            }
+            // Vòng 179: nếu đã bắt tay xong thì hoàn tất handshake (ACK) và chờ
+            // dữ liệu THẬT từ host — echo hai chiều, không chỉ SYN/SYN-ACK.
+            if connected {
+                vifast_virtio::net_rx_rearm();
+                let ack_ok = vifast_virtio::net_send_tcp_bounded(
+                    [10u8, 0, 2, 2],
+                    TCP_PROBE_PORT,
+                    TCP_PROBE_LOCAL,
+                    isn.wrapping_add(1),
+                    server_seq.wrapping_add(1),
+                    vifast_virtio::TCP_ACK,
+                    &[],
+                    250_000,
+                )
+                .is_some();
+                if !ack_ok {
+                    vifast_kernel::klog!(RiscvPlatform, "NET TCP ACK FAIL");
+                }
+                let mut echo = [0u8; 64];
+                let mut echoed = false;
+                if let Some(seg) =
+                    vifast_virtio::net_recv_tcp_bounded(TCP_PROBE_LOCAL, &mut echo, 2_000_000)
+                {
+                    let want = b"VIFAST-ECHO";
+                    if seg.payload_len >= want.len() && &echo[..want.len()] == want {
+                        echoed = true;
+                    }
+                }
+                if echoed {
+                    vifast_kernel::klog!(RiscvPlatform, "NET TCP ECHO OK");
+                } else {
+                    vifast_kernel::klog!(RiscvPlatform, "NET TCP ECHO SKIP");
+                }
+                vifast_virtio::net_rx_rearm();
             }
         }
         vifast_virtio::net_rx_rearm();
