@@ -80,6 +80,10 @@ COMMON = [
         "invalid handles and out-of-range user pointers were all refused",
     ),
     (
+        "EXEC MEM OK",
+        "destroying the previous exec task returned its pages (arena not growing)",
+    ),
+    (
         "MEM FREE OK",
         "arena usage stayed consistent (used < size) after the whole FS op chain",
     ),

@@ -3127,10 +3127,20 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"FS USAGE BAD\n"
                     });
+                    // Vòng 186: đo THU HỒI BỘ NHỚ qua vòng đời exec. Nếu
+                    // destroy không trả trang về arena thì `used` sẽ TĂNG dần
+                    // sau mỗi lần chạy — loại rò rỉ giết hệ sau vài chục lần.
+                    let mem_before = vifast_user::mem_info().value & 0xffff_ffff;
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_tcb = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
+                    let mem_after = vifast_user::mem_info().value & 0xffff_ffff;
+                    write(if mem_after <= mem_before {
+                        b"EXEC MEM OK\n"
+                    } else {
+                        b"EXEC MEM BAD\n"
+                    });
                     // Vòng 103: truyền tham số RIÊNG ("HIARG") để cổng chuẩn
                     // chứng minh cả exec-từ-FS lẫn argv: chuỗi này không nằm
                     // trong ảnh trên đĩa, chỉ đến từ tham số root truyền.

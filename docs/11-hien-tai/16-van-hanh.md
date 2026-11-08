@@ -262,6 +262,13 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 - `message_rejects_too_many_words_and_keeps_cap` — `Message::new` từ chối quá
   `MSG_MAX_WORDS`; `with_cap` giữ đúng slot để kernel biết chuyển cap nào.
 
+### 5p-a. Thu hồi bộ nhớ qua vòng đời exec (`EXEC MEM OK`)
+
+Trước khi destroy task exec cũ, root đọc `MemInfo.used`; sau khi destroy đọc
+lại. Điều kiện cổng: **`used` không được tăng** (`after <= before`) ⇒
+`EXEC MEM OK`. Nếu tăng, tức `destroy_exec` không trả trang về arena — loại rò
+rỉ sẽ làm cạn bộ nhớ sau vài chục lần chạy. Đo thật: xanh trên cả ba arch.
+
 ### 5q. Bộ nhớ: W^X, VA trùng, ghi vượt biên frame
 
 - `map_rejects_wx_overlap_and_duplicate_va` — `READ|WRITE|EXEC` trong **một**

@@ -3161,3 +3161,15 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   cả hai việc cùng lúc: thêm vùng lưu VÀ bật FP".
 - Gate: build 0 warning, QEMU 3/3×3 (riscv có marker mới), persist 3/3, harness
   583, docs PASS, fmt sạch.
+
+## 9.183 — Vòng 186: `EXEC MEM OK` — đo thu hồi bộ nhớ qua vòng đời exec
+
+- Thêm phép đo **trước/sau** `destroy_exec` ở đường boot: đọc `MemInfo.used`
+  trước khi huỷ và sau khi huỷ; điều kiện cổng là **`after <= before`** ⇒
+  `EXEC MEM OK`. Đây là bất biến chống rò rỉ trang qua từng lần chạy task.
+- Marker vào `COMMON`: harness **583 → 586 ca**. Đo thật: xanh trên cả ba arch.
+- **Lặp lại lỗi cũ lần thứ hai**: dùng biến `output` ngoài scope trong thông báo
+  retry ⇒ `NameError` khi nhánh retry chạy. Đã sửa, nhưng đây là **cùng một lớp
+  lỗi** với lần `rc` ở vòng 177 — đã ghi vào `17-su-co.md` là lỗi cần soát.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness **586**, docs PASS,
+  fmt sạch.

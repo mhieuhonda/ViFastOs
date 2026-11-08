@@ -402,8 +402,7 @@ def run_qemu(
         elif retry_shell:
             bonus -= 1
             print(
-                f"RETRY {name}: guest dừng trước SHELL READY "
-                f"({len(output.splitlines())} dòng serial) — nghi flake boot,"
+                f"RETRY {name}: guest dừng trước SHELL READY — nghi flake boot,"
                 " chạy lại MỘT lần"
             )
         elif retry_exit:
