@@ -2942,3 +2942,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Runbook thêm mục **5s** ghi rõ ngữ nghĩa `bool` này (dễ hiểu sai).
 - Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 190, FS 31, virtio 7,
   docs PASS, fmt sạch, 0 warning.
+
+## 9.170 — Vòng 173: chuyển capability qua IPC + `reply` (bảo mật microkernel)
+
+- Thêm 2 host test kernel (**190 → 192**):
+  - `cap_transfer_requires_grant_and_strips_the_right` — không có `GRANT` thì
+    `send` trả `NoRights`; có `GRANT` thì cap vào **đúng slot** người nhận chỉ
+    định và **mất `GRANT`** ở bản sao (chống "rửa quyền" qua IPC);
+  - `reply_wakes_the_caller_with_the_reply_message` — `reply` đánh thức đúng
+    client `BlockedReply`, message trả lời ở `resume`, `caller` được xoá.
+- Lỗi nhỏ khi viết: dùng `Rights::union` (không tồn tại) — API thật là `BitOr`
+  (`Rights::READ | Rights::GRANT`). Sửa theo mã nguồn.
+- Runbook mục **5r** ghi lại luật GRANT (đây là chỗ dễ có lỗ hổng nhất).
+- Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 192, FS 31, virtio 7,
+  docs PASS, fmt sạch, 0 warning.

@@ -7630,6 +7630,76 @@ mod tests {
     }
 
     #[test]
+    fn cap_transfer_requires_grant_and_strips_the_right() {
+        // Vòng 173 (IPC + bảo mật): chuyển capability qua message đòi quyền
+        // GRANT ở phía gửi; người nhận KHÔNG được thừa hưởng GRANT (nếu không
+        // thì một cap đã cho đi lại có thể cho tiếp — rửa quyền qua IPC).
+        let mut kernel = Kernel::new();
+        let sender = kernel.create_tcb("sender", 5).unwrap();
+        let receiver = kernel.create_tcb("receiver", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let payload = kernel.create_endpoint().unwrap();
+        // Không có GRANT: gửi phải bị từ chối ngay.
+        kernel
+            .install_cap(sender, 1, Cap::new(payload, ObjType::Endpoint, Rights::READ))
+            .unwrap();
+        let msg = Message::new(0x31, &[]).unwrap().with_cap(1);
+        assert_eq!(
+            kernel.send(sender, endpoint, 0, msg, false),
+            Err(KError::NoRights)
+        );
+        // Có GRANT: gửi được, và bản sao bên nhận mất GRANT.
+        kernel
+            .install_cap(
+                sender,
+                2,
+                Cap::new(payload, ObjType::Endpoint, Rights::READ | Rights::GRANT),
+            )
+            .unwrap();
+        let msg = Message::new(0x32, &[]).unwrap().with_cap(2);
+        assert_eq!(kernel.send(sender, endpoint, 0, msg, false), Ok(false));
+        let received = kernel
+            .recv(receiver, endpoint, 9)
+            .unwrap()
+            .expect("message phải ở trong hàng");
+        assert_eq!(received.label, 0x32);
+        assert_eq!(received.cap, 9, "cap được cài vào slot chỉ định");
+        let copied = kernel.lookup_cap(receiver, 9, None, Rights::NONE).unwrap();
+        assert_eq!(copied.obj, payload);
+        assert!(
+            !copied.rights.contains(Rights::GRANT),
+            "GRANT không được lan qua IPC"
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn reply_wakes_the_caller_with_the_reply_message() {
+        // Vòng 173: `reply` phải đánh thức ĐÚNG client đang BlockedReply và
+        // gắn message trả lời vào resume của nó.
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 5).unwrap();
+        let client = kernel.create_tcb("client", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        assert_eq!(kernel.recv(server, endpoint, 4), Ok(None));
+        let call = Message::new(0x40, &[1]).unwrap();
+        assert_eq!(kernel.send(client, endpoint, 0, call, true), Ok(true));
+        assert_eq!(
+            kernel.tcb(client).unwrap().state,
+            ThreadState::BlockedReply
+        );
+        let reply = Message::new(0x41, &[2]).unwrap();
+        kernel.reply(server, reply).unwrap();
+        let table = kernel.tcb(client).unwrap();
+        assert_eq!(table.state, ThreadState::Ready);
+        let resume = table.resume.expect("phải có message trả lời");
+        assert_eq!(resume.label, 0x41);
+        assert_eq!(resume.words()[0], 2);
+        assert_eq!(kernel.tcb(server).unwrap().caller, None);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn send_to_waiting_receiver_hands_the_message_over_directly() {
         // Vòng 172 (IPC): nếu đã có người nhận đang chờ thì message được trao
         // TRỰC TIẾP — người nhận tỉnh dậy với đúng label/badge, không đi qua

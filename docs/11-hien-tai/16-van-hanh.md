@@ -199,6 +199,17 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5r. Chuyển capability qua IPC: quyền `GRANT` và luật "không rửa quyền"
+
+- `cap_transfer_requires_grant_and_strips_the_right`:
+  - gửi kèm cap **không có** `GRANT` ⇒ `send` trả `NoRights` ngay;
+  - có `GRANT` ⇒ gửi được, cap được cài vào **đúng slot** người nhận chỉ định;
+  - bản sao bên nhận **mất `GRANT`** — nếu không, một cap đã cho đi lại cho
+    tiếp được (rửa quyền qua IPC).
+- `reply_wakes_the_caller_with_the_reply_message`: `reply` đánh thức **đúng**
+  client đang `BlockedReply`, message trả lời nằm ở `resume`, `caller` của
+  server được xoá.
+
 ### 5s. IPC: trao trực tiếp vs xếp hàng, và ý nghĩa `bool` của `send`
 
 `send()` trả **`Ok(true)` = trao trực tiếp cho người đang chờ**, **`Ok(false)`

@@ -415,6 +415,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a796448 tinh nang (vong 169): lenh kill — dung chuong trinh dang chay tu shell
 - a063c55 tinh nang (vong 170): jobs + sua bug that trong kill (suspend slot cu)
 - d022bcb test (vong 171): thu tu scheduler (uu tien + FIFO + affinity)
+- dda68fd test (vong 172): IPC trao truc tiep vs xep hang FIFO
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -462,7 +463,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 5/5 PASS
-- `cargo test -p vifast-kernel`: 190/190 PASS
+- `cargo test -p vifast-kernel`: 192/192 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
