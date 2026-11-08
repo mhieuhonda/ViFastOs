@@ -3431,3 +3431,15 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   Định dạng vẫn giữ nguyên nên kết quả kiểm chứng ở trên áp dụng cho bản cuối.
 - Phụ: rút gọn chuỗi help + "unknown cmd" để tiết kiệm chỗ.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS, fmt sạch.
+
+## 9.202 — Vòng 205: thử `df` có thanh tỷ lệ — vượt ngân sách client, chuyển sang khoá hồi quy kernel
+
+- Thử thêm thanh `[####....]` vào `df`: client **25088 → 29184 B (7 → 8 trang)**.
+  Dù đã rút gọn `help`, vẫn **không về** 7 trang (cần giảm >512 B) ⇒ **revert**
+  tính năng, không phá ngân sách (đây là lần thứ ba gặp giới hạn này).
+- Dùng thời gian còn lại cho việc **chắc chắn có giá trị**: thêm test hồi quy
+  `exec_teardown_chain_frees_tcb_vspace_frame` — dọn TCB → VSpace → frame đúng
+  thứ tự root làm, yêu cầu **cả ba** trả `Ok`. Test này khoá hai lỗi gốc vừa sửa
+  (vòng 199: thiếu `ObjType::Tcb`; vòng 200: `vspace_in_use` chặn teardown).
+- Kernel test **205 → 206**, tổng host test **297**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS, fmt sạch.

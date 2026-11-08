@@ -418,6 +418,15 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5p-g. Khoá hồi quy chuỗi dọn task exec (vòng 205)
+
+Test `exec_teardown_chain_frees_tcb_vspace_frame` làm **đúng thứ tự root dọn
+task**: TCB → VSpace → frame, và yêu cầu **cả ba** `destroy` trả `Ok`.
+Trước hai bản sửa (vòng 199, 200), bước 1 trả `InvalidArg` (thiếu `ObjType::Tcb`
+trong danh sách cho phép) và bước 2 trả `Busy` (`vspace_in_use` chặn chính thứ nó
+sắp dọn) ⇒ cả ba object kẹt vĩnh viễn. Test này biến hai lỗi đó thành **hồi quy
+không thể tái phát âm thầm**.
+
 ### 5p-d. `check_invariants()` có mutation test (vòng 189)
 
 Công cụ chẩn đoán chỉ đáng tin nếu **chứng minh được nó bắt lỗi**. Ba test cố ý

@@ -8428,6 +8428,37 @@ mod tests {
     }
 
     #[test]
+    fn exec_teardown_chain_frees_tcb_vspace_frame() {
+        // Vòng 205: khoá HỒI QUY cho chuỗi rò rỉ đã sửa ở vòng 199–200. Thứ tự
+        // huỷ đúng như root làm khi dọn task exec: TCB → VSpace → frame. Trước
+        // khi sửa, bước 1 trả `InvalidArg` (TCB không nằm trong danh sách loại
+        // được huỷ) và bước 2 trả `Busy` (vspace còn mapping) ⇒ cả 3 object kẹt.
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x7a0_0000, 16);
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        let vspace = retype_at(&mut kernel, root, ObjType::VSpace, 3);
+        let tcb = retype_at(&mut kernel, root, ObjType::Tcb, 4);
+        kernel.map_frame(vspace, frame, 0, Rights::READ).unwrap();
+        kernel.tcb_mut(tcb).unwrap().vspace = Some(vspace);
+        assert_eq!(
+            kernel.destroy_cap_object(root, 4),
+            Ok(()),
+            "TCB phải huỷ được qua đường cap"
+        );
+        assert_eq!(
+            kernel.destroy_cap_object(root, 3),
+            Ok(()),
+            "VSpace có mapping phải tự dọn được"
+        );
+        assert_eq!(
+            kernel.destroy_cap_object(root, 2),
+            Ok(()),
+            "frame phải huỷ được sau khi VSpace dọn mapping"
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn object_destroy_tears_down_mapped_vspace() {
         // Vòng 200: ĐỔI NGỮ NGHĨA có chủ ý. Trước đây VSpace còn mapping thì
         // `destroy` trả `Busy`, buộc người dùng tự unmap trước. Thực tế root

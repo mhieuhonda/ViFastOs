@@ -447,6 +447,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - e122bbf tinh nang (vong 201): lenh loop <n> — tu kiem chung chay lap khong ro ri
 - 2ea9a7b sua loi (vong 202): go marker LOOP OK khoi cong (IPC luc boot khong on dinh)
 - 23b3c3c tai lieu (vong 203): soak 15/15 sau khi sua ro ri — moc on dinh moi
+- 9da0f5d tinh nang (vong 204): uptime dang 1m05s (da kiem chung that)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -494,7 +495,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 205/205 PASS
+- `cargo test -p vifast-kernel`: 206/206 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
