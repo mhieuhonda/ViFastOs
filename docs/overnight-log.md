@@ -1893,3 +1893,16 @@ follow-up `62b31f4`.
   tế của từng arch, đặc biệt giới hạn `auipc/addi` 20+12 bit).
 - Đã revert toàn bộ thí nghiệm; cây về HEAD `52a5984`, gate xanh
   (QEMU 2/2×3, persist 3/3, harness 523, docs PASS, fmt sạch, 0 warning).
+
+## 9.101 — Vòng 107: thu hẹp nghi phạm sang `map_frame_fallible`
+
+- In `image.entry` thật từ root: `ENT 68719481120` = `0x10_0000_1120` — **đúng**
+  như tính tay, nên giả thuyết "địa chỉ chương trình lệch" bị loại.
+- Thử lại vùng args trong trang stack với chương trình đọc cặp `(ptr,len)`:
+  `EXEC OK` (nghĩa là **cả hai `frame_write` đều trả `Ok`**) nhưng chương
+  trình vẫn không in gì ⇒ nội dung ghi vào frame **không hiện ra ở VA đã map**.
+- Nghi phạm mới, hẹp: `map_frame_fallible`/`map_with_tables` — nhiều khả năng
+  khi phải tạo page table mới, đường map dùng frame khác (hoặc bỏ qua frame
+  truyền vào). Cần đọc lại hàm này và kiểm tra bằng một test host nếu có thể.
+- Gate xanh sau khi revert: QEMU 2/2×3, persist 3/3, harness 523, docs PASS,
+  fmt sạch, 0 warning, headroom 203 120/199 024 B.
