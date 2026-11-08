@@ -7630,6 +7630,55 @@ mod tests {
     }
 
     #[test]
+    fn send_to_waiting_receiver_hands_the_message_over_directly() {
+        // Vòng 172 (IPC): nếu đã có người nhận đang chờ thì message được trao
+        // TRỰC TIẾP — người nhận tỉnh dậy với đúng label/badge, không đi qua
+        // hàng đợi.
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 5).unwrap();
+        let client = kernel.create_tcb("client", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        assert_eq!(kernel.recv(server, endpoint, 4), Ok(None));
+        let msg = Message::new(0x2222, &[0xaa, 0xbb]).unwrap();
+        assert_eq!(kernel.send(client, endpoint, 7, msg, false), Ok(true));
+        let table = kernel.tcb(server).unwrap();
+        assert_eq!(table.state, ThreadState::Ready, "người nhận phải tỉnh dậy");
+        let resume = table.resume.expect("message phải được gắn vào resume");
+        assert_eq!(resume.label, 0x2222);
+        assert_eq!(resume.badge, 7, "badge của endpoint phải tới người nhận");
+        assert_eq!(resume.words()[0], 0xaa);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn send_to_busy_endpoint_queues_fifo() {
+        // Vòng 172 (IPC): khi chưa ai chờ, message phải xếp hàng và ra theo
+        // đúng thứ tự gửi — FIFO, không đảo.
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 5).unwrap();
+        let a = kernel.create_tcb("a", 5).unwrap();
+        let b = kernel.create_tcb("b", 5).unwrap();
+        let c = kernel.create_tcb("c", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        for (sender, label) in [(a, 0x10u64), (b, 0x20), (c, 0x30)] {
+            let msg = Message::new(label, &[]).unwrap();
+            // `Ok(false)` = ĐÃ XẾP HÀNG (khác `Ok(true)` = trao trực tiếp).
+            assert_eq!(kernel.send(sender, endpoint, 0, msg, false), Ok(false));
+        }
+        let mut seen = [0u64; 3];
+        for slot in seen.iter_mut() {
+            let got = kernel
+                .recv(server, endpoint, 4)
+                .unwrap()
+                .expect("phải còn message trong hàng");
+            *slot = got.label;
+        }
+        assert_eq!(seen, [0x10, 0x20, 0x30], "thứ tự phải là FIFO");
+        assert_eq!(kernel.recv(server, endpoint, 4), Ok(None), "hàng phải rỗng");
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn pick_prefers_higher_priority_and_is_fifo_within_a_level() {
         // Vòng 171 (sched): hàng đợi phải chọn ưu tiên cao nhất, và giữa các
         // TCB cùng ưu tiên thì FIFO theo `queue_seq`.

@@ -199,6 +199,15 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5s. IPC: trao trực tiếp vs xếp hàng, và ý nghĩa `bool` của `send`
+
+`send()` trả **`Ok(true)` = trao trực tiếp cho người đang chờ**, **`Ok(false)`
+= đã xếp hàng vào endpoint**. Test khoá cả hai đường:
+- `send_to_waiting_receiver_hands_the_message_over_directly` — người nhận tỉnh
+  dậy, message nằm ở `resume`, **badge của endpoint tới đúng người nhận**;
+- `send_to_busy_endpoint_queues_fifo` — ba message ra đúng thứ tự, rồi hàng
+  rỗng trả `None`.
+
 ### 5t. Scheduler: thứ tự chọn đã có test
 
 `cargo test -p vifast-kernel --lib` (nay **188**) khoá hai bất biến của `pick`:

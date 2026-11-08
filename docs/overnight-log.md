@@ -2927,3 +2927,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Runbook thêm mục **5t**; `09-testing.md` cập nhật số test kernel.
 - Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 188, FS 31, virtio 7,
   docs PASS, fmt sạch.
+
+## 9.169 — Vòng 172: test IPC (trao trực tiếp vs xếp hàng FIFO)
+
+- Thêm 2 host test kernel (**188 → 190**):
+  - `send_to_waiting_receiver_hands_the_message_over_directly` — người nhận
+    đang chờ thì message trao **trực tiếp**, nằm ở `resume`, **badge của
+    endpoint** tới đúng người nhận;
+  - `send_to_busy_endpoint_queues_fifo` — ba message ra đúng thứ tự FIFO, rồi
+    hàng rỗng trả `None`.
+- **Phát hiện khi viết test**: `send()` trả `Ok(true)` = trao trực tiếp,
+  `Ok(false)` = **đã xếp hàng** — tôi đoán ngược và test đỏ ngay, sửa theo mã
+  nguồn chứ không nới assertion.
+- Runbook thêm mục **5s** ghi rõ ngữ nghĩa `bool` này (dễ hiểu sai).
+- Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 190, FS 31, virtio 7,
+  docs PASS, fmt sạch, 0 warning.
