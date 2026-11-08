@@ -1773,4 +1773,4 @@ follow-up `62b31f4`.
   199 024 → 194 928** (dưới ngưỡng 192 KiB) → build fail. Đã revert.
 - Bài học lặp lại: mọi thêm mã vào root đều ăn vào headroom destroy-smp
   (chỉ còn ~2.4 KiB); muốn thêm tính năng phải giải phóng chỗ trước.
-- Gate cuối vòng: QEMU 3/3×3 (x86 rerun), persist 3/3, harness 523 continue.
+- Gate cuối vòng: QEMU 3/3×3 (x86 rerun), persist 3/3, harness 523 
