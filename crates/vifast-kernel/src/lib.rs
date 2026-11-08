@@ -4464,6 +4464,11 @@ impl Kernel {
             | ObjType::PageTable
             | ObjType::VSpace
             | ObjType::CNode
+            // Vòng 199: TCB phải huỷ được qua đường cap. Thiếu nó ở đây khiến
+            // `destroy_cap_object` trả `InvalidArg` cho MỌI TCB ⇒ TCB của task
+            // exec không bao giờ chết ⇒ VSpace luôn `vspace_in_use` ⇒ frame
+            // không giải phóng (rò rỉ 6 object mỗi chu kỳ, đúng `DESTROY DIAG`).
+            | ObjType::Tcb
             | ObjType::SchedContext => {}
             _ => return Err(KError::InvalidArg),
         }
@@ -4586,6 +4591,21 @@ impl Kernel {
             }
             Kind::PageTable(_) => self.detach_page_table(obj),
             Kind::VSpace(_) => {
+                // Vòng 199: gỡ từng mapping trước khi huỷ bảng trang để
+                // `mapped_w`/`mapped_x` của frame được giảm. Không có bước này,
+                // frame vẫn bị coi là "còn map" ⇒ `destroy` trả `Busy` mãi
+                // (đo: còn 5 object kẹt sau khi đã sửa TCB).
+                let mut guard = 0usize;
+                while guard < MAX_MAPPINGS {
+                    guard += 1;
+                    let next = self
+                        .vspace(obj)
+                        .and_then(|space| space.mappings.iter().flatten().next().copied());
+                    let Some(mapping) = next else {
+                        break;
+                    };
+                    let _ = self.unmap_frame(obj, mapping.va);
+                }
                 self.destroy_vspace_page_tables(obj);
                 for i in 0..MAX_OBJECTS {
                     let r = ObjRef {
@@ -8446,9 +8466,11 @@ mod tests {
         let root = test_root_with_untyped(&mut kernel, 0x760_0000, 16);
         // Untyped root cap is rejected even though other checks would pass.
         assert_eq!(kernel.destroy_cap_object(root, 1), Err(KError::InvalidArg));
+        // Vòng 199: TCB GIỜ huỷ được qua đường cap (trước đây trả `InvalidArg`
+        // vĩnh viễn ⇒ TCB exec không bao giờ chết ⇒ rò rỉ cả VSpace lẫn frame).
         let tcb = retype_at(&mut kernel, root, ObjType::Tcb, 2);
-        assert_eq!(kernel.destroy_cap_object(root, 2), Err(KError::InvalidArg));
-        assert!(kernel.get(tcb).is_some());
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.get(tcb).is_none());
         assert!(kernel.check_invariants().is_ok());
     }
 

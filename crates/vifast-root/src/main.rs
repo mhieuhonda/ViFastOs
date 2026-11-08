@@ -962,7 +962,7 @@ fn map_frame_fallible(
         }
         // Mọi page table cấp cho exec đều track để destroy_exec dọn được
         // (vòng 34: table leak làm `run` lần 2 RUN SKIP vì cạn Untyped).
-        let table = match track_alloc(slots, used, used_len) {
+        let table = match track_alloc(slots, used, used_len, b'P') {
             Some(slot) => slot,
             None => return false,
         };
@@ -1183,10 +1183,15 @@ fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usi
 
 /// Cấp slot và ghi lại để `destroy_exec` dọn được khi `run` lần sau.
 /// Trả None khi đầy (spawn fail-êm).
+/// Vòng 199: bật/tắt chẩn đoán `track_alloc`. Chỉ bật từ đường lệnh shell
+/// (`runfs`) để **không** đổi nhịp boot (bài học vòng 196).
+static DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 fn track_alloc(
     slots: &mut SlotAllocator,
     used: &mut [u8; MAX_EXEC_SLOTS],
     len: &mut usize,
+    tag: u8,
 ) -> Option<u8> {
     if *len >= MAX_EXEC_SLOTS {
         return None;
@@ -1194,6 +1199,15 @@ fn track_alloc(
     let slot = slots.alloc();
     used[*len] = slot;
     *len += 1;
+    if DIAG.load(core::sync::atomic::Ordering::Relaxed) {
+        write(b"TA ");
+        write(&[tag]);
+        write(b" len=");
+        write_decimal(*len as u64);
+        write(b" slot=");
+        write_decimal(slot as u64);
+        write(b"\n");
+    }
     Some(slot)
 }
 
@@ -1261,7 +1275,7 @@ fn spawn_elf_copy(
         CODE_VA as u64 + MODULE_WINDOW,
     )
     .ok()?;
-    let vspace = track_alloc(slots, used, &mut used_len)?;
+    let vspace = track_alloc(slots, used, &mut used_len, b'V')?;
     if vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace).error != KError::Ok {
         return None;
     }
@@ -1271,7 +1285,7 @@ fn spawn_elf_copy(
         let mut page = 0;
         while page < page_count {
             let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
-            let frame = track_alloc(slots, used, &mut used_len)?;
+            let frame = track_alloc(slots, used, &mut used_len, b'F')?;
             if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
                 return None;
             }
@@ -1330,7 +1344,7 @@ fn spawn_elf_copy(
         }
     }
     // Stack riêng cho bản sao.
-    let stack_frame = track_alloc(slots, used, &mut used_len)?;
+    let stack_frame = track_alloc(slots, used, &mut used_len, b'S')?;
     if vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame).error != KError::Ok {
         return None;
     }
@@ -1363,7 +1377,7 @@ fn spawn_elf_copy(
             write(if wx_ok { b"WX OK\n" } else { b"WX BAD\n" });
         }
     }
-    let tcb = track_alloc(slots, used, &mut used_len)?;
+    let tcb = track_alloc(slots, used, &mut used_len, b'T')?;
     if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
         return None;
     }
@@ -2034,7 +2048,7 @@ fn spawn_elf_from_fs(
             return None;
         }
     };
-    let vspace = track_alloc(slots, used, &mut used_len)?;
+    let vspace = track_alloc(slots, used, &mut used_len, b'V')?;
     let vspace_r = vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace);
     if vspace_r.error != KError::Ok {
         root_vfs_close(endpoint_slot, fd);
@@ -2045,7 +2059,7 @@ fn spawn_elf_from_fs(
         let mut page = 0;
         while page < segment.page_count() {
             let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
-            let frame = track_alloc(slots, used, &mut used_len)?;
+            let frame = track_alloc(slots, used, &mut used_len, b'F')?;
             let frame_r = vifast_user::retype(data_untyped, ObjType::Frame as u64, frame);
             if frame_r.error != KError::Ok {
                 root_vfs_close(endpoint_slot, fd);
@@ -2100,7 +2114,7 @@ fn spawn_elf_from_fs(
     }
     root_vfs_close(endpoint_slot, fd);
     // Stack riêng như spawn_elf_copy.
-    let stack_frame = track_alloc(slots, used, &mut used_len)?;
+    let stack_frame = track_alloc(slots, used, &mut used_len, b'S')?;
     let stack_r = vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame);
     if stack_r.error != KError::Ok {
         return None;
@@ -2117,7 +2131,7 @@ fn spawn_elf_from_fs(
     ) {
         return None;
     }
-    let tcb = track_alloc(slots, used, &mut used_len)?;
+    let tcb = track_alloc(slots, used, &mut used_len, b'T')?;
     if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
         return None;
     }
@@ -3475,11 +3489,15 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         // Vòng 104: luôn destroy + nạp lại từ file (không phụ
                         // thuộc stat) để `runfs/exec` chạy được cả khi TCB cũ
                         // đã có; fail thì rơi về demo copy như nhánh đầu.
+                        // Vòng 199: bật chẩn đoán cho chuỗi cấp/huỷ của lần chạy
+                        // này (chỉ đường lệnh shell ⇒ cổng không đổi nhịp boot).
+                        DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
                         destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
                         exec_len = 0;
                         exec_tcb = 0;
                         exec_used = [0u8; MAX_EXEC_SLOTS];
                         exec_vspace = 0;
+                        DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
                         if let Some(tcb) = spawn_elf_from_fs(
                             root_vfs_slot,
                             &pbuf[..plen],

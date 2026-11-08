@@ -331,9 +331,17 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
   (`len` đi 0→5 rồi dừng), tức **TCB không được track** trên đường đã chạy, dù
   mã nguồn của `spawn_elf_from_fs` có `track_alloc` cho TCB ⇒ nhánh thực thi
   **khác** với nhánh tôi đọc (lần thứ ba), hoặc `?` thoát sớm ở một bước trước.
-- Việc cần làm (vòng sau): gắn **nhãn loại** cho từng `track_alloc` (V/F/S/P/T)
-  và chỉ in khi cờ `DIAG` bật từ đường lệnh shell (để cổng không đổi nhịp boot),
-  xác định chính xác 6 lần cấp là những object nào.
+- **Đã gắn nhãn và đo (vòng 199)**: `TA V,F,P,P,S,T` ⇒ 6 object là
+  **vspace, 1 frame ảnh, 2 page table, frame stack, TCB** — TCB **có** trong danh
+  sách (giả định "TCB bị bỏ" của tôi ở vòng 194–195 là **sai**).
+- **Nguyên nhân thật, đã sửa**: `destroy_cap_object` **không liệt kê
+  `ObjType::Tcb`** trong danh sách loại được phép huỷ ⇒ **mọi** TCB trả
+  `InvalidArg` ⇒ TCB exec không bao giờ chết ⇒ VSpace luôn `in_use` ⇒ frame/PTE
+  không giải phóng. Đã thêm `ObjType::Tcb`, cập nhật host test
+  (`object_destroy_rejects_unsupported_types` giờ kỳ vọng TCB huỷ **thành công**).
+  Đo lại: `DESTROY DIAG` **6 → 5**.
+- Còn 5 object kẹt (vspace + frame + 2 PTE + stack) — tiếp tục ở vòng sau; cần
+  in lại `idx`+`err` (hạ tầng nhãn đã có sẵn).
 - Ghi chú: chẩn đoán in ở boot ("FS TCB …") **đã gỡ** vì nó chạy trong cổng;
   chỉ dùng chẩn đoán ở đường lệnh shell.
 - **Bài học vận hành (vòng 196)**: thêm 2 dòng in chẩn đoán ở boot làm riscv

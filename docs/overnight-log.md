@@ -3353,3 +3353,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   và chỉ in khi cờ `DIAG` bật từ đường lệnh shell ⇒ biết chính xác 6 lần cấp là
   object nào, mà không đổi nhịp boot.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt sạch.
+
+## 9.196 — Vòng 199: TÌM RA LỖI GỐC — `destroy_cap_object` không cho phép TCB
+
+- Gắn **nhãn loại** cho `track_alloc` + cờ `DIAG` chỉ bật từ đường lệnh shell
+  (đúng bài học vòng 196: không đổi nhịp boot). Kết quả đo: `TA V,F,P,P,S,T` —
+  6 object là vspace, 1 frame ảnh, 2 page table, stack, **TCB**.
+- ⇒ Giả định của tôi ở vòng 194–195 ("TCB bị bỏ khỏi danh sách") là **SAI**.
+- **Nguyên nhân gốc**: `destroy_cap_object` **không liệt kê `ObjType::Tcb`** trong
+  danh sách loại được huỷ ⇒ **mọi** TCB trả `InvalidArg` ⇒ TCB exec không chết ⇒
+  VSpace luôn `vspace_in_use` ⇒ frame/page table không giải phóng. Đây là lỗi
+  một dòng, tồn tại từ trước, và là gốc của toàn bộ chuỗi rò rỉ.
+- Đã sửa: thêm `ObjType::Tcb`; cập nhật host test (test cũ **khẳng định hành vi
+  sai**: kỳ vọng TCB bị từ chối) — giờ kỳ vọng TCB huỷ **thành công**.
+- Đo lại: `DESTROY DIAG` **6 → 5**. Còn 5 (vspace + frame + 2 PTE + stack).
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt sạch.
