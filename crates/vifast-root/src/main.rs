@@ -1492,6 +1492,97 @@ fn root_vfs_close(endpoint_slot: u8, fd: u64) {
     let _ = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::CLOSE, fd, 0, 0) };
 }
 
+/// Ghi `data` (tối đa MAX_IO) vào `path` ở `offset`. Lần đầu (`truncate`)
+/// tạo mới/cắt file, các lần sau mở O_WRONLY ghi tiếp. Trả true khi ghi đủ.
+fn root_vfs_write_at(
+    endpoint_slot: u8,
+    path: &[u8],
+    offset: u64,
+    data: &[u8],
+    truncate: bool,
+) -> bool {
+    if path.is_empty()
+        || path.len() > vifast_abi::vfs::MAX_PATH
+        || data.len() > vifast_abi::vfs::MAX_IO
+    {
+        return false;
+    }
+    unsafe {
+        let mut i = 0;
+        while i < path.len() {
+            core::ptr::write_volatile((ROOT_IPC_BUF_VA as *mut u8).add(i), path[i]);
+            i += 1;
+        }
+    }
+    let flags = if truncate {
+        vifast_abi::O_CREATE | vifast_abi::O_WRONLY | vifast_abi::O_TRUNC
+    } else {
+        vifast_abi::O_WRONLY
+    };
+    let open = unsafe {
+        vifast_user::call_message(endpoint_slot, vfs_abi::OPEN, flags, path.len() as u64, 0)
+    };
+    if open.error != KError::Ok || open.label != vfs_abi::OK {
+        return false;
+    }
+    let fd = open.data[0];
+    unsafe {
+        let mut i = 0;
+        while i < data.len() {
+            core::ptr::write_volatile((ROOT_IPC_BUF_VA as *mut u8).add(i), data[i]);
+            i += 1;
+        }
+    }
+    let written = unsafe {
+        vifast_user::call_message(endpoint_slot, vfs_abi::WRITE, fd, offset, data.len() as u64)
+    };
+    root_vfs_close(endpoint_slot, fd);
+    written.error == KError::Ok && written.label == data.len() as u64
+}
+
+// Mốc 9 (vòng 82): đọc + parse ELF header của file trên FS (bước 3
+// exec-thật). `parse` cần cả program header table (nằm sau 64B ELF header)
+// nên đọc 512 byte đầu qua 4 READ vào stack buffer rồi parse tại chỗ
+// (không cần staging toàn file). Trả entry point khi hợp lệ. Fail-êm.
+// Mốc 9 (vòng 82/83): đọc + verify prefix file trên FS (bước 2 exec-thật:
+// đọc ELF từ FS tin cậy từng byte). `parse` đòi toàn bộ segment trong buffer
+// nên chưa parse tại đây — vòng sau nạp segment theo page rồi parse trên
+// staging frames. Đọc tối đa `expected.len()` (kẹp 1KiB) và so khớp từng
+// byte với mẫu gọi truyền vào. Fail-êm.
+fn root_vfs_verify_prefix(endpoint_slot: u8, path: &[u8], expected: &[u8]) -> bool {
+    if expected.is_empty() || expected.len() > 1024 {
+        return false;
+    }
+    let Some(fd) = root_vfs_open(endpoint_slot, path) else {
+        return false;
+    };
+    // Đọc theo chunk MAX_IO vào IPC buffer rồi so ngay (không cần stack lớn).
+    let mut off = 0usize;
+    let mut ok = true;
+    while off < expected.len() {
+        let n = root_vfs_read_at(endpoint_slot, fd, off as u64, (expected.len() - off) as u64);
+        if n == 0 {
+            ok = false;
+            break;
+        }
+        let mut i = 0;
+        while i < n as usize {
+            let b = unsafe { core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i)) };
+            if expected[off + i] != b {
+                ok = false;
+                break;
+            }
+            i += 1;
+        }
+        if !ok {
+            break;
+        }
+        off += n as usize;
+    }
+    root_vfs_close(endpoint_slot, fd);
+    ok && off == expected.len()
+}
+
 fn root_vfs_read_head(endpoint_slot: u8, path: &[u8]) -> bool {
     let Some(fd) = root_vfs_open(endpoint_slot, path) else {
         return false;
@@ -2244,6 +2335,40 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                                 core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i))
                             };
                             i += 1;
+                        }
+                        // Vòng 82/83: vòng tròn ghi→đọc→verify ELF on-demand
+                        // (tránh call blocking cuối boot như vòng 75).
+                        // Đảm bảo /elf-test từ 1KiB đầu client ELF rồi đọc
+                        // lại so khớp từng byte với bản gốc. Fail-êm.
+                        if client_bytes.len() >= 1024
+                            && root_vfs_stat(root_vfs_slot, b"/elf-test").is_none()
+                        {
+                            let mut off = 0usize;
+                            while off < 1024 {
+                                let mut chunk = [0u8; vifast_abi::vfs::MAX_IO];
+                                let mut j = 0;
+                                while j < chunk.len() {
+                                    chunk[j] = client_bytes[off + j];
+                                    j += 1;
+                                }
+                                if !root_vfs_write_at(
+                                    root_vfs_slot,
+                                    b"/elf-test",
+                                    off as u64,
+                                    &chunk,
+                                    off == 0,
+                                ) {
+                                    break;
+                                }
+                                off += chunk.len();
+                            }
+                        }
+                        if root_vfs_verify_prefix(
+                            root_vfs_slot,
+                            b"/elf-test",
+                            &client_bytes[..1024],
+                        ) {
+                            write(b"ROOT ELF OK\n");
                         }
                         if root_vfs_stat(root_vfs_slot, &path[..plen]).is_some() {
                             stat_ok = true;
