@@ -58,6 +58,16 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def timeout_hint(output: str) -> str:
+    """Gợi ý khi boot timeout: guest đã in đủ marker (nghi tải máy) hay thiếu
+    marker nào (chỉ đúng chỗ hỏng) — cùng tinh thần với test-qemu.py."""
+    markers = ("SELFTEST PASS", "FS DISK OK", "FS FORMAT OK", "SHELL READY")
+    missing = [m for m in markers if m not in output]
+    if not missing:
+        return " (guest đã in đủ marker — nghi máy host quá tải; chạy lại)"
+    return f" (thiếu marker: {', '.join(missing)})" 
+
+
 def make_disk(path: str) -> None:
     with open(path, "wb") as image:
         image.truncate(4 * 1024 * 1024)
@@ -152,8 +162,8 @@ def run_phases(name: str, tmp: str, boot) -> None:
 
     # 1. Blank disk: guest format, no persistence, host fsck.
     rc, output, timeout = boot(disk, serial)
-    require(not timeout, f"{name}: blank timeout")
-    require("SELFTEST PASS" in output and "FS DISK OK" in output, f"{name}: blank boot")
+    require(not timeout, f"{name}: blank timeout" + timeout_hint(output))
+    require("SELFTEST PASS" in output and "FS DISK OK" in output, f"{name}: blank boot" + timeout_hint(output))
     require("FS FORMAT OK" in output, f"{name}: blank missing FS FORMAT OK")
     require("FS PERSIST OK" not in output, f"{name}: blank claimed persistence")
     require("FS PERSIST DATA" not in output, f"{name}: blank printed data")
@@ -164,7 +174,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     nonce = secrets.token_hex(8)[:15].encode("ascii")
     fsutil("put", disk, "/p/nonce", nonce.decode())
     rc, output, timeout = boot(disk, serial)
-    require(not timeout and "FS PERSIST OK" in output, f"{name}: persist boot")
+    require(not timeout and "FS PERSIST OK" in output, f"{name}: persist boot" + timeout_hint(output))
     require(b"FS PERSIST DATA " + nonce + b"\n" in output.encode(), f"{name}: nonce read")
     expected = nonce[::-1]
     got = fsutil("get", disk, "/p/nonce").stdout
@@ -177,7 +187,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     legacy = secrets.token_hex(6).encode("ascii")
     seed_legacy(disk, legacy)
     rc, output, timeout = boot(disk, serial)
-    require(not timeout and "FS MIGRATE OK" in output, f"{name}: migrate boot")
+    require(not timeout and "FS MIGRATE OK" in output, f"{name}: migrate boot" + timeout_hint(output))
     require(fsutil("get", disk, "/scratch").stdout == legacy, f"{name}: migrated data")
     require(sector0(disk) == b"\0\0\0\0", f"{name}: legacy sector not cleared")
     fsutil("fsck", disk)
@@ -188,7 +198,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     fsutil("mkfs", disk)
     fsutil("inject-journal", disk, "--valid")
     rc, output, timeout = boot(disk, serial)
-    require(not timeout and "FS RECOVER OK (replayed=1)" in output, f"{name}: valid replay boot")
+    require(not timeout and "FS RECOVER OK (replayed=1)" in output, f"{name}: valid replay boot" + timeout_hint(output))
     require(fsutil("get", disk, "/j").stdout == b"journal-new\n", f"{name}: replayed data")
     fsutil("fsck", disk)
     print(f"{name}: phase 4 valid journal replay PASS")
@@ -199,7 +209,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     fsutil("put", disk, "/j", "stable")
     fsutil("inject-journal", disk, "--torn")
     rc, output, timeout = boot(disk, serial)
-    require(not timeout and "FS RECOVER OK (replayed=0)" in output, f"{name}: torn replay boot")
+    require(not timeout and "FS RECOVER OK (replayed=0)" in output, f"{name}: torn replay boot" + timeout_hint(output))
     require(fsutil("get", disk, "/j").stdout == b"stable", f"{name}: torn changed data")
     fsutil("fsck", disk)
     print(f"{name}: phase 5 torn journal PASS")
@@ -215,7 +225,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     fsutil("link", disk, "/p/large", "/p/large2")
     fsutil("symlink", disk, "/p/large", "/p/large-sym")
     rc, output, timeout = boot(disk, serial)
-    require(not timeout and "FS LARGE OK" in output, f"{name}: large boot")
+    require(not timeout and "FS LARGE OK" in output, f"{name}: large boot" + timeout_hint(output))
     require("FS FSCK OK" in output, f"{name}: large fsck")
     got = fsutil("get", disk, "/p/large").stdout
     require(got == large, f"{name}: large host readback")
@@ -235,7 +245,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
         image.seek(SECTOR)
         image.write(b"BAD!")
     rc, output, timeout = boot(disk, serial)
-    require(not timeout and "FS FORMAT OK" in output, f"{name}: corrupt boot")
+    require(not timeout and "FS FORMAT OK" in output, f"{name}: corrupt boot" + timeout_hint(output))
     require("FS PERSIST OK" not in output, f"{name}: corrupt claimed persistence")
     fsutil("fsck", disk)
     print(f"{name}: phase 6 corrupt superblock PASS")

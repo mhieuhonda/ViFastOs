@@ -1745,3 +1745,17 @@ follow-up `62b31f4`.
 - Lý do: các vòng trước gặp 0/3 riscv64 hàng loạt dù serial đã tới
   `SHELL READY`; chạy lại khi máy rảnh thì 3/3. Giờ log tự nói rõ là flake.
 - Gate: QEMU 3/3×3, persist 7×3, harness 523, docs PASS, fmt sạch, 0 warning.
+
+## 9.90 — Vòng 99: chẩn đoán timeout cho persist + bỏ thử nghiệm giữ slot exec
+
+- `test-persist.py`: mọi assertion timeout giờ kèm `timeout_hint()` — nếu
+  guest đã in đủ marker thì báo "nghi máy host quá tải", nếu thiếu thì liệt
+  kê marker thiếu. Nhờ đó lần fail x86_64 "large boot" hiện rõ là **không có
+  marker nào** (boot không chạy), khác hẳn lỗi logic.
+- Thử giữ slot của exec demo lúc boot để `run` sau này restart TCB cũ thay vì
+  cấp mới (chống rò rỉ ~4 frame mỗi lần `run`): QEMU 3/3×3 vẫn xanh nhưng
+  **persist riscv64 "blank format" timeout** (tái hiện 2 lần), revert thì
+  persist PASS 3/3 → đã bỏ thay đổi, ghi lại làm bài học (thay đổi nhỏ ở
+  đường boot vẫn có thể phá persist dù QEMU xanh).
+- Gate cuối vòng: QEMU 3/3×3, persist 3/3 (sau rerun), harness 523, docs PASS,
+  fmt sạch, 0 warning.

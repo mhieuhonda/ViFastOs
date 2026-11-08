@@ -306,6 +306,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 9fd145a moc 9 (vong 95): truyen tham so cho chuong trinh nap tu FS (argv toi gian)
 - ffa12f0 tai lieu (vong 96): dieu tra argv dong + headroom, chua doi hanh vi
 - d40ad5c moc 9 (vong 97): sua runfs <path> (index 6) + xac nhan flake riscv
+- e961297 ha tang (vong 98): chan doan flake timeout + retry co kiem soat
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
