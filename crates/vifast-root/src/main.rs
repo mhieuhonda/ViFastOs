@@ -1530,6 +1530,24 @@ fn spawn_pager_server(
 // Mốc 9 (vòng 46): root tự STAT path qua endpoint gốc. Gọi sau khi VFS
 // sẵn sàng (cuối boot, sau DEMAND VFSLOAD) vì server init FS bất đồng
 // bộ sau resume. Trả size khi OK.
+/// Vòng 128: xoá file qua VFS (UNLINK) — dùng cho self-test đường unlink.
+fn root_vfs_unlink(endpoint_slot: u8, path: &[u8]) -> bool {
+    if path.is_empty() || path.len() > vifast_abi::vfs::MAX_PATH {
+        return false;
+    }
+    unsafe {
+        let mut i = 0;
+        while i < path.len() {
+            core::ptr::write_volatile((ROOT_IPC_BUF_VA as *mut u8).add(i), path[i]);
+            i += 1;
+        }
+    }
+    let reply = unsafe {
+        vifast_user::call_message(endpoint_slot, vfs_abi::UNLINK, path.len() as u64, 0, 0)
+    };
+    reply.error == KError::Ok && reply.label == vfs_abi::OK
+}
+
 fn root_vfs_stat(endpoint_slot: u8, path: &[u8]) -> Option<u64> {
     if path.is_empty() || path.len() > vifast_abi::vfs::MAX_PATH {
         return None;
@@ -2825,6 +2843,13 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         write(b"PROG MID BAD\n")
                     }
+                    // Vòng 128: vòng đời file trọn vẹn — tạo, kiểm kích thước,
+                    // xoá, xác nhận đã biến mất. Bắt lỗi đường UNLINK/FS.
+                    let rm_ok = root_vfs_write_at(root_vfs_slot, b"/rm-test", 0, b"12345678", true)
+                        && root_vfs_stat(root_vfs_slot, b"/rm-test") == Some(8)
+                        && root_vfs_unlink(root_vfs_slot, b"/rm-test")
+                        && root_vfs_stat(root_vfs_slot, b"/rm-test").is_none();
+                    write(if rm_ok { b"FS RM OK\n" } else { b"FS RM BAD\n" });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];

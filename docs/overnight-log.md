@@ -2235,3 +2235,15 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   fail nếu vượt.
 - Cập nhật runbook: ngân sách theo arch + giới thiệu `scripts/diag.sh`.
 - Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, fmt sạch, 0 warning.
+
+## 9.125 — Vòng 128: self-test vòng đời file (tạo → stat → xoá) vào cổng chuẩn
+
+- Thêm `root_vfs_unlink()` (gửi `vfs_abi::UNLINK` với path trong IPC buffer) và
+  self-test: ghi `/rm-test` 8 byte → `stat` phải bằng 8 → `unlink` → `stat`
+  phải là `None`. In `FS RM OK` / `FS RM BAD`.
+- Đây là lần đầu cổng chuẩn kiểm **đường xoá file** trên FS thật (trước chỉ
+  kiểm ghi/đọc/stat/kích thước/nội dung).
+- Marker `FS RM OK` thêm vào `harness_spec.COMMON`: harness **535 → 538 ca**,
+  cả 3 arch đều in.
+- Gate: QEMU 3/3×3, persist 3/3, harness 538, docs PASS, fmt sạch, 0 warning,
+  headroom 199 024 B.

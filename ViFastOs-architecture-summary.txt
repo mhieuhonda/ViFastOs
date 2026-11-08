@@ -354,6 +354,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 7bc79a5 tai lieu (vong 125b): ghi log be tac cuc bo + bai hoc quy trinh
 - 7a2f396 tai lieu (vong 126): chuong trinh 8 lenh in errno cung khong in — tam dung dieu tra
 - 0823077 cong cu (vong 126): chan ngan sach trang client ELF ngay o build
+- 3468827 cong cu (vong 127): script diag + ngan sach trang client theo tung arch
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1473,6 +1474,7 @@ QEMU test:
 - `PAGER RECLAIM OK` — pager demo frames/TCBs returned to untyped
 - `RUN FS OK` — exec-from-filesystem loaded an ELF page-by-page and ran it
 - `HIARG` — program executed from the filesystem printed an argv-only marker
+- `FS RM OK` — create + stat + unlink + stat cycle on the filesystem succeeded
 - `PROG MID OK` — a 16-byte window at the middle of /prog.elf matches the source image
 - `PROG TAIL OK` — the last 32 bytes of /prog.elf match the source ELF image
 - `PROG SIZE OK` — the ELF written to /prog.elf has exactly the expected byte size
