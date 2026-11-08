@@ -3460,3 +3460,16 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   che lỗi FS thật.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3 (sau retry), harness 589, docs
   PASS, fmt sạch.
+
+## 9.204 — Vòng 207: hướng dẫn dùng nhanh cho NGƯỜI DÙNG (không phải dev)
+
+- Thêm `docs/11-hien-tai/18-dung-nhanh.md` + liên kết từ `00-index.md`: dựng,
+  chạy gate, tour shell, **cách tự kiểm bằng số**, giới hạn đã biết.
+- **Mọi con số trong ví dụ đều là ĐO THẬT** trên QEMU riscv64 vừa chạy:
+  `free` → `28/344 KiB free`; `df` → `12/8162 blocks [#...................]`;
+  `ls` → 4 mục; `ps` → `0 15 4 aff=1 root`; `uptime` → `2s`.
+- Đã **sửa chính mình**: bản nháp ghi ví dụ sai (`prog.elf 512@`, `ps slot=…`,
+  `free 36/344`) — đọc từ trí nhớ thay vì từ serial. Sửa lại theo output thật,
+  kèm ghi chú rằng số đo phụ thuộc tốc độ máy nhưng `free` trước/sau `loop` phải
+  giữ nguyên.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS, fmt sạch.

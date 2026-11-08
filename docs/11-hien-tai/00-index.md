@@ -35,6 +35,9 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
 17. [17-su-co.md](17-su-co.md) — runbook **sự cố**: triệu chứng → nguyên nhân đã
     gặp → cách xác minh → cách xử lý (QEMU mồ côi, kernel thiếu feature, ngân
     sách trang, slot giả định trống, test Rust trùng thuộc tính, git).
+18. [18-dung-nhanh.md](18-dung-nhanh.md) — **hướng dẫn dùng nhanh cho người dùng
+    cuối**: dựng, chạy gate, tour shell (`free`/`loop`/`df`/`uptime`/`ps`), cách
+    tự kiểm bằng số và các giới hạn đã biết.
 14. `vifast-elf` — parser ELF64 PT_LOAD và host test. Nạp root ELF là Bước 6.
 
 ## Bản đồ crate
