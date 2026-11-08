@@ -1,0 +1,54 @@
+# Lỗi: chương trình exec không đọc được trang RW (stack)
+
+Trạng thái: **đang mở**, đã khoanh vùng mạnh (vòng 112–119).
+
+## Triệu chứng
+
+Chương trình exec (nạp qua `spawn_elf_copy` hoặc `spawn_elf_from_fs`) chạy
+được, đọc được **trang code** (`R|X`), nhưng mọi truy cập vào **trang stack**
+(`R|W`, map tại `EXEC_STACK_BASE`) đều không có kết quả: `DebugWrite` từ địa
+chỉ đó không in gì, task chết im lặng (exec TCB không có fault endpoint).
+
+## Bằng chứng đã thu (đều trên riscv64, kernel xanh)
+
+| # | Thí nghiệm | Kết quả |
+|---|---|---|
+| 1 | Đọc `entry+0x40` (trang code), `auipc` ở lệnh đầu | in đúng `HI FS` ✔ |
+| 2 | `frame_write(stack_frame, off, msg)` tại `0xFF8`/`0x100` | trả `Ok`, không có `STK WRITE BAD` |
+| 3 | Root in hằng số layout | `0x10_0002_3000`/`0x10_0002_4000` — đúng |
+| 4 | Đọc `EXEC_STACK_TOP-8` | **không in** |
+| 5 | Đọc `EXEC_STACK_BASE+0x100` | **không in** |
+| 6 | Đổi VA stack sang `0x10_0000_2000` (kề trang code) | **không in** |
+| 7 | Dùng `map_with_tables` (đường client) thay `map_frame_fallible` | **không in** |
+| 8 | Map stack TRƯỚC code (đảo thứ tự) | **không in** |
+
+## Đã loại trừ
+
+- **Sai địa chỉ/offset**: đã tính tay + in hằng số từ root + `auipc` đặt ở lệnh
+  đầu (bài học vòng 113: `auipc` lấy PC của chính nó).
+- **`frame_write` hỏng**: trả `Ok` cho cả hai offset.
+- **Lỗi kernel core (walk bảng, ghi leaf)**: test host
+  `maps_two_pages_in_one_fresh_vspace` map 2 trang trong một vspace mới, kiểm
+  **PTE thật** → PASS (kể cả khi assert trực tiếp `FAKE_MEM`).
+- **Lỗi do `map_frame_fallible`**: thay bằng `map_with_tables` vẫn hỏng.
+- **Lỗi do thứ tự map**: đảo thứ tự vẫn hỏng.
+- **Thiếu bit A/D**: đã set `PTE_A|PTE_D` (vòng 115) — không đổi gì.
+
+## Giả thuyết còn lại (ưu tiên giảm dần)
+
+1. **Bất thường ở platform riscv `encode_leaf` cho quyền RW**: PTE có
+   `V|U|A|D|R|W` nhưng CPU vẫn fault → cần đọc PTE thật trong QEMU
+   (`info mem`/`xp`) hoặc thêm `klog` phía platform.
+2. **VSpace window**: `VSpace::with_page_size(pa, USER_VA_START, size, page)` —
+   nếu `end` tính sai thì `map_leaf` bỏ qua (nhưng `frame_map` vẫn Ok vì
+   mapping được ghi vào sổ).
+3. **`tcb_configure` + `set_tcb_vspace`**: task chạy với vspace khác root?
+   (đã chứng minh không phải: đọc code page trả đúng dữ liệu ta ghi).
+
+## Cách kiểm tra nhanh ở vòng sau
+
+```sh
+# 1) Xem PTE thật trong QEMU monitor cho VA 0x10_0002_3100
+python3 scripts/test-qemu.py --interactive --arch riscv64   # rồi dùng monitor
+# 2) Hoặc thêm klog trong platform riscv map_leaf: in va, pte, table_pa
+```
