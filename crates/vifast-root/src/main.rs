@@ -1285,6 +1285,23 @@ fn spawn_elf_copy(
     ) {
         return None;
     }
+    // Vòng 136: W^X — ghi vào frame ĐÃ map executable phải bị từ chối, còn
+    // frame RW (stack) sau khi map vẫn ghi được. Chỉ in một lần.
+    let mut wx_ok = false;
+    if let Some(code_frame) = used.first().copied().filter(|_| used_len > 0) {
+        let denied =
+            vifast_user::frame_write(code_frame, 0, b"x".as_ptr() as u64, 1).error != KError::Ok;
+        let stack_ok =
+            vifast_user::frame_write(stack_frame, 0, b"x".as_ptr() as u64, 1).error == KError::Ok;
+        wx_ok = denied && stack_ok;
+    }
+    static mut WX_PRINTED: bool = false;
+    unsafe {
+        if !WX_PRINTED {
+            WX_PRINTED = true;
+            write(if wx_ok { b"WX OK\n" } else { b"WX BAD\n" });
+        }
+    }
     let tcb = track_alloc(slots, used, &mut used_len)?;
     if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
         return None;

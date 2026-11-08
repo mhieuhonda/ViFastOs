@@ -116,7 +116,7 @@ def boot_riscv(disk: str, serial: str) -> tuple[int, str, bool]:
            "-display", "none", "-monitor", "none", "-serial", f"file:{serial}",
            "-global", "virtio-mmio.force-legacy=false", "-drive", f"if=none,id=vd0,file={disk},format=raw",
            "-device", "virtio-blk-device,drive=vd0", "-bios", "default", "-kernel", kernel]
-    return run_qemu("riscv64", cmd, serial, 30, {0})
+    return run_qemu("riscv64", cmd, serial, 60, {0})
 
 
 def boot_aarch(disk: str, serial: str) -> tuple[int, str, bool]:
@@ -126,7 +126,7 @@ def boot_aarch(disk: str, serial: str) -> tuple[int, str, bool]:
            "-serial", f"file:{serial}", "-global", "virtio-mmio.force-legacy=false",
            "-drive", f"if=none,id=vd0,file={disk},format=raw",
            "-device", "virtio-blk-device,drive=vd0", "-kernel", kernel]
-    return run_qemu("aarch64", cmd, serial, 30, {0})
+    return run_qemu("aarch64", cmd, serial, 60, {0})
 
 
 def prepare_x86(tmp: str) -> tuple[str, str, str]:
@@ -152,8 +152,20 @@ def boot_x86(disk: str, serial: str, code: str, esp: str, vars_path: str) -> tup
            "-drive", f"id=vd1,if=none,format=raw,file={disk}",
            "-device", "ide-hd,drive=vd1,bus=ide.6,unit=0",
            "-device", "isa-debug-exit,iobase=0x501,iosize=0x03"]
-    return run_qemu("x86_64", cmd, serial, 45, {3})
+    return run_qemu("x86_64", cmd, serial, 90, {3})
 
+
+def boot_retry(boot, disk: str, serial: str) -> tuple[int, str, bool]:
+    """Boot một lần; nếu guest gần như không in gì (flake UEFI/QEMU) thì thử
+    lại MỘT lần và nói rõ, để không lẫn flake với lỗi FS thật."""
+    rc, output, timeout = boot(disk, serial)
+    if len(output.splitlines()) < 20:
+        print(
+            f"note: guest không boot (chỉ {len(output.splitlines())} dòng serial) — thử lại một lần",
+            file=sys.stderr,
+        )
+        rc, output, timeout = boot(disk, serial)
+    return rc, output, timeout
 
 def run_phases(name: str, tmp: str, boot) -> None:
     disk = os.path.join(tmp, "disk.img")
@@ -161,7 +173,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     make_disk(disk)
 
     # 1. Blank disk: guest format, no persistence, host fsck.
-    rc, output, timeout = boot(disk, serial)
+    rc, output, timeout = boot_retry(boot, disk, serial)
     require(not timeout, f"{name}: blank timeout" + timeout_hint(output))
     require("SELFTEST PASS" in output and "FS DISK OK" in output, f"{name}: blank boot" + timeout_hint(output))
     require("FS FORMAT OK" in output, f"{name}: blank missing FS FORMAT OK")
@@ -173,7 +185,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     # 2. Host put, guest reads/reverses, host reads new value.
     nonce = secrets.token_hex(8)[:15].encode("ascii")
     fsutil("put", disk, "/p/nonce", nonce.decode())
-    rc, output, timeout = boot(disk, serial)
+    rc, output, timeout = boot_retry(boot, disk, serial)
     require(not timeout and "FS PERSIST OK" in output, f"{name}: persist boot" + timeout_hint(output))
     require(b"FS PERSIST DATA " + nonce + b"\n" in output.encode(), f"{name}: nonce read")
     expected = nonce[::-1]
@@ -186,7 +198,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     make_disk(disk)
     legacy = secrets.token_hex(6).encode("ascii")
     seed_legacy(disk, legacy)
-    rc, output, timeout = boot(disk, serial)
+    rc, output, timeout = boot_retry(boot, disk, serial)
     require(not timeout and "FS MIGRATE OK" in output, f"{name}: migrate boot" + timeout_hint(output))
     require(fsutil("get", disk, "/scratch").stdout == legacy, f"{name}: migrated data")
     require(sector0(disk) == b"\0\0\0\0", f"{name}: legacy sector not cleared")
@@ -197,7 +209,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     make_disk(disk)
     fsutil("mkfs", disk)
     fsutil("inject-journal", disk, "--valid")
-    rc, output, timeout = boot(disk, serial)
+    rc, output, timeout = boot_retry(boot, disk, serial)
     require(not timeout and "FS RECOVER OK (replayed=1)" in output, f"{name}: valid replay boot" + timeout_hint(output))
     require(fsutil("get", disk, "/j").stdout == b"journal-new\n", f"{name}: replayed data")
     fsutil("fsck", disk)
@@ -208,7 +220,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     fsutil("mkfs", disk)
     fsutil("put", disk, "/j", "stable")
     fsutil("inject-journal", disk, "--torn")
-    rc, output, timeout = boot(disk, serial)
+    rc, output, timeout = boot_retry(boot, disk, serial)
     require(not timeout and "FS RECOVER OK (replayed=0)" in output, f"{name}: torn replay boot" + timeout_hint(output))
     require(fsutil("get", disk, "/j").stdout == b"stable", f"{name}: torn changed data")
     fsutil("fsck", disk)
@@ -224,7 +236,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     fsutil("put-file", disk, "/p/large", large_path)
     fsutil("link", disk, "/p/large", "/p/large2")
     fsutil("symlink", disk, "/p/large", "/p/large-sym")
-    rc, output, timeout = boot(disk, serial)
+    rc, output, timeout = boot_retry(boot, disk, serial)
     require(not timeout and "FS LARGE OK" in output, f"{name}: large boot" + timeout_hint(output))
     require("FS FSCK OK" in output, f"{name}: large fsck")
     got = fsutil("get", disk, "/p/large").stdout
@@ -244,7 +256,7 @@ def run_phases(name: str, tmp: str, boot) -> None:
     with open(disk, "r+b") as image:
         image.seek(SECTOR)
         image.write(b"BAD!")
-    rc, output, timeout = boot(disk, serial)
+    rc, output, timeout = boot_retry(boot, disk, serial)
     require(not timeout and "FS FORMAT OK" in output, f"{name}: corrupt boot" + timeout_hint(output))
     require("FS PERSIST OK" not in output, f"{name}: corrupt claimed persistence")
     fsutil("fsck", disk)

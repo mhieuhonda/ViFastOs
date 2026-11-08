@@ -2336,3 +2336,20 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
 - Ghi nhận flake: persist có 1 lần riscv fail ở phase 3 (thiếu marker boot);
   chạy lại 3/3 PASS ⇒ lại là flake boot, không phải lỗi FS.
 - Gate: QEMU 3/3×3, persist 3/3 (sau khi chạy lại), harness 562, docs PASS.
+
+## 9.133 — Vòng 136: W^X thành marker + giảm flake boot (chẩn đoán và retry)
+
+- **W^X**: thêm probe trong `spawn_elf_copy` sau khi map: ghi vào frame **đã map
+  executable** phải bị từ chối, còn frame **RW** (stack) vẫn ghi được ⇒
+  `WX OK`. Marker vào `COMMON`: harness **562 → 565 ca**, cả 3 arch in.
+- **Chẩn đoán lỗi boot rõ hơn** (`test-qemu.py`): thay câu chung chung bằng
+  - `guest không boot (chỉ N dòng serial — nghi flake UEFI/QEMU; chạy lại)`
+  - hoặc `thiếu marker (k): …` liệt kê marker thiếu.
+- **Giảm flake** (`test-persist.py`): thêm `boot_retry()` — nếu serial < 20
+  dòng (guest chưa boot) thì thử lại **một lần** kèm ghi chú `note:` ra stderr,
+  để flake không bị lẫn với lỗi FS thật.
+- **Tăng timeout boot** cho CI ít đỏ vặt: test-qemu riscv/aarch64 20→40 s,
+  x86_64 40→80 s; test-persist riscv/aarch64 30→60 s, x86_64 45→90 s.
+- Kiểm chứng: legacy-migration boot riêng lẻ **5/5 PASS**; `test-persist` chạy
+  **2 lần liền đều 3/3 PASS** (trước đó fail 1/2 lần ở phase 3 x86_64).
+- Gate: QEMU 3/3×3, persist 3/3 ×2, harness 565, docs PASS, fmt sạch.

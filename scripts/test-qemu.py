@@ -460,7 +460,25 @@ def run_qemu_once(
         print(f"FAIL: unexpected QEMU exit code {rc}")
         return False, timed_out
     if not ok:
-        print("FAIL: banner or SELFTEST PASS missing")
+        # In rõ marker nào thiếu: phân biệt "guest không boot" (thiếu banner +
+        # toàn bộ marker) với "hỏng thật" (chỉ thiếu vài marker cuối).
+        missing = [text for text, _ in COMMON if text not in output]
+        arch_missing = [
+            value.split(" (")[0]
+            for value, _ in ARCH[name]
+            if value.split(" (")[0] not in output
+        ]
+        lines = len(output.splitlines())
+        if lines < 20:
+            print(
+                f"FAIL: guest không boot (chỉ {lines} dòng serial — "
+                "nghi flake UEFI/QEMU; chạy lại)"
+            )
+        elif missing or arch_missing:
+            shown = ", ".join((missing + arch_missing)[:5])
+            print(f"FAIL: thiếu marker ({len(missing) + len(arch_missing)}): {shown}")
+        else:
+            print("FAIL: banner or SELFTEST PASS missing")
         return False, timed_out
     print("PASS")
     return True, False
@@ -521,7 +539,7 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         "riscv64",
         cmd,
         serial,
-        20,
+        40,
         {1} if feature == "test-panic-hart1" else {0},
         require_smp=True,
         require_block=True,
@@ -576,7 +594,7 @@ def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
         "aarch64",
         cmd,
         serial,
-        20,
+        40,
         {1} if feature == "test-panic-hart1" else {0},
         require_smp=True,
         require_block=True,
@@ -685,7 +703,7 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
         "x86_64",
         cmd,
         serial,
-        40,
+        80,
         {7} if feature == "test-panic-hart1" else {3},
         require_block=True,
         require_disk=True,

@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "WX OK",
+        "writing an executable-mapped frame was denied while the RW stack stayed writable",
+    ),
+    (
         "MEM OOM OK",
         "oversized untyped request was refused with OutOfMemory and size 0 rejected",
     ),
