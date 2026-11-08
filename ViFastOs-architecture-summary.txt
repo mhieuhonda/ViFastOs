@@ -335,6 +335,21 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 91bf3ca moc 9 (vong 115): PTE riscv set san A/D (dung dac ta)
 - f1d6d63 cong cu (vong 116): bien cong song song 2 may thanh skill + sua gen-docs guard
 - 5aa08f2 moc 9 (vong 117): test host chung minh kernel map 2 trang dung
+- 5e607f6 moc 9 (vong 118): bai hoc test platform gia + giu test 4 cap
+- 0c52c46 tai lieu (vong 119): bao cao loi exec khong doc duoc trang RW kem ma tran loai tru
+- c602273 tai lieu (vong 119b): ghi log vong 119 (loai tru API map + thu tu map)
+- b642cc9 tai lieu (vong 120): STKR=8 chung minh kernel co ghi nhan mapping stack
+- e8988ef tai lieu (vong 120b): ASID duy nhat + de xuat klog trong platform de doc PTE that
+- bc6eefb tai lieu (vong 120c): ghi log probe STKR=8 + kiem ASID
+- e4b59bb tai lieu (vong 121): trace PTE that — PTE hop le, bac gia thuyet 'khong map duoc'
+- 321d65a tai lieu (vong 121b): ghi log trace PTE + hai huong dieu tra moi
+- c7a7183 tai lieu (vong 122): chuong trinh test dai fault cause=2 — ghi lai de tranh lap lai
+- f78ffba tai lieu (vong 122b): ghi log bai hoc test asm dai
+- 13963bd tai lieu (vong 123): frame va PTE khop nhau — nghi task exec chay sai vspace
+- 32fccf1 tai lieu (vong 123b): ghi log — frame/PTE khop, nghi task exec sai vspace
+- d515196 tai lieu (vong 124): task exec chay dung vspace cua no (bang chung duong)
+- 9f2b711 tai lieu (vong 124b): ghi log bang chung duong + bai hoc chuong trinh dai
+- b0f7c15 tai lieu (vong 125): bai hoc quy trinh — sua code trong spawn_elf_copy de lac cho
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
