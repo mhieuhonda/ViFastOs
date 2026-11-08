@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "IPC DEAD OK",
+        "calling a destroyed endpoint returned an error instead of blocking",
+    ),
+    (
         "IPC JUNK OK",
         "unknown VFS opcode got an error reply and the channel kept working",
     ),

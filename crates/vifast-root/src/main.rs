@@ -2155,6 +2155,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let fault3_tcb = slots.alloc();
     let fault4_tcb = slots.alloc();
     let fault_endpoint_slot = slots.alloc();
+    let probe_endpoint_slot = slots.alloc();
 
     retype(meta_untyped, ObjType::Endpoint, endpoint_slot);
     retype(meta_untyped, ObjType::Tcb, server_tcb);
@@ -2171,6 +2172,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     retype(meta_untyped, ObjType::Tcb, fault3_tcb);
     retype(meta_untyped, ObjType::Tcb, fault4_tcb);
     retype(meta_untyped, ObjType::Endpoint, fault_endpoint_slot);
+    retype(meta_untyped, ObjType::Endpoint, probe_endpoint_slot);
 
     for (fault_tcb, entry, stack, fault_slot) in [
         (
@@ -3017,6 +3019,18 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"IPC JUNK BAD\n"
                     });
+                    // Vòng 134: endpoint đã bị destroy thì lời gọi phải trả
+                    // lỗi NGAY, không được treo task gọi.
+                    let ep = probe_endpoint_slot;
+                    let destroyed = vifast_user::object_destroy(ep);
+                    let dead = unsafe { vifast_user::call_message(ep, 1, 0, 0, 0) };
+                    write(
+                        if destroyed.error == KError::Ok && dead.error != KError::Ok {
+                            b"IPC DEAD OK\n"
+                        } else {
+                            b"IPC DEAD BAD\n"
+                        },
+                    );
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];

@@ -2310,3 +2310,14 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   chạy lại 3 lần liền đều PASS và `--repeat 3` xanh ⇒ flake lúc boot, không
   phải lỗi mới (VIFAST_RETRY_TIMEOUT chỉ retry timeout, không retry mất marker).
 - Gate: QEMU 3/3×3, persist 3/3, harness 556, docs PASS, fmt sạch, 0 warning.
+
+## 9.131 — Vòng 134: gọi endpoint đã destroy phải lỗi ngay, không treo
+
+- Cấp thêm **một endpoint "thử nghiệm"** ngay chỗ cấp `fault_endpoint` (lúc meta
+  Untyped còn dư), rồi ở cuối chuỗi self-test: `object_destroy(ep)` phải `Ok`,
+  và `call_message(ep, …)` sau đó phải trả **mã lỗi khác Ok** — in
+  `IPC DEAD OK`.
+- Ý nghĩa: handle chết không được làm task gọi **block vô hạn** (kiểu treo khó
+  chẩn đoán nhất trong hệ microkernel); đây là bất biến của scheduler/IPC.
+- Marker vào `COMMON`: harness **556 → 559 ca**, cả 3 arch in.
+- Gate: QEMU 3/3×3, persist 3/3, harness 559, docs PASS, fmt sạch, 0 warning.

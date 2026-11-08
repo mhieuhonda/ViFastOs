@@ -361,6 +361,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - f8fcaf4 moc 9 (vong 131): fsck phai sach sau chuoi thao tac FS moi
 - b5626a9 moc 9 (vong 132): kiem tra tu choi dung cua syscall (bao mat co ban)
 - 570c378 chore: them LICENSE MIT + ignore content/
+- aa12470 moc 9 (vong 133): IPC chiu duoc yeu cau rac
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1480,6 +1481,7 @@ QEMU test:
 - `PAGER RECLAIM OK` — pager demo frames/TCBs returned to untyped
 - `RUN FS OK` — exec-from-filesystem loaded an ELF page-by-page and ran it
 - `HIARG` — program executed from the filesystem printed an argv-only marker
+- `IPC DEAD OK` — calling a destroyed endpoint returned an error instead of blocking
 - `IPC JUNK OK` — unknown VFS opcode got an error reply and the channel kept working
 - `SYS REJECT OK` — invalid handles and out-of-range user pointers were all refused
 - `FS OPS FSCK OK` — fsck stayed clean after create/unlink/truncate/rename/link operations
