@@ -112,3 +112,29 @@ T:0000000080382000 I:0000000000000023 P:00000000200e0cd7   ← stack (R|W|U|A|D)
   lệch khi code vượt quá vùng 0x140 mà `write_program_args` ghi đè.
 - Đây là **lỗi của test harness tự chế**, chưa kết luận gì về lỗi stack; ghi
   lại để lần sau viết test ngắn (≤ 8 lệnh) và kiểm tra từng bước.
+
+## Bổ sung vòng 123 — frame & PTE khớp nhau, dữ liệu nằm đúng PA
+
+Trace mới (bật lại PTE + probe map frame stack ở VA thứ hai):
+
+```
+T:80380000 I:23 P:00000000200e04d7     ← PTE trang stack  → PA 0x80381000
+T:80380000 I:24 P:00000000200e04d7     ← PTE probe (0x24000) → cùng PA
+PMAP 0 68719624192                     ← frame_map trả VA 0x10_0002_4000
+```
+
+- Hai mapping (0x23000 và 0x24000) trỏ **cùng một frame PA 0x80381000**.
+- Root đã ghi `"HI FS"` vào frame đó ở offset 0x100 ⇒ dữ liệu nằm đúng PA và
+  đúng VA (0x23100).
+- **Kết luận**: không phải lỗi map, không phải lỗi PTE, không phải lỗi ghi.
+  Nghĩa là khi chương trình đọc `0x23100` nó **không nhận được** `"HI FS"`,
+  tức hoặc task chạy với **vspace khác**, hoặc chương trình **không chạy**.
+- Loại trừ thêm: map với `R|X` (thay `R|W`) vẫn không đọc được ⇒ không phải
+  bit W.
+
+### Việc cần làm ngay (một thí nghiệm duy nhất)
+
+Ghi một **giá trị đặc trưng** vào frame stack (ví dụ `0x41424344`) rồi cho
+chương trình đọc 4 byte ở `0x23100` và in ra; so sánh với việc đọc cùng VA
+bằng một *task khác chắc chắn chạy* (worker). Nếu worker thấy giá trị mà task
+exec không thấy ⇒ **task exec chạy sai vspace**.
