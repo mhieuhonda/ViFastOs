@@ -2418,3 +2418,20 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   rằng **đường validate không phải thủ phạm** khi range nằm gọn trong trang.
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch,
   0 warning, headroom 199 024 B (client riscv 6 trang).
+
+## 9.138 — Vòng 141: lệnh `uname` + bài học "QEMU mồ côi" (đính chính vòng 116)
+
+- Thêm lệnh shell **`uname`** → in `ViFastOs <arch> bootinfo-v3`; đo được bằng
+  cách gõ vào shell thật (`ViFastOs riscv64 bootinfo-v3`). Cập nhật `help` và
+  runbook mục "Lệnh shell có sẵn" (kèm `df` của vòng 139).
+- Ngân sách: client riscv **22416 → 22456 B** (vẫn 6 trang), headroom riscv giữ
+  **199 024 B** cho cả hai bản.
+- **Sự cố & đính chính**: lần chạy cổng đầu tiên riscv **0/3** với `thiếu 1
+  marker: PREEMPT OK`. Tôi nghi client lớn thêm 40 B (giống vòng 116). Kiểm tra
+  lại: chạy riêng **1/1 PASS**, rồi `--repeat 3` **3/3 PASS** với cùng kích
+  thước ⇒ **không phải kích thước**. Nguyên nhân thật: script thủ công của tôi
+  mở QEMU rồi thoát mà không kill ⇒ **QEMU mồ côi** tranh CPU làm PREEMPT
+  timeout.
+- Đã ghi vào runbook mục **1c**: trước khi chạy cổng phải kiểm
+  `./scripts/diag.sh` thấy `qemu-system: 0` (hoặc `pkill -f qemu-system`).
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.

@@ -39,6 +39,22 @@ x86_64; mỗi kiến trúc có serial/disk/socket riêng nên không tranh chấ
 đầy đủ trên máy này để ghi fingerprint (`target/qemu-status-standard.json`).
 
 
+## 1c. Trước khi chạy cổng: không để QEMU mồ côi
+
+Kinh nghiệm vòng 141: script thủ công tự mở QEMU rồi thoát mà **không kill**
+tiến trình ⇒ QEMU cũ chạy nền, tranh CPU, làm cổng chuẩn **timeout `PREEMPT
+OK`** trên riscv (giống hệt triệu chứng "client quá lớn" ở vòng 116 — lần đó
+tôi đã kết luận sai là do kích thước client).
+
+Trước khi chạy `test-qemu.py`/`test-persist.py`:
+
+```bash
+./scripts/diag.sh | tail -3     # phải thấy "qemu-system: 0"
+ps -Ao pid,comm | grep qemu-system
+```
+
+Nếu còn tiến trình: `pkill -f qemu-system` rồi chạy lại cổng.
+
 ## 2. Soak (ổn định dài)
 
 ```bash
