@@ -62,6 +62,23 @@ vào VSpace mới, hoặc `tcb_restart` TCB cũ nếu đã có. `RUN SKIP` =
 hết tài nguyên (fail-êm, không panic). Chạy `run` liên tiếp nhiều lần
 an toàn: VSpace setup một lần, mỗi lần chỉ restart TCB.
 
+### 3b. `runfs <path> [args...]` — chạy chương trình từ filesystem
+
+```text
+shell> runfs /prog.elf hello
+runfs sent
+RUN FS OK
+hello
+```
+
+- Root **tạo `/prog.elf` on-demand** (lần đầu) rồi nạp **từng page từ file**
+  vào frame đích (`spawn_elf_from_fs`), không staging.
+- `args` được gửi dạng `path\0args\0`; root ghi cặp `(ptr,len)` + chuỗi vào
+  trang code, chương trình đọc cặp đó và `DebugWrite` → in đúng tham số
+  (cùng binary, nội dung do tham số quyết định).
+- Cổng chuẩn tự chạy đường này sau thu hồi pager và in `HIARG` (marker chỉ
+  đến từ argv, không nhúng trong ảnh trên đĩa).
+
 ## 4. Đọc serial và chỉ số sức khỏe
 
 Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:

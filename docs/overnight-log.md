@@ -1813,3 +1813,15 @@ follow-up `62b31f4`.
      → bản default ghi đè sau. Sửa: một lời gọi duy nhất, sau copy, trước map.
 - Gate: QEMU 3/3×3, persist 3/3, harness 523, docs PASS, fmt sạch,
   headroom riscv 203 120 B (destroy-smp 199 024 B).
+
+## 9.95 — Vòng 103: đưa argv vào cổng chuẩn (marker `HIARG`)
+
+- Selftest sau thu hồi pager gọi `spawn_elf_from_fs("/prog.elf", "HIARG\n")`:
+  chuỗi này **không có trong ảnh trên đĩa**, chỉ đến từ tham số root truyền →
+  `HIARG` xuất hiện trên serial là bằng chứng đồng thời của exec-từ-FS và argv.
+- `harness_spec.COMMON`: thay marker `HI DK` bằng `HIARG` (vẫn 523 ca).
+- Runbook thêm mục 3b mô tả `runfs <path> [args...]`, định dạng
+  `path\0args\0` và cách root ghi cặp (ptr,len).
+- Kết quả: riscv64/aarch64/x86_64 đều in `HI FS` (ảnh RAM) và `HIARG` (exec
+  từ FS + argv).
+- Gate: QEMU 3/3×3, persist 3/3, harness 523, docs PASS, fmt sạch, 0 warning.

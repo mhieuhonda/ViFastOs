@@ -2695,10 +2695,13 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
+                    // Vòng 103: truyền tham số RIÊNG ("HIARG") để cổng chuẩn
+                    // chứng minh cả exec-từ-FS lẫn argv: chuỗi này không nằm
+                    // trong ảnh trên đĩa, chỉ đến từ tham số root truyền.
                     match spawn_elf_from_fs(
                         root_vfs_slot,
                         b"/prog.elf",
-                        b"HI DK\n",
+                        b"HIARG\n",
                         meta_untyped,
                         data_untyped,
                         0b01,

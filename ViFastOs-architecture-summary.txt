@@ -311,6 +311,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 207ad61 moc 9 (vong 100): test parse cho entry lech trang + bo thu thu hoi server
 - 1975ea5 ha tang (vong 100b): serialize persist trong par-gate
 - 2c78288 moc 9 (vong 101): anh ELF demo 0x180 — headroom +4 KiB, sua thu tu ghi tham so
+- b4e034e moc 9 (vong 102): argv dong — runfs <path> <args> in ra tham so
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1429,7 +1430,7 @@ QEMU test:
 - `FS DISK OK` — filesystem disk path responded
 - `PAGER RECLAIM OK` — pager demo frames/TCBs returned to untyped
 - `RUN FS OK` — exec-from-filesystem loaded an ELF page-by-page and ran it
-- `HI DK` — program executed from the filesystem printed its marker
+- `HIARG` — program executed from the filesystem printed an argv-only marker
 
 Mỗi dòng sau đúng một lần:
 - `VFS SERVER OK` — exactly once
