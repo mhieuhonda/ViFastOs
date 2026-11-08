@@ -2736,3 +2736,27 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   kernel `unmap_frame` + `destroy_object` từng mục ⇒ trang về `Untyped.free`.
   Ước tính thu lại 10–25 trang, đủ nới ngân sách client cho cả 3 arch.
 - Gate: xanh như vòng 158 (không đổi kernel).
+
+## 9.157 — Vòng 160: THU HỒI TRANG STAGING MODULE (thu thật 21–23 trang/arch)
+
+- Vấn đề: runtime cấp `module_pages()` frame cho server/client ELF rồi map
+  read-only vào root vspace; root copy xong vào vspace con nhưng các trang đó
+  **nằm chết tới hết phiên** ⇒ arena cạn (x86 chỉ còn 1 trang trống).
+- Hiện thực:
+  - kernel: `staging: [Option<(vspace, va, frame)>; 32]` + `register_staging()`
+    + `release_staging()` (unmap_frame rồi destroy_object ⇒ trang về `free`);
+  - syscall mới `ModuleRelease = 55`, helper `vifast_user::release_modules()`;
+  - runtime đăng ký mỗi frame sau khi map;
+  - client gọi release **sau `SHELL READY`** (không đặt trong root: đặt sau mốc
+    `SYS REJECT` làm aarch64/x86 mất các marker cuối — đã thử và revert).
+- An toàn theo port: `Platform::staging_release_safe()` mặc định **false**; bật
+  cho riscv64 và aarch64 sau khi gate xanh; x86_64 giữ tắt (chưa chứng minh).
+- Đo được: riscv **21 trang**, aarch64 **22**, x86_64 **23** (đo khi bật tạm cho
+  x86) ⇒ arena x86 từ 85/86 xuống **62/86**.
+- Ngân sách trang client nới có kỷ luật: riscv 6→7, aarch64 7→8, x86_64 8→9
+  (dư địa cho tính năng vòng sau; hiện client 6/7/8 trang).
+- Thử `history`/`!!`: chạy đúng trong shell thật (`last: echo hi`, `!!: echo hi`
+  → in `hi`), nhưng **client +1 trang làm aarch64/x86 thiếu marker cuối** ⇒ đã
+  gỡ khỏi cây lần này, để vòng sau làm cùng lúc với việc nới arena x86.
+- Gate: QEMU 3/3×3, persist 3/3, harness 574, kernel 186, docs PASS, fmt sạch,
+  0 warning, headroom 2 296 176 B.

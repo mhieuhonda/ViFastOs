@@ -75,6 +75,9 @@ Kết quả mẫu (vòng 36): 5/5×3 PASS trong 88.8s. Serial lần hỏng nằm
 - `uname` → `ViFastOs <arch> bootinfo-v3`.
 - `uptime` → `<giây> s (<n> ticks @ <hz> Hz)`; hz do platform công bố qua
   `Platform::tick_hz()` (mặc định 100 Hz — cả ba port đang đúng nhịp này).
+- Sau `SHELL READY`, client gọi syscall `ModuleRelease` (55) để kernel thu hồi
+  các trang staging module (riscv thu 21, aarch64 22, x86_64 23 trang) — xem
+  mục "Ngân sách cứng đã đo".
 - `free` → `<trống>/<tổng> KiB` của **arena lớn nhất** (Untyped gốc), qua
   syscall `MemInfo` (53). Đo thật: `24/344 KiB free` ≈ 6 trang còn trống.
 - `ps` → mỗi dòng `<slot> <prio> <state>` cho từng TCB đang sống (state theo

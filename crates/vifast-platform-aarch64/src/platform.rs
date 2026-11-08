@@ -1051,6 +1051,12 @@ fn tcp_pump() {
 }
 
 impl Platform for Aarch64Platform {
+    /// Vòng 160: thu hồi trang staging module đã được chứng minh an toàn trên
+    /// port này (riscv: gate 3/3 nhiều lần; aarch64: 3/3).
+    fn staging_release_safe() -> bool {
+        true
+    }
+
     type Context = TrapFrame;
 
     const USER_CODE_VA: usize = USER_CODE_VA;

@@ -402,6 +402,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 1413943 tinh nang (vong 156): nhip timer vao kernel (Platform::tick_hz) + uptime giay
 - f334710 tai lieu (vong 157): thu history/!! bi ngan sach chan — ghi bang ngan sach do duoc
 - 0798c0e ha tang (vong 158): noi cua so kernel riscv 2 MiB -> 6 MiB (headroom x11.5)
+- e448a35 cong cu (vong 159): diag in arena tung arch + thiet ke thu hoi trang staging
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -461,7 +462,7 @@ Test hiện tại:
 ### END GENERATED tests
 ### BEGIN GENERATED status
 - RISC-V headroom: 2296176 byte (`kernel_end=0x803cf690`)
-- `Kernel = 550304`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
+- `Kernel = 551328`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
@@ -1137,6 +1138,7 @@ Số syscall chính:
 52 TcbInfo — implemented
 53 MemInfo — implemented
 54 TimerInfo — implemented
+55 ModuleRelease — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,

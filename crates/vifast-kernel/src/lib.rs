@@ -261,6 +261,8 @@ pub struct Kernel {
     pub(crate) fs: fs::RamFs,
     pub(crate) stats: KernelStats,
     pub(crate) page_table_ops: Option<&'static dyn PageTableOps>,
+    /// Vòng 160: trang staging module (runtime map read-only vào root vspace).
+    staging: [Option<(ObjRef, u64, ObjRef)>; 32],
     /// Vòng 156: nhịp timer (tick/giây) do platform đẩy vào lúc init.
     timer_hz: u32,
     /// Root's cspace is separate so ordinary TCBs stay compact.
@@ -308,6 +310,7 @@ impl Kernel {
                 ticks: 0,
             },
             page_table_ops: None,
+            staging: [None; 32],
             timer_hz: 100,
             root_cspace: [None; MAX_CAPS_ROOT],
             next_cap_id: 1,
@@ -502,6 +505,34 @@ impl Kernel {
 
     pub fn set_page_table_ops(&mut self, ops: &'static dyn PageTableOps) {
         self.page_table_ops = Some(ops);
+    }
+
+    /// Vòng 160: ghi nhận một trang staging để thu hồi sau khi root parse
+    /// xong module (xem `release_staging`).
+    pub fn register_staging(&mut self, vspace: ObjRef, va: u64, frame: ObjRef) {
+        for entry in self.staging.iter_mut() {
+            if entry.is_none() {
+                *entry = Some((vspace, va, frame));
+                return;
+            }
+        }
+    }
+
+    /// Vòng 160: bỏ mapping và huỷ mọi trang staging đã ghi nhận; trả số trang
+    /// đã thu hồi. Trang huỷ ⇒ vùng nhớ về `Untyped.free` của arena.
+    pub fn release_staging(&mut self) -> usize {
+        let mut released = 0usize;
+        for index in 0..self.staging.len() {
+            let Some((vspace, va, frame)) = self.staging[index] else {
+                continue;
+            };
+            self.staging[index] = None;
+            let _ = self.unmap_frame(vspace, va);
+            if self.destroy_object(frame).is_ok() {
+                released += 1;
+            }
+        }
+        released
     }
 
     /// Vòng 156: đặt nhịp timer (tick/giây).
@@ -6158,6 +6189,10 @@ impl Kernel {
                     error: KError::NotFound,
                 }
             }
+            n if n == SyscallId::ModuleRelease as u64 => UserAction::Return {
+                value: self.release_staging() as u64,
+                error: KError::Ok,
+            },
             n if n == SyscallId::TimerInfo as u64 => UserAction::Return {
                 value: self.timer_hz as u64,
                 error: KError::Ok,

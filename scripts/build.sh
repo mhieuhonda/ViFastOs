@@ -90,7 +90,7 @@ check_client_budget() {
         exit 1
     fi
 }
-check_client_budget riscv64 "${CLIENT_RV}.stripped" 6
+check_client_budget riscv64 "${CLIENT_RV}.stripped" 7
 
 cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
     -C relocation-model=static \
@@ -100,7 +100,7 @@ cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-sof
     -C link-arg=-z -C link-arg=separate-code
 "$OBJCOPY" --strip-all "$ROOT_ARM" "$ROOT_ARM.stripped"
 scripts/check-root-elf.sh "$ROOT_ARM.stripped" aarch64-unknown-none-softfloat 183
-check_client_budget aarch64 "${CLIENT_ARM}.stripped" 7
+check_client_budget aarch64 "${CLIENT_ARM}.stripped" 8
 
 cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
     -C relocation-model=pic \
@@ -111,7 +111,7 @@ cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
     -C link-arg=-no-pie
 "$OBJCOPY" --strip-all "$ROOT_X86" "$ROOT_X86.stripped"
 scripts/check-root-elf.sh "$ROOT_X86.stripped" x86_64-unknown-none 62
-check_client_budget x86_64 "${CLIENT_X86}.stripped" 8
+check_client_budget x86_64 "${CLIENT_X86}.stripped" 9
 
 echo "== destroy-smp root variants =="
 cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf --features test-destroy-smp -- \

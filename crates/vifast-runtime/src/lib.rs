@@ -115,6 +115,11 @@ pub trait Platform: Arch + Console {
     fn tick_hz() -> u32 {
         100
     }
+    /// Vòng 160: port này có an toàn để thu hồi trang staging module không.
+    /// Mặc định TẮT: chỉ bật khi đã chứng minh trên phần cứng/emulator đó.
+    fn staging_release_safe() -> bool {
+        false
+    }
     /// Verify that trap entry, kernel stacks, descriptor tables, kernel
     /// storage and MMIO all live in KERNEL_SHARED_SLOTS before switching roots.
     fn check_kernel_mappings(root_pa: u64) -> bool;
@@ -807,17 +812,16 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
                 vifast_kernel::klog!(A, "BOOT MODULE COPY FAILED");
                 A::exit(1);
             }
+            let page_va = base + (page * A::PAGE_SIZE) as u64;
             if kernel
-                .map_frame(
-                    vspace,
-                    frame,
-                    base + (page * A::PAGE_SIZE) as u64,
-                    Rights::READ,
-                )
+                .map_frame(vspace, frame, page_va, Rights::READ)
                 .is_err()
             {
                 vifast_kernel::klog!(A, "BOOT MODULE MAP FAILED");
                 A::exit(1);
+            }
+            if A::staging_release_safe() {
+                kernel.register_staging(vspace, page_va, frame);
             }
         }
     }

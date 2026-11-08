@@ -666,6 +666,12 @@ pub fn timer_hz() -> SyscallResult {
     result(e, v)
 }
 
+/// Vòng 160: thu hồi trang staging module — `value` = số trang đã trả lại.
+pub fn release_modules() -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::ModuleRelease as u64, [0, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn tcb_set_affinity(tcb_slot: u8, mask: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

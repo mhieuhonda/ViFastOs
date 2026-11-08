@@ -685,6 +685,12 @@ fn shell() -> ! {
     // Vòng 61 (pha 4 input): marker chứng minh input task (UART console_read
     // + IRQ notify) đã vào vòng lặp — harness khóa exact-one cả 3 arch.
     write(b"SHELL READY\n");
+    // Vòng 160: module đã được root copy vào vspace con xong — trả các trang
+    // staging cho arena (kernel chỉ thực thi khi port đã được chứng minh an toàn).
+    let released = vifast_user::release_modules();
+    if released.error == KError::Ok && released.value > 0 {
+        write(b"MODULE PAGES FREED\n");
+    }
     write(b"shell> ");
     loop {
         let input = vifast_user::console_read();
