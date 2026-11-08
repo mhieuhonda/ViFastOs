@@ -387,6 +387,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 1947206 sua loi (vong 145): exec doc duoc trang stack — thieu cua so VA trong read_user/write_user
 - 99f8d09 moc 9 (vong 146): hop dong cua so copy thanh hang so + test chong tai phat
 - 98af398 ui: menu gon + hamburger mobile
+- ae6f380 moc 9 (vong 147): ba platform dung chung copy_window_ok (mot nguon su that)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

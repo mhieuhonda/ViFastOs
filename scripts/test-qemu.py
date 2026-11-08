@@ -477,6 +477,14 @@ def run_qemu_once(
         elif missing or arch_missing:
             shown = ", ".join((missing + arch_missing)[:5])
             print(f"FAIL: thiếu marker ({len(missing) + len(arch_missing)}): {shown}")
+            # Vòng 148: riêng PREEMPT OK (và chỉ nó) gần như luôn là flake do
+            # tải máy/QEMU mồ côi — đã gặp ở vòng 116 và 141. Nhắc ngay để
+            # người trực không đi sai hướng.
+            if (missing + arch_missing) == ["PREEMPT OK"]:
+                print(
+                    "      gợi ý: chỉ thiếu PREEMPT OK ⇒ nghi QEMU mồ côi/tải máy;"
+                    " chạy ./scripts/diag.sh và pkill -f qemu-system rồi thử lại"
+                )
         else:
             print("FAIL: banner or SELFTEST PASS missing")
         return False, timed_out

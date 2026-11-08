@@ -2527,3 +2527,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   sẽ bị test bắt ngay thay vì lặp lại lỗi exec-stack.
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, abi 5, docs PASS,
   fmt sạch, 0 warning, headroom 199 024 B.
+
+## 9.145 — Vòng 148: runbook phân loại lỗi + gợi ý tự động khi thiếu PREEMPT OK
+
+- Runbook thêm bảng **"Ba lớp lỗi đã gặp nhiều lần"** (mục 5b): PREEMPT OK đơn lẻ
+  = flake tải/QEMU mồ côi; `guest không boot (N dòng)` = flake UEFI (persist đã
+  tự retry 1 lần); `CLIENT ELF ... VƯỢT NGÂN SÁCH TRANG` = chặn ở build.
+  Kèm ghi chú lịch sử: lỗi exec-stack (112–145) là **thiếu cửa sổ VA trong
+  `read_user`/`write_user`**, đã đóng; hợp đồng nằm ở
+  `vifast_abi::user_layout::COPY_WINDOWS` + test host.
+- `scripts/test-qemu.py`: khi **chỉ** thiếu `PREEMPT OK`, in thêm gợi ý
+  `chạy ./scripts/diag.sh và pkill -f qemu-system rồi thử lại` — đúng bài học
+  vòng 116/141, tránh người trực đi sai hướng (tôi đã từng kết luận sai là do
+  kích thước client).
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.

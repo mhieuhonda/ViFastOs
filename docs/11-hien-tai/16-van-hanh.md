@@ -180,6 +180,19 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5b. Ba lớp lỗi đã gặp nhiều lần (phân biệt nhanh)
+
+| Triệu chứng | Cách phân biệt | Việc cần làm |
+|---|---|---|
+| `thiếu 1 marker: PREEMPT OK` (riscv) | chạy lại **một** lần; nếu PASS ⇒ flake | `./scripts/diag.sh` phải báo `qemu-system: 0`; nếu còn ⇒ `pkill -f qemu-system` |
+| `guest không boot (chỉ N dòng serial)` | N rất nhỏ (vài dòng) | flake UEFI/QEMU: `test-persist` đã tự thử lại 1 lần; `test-qemu` chạy lại |
+| `CLIENT ELF <arch> VƯỢT NGÂN SÁCH TRANG` | build fail ngay | thu gọn `vifast-client` hoặc nới Untyped; **đừng** nâng ngân sách mà chưa đo QEMU 3/3 |
+
+Ghi chú lịch sử: lỗi "exec không đọc được trang stack" (vòng 112–145) hoá ra là
+**thiếu cửa sổ VA trong `read_user`/`write_user`** của platform, không phải lỗi
+bảng trang — xem `docs/bugs/exec-stack-page-unreadable.md` (đã đóng). Hợp đồng
+cửa sổ giờ nằm ở `vifast_abi::user_layout::COPY_WINDOWS` và có test host canh.
+
 ## 6. Mở rộng arena (quy trình)
 
 Arena nằm ở `platform-*/src/platform.rs` (`DataPool`, `BootPool`,
