@@ -446,6 +446,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 88007f8 loi (vong 200): HET RO RI — vspace_in_use chan chinh thu no sap don
 - e122bbf tinh nang (vong 201): lenh loop <n> — tu kiem chung chay lap khong ro ri
 - 2ea9a7b sua loi (vong 202): go marker LOOP OK khoi cong (IPC luc boot khong on dinh)
+- 23b3c3c tai lieu (vong 203): soak 15/15 sau khi sua ro ri — moc on dinh moi
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

@@ -420,7 +420,7 @@ fn shell_command(line: &[u8]) {
         write(b"help history !! jobs kill free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
-        write(b"runfs <path> [args...] exec <path> [args...]\n");
+        write(b"runfs <path> [args...]\n");
     } else if line == b"uname" {
         // Vòng 141: định danh hệ thống — arch + phiên bản BootInfo.
         write(b"ViFastOs ");
@@ -506,15 +506,22 @@ fn shell_command(line: &[u8]) {
             }
         }
     } else if line == b"uptime" {
-        // Vòng 156: in cả giây (dùng tick-rate do platform công bố) và tick.
+        // Vòng 204: dạng `1m23s` (gọn; bỏ phần tick/Hz để giữ ngân sách trang).
         let ticks = vifast_user::get_time().value;
-        let hz = vifast_user::timer_hz().value.max(1);
-        write_u64(ticks / hz);
-        write(b" s (");
-        write_u64(ticks);
-        write(b" ticks @ ");
-        write_u64(hz);
-        write(b" Hz)\n");
+        let secs = ticks / vifast_user::timer_hz().value.max(1);
+        if secs >= 60 {
+            write_u64(secs / 60);
+            write(b"m");
+            let r = secs % 60;
+            if r < 10 {
+                write(b"0");
+            }
+            write_u64(r);
+            write(b"s\n");
+        } else {
+            write_u64(secs);
+            write(b"s\n");
+        }
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");
@@ -749,7 +756,7 @@ fn shell_command(line: &[u8]) {
             b"fsck failed\n"
         });
     } else {
-        write(b"unknown command; try help\n");
+        write(b"unknown cmd\n");
     }
 }
 

@@ -3419,3 +3419,15 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   15/15 ⇒ khoanh vùng ngay.
 - Gate chuẩn vẫn xanh sau soak: build 0 warning, QEMU 3/3×3, persist 3/3,
   harness 589, docs PASS, fmt sạch.
+
+## 9.201 — Vòng 204: `uptime` dạng `1m05s` (đã kiểm chứng thật, gỡ tham số test)
+
+- `uptime` in `<giây>s` (<1 phút) hoặc `<phút>m<giây 2 chữ số>s` (≥1 phút),
+  gọn hơn hẳn `0 s (0 ticks @ 100 Hz)` trước đây.
+- **Kiểm chứng thật trên guest** bằng tham số tạm `uptime <số giây>`:
+  `65 → 1m05s`, `100 → 1m40s`, `3599 → 59m59s` (driver match cả 3).
+- Sau đó **gỡ tham số** vì client vượt ngân sách: bản có tham số là
+  **29184 B = 8 trang** (giới hạn 7); gỡ xong về **25088 B = 7 trang**.
+  Định dạng vẫn giữ nguyên nên kết quả kiểm chứng ở trên áp dụng cho bản cuối.
+- Phụ: rút gọn chuỗi help + "unknown cmd" để tiết kiệm chỗ.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS, fmt sạch.

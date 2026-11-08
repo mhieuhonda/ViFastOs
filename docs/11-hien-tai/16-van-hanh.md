@@ -149,6 +149,21 @@ vào VSpace mới, hoặc `tcb_restart` TCB cũ nếu đã có. `RUN SKIP` =
 hết tài nguyên (fail-êm, không panic). Chạy `run` liên tiếp nhiều lần
 an toàn: VSpace setup một lần, mỗi lần chỉ restart TCB.
 
+### 2c-2. `uptime` dạng người đọc được (vòng 204)
+
+```
+shell> uptime
+1m40s
+```
+
+Dưới 1 phút in `<giây>s`, từ 1 phút in `<phút>m<giây 2 chữ số>s`. Định dạng đã
+**kiểm chứng thật** trên guest bằng tham số tạm (`uptime 65` → `1m05s`,
+`uptime 100` → `1m40s`, `uptime 3599` → `59m59s`), sau đó **gỡ tham số** để giữ
+client trong ngân sách **7 trang** (25088 B).
+
+Bài học ngân sách (lần thứ hai): mọi thêm vào client phải đo ngay — bản có tham
+số kiểm định làm client **29184 B = 8 trang** và `build.sh` chặn.
+
 ### 2c-1. `loop <n>` — tự kiểm chứng chạy lặp không rò rỉ
 
 ```
