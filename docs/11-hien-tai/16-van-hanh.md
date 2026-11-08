@@ -284,6 +284,16 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
   client đang `BlockedReply`, message trả lời nằm ở `resume`, `caller` của
   server được xoá.
 
+### 5s-1. Notification: block, không mất tín hiệu, đánh thức mọi waiter
+
+Ba bất biến đã có test (vòng 183):
+- `wait` trên notification **chưa có bit** ⇒ `BlockedNotification`; `signal` đánh
+  thức và **bit tới đúng waiter** (`LABEL_NOTIFICATION`, word = bit đã báo).
+- **Báo trước khi chờ không mất**: `signal` khi không có waiter để lại bit trong
+  word; `wait` sau đó nhận **ngay** (`Ok(Some(bits))`), **không** block; `poll`
+  sau đó trả `0`.
+- Một `signal` đánh thức **mọi waiter còn sống** (không chỉ waiter đầu).
+
 ### 5s. IPC: trao trực tiếp vs xếp hàng, và ý nghĩa `bool` của `send`
 
 `send()` trả **`Ok(true)` = trao trực tiếp cho người đang chờ**, **`Ok(false)`

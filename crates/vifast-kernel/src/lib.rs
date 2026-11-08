@@ -7701,6 +7701,60 @@ mod tests {
     }
 
     #[test]
+    fn wait_on_silent_notification_blocks_until_signalled() {
+        // Vòng 183 (lõi IPC): `wait` trên notification chưa có tín hiệu phải
+        // BLOCK task, và `signal` phải đánh thức đúng nó với bit đã báo.
+        let mut kernel = Kernel::new();
+        let waiter = kernel.create_tcb("waiter", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(waiter, ntfn), Ok(None));
+        assert_eq!(
+            kernel.tcb(waiter).unwrap().state,
+            ThreadState::BlockedNotification
+        );
+        kernel.signal(ntfn, 0b100).unwrap();
+        let table = kernel.tcb(waiter).unwrap();
+        assert_eq!(table.state, ThreadState::Ready, "signal phải đánh thức waiter");
+        let resume = table.resume.expect("phải có message thông báo");
+        assert_eq!(resume.label, LABEL_NOTIFICATION);
+        assert_eq!(resume.words()[0], 0b100, "bit đã báo phải tới waiter");
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn signal_before_wait_is_not_lost() {
+        // Vòng 183: tín hiệu báo TRƯỚC khi ai chờ KHÔNG được mất — bit nằm lại
+        // trong word và `wait` sau đó nhận ngay, không block.
+        let mut kernel = Kernel::new();
+        let waiter = kernel.create_tcb("waiter", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        kernel.signal(ntfn, 0b10).unwrap();
+        assert_eq!(kernel.wait_as(waiter, ntfn), Ok(Some(0b10)));
+        assert_eq!(
+            kernel.tcb(waiter).unwrap().state,
+            ThreadState::Inactive,
+            "wait có sẵn bit thì KHÔNG được block"
+        );
+        assert_eq!(kernel.poll(ntfn), Ok(0), "bit đã tiêu thụ");
+    }
+
+    #[test]
+    fn signal_wakes_every_live_waiter() {
+        // Vòng 183 (audit #4 P0): một `signal` phải đánh thức TẤT CẢ waiter còn
+        // sống, không chỉ waiter đầu tiên.
+        let mut kernel = Kernel::new();
+        let a = kernel.create_tcb("a", 5).unwrap();
+        let b = kernel.create_tcb("b", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(a, ntfn), Ok(None));
+        assert_eq!(kernel.wait_as(b, ntfn), Ok(None));
+        kernel.signal(ntfn, 0b1).unwrap();
+        assert_eq!(kernel.tcb(a).unwrap().state, ThreadState::Ready);
+        assert_eq!(kernel.tcb(b).unwrap().state, ThreadState::Ready);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn cap_transfer_requires_grant_and_strips_the_right() {
         // Vòng 173 (IPC + bảo mật): chuyển capability qua message đòi quyền
         // GRANT ở phía gửi; người nhận KHÔNG được thừa hưởng GRANT (nếu không

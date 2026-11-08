@@ -3117,3 +3117,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `USER EXIT` ⇒ loại flake này.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
   sạch.
+
+## 9.180 — Vòng 183: test notification (block / không mất bit / đánh thức mọi waiter)
+
+- Thêm 3 host test kernel (**195 → 198**):
+  - `wait_on_silent_notification_blocks_until_signalled` — wait khi chưa có bit
+    ⇒ `BlockedNotification`; signal đánh thức và **bit tới đúng waiter**;
+  - `signal_before_wait_is_not_lost` — báo trước khi chờ **không mất bit**:
+    `wait` sau đó trả `Ok(Some(0b10))` mà **không block**, `poll` trả `0`;
+  - `signal_wakes_every_live_waiter` — một `signal` đánh thức **cả hai** waiter
+    (bất biến audit #4 P0).
+- **Guard tự động hoạt động đúng như thiết kế**: `build.sh` **đỏ** ngay với
+  `bảng host test LỆCH so với kết quả cargo test` trước khi tôi cập nhật bảng;
+  chạy `gen-test-counts.py` xong thì xanh, tổng **289 test**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
+  sạch.
