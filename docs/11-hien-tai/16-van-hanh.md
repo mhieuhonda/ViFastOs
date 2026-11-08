@@ -262,6 +262,21 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 - `message_rejects_too_many_words_and_keeps_cap` — `Message::new` từ chối quá
   `MSG_MAX_WORDS`; `with_cap` giữ đúng slot để kernel biết chuyển cap nào.
 
+### 5p-f. GIỚI HẠN đã biết: spawn/destroy lặp lại làm cạn tài nguyên exec
+
+Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
+- chèn vòng lặp **3 chu kỳ** `spawn_elf_copy` + `destroy_exec` ngay trước bước
+  spawn `HIARG` ở boot;
+- kết quả: chỉ **2** chu kỳ spawn thành công (`cycles=2`), `used` tăng
+  **335 872 → 348 160 B** (3 trang) giữa chu kỳ 1 và 3, và bước spawn ngay sau
+  đó **thất bại** ⇒ mất marker `RUN FS OK` + `HIARG` (cổng đỏ 3/3 arch).
+- Kết luận: `destroy_exec` **không** trả đủ tài nguyên để spawn lại nhiều lần
+  liền nhau; `MemInfo.used` là mốc `bump` nên chỉ giảm khi free-list được tái
+  dùng. Đây là **giới hạn tần suất spawn** (và là rủi ro thật cho "OS dùng
+  được"), chưa phải rò rỉ vô hạn.
+- Việc cần làm (vòng sau): tìm tài nguyên không được trả (slot? page table?
+  capability?) bằng cách log số slot/bảng trang trước–sau mỗi chu kỳ.
+
 ### 5p-b. Đo rò rỉ qua NHIỀU lần exec (vòng 187)
 
 Kịch bản tái lập (kernel **không** `test-exit`, build sang target dir riêng):

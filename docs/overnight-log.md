@@ -3218,3 +3218,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Bảng test host tự cập nhật: tổng **295 test**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
   sạch.
+
+## 9.187 — Vòng 190: thực nghiệm spawn lặp lại PHÁT HIỆN GIỚI HẠN THẬT (đã revert)
+
+- Mục tiêu: tự động hoá phép đo rò rỉ nhiều vòng (v187 chỉ đo thủ công) bằng
+  self-test 3 chu kỳ `spawn_elf_copy` + `destroy_exec` ở boot.
+- Kết quả thực nghiệm: chỉ **2** chu kỳ spawn được (`cycles=2`); `used` tăng
+  **335 872 → 348 160 B** (3 trang) giữa chu kỳ 1 và 3; và bước spawn `HIARG`
+  ngay sau đó **thất bại** ⇒ mất `RUN FS OK`/`HIARG`, cổng đỏ **3/3 arch**.
+- Kết luận: `destroy_exec` **không trả đủ tài nguyên** để spawn lại nhiều lần
+  liền nhau. `MemInfo.used` là mốc `bump` nên chỉ giảm khi free-list tái dùng —
+  tức đây là **giới hạn tần suất spawn**, rủi ro thật với "OS dùng được".
+- Đã **revert** vòng lặp để giữ cổng xanh; ghi phát hiện vào runbook **5p-f**
+  kèm việc cần làm: log số slot/page table/cap trước–sau mỗi chu kỳ để tìm tài
+  nguyên không được trả.
+- Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs
+  PASS, fmt sạch.
