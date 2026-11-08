@@ -1610,3 +1610,20 @@ follow-up `62b31f4`.
   nâng trần trước khi exec client ELF đầy đủ (5 page).
 - `--interactive` gửi thêm `runfs` (best-effort vì riscv64 có flake nhận byte
   UART ở chế độ socket, tái hiện cả trên HEAD).
+
+## 9.81 — Vòng 90: điều tra thu hồi bộ nhớ pager + par-gate --full
+
+- Thử thu hồi 3 pager client (6 frame + 3 TCB) sau `DEMAND LOAD OK` để nâng
+  trần exec-thật. Kết quả điều tra (giữ lại làm bài học, code đã revert):
+  1. `object_destroy` từ **pager server** trả `HasDependents` (0/6 destroy được)
+     vì root còn cap gốc; phải `cap_revoke` ở chính root rồi mới destroy.
+  2. Copy cap stack frame vào pager server phải tránh slot 11 — đó là
+     `PAGER_SERVER_VFS_ENDPOINT`; đè lên làm boot in `PAGER VFS CAP BAD`.
+  3. `send()` từ pager server tới endpoint của root trong nhánh
+     `DEMAND LOAD OK` làm task pager dừng ngay sau khi in marker (không in
+     được dòng kế tiếp) — cần điều tra thêm trước khi dùng làm tín hiệu
+     thu hồi; chưa dùng.
+- Chốt: chưa đổi hành vi hệ thống; giữ gate xanh ở `e9c1557`.
+- Hạ tầng: `scripts/par-gate.sh --full` chạy song song local (riscv64+aarch64
+  QEMU + persist + harness + gen-docs/check-docs + fmt) và remote x86_64
+  (QEMU + persist qua SSH) — một lệnh, ~½ thời gian.

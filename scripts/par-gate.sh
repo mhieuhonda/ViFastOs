@@ -5,6 +5,8 @@
 #   ./scripts/par-gate.sh --repeat 3            # số lần lặp mỗi kiến trúc (mặc định 3)
 #   ./scripts/par-gate.sh --remote mac@host     # đổi máy remote
 #   ./scripts/par-gate.sh --local-only          # chỉ chạy máy này (fallback)
+#   ./scripts/par-gate.sh --full                # thêm persist + harness + docs
+#                                               # (persist x86_64 chạy ở máy xa)
 #
 # Cách chia việc: máy này chạy riscv64 + aarch64, máy remote chạy x86_64 —
 # mỗi kiến trúc dùng serial + disk + socket riêng nên không tranh chấp.
@@ -19,11 +21,13 @@ REPEAT=3
 REMOTE="${VIFAST_REMOTE:-ps@100.113.214.23}"
 REMOTE_DIR="${VIFAST_REMOTE_DIR:-ViFastOs}"
 LOCAL_ONLY=0
+FULL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --repeat) REPEAT="$2"; shift 2 ;;
         --remote) REMOTE="$2"; shift 2 ;;
         --local-only) LOCAL_ONLY=1; shift ;;
+        --full) FULL=1; shift ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -38,8 +42,17 @@ REMOTE_LOG="$TMP/vifast-par-remote.log"
 
 start_local() {
     for arch in riscv64 aarch64; do
-        python3 scripts/test-qemu.py --arch "$arch" --repeat "$REPEAT"
+        python3 scripts/test-qemu.py --arch "$arch" --repeat "$REPEAT" || return 1
     done
+    if [ "$FULL" -eq 1 ]; then
+        # Persist + harness chạy ở máy này (không đụng serial của QEMU thường
+        # vì test-persist dùng serial/disk riêng).
+        python3 scripts/test-persist.py || return 1
+        python3 scripts/test-harness-spec.py || return 1
+        python3 scripts/gen-docs.py || return 1
+        python3 scripts/check-docs.py || return 1
+        cargo fmt --all -- --check || return 1
+    fi
 }
 
 start_remote() {
@@ -49,8 +62,12 @@ start_remote() {
         echo "remote sync failed" >&2
         return 1
     fi
+    REMOTE_PERSIST=""
+    if [ "$FULL" -eq 1 ]; then
+        REMOTE_PERSIST=" && PATH=\$HOME/.cargo/bin:\$PATH python3 scripts/test-persist.py"
+    fi
     ssh -o BatchMode=yes "$REMOTE" \
-        "cd ~/$REMOTE_DIR && PATH=\$HOME/.cargo/bin:\$PATH ./scripts/build.sh >/dev/null 2>&1 && PATH=\$HOME/.cargo/bin:\$PATH python3 scripts/test-qemu.py --arch x86_64 --repeat $REPEAT"
+        "cd ~/$REMOTE_DIR && PATH=\$HOME/.cargo/bin:\$PATH ./scripts/build.sh >/dev/null 2>&1 && PATH=\$HOME/.cargo/bin:\$PATH python3 scripts/test-qemu.py --arch x86_64 --repeat $REPEAT$REMOTE_PERSIST"
 }
 
 echo "=== par-gate: local riscv64+aarch64 ($REPEAT lần) | remote $REMOTE x86_64 ==="
