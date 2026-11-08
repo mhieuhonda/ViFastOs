@@ -138,3 +138,17 @@ Ghi một **giá trị đặc trưng** vào frame stack (ví dụ `0x41424344`) 
 chương trình đọc 4 byte ở `0x23100` và in ra; so sánh với việc đọc cùng VA
 bằng một *task khác chắc chắn chạy* (worker). Nếu worker thấy giá trị mà task
 exec không thấy ⇒ **task exec chạy sai vspace**.
+
+## Bổ sung vòng 124 — task CHẠY trong vspace của chính nó (bằng chứng dương)
+
+- Ghi `"TEST"` vào **trang code** của exec tại offset `0x1a0` (ngoài vùng code +
+  ngoài vùng tham số), chương trình đọc 4 byte ở `entry+0x80` và in.
+- Kết quả serial: `TESTPAGER OK` — chuỗi `TEST` in ra **dính liền** `PAGER OK`
+  ⇒ task exec **thực sự chạy trong vspace của nó** và đọc được trang code của
+  chính nó.
+- Vậy hai khả năng "task chạy sai vspace" và "chương trình không chạy" đều bị
+  loại. Khác biệt duy nhất còn lại giữa hai trang: **trang RW**.
+- Bước tiếp theo (rất hẹp): kiểm tra `validate_user_range()` — nếu nó từ chối
+  VA trong trang stack, `DebugWrite` trả `InvalidArg` và chương trình **im
+  lặng** (đúng triệu chứng). Cần một chương trình ngắn in mã lỗi trả về
+  (`O`/`E`) — lưu ý đã có 2 lần thất bại vì chương trình dài chạm vùng tham số.
