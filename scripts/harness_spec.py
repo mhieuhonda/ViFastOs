@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "FS OPS FSCK OK",
+        "fsck stayed clean after create/unlink/truncate/rename/link operations",
+    ),
+    (
         "FS RENAME OK",
         "rename made the old name disappear and kept the new name's size",
     ),

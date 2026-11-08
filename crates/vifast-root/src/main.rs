@@ -1607,6 +1607,13 @@ fn root_vfs_link(endpoint_slot: u8, from: &[u8], to: &[u8]) -> bool {
     root_vfs_two_paths(endpoint_slot, vfs_abi::LINK, from, to)
 }
 
+/// Vòng 131: chạy fsck qua server — xác nhận metadata còn nhất quán sau các
+/// thao tác FS (tạo/xoá/cắt/đổi tên/link).
+fn root_vfs_fsck(endpoint_slot: u8) -> bool {
+    let reply = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::FSCK, 0, 0, 0) };
+    reply.error == KError::Ok && reply.label == vfs_abi::OK
+}
+
 fn root_vfs_stat(endpoint_slot: u8, path: &[u8]) -> Option<u64> {
     if path.is_empty() || path.len() > vifast_abi::vfs::MAX_PATH {
         return None;
@@ -2971,6 +2978,13 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         b"FS LINK OK\n"
                     } else {
                         b"FS LINK BAD\n"
+                    });
+                    // Vòng 131: sau toàn bộ thao tác FS ở trên, fsck phải sạch.
+                    let fsck_ok = root_vfs_fsck(root_vfs_slot);
+                    write(if fsck_ok {
+                        b"FS OPS FSCK OK\n"
+                    } else {
+                        b"FS OPS FSCK BAD\n"
                     });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;

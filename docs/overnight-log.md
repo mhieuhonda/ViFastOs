@@ -2272,3 +2272,14 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
 - Cả hai marker đều in trên 3 arch; thêm vào `COMMON`: harness **541 → 547 ca**.
 - Dọn 2 cảnh báo `variable does not need to be mutable` (build về 0 warning).
 - Gate: QEMU 3/3×3, persist 3/3, harness 547, docs PASS, fmt sạch.
+
+## 9.128 — Vòng 131: fsck phải sạch SAU chuỗi thao tác FS mới
+
+- Thêm `root_vfs_fsck()` (gửi `vfs_abi::FSCK`, thành công khi reply `OK`).
+- Self-test mới chạy **sau** toàn bộ chuỗi write/stat/unlink/truncate/rename/
+  link của các vòng 128–130: gọi fsck và yêu cầu sạch. In
+  `FS OPS FSCK OK` / `FS OPS FSCK BAD`.
+- Ý nghĩa: không chỉ từng thao tác trả `OK`, mà **metadata trên đĩa vẫn nhất
+  quán** sau khi trộn nhiều thao tác — đúng chỗ journaling/bitmap dễ sai.
+- Marker vào `COMMON`: harness **547 → 550 ca**, cả 3 arch in.
+- Gate: QEMU 3/3×3, persist 3/3, harness 550, docs PASS, fmt sạch, 0 warning.
