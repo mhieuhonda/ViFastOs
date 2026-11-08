@@ -2197,3 +2197,16 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   chạm vùng bị ghi đè/đệm 0 (bẫy cũ). Đã ghi chú để lần sau dùng chương trình
   ngắn hơn hoặc tách vùng code.
 - Gate: QEMU 2/2×3, harness 535, build 0 warning, headroom 199 024 B.
+
+## 9.122 — Vòng 125: bế tắc cục bộ + bài học quy trình
+
+- Thử chương trình 12 lệnh in **mã lỗi** của `DebugWrite(0x23100,4)` dưới dạng
+  ký tự (`'0'+errno`): không in gì.
+- Kiểm chứng đối chứng (TEST ở `0x1a0`, bỏ `write_program_args`): cũng không
+  in ⇒ **không kết luận được gì**, vì khối ghi TEST rất có thể đã rơi vào
+  `load_module` (cùng mẫu `let mut rights = Rights::READ;`) thay vì
+  `spawn_elf_copy`.
+- Ghi **bài học quy trình** vào báo cáo lỗi: các mẫu `let mut rights`,
+  `let code: [u32; 8]` xuất hiện ở nhiều hàm/nhánh arch → phải `grep -n` kèm
+  ngữ cảnh hàm sau mỗi lần sửa, và luôn in dấu hiệu (TEST) trước khi kết luận.
+- Gate: QEMU 3/3×3, build 0 warning, docs PASS, headroom 199 024 B.
