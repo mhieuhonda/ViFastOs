@@ -340,8 +340,19 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
   không giải phóng. Đã thêm `ObjType::Tcb`, cập nhật host test
   (`object_destroy_rejects_unsupported_types` giờ kỳ vọng TCB huỷ **thành công**).
   Đo lại: `DESTROY DIAG` **6 → 5**.
-- Còn 5 object kẹt (vspace + frame + 2 PTE + stack) — tiếp tục ở vòng sau; cần
-  in lại `idx`+`err` (hạ tầng nhãn đã có sẵn).
+- **Đã xử lý nốt (vòng 200)**: 5 object còn lại đều `Busy` vì `vspace_in_use`
+  chặn hai điều kiện: (a) VSpace **còn mapping**, (b) **còn page table trỏ tới**.
+  Cả hai đều là thứ mà `destroy_object` **sẽ tự dọn** ⇒ giữ chúng khiến VSpace
+  của task exec **không bao giờ** huỷ được. Đã bỏ hai điều kiện (giữ điều kiện
+  "TCB đang dùng" — có test riêng), kèm test mới
+  `object_destroy_tears_down_mapped_vspace` và
+  `object_destroy_refuses_vspace_bound_to_live_tcb`.
+- **Kết quả đo lại**: `DESTROY DIAG` **biến mất hoàn toàn** (0 object kẹt),
+  **7 lần `runfs` liên tiếp** đều `RUN FS OK` (trước: 3), `free` **16 → 36 KiB**
+  ⇒ bộ nhớ được trả thật.
+- **Marker mới `EXEC MEM STABLE`**: self-test 3 chu kỳ spawn→destroy ở boot, đo
+  `used` ở **trạng thái ổn định** (sau chu kỳ 1 so với sau chu kỳ 3) — xanh trên
+  cả ba arch, harness **586 → 589 ca**.
 - Ghi chú: chẩn đoán in ở boot ("FS TCB …") **đã gỡ** vì nó chạy trong cổng;
   chỉ dùng chẩn đoán ở đường lệnh shell.
 - **Bài học vận hành (vòng 196)**: thêm 2 dòng in chẩn đoán ở boot làm riscv
@@ -576,6 +587,7 @@ arch liệt kê mới cần.
 | `IPC JUNK OK` | bắt buộc | unknown VFS opcode got an error reply and the channel kept working |
 | `SEC PROBE OK` | bắt buộc | kernel refused to read user buffers outside the copy windows |
 | `SYS REJECT OK` | bắt buộc | invalid handles and out-of-range user pointers were all refused |
+| `EXEC MEM STABLE` | bắt buộc | three spawn/destroy cycles left arena usage unchanged (no leak) |
 | `EXEC MEM OK` | bắt buộc | destroying the previous exec task returned its pages (arena not growing) |
 | `MEM FREE OK` | bắt buộc | arena usage stayed consistent (used < size) after the whole FS op chain |
 | `FS MOUNT CLEAN` | bắt buộc | fsck ran at mount time and the loaded disk was consistent |

@@ -3368,3 +3368,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   sai**: kỳ vọng TCB bị từ chối) — giờ kỳ vọng TCB huỷ **thành công**.
 - Đo lại: `DESTROY DIAG` **6 → 5**. Còn 5 (vspace + frame + 2 PTE + stack).
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt sạch.
+
+## 9.197 — Vòng 200: HẾT RÒ RỈ — `vspace_in_use` chặn chính thứ nó sắp dọn
+
+- 5 object còn lại đều `Busy` vì `vspace_in_use` chặn (a) VSpace **còn mapping**,
+  (b) **còn page table trỏ tới**. Cả hai là thứ `destroy_object` **sẽ tự dọn**
+  ⇒ giữ lại khiến VSpace của task exec **không bao giờ** huỷ được.
+- Sửa: bỏ hai điều kiện (giữ điều kiện "TCB đang dùng", có test riêng); thêm
+  test `object_destroy_tears_down_mapped_vspace` (huỷ vspace có mapping ⇒ Ok và
+  frame huỷ được ngay) và `object_destroy_refuses_vspace_bound_to_live_tcb`.
+- **Kết quả**: `DESTROY DIAG` **biến mất** (0 kẹt), **7 lần `runfs` liên tiếp**
+  thành công (trước 3), `free` **16 → 36 KiB**.
+- Thêm marker **`EXEC MEM STABLE`** (self-test 3 chu kỳ ở boot, đo ổn định giữa
+  chu kỳ 1 và 3): xanh cả 3 arch; harness **586 → 589**; tổng host test **296**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, docs PASS, fmt sạch.

@@ -63,7 +63,7 @@ build complete (0 warning)
 | Crate | Số test | Ghi chú |
 |---|---|---|
 | `vifast-abi` | **8/8** | protocol pager v2: label, VA window, encode/decode |
-| `vifast-kernel` | **204/204** | + 2 test fuzz dài `#[ignore]`, chạy `--ignored` |
+| `vifast-kernel` | **205/205** | + 2 test fuzz dài `#[ignore]`, chạy `--ignored` |
 | `vifast-arch` | **7/7** |  |
 | `vifast-pte` | **11/11** |  |
 | `vifast-elf` | **19/19** |  |
@@ -71,7 +71,7 @@ build complete (0 warning)
 | `vifast-fs` | **31/31** | định dạng đĩa, biên block, fsck; nằm trong cổng từ vòng 166 |
 | `vifast-virtio` | **7/7** | checksum TCP/IP; nằm trong cổng từ vòng 167 |
 | `vifast-runtime`, `vifast-user`, `vifast-fsutil` | 0 | kiểm qua QEMU/build |
-| **Tổng duy nhất** | **295** | |
+| **Tổng duy nhất** | **296** | |
 
 Phạm vi chính của `vifast-kernel`:
 
@@ -135,9 +135,9 @@ Tóm tắt:
   `Zero OK`, `BLOCK OK`, `FS DISK OK`, `PAGER RECLAIM OK`, `RUN FS OK`,
   `HIARG`, `WX OK`, `MEM OOM OK`, `FS USAGE OK`, `KILL OK`,
   `SLOT REUSE OK`, `IPC DEAD OK`, `IPC JUNK OK`, `SEC PROBE OK`,
-  `SYS REJECT OK`, `EXEC MEM OK`, `MEM FREE OK`, `FS MOUNT CLEAN`,
-  `FS OPS FSCK OK`, `FS RENAME OK`, `FS LINK OK`, `FS TRUNC OK`,
-  `FS RM OK`, `PROG MID OK`, `PROG TAIL OK`, `PROG SIZE OK`,
+  `SYS REJECT OK`, `EXEC MEM STABLE`, `EXEC MEM OK`, `MEM FREE OK`,
+  `FS MOUNT CLEAN`, `FS OPS FSCK OK`, `FS RENAME OK`, `FS LINK OK`,
+  `FS TRUNC OK`, `FS RM OK`, `PROG MID OK`, `PROG TAIL OK`, `PROG SIZE OK`,
   `PAGER SRV 0/0/0`
 - **Đúng một lần**: `VFS SERVER OK`, `VFS OK`, `VFS STAT OK`, `IOMMU OK`,
   `PERCPU CLOBBER OK`, `TIME MONOTONIC OK`, `TLB REMAP OK`,

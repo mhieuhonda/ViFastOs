@@ -80,6 +80,10 @@ COMMON = [
         "invalid handles and out-of-range user pointers were all refused",
     ),
     (
+        "EXEC MEM STABLE",
+        "three spawn/destroy cycles left arena usage unchanged (no leak)",
+    ),
+    (
         "EXEC MEM OK",
         "destroying the previous exec task returned its pages (arena not growing)",
     ),

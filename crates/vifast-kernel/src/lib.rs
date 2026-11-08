@@ -4393,18 +4393,15 @@ impl Kernel {
             {
                 return true;
             }
-            if reference == object
-                && self
-                    .vspace(object)
-                    .is_some_and(|space| space.mappings.iter().any(Option::is_some))
-            {
-                return true;
-            }
-            if let Some(table) = self.page_table(reference) {
-                if table.mapped.is_some_and(|mapping| mapping.vspace == object) {
-                    return true;
-                }
-            }
+            // Vòng 200: BỎ điều kiện "vspace còn mapping thì không huỷ được".
+            // Giữ nó thì không VSpace nào của task exec huỷ được (vì luôn còn
+            // mapping của code/stack) ⇒ frame + page table kẹt theo ⇒ rò rỉ 5
+            // object mỗi chu kỳ. Huỷ address space phải TỰ gỡ mapping của nó
+            // (nhánh `Kind::VSpace` trong `destroy_object` đã làm việc này).
+            // Vòng 200: bỏ cả điều kiện "còn page table trỏ tới". Các page
+            // table này chính là đối tượng mà `destroy_vspace_page_tables` sẽ
+            // gỡ; giữ điều kiện này thì VSpace của task exec vẫn Busy vĩnh viễn
+            // (mỗi lần chạy đều có 2 page table).
         }
         false
     }
@@ -8431,14 +8428,34 @@ mod tests {
     }
 
     #[test]
-    fn object_destroy_refuses_vspace_in_use() {
+    fn object_destroy_tears_down_mapped_vspace() {
+        // Vòng 200: ĐỔI NGỮ NGHĨA có chủ ý. Trước đây VSpace còn mapping thì
+        // `destroy` trả `Busy`, buộc người dùng tự unmap trước. Thực tế root
+        // không biết hết VA đã map (code/stack/trang do chương trình tự map) nên
+        // VSpace của task exec KHÔNG BAO GIỜ huỷ được ⇒ rò rỉ frame + page table
+        // mỗi chu kỳ. Giờ huỷ address space **tự gỡ** mapping của nó (giống mọi
+        // microkernel thực dụng); chỉ TCB đang dùng nó mới chặn (kiểm riêng).
         let mut kernel = Kernel::new();
         let root = test_root_with_untyped(&mut kernel, 0x740_0000, 16);
         let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
         let vspace = retype_at(&mut kernel, root, ObjType::VSpace, 3);
-        let mapping = kernel.map_frame(vspace, frame, 0, Rights::READ).unwrap();
+        kernel.map_frame(vspace, frame, 0, Rights::READ).unwrap();
+        assert_eq!(kernel.destroy_cap_object(root, 3), Ok(()));
+        // Frame phải huỷ được ngay sau đó — chứng minh counter mapping đã về 0.
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn object_destroy_refuses_vspace_bound_to_live_tcb() {
+        // Bất biến còn giữ: VSpace đang được TCB SỐNG dùng thì không huỷ được.
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x745_0000, 16);
+        let vspace = retype_at(&mut kernel, root, ObjType::VSpace, 3);
+        let tcb = retype_at(&mut kernel, root, ObjType::Tcb, 4);
+        kernel.tcb_mut(tcb).unwrap().vspace = Some(vspace);
         assert_eq!(kernel.destroy_cap_object(root, 3), Err(KError::Busy));
-        kernel.unmap_frame(vspace, mapping.va).unwrap();
+        kernel.tcb_mut(tcb).unwrap().vspace = None;
         assert_eq!(kernel.destroy_cap_object(root, 3), Ok(()));
         assert!(kernel.check_invariants().is_ok());
     }

@@ -3200,6 +3200,42 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"EXEC MEM BAD\n"
                     });
+                    // Vòng 200: rò rỉ đã hết (DESTROY DIAG = 0, 7 lần chạy liên
+                    // tiếp OK) ⇒ thêm lại self-test 3 chu kỳ spawn→destroy NGAY,
+                    // đo `used` ở trạng thái ổn định (chu kỳ 1 vs 3).
+                    let mut cycles_ok = 0u32;
+                    let mut used_after_first = 0u64;
+                    let mut cycle = 0u32;
+                    while cycle < 3 {
+                        cycle += 1;
+                        if spawn_elf_copy(
+                            meta_untyped,
+                            data_untyped,
+                            EXEC_DEMO_ELF,
+                            b"LOOP\n",
+                            0b01,
+                            &mut slots,
+                            &mut exec_used,
+                        )
+                        .is_some()
+                        {
+                            let n = used_len(&exec_used);
+                            destroy_exec(&mut slots, &exec_used, n);
+                            exec_used = [0u8; MAX_EXEC_SLOTS];
+                            exec_len = 0;
+                            exec_tcb = 0;
+                            cycles_ok += 1;
+                            if cycle == 1 {
+                                used_after_first = vifast_user::mem_info().value & 0xffff_ffff;
+                            }
+                        }
+                    }
+                    let used_after_third = vifast_user::mem_info().value & 0xffff_ffff;
+                    write(if cycles_ok == 3 && used_after_third == used_after_first {
+                        b"EXEC MEM STABLE\n"
+                    } else {
+                        b"EXEC MEM LEAK\n"
+                    });
                     // Vòng 103: truyền tham số RIÊNG ("HIARG") để cổng chuẩn
                     // chứng minh cả exec-từ-FS lẫn argv: chuỗi này không nằm
                     // trong ảnh trên đĩa, chỉ đến từ tham số root truyền.
