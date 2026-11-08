@@ -1627,3 +1627,18 @@ follow-up `62b31f4`.
 - Hạ tầng: `scripts/par-gate.sh --full` chạy song song local (riscv64+aarch64
   QEMU + persist + harness + gen-docs/check-docs + fmt) và remote x86_64
   (QEMU + persist qua SSH) — một lệnh, ~½ thời gian.
+
+## 9.82 — Vòng 91: thu hồi demo pager (`PAGER RECLAIM OK`)
+
+- Pager server báo root khi xong demo demand-load (cap tới fault endpoint của
+  root ở slot 15, `PAGER_DONE_LABEL`); root `cap_revoke` → `frame_unmap` →
+  `object_destroy`/`tcb_destroy` cho 3 pager client (3 TCB + 6 frame).
+  `PAGER RECLAIM OK` trên riscv64 và aarch64; DATA untyped objects 77 → 71.
+- Bài học ABI: `object_destroy` trả `HasDependents` nếu còn cap dẫn xuất —
+  phải `cap_revoke` ở chủ sở hữu trước. `frame_unmap` trả `NotMapped` là hợp
+  lệ (pager2 evict demo đã unmap trang của nó trước).
+- Sửa lỗi shell `runfs <path>`: cắt từ index 6 (trước là 7, mất dấu `/`).
+- Ghi chú hạ tầng: kernel nhúng `*.stripped` do `build.sh` sinh — build tay
+  bằng `cargo build` không cập nhật ELF nhúng (dễ test nhầm bản cũ).
+- Gate: QEMU 3/3×3, persist 7×3, harness 514, docs PASS, fmt sạch, 0 warning,
+  headroom riscv giữ 199024 B.

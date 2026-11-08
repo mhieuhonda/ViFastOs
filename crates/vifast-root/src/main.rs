@@ -94,6 +94,11 @@ const DEMAND_LOAD_OK: &[u8] = b"DEMAND LOAD OK\n";
 const DEMAND_LOAD_BAD: &[u8] = b"DEMAND LOAD BAD\n";
 const PAGER3_BAD: &[u8] = b"PAGER3 BAD\n";
 const PAGER_EVICT_OK: &[u8] = b"PAGER EVICT OK\n";
+const PAGER_RECLAIM_OK: &[u8] = b"PAGER RECLAIM OK\n";
+const PAGER_RECLAIM_BAD: &[u8] = b"PAGER RECLAIM BAD\n";
+const PAGER_DONE_LABEL: u64 = 0x5041_4744;
+/// Slot trong cspace pager server giữ cap tới fault endpoint của root.
+const PAGER_SERVER_ROOT: u8 = 15;
 const PAGER_EVICT_BAD: &[u8] = b"PAGER EVICT BAD\n";
 const PAGER_OK: &[u8] = b"PAGER OK\n";
 const PAGER_BAD: &[u8] = b"PAGER BAD\n";
@@ -351,6 +356,15 @@ pub extern "C" fn pager_server() -> ! {
             } else {
                 DEMAND_LOAD_BAD
             });
+            // Vòng 91: báo root thu hồi demo pager (root giữ cap gốc nên chỉ
+            // root revoke + unmap + destroy được; server gửi trên cap tới
+            // fault endpoint của root ở slot PAGER_SERVER_ROOT).
+            if message.data[0] == PAGER4_IMAGE {
+                let r = vifast_user::send(PAGER_SERVER_ROOT, PAGER_DONE_LABEL, 0, 0, 0);
+                write(b"PAGER NOTIFY ");
+                write_decimal(r.error as u64);
+                write(b"\n");
+            }
         } else if message.label == PAGER_LABEL {
             write(if message.data[0] == PAGER_VALUE {
                 PAGER_OK
@@ -1260,7 +1274,7 @@ fn spawn_pager(
     value: u64,
     entry: usize,
     slots: &mut SlotAllocator,
-) -> (u8, u8) {
+) -> (u8, u8, u8) {
     let pager_tcb = slots.alloc();
     retype(meta_untyped, ObjType::Tcb, pager_tcb);
     let stack_frame = slots.alloc();
@@ -1303,7 +1317,7 @@ fn spawn_pager(
         1,
     ));
     check(vifast_user::tcb_resume(pager_tcb));
-    (pager_tcb, page_frame)
+    (pager_tcb, stack_frame, page_frame)
 }
 
 fn spawn_pager_server(
@@ -1312,6 +1326,7 @@ fn spawn_pager_server(
     root_vspace: u8,
     endpoint_slot: u8,
     vfs_endpoint: u8,
+    root_endpoint: u8,
     pager_tcb: u8,
     pager_frame: u8,
     pager2_tcb: u8,
@@ -1410,6 +1425,19 @@ fn spawn_pager_server(
             unsafe {
                 PAGER_VFS_ENABLED = false;
             }
+        }
+        // Vòng 91: cap tới fault endpoint của root để báo hoàn tất demo
+        // pager; root dùng cap gốc của chính nó để revoke + unmap + destroy.
+        if vifast_user::cap_copy(
+            root_endpoint,
+            server_tcb,
+            PAGER_SERVER_ROOT,
+            Rights::WRITE.0,
+        )
+        .error
+            != KError::Ok
+        {
+            write(b"PAGER ROOT CAP BAD\n");
         }
     }
     check(vifast_user::tcb_resume(server_tcb));
@@ -2229,7 +2257,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     );
     let pager_endpoint = slots.alloc();
     retype(meta_untyped, ObjType::Endpoint, pager_endpoint);
-    let (pager_tcb, pager_frame) = spawn_pager(
+    let (pager_tcb, pager_stack, pager_frame) = spawn_pager(
         meta_untyped,
         data_untyped,
         root_vspace,
@@ -2241,7 +2269,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         pager_client as extern "C" fn() -> ! as usize,
         &mut slots,
     );
-    let (pager2_tcb, pager2_frame) = spawn_pager(
+    let (pager2_tcb, pager2_stack, pager2_frame) = spawn_pager(
         meta_untyped,
         data_untyped,
         root_vspace,
@@ -2257,7 +2285,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     // từ Untyped riêng (PAGER_SERVER_UNTYPED) ngay lúc fault, nên cả 3 arch
     // (kể cả x86_64 vốn cạn Untyped ở root) đều chạy được.
     let pager3_entry = pager3_client as extern "C" fn() -> ! as usize;
-    let (pager3_tcb, pager3_frame) = spawn_pager(
+    let (pager3_tcb, pager3_stack, pager3_frame) = spawn_pager(
         meta_untyped,
         data_untyped,
         root_vspace,
@@ -2275,6 +2303,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         root_vspace,
         pager_endpoint,
         endpoint_slot,
+        fault_endpoint_slot,
         pager_tcb,
         pager_frame,
         pager2_tcb,
@@ -2496,6 +2525,61 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             // Mốc 9 (vòng 33): lệnh `run` từ shell — fire-and-forget trên
             // fault_endpoint với badge RUN_BADGE. Không reply (send đơn).
             // Badge lạ + label RUN mới dispatch; fault thật badge 0.
+            // Vòng 91: pager server báo xong demo demand-load → root thu hồi
+            // 3 pager client: revoke cap copy bên server, unmap frame khỏi
+            // root VSpace, destroy frame + TCB → trả 6 frame + 3 TCB.
+            if message.label == PAGER_DONE_LABEL {
+                let mut ok = 0u64;
+                let mut i = 0;
+                while i < 3 {
+                    let (tcb_slot, stack_slot, stack_va, frame_slot, va) = match i {
+                        0 => (
+                            pager_tcb,
+                            pager_stack,
+                            PAGER_STACK_BASE as u64,
+                            pager_frame,
+                            PAGER_VA,
+                        ),
+                        1 => (
+                            pager2_tcb,
+                            pager2_stack,
+                            PAGER2_STACK_BASE as u64,
+                            pager2_frame,
+                            PAGER2_VA,
+                        ),
+                        _ => (
+                            pager3_tcb,
+                            pager3_stack,
+                            PAGER3_STACK_BASE as u64,
+                            pager3_frame,
+                            PAGER3_VA,
+                        ),
+                    };
+                    // Bỏ cap dẫn xuất (nếu có) trước khi destroy object gốc.
+                    let _ = vifast_user::cap_revoke(stack_slot);
+                    let _ = vifast_user::cap_revoke(frame_slot);
+                    let _ = vifast_user::cap_revoke(tcb_slot);
+                    let ub = vifast_user::frame_unmap(root_vspace, stack_va, stack_slot).error;
+                    let uf = vifast_user::frame_unmap(root_vspace, va, frame_slot).error;
+                    let ds = vifast_user::object_destroy(stack_slot).error;
+                    let df = vifast_user::object_destroy(frame_slot).error;
+                    let dt = vifast_user::tcb_destroy(tcb_slot).error;
+                    if (ub == KError::Ok || ub == KError::NotMapped)
+                        && (uf == KError::Ok || uf == KError::NotMapped)
+                        && ds == KError::Ok
+                        && df == KError::Ok
+                        && dt == KError::Ok
+                    {
+                        ok += 1;
+                    }
+                    i += 1;
+                }
+                write(if ok == 3 {
+                    PAGER_RECLAIM_OK
+                } else {
+                    PAGER_RECLAIM_BAD
+                });
+            }
             if message.label == LABEL_RUN && message.badge == RUN_BADGE {
                 // `run` lặp: VSpace setup 1 lần, mỗi lần chỉ thay TCB.
                 if exec_vspace == 0 {

@@ -298,6 +298,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 437d907 moc 9 (vong 82/83): vong tron FS ghi-doc-verify 1KiB on-demand
 - 120f95d moc 9 (vong 84): parse ELF metadata + exec-from-FS + gate song song 2 may
 - e9c1557 moc 9 (vong 89): exec-that tu filesystem chay duoc (RUN FS OK)
+- 9c1cff1 ha tang (vong 90): par-gate --full chay song song 2 may ca persist/harness/docs
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
