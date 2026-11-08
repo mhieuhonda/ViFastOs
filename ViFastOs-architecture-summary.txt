@@ -440,6 +440,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 47c569b loi (vong 194): TCB khong co trong danh sach huy (len=6) + sua TCB luon Busy
 - 59afbc6 chan doan (vong 195): SPAWN LEN=6 — mat slot trong chinh ham spawn
 - 9759895 chan doan (vong 196): spawn ghi vao mang KHAC + go chan doan gay do cong
+- d0f4ac5 chan doan (vong 197): runfs di qua nhanh khac, chan doan khong bao gio in
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

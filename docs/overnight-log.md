@@ -3339,3 +3339,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   chỉ dùng chẩn đoán ở đường lệnh shell để không đổi nhịp boot.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
   sạch.
+
+## 9.195 — Vòng 198: CÙNG một mảng (addr=20072) và chỉ 6 lần `track_alloc`
+
+- Đo **địa chỉ mảng**: `TA addr=20072` ở mọi lần cấp và `DE addr=20072` ở chỗ
+  huỷ ⇒ **cùng một mảng** — loại bỏ giả thuyết "hai mảng song song" (đã treo từ
+  vòng 196).
+- Chuỗi `len=` cho thấy mỗi lần spawn chỉ có **6** lệnh `track_alloc`
+  (`len` 0→5 rồi dừng) ⇒ **TCB không được track** trên đường thực thi, dù mã
+  nguồn `spawn_elf_from_fs` có `track_alloc` cho TCB ⇒ nhánh chạy **khác** nhánh
+  tôi đọc (lần thứ ba) hoặc `?` thoát sớm trước bước đó.
+- Việc cần làm (vòng sau): gắn **nhãn loại** (V/F/S/P/T) cho từng `track_alloc`
+  và chỉ in khi cờ `DIAG` bật từ đường lệnh shell ⇒ biết chính xác 6 lần cấp là
+  object nào, mà không đổi nhịp boot.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt sạch.

@@ -325,9 +325,15 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
   nên an toàn) ⇒ `RUNFS USED …` **không bao giờ in** ⇒ lệnh `runfs` của shell đi
   qua **nhánh xử lý khác**, không phải đoạn `match spawned` đã đọc. Vì vậy mọi
   suy luận trước đó dựa trên nhánh đó **không áp dụng** cho `runfs`.
-- Việc cần làm (vòng sau): tìm **đúng handler** của `runfs` trong root (grep
-  `RUNFS`/`Label`), rồi in `&used as *const _` (địa chỉ mảng) tại `track_alloc`
-  và tại chỗ huỷ để xác nhận **cùng hay khác mảng** — thay vì suy đoán từ giá trị.
+- **Đo địa chỉ (vòng 198)**: `TA addr=20072` (mọi lần cấp) và `DE addr=20072`
+  ⇒ **cùng một mảng**, loại bỏ giả thuyết "hai mảng song song".
+- Và chuỗi `len=` cho thấy mỗi lần spawn chỉ có **6** lệnh `track_alloc`
+  (`len` đi 0→5 rồi dừng), tức **TCB không được track** trên đường đã chạy, dù
+  mã nguồn của `spawn_elf_from_fs` có `track_alloc` cho TCB ⇒ nhánh thực thi
+  **khác** với nhánh tôi đọc (lần thứ ba), hoặc `?` thoát sớm ở một bước trước.
+- Việc cần làm (vòng sau): gắn **nhãn loại** cho từng `track_alloc` (V/F/S/P/T)
+  và chỉ in khi cờ `DIAG` bật từ đường lệnh shell (để cổng không đổi nhịp boot),
+  xác định chính xác 6 lần cấp là những object nào.
 - Ghi chú: chẩn đoán in ở boot ("FS TCB …") **đã gỡ** vì nó chạy trong cổng;
   chỉ dùng chẩn đoán ở đường lệnh shell.
 - **Bài học vận hành (vòng 196)**: thêm 2 dòng in chẩn đoán ở boot làm riscv
