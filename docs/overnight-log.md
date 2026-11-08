@@ -2818,3 +2818,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `SYS REJECT OK` (slot 200 + vượt `USER_VA_END`), `WX OK` (ghi trang X bị chối).
 - Gate: QEMU 3/3×3, persist 3/3, harness 580, kernel 186, FS 28, docs PASS,
   fmt sạch, 0 warning.
+
+## 9.162 — Vòng 165: `KILL OK` — đường "tiến trình" (tạo — huỷ) được khoá
+
+- Self-test ngay sau `SLOT REUSE`: retype một **TCB** vào slot vừa trống rồi
+  `tcb_destroy(slot)` phải **thành công**, và `tcb_destroy(200)` (slot không
+  tồn tại) phải **bị từ chối** ⇒ `KILL OK`.
+- Vì sao đặt cạnh `SLOT REUSE`: tận dụng đúng slot đã được trả về, tránh
+  `slots.alloc()` (bài học vòng 139: alloc làm panic `root slot range
+  exhausted` trên aarch64).
+- Marker vào `COMMON`: harness **580 → 583 ca**. Headroom sau thay đổi vẫn
+  ~2.29 MB (root ELF +1 trang nhưng cửa sổ đã nới từ vòng 158).
+- Runbook thêm mục **5w** mô tả đường tiến trình cơ bản đã khoá.
+- Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 186, FS 28, docs PASS,
+  fmt sạch, 0 warning.

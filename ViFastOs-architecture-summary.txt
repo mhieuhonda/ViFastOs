@@ -407,6 +407,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 3deeb3d tinh nang (vong 161): arena aarch64/x86 len 96 trang + history/!! vao cay
 - 2432b22 loi (vong 162): fsck ngay khi mount (FS MOUNT CLEAN) + tu thu lai khi guest khong boot
 - a974b03 loi (vong 163): tu sua dia khi mount, chi khi chac chan khong mat du lieu
+- 9d060ce bao mat (vong 164): SEC PROBE OK — khoa duong ro ri qua DebugWrite
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1533,6 +1534,7 @@ QEMU test:
 - `WX OK` — writing an executable-mapped frame was denied while the RW stack stayed writable
 - `MEM OOM OK` — oversized untyped request was refused with OutOfMemory and size 0 rejected
 - `FS USAGE OK` — STATFS reported a sane used/total block count with 512-byte blocks
+- `KILL OK` — tcb_destroy killed a freshly retyped TCB and rejected an invalid slot
 - `SLOT REUSE OK` — a slot destroyed and immediately retyped worked again (no leaked cap)
 - `IPC DEAD OK` — calling a destroyed endpoint returned an error instead of blocking
 - `IPC JUNK OK` — unknown VFS opcode got an error reply and the channel kept working

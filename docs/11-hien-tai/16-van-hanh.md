@@ -194,6 +194,12 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5w. Tiến trình: huỷ TCB đã được khoá
+
+`KILL OK` — root retype một TCB vào slot vừa trống rồi `tcb_destroy` (phải
+thành công), và `tcb_destroy(200)` trên slot không tồn tại phải bị từ chối.
+Đây là đường "tiến trình" cơ bản: tạo — huỷ — kiểm tra.
+
 ### 5x. Bảo mật cơ bản đã khoá bằng self-test
 
 - `SEC PROBE OK` — kernel **từ chối đọc hộ** con trỏ nằm ngoài cửa sổ copy

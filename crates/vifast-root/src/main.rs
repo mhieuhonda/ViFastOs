@@ -3085,6 +3085,14 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"SLOT REUSE BAD\n"
                     });
+                    // Vòng 165 (tiến trình): huỷ TCB phải chạy được thật —
+                    // retype một TCB vào slot vừa trống rồi destroy nó, và
+                    // destroy một slot không tồn tại phải bị TỪ CHỐI.
+                    let tcb_probe = vifast_user::retype(meta_untyped, ObjType::Tcb as u64, ep);
+                    let kill_ok = tcb_probe.error == KError::Ok
+                        && vifast_user::tcb_destroy(ep).error == KError::Ok
+                        && vifast_user::tcb_destroy(200).error != KError::Ok;
+                    write(if kill_ok { b"KILL OK\n" } else { b"KILL BAD\n" });
                     // Vòng 139: dung lượng FS qua STATFS — dùng phải ≤ tổng,
                     // tổng > 0, và block size đúng 512 (vifast_fs::BLOCK_SIZE).
                     let usage = unsafe {
