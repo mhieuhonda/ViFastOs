@@ -199,6 +199,17 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5q. Bộ nhớ: W^X, VA trùng, ghi vượt biên frame
+
+- `map_rejects_wx_overlap_and_duplicate_va` — `READ|WRITE|EXEC` trong **một**
+  mapping bị từ chối (`NoRights`); map đè lên VA đã có bị từ chối.
+  Lưu ý: `Rights::ALL` (có bit `GRANT`) trả `InvalidArg` **trước** khi tới luật
+  W^X — đây là lý do test dùng đúng `READ|WRITE|EXEC`.
+- `unmap_then_remap_at_the_same_va_succeeds` — VA dùng lại được sau `unmap`.
+- `copy_frame_bytes_rejects_out_of_range_windows` — ghi vượt biên frame trả
+  `InvalidArg`; `offset = usize::MAX` không tràn; **nhưng** hàm cần
+  `page_table_ops` đã cài, nếu không sẽ trả `MissingPageTable` (không phải Ok).
+
 ### 5r. Chuyển capability qua IPC: quyền `GRANT` và luật "không rửa quyền"
 
 - `cap_transfer_requires_grant_and_strips_the_right`:

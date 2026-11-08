@@ -7282,6 +7282,75 @@ mod tests {
     }
 
     #[test]
+    fn map_rejects_wx_overlap_and_duplicate_va() {
+        // Vòng 174 (bộ nhớ): một mapping không được vừa ghi vừa thi hành
+        // (W^X), và không được map hai frame vào cùng một VA.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_vspace_with_page_size(0x1000, 0x4000_0000, 0x4000, 4096)
+            .unwrap();
+        let frame_a = kernel.create_frame(0x9000, 4096).unwrap();
+        let frame_b = kernel.create_frame(0xa000, 4096).unwrap();
+        assert_eq!(
+            kernel.map_frame(
+                space,
+                frame_a,
+                0x4000_0000,
+                Rights::READ | Rights::WRITE | Rights::EXEC
+            ),
+            Err(KError::NoRights),
+            "W^X: RWX trong một mapping phải bị từ chối"
+        );
+        assert!(kernel
+            .map_frame(space, frame_a, 0x4000_0000, Rights::READ | Rights::WRITE)
+            .is_ok());
+        assert!(
+            kernel
+                .map_frame(space, frame_b, 0x4000_0000, Rights::READ | Rights::WRITE)
+                .is_err(),
+            "map đè lên VA đã có phải bị từ chối"
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn unmap_then_remap_at_the_same_va_succeeds() {
+        // Vòng 174: sau unmap, VA đó phải dùng lại được (không rò rỉ bảng
+        // trang khi map lại cùng vị trí).
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_vspace_with_page_size(0x1000, 0x4000_0000, 0x4000, 4096)
+            .unwrap();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        let first = kernel
+            .map_frame(space, frame, 0x4000_1000, Rights::READ)
+            .unwrap();
+        kernel.unmap_frame(space, first.va).unwrap();
+        let again = kernel.map_frame(space, frame, first.va, Rights::READ).unwrap();
+        assert_eq!(again.va, first.va);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn copy_frame_bytes_rejects_out_of_range_windows() {
+        // Vòng 174: ghi vào frame không được vượt biên — đây là chỗ dễ tràn
+        // nếu ai đó tính offset bằng số học không kiểm tra.
+        let mut kernel = Kernel::new();
+        // copy_frame_bytes cần page-table ops để ghi thật.
+        kernel.set_page_table_ops(&FLUSH_OPS);
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        assert_eq!(
+            kernel.copy_frame_bytes(frame, 4092, &[0u8; 8]),
+            Err(KError::InvalidArg)
+        );
+        assert!(kernel.copy_frame_bytes(frame, 4096 - 8, &[0u8; 8]).is_ok());
+        assert_eq!(
+            kernel.copy_frame_bytes(frame, usize::MAX, &[0u8; 2]),
+            Err(KError::InvalidArg)
+        );
+    }
+
+    #[test]
     fn vspace_range_allocator_reuses_unmapped_holes() {
         let mut kernel = Kernel::new();
         let space = kernel

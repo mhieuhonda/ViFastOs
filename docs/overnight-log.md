@@ -2956,3 +2956,20 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Runbook mục **5r** ghi lại luật GRANT (đây là chỗ dễ có lỗ hổng nhất).
 - Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 192, FS 31, virtio 7,
   docs PASS, fmt sạch, 0 warning.
+
+## 9.171 — Vòng 174: test bộ nhớ (W^X, VA trùng, biên frame)
+
+- Thêm 3 host test kernel (**192 → 195**):
+  - `map_rejects_wx_overlap_and_duplicate_va` — RWX trong MỘT mapping bị từ
+    chối; map đè VA đã có bị từ chối;
+  - `unmap_then_remap_at_the_same_va_succeeds` — VA dùng lại được sau unmap;
+  - `copy_frame_bytes_rejects_out_of_range_windows` — vượt biên trả
+    `InvalidArg`, `usize::MAX` không tràn.
+- Hai lần đoán sai, sửa theo **mã nguồn**:
+  1. `Rights::ALL` (15, có bit GRANT) trả `InvalidArg` **trước** khi tới luật
+     W^X ⇒ phải dùng đúng `READ|WRITE|EXEC` (7) mới chạm `NoRights`;
+  2. `copy_frame_bytes` cần `page_table_ops` đã cài, nếu không trả
+     `MissingPageTable` chứ không Ok.
+- Runbook mục **5q** ghi cả hai điều này (dễ mất thời gian nếu không biết).
+- Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 195, FS 31, virtio 7,
+  docs PASS, fmt sạch, 0 warning.
