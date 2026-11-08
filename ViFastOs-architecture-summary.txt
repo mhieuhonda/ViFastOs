@@ -356,6 +356,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 0823077 cong cu (vong 126): chan ngan sach trang client ELF ngay o build
 - 3468827 cong cu (vong 127): script diag + ngan sach trang client theo tung arch
 - 63248e4 moc 9 (vong 128): self-test vong doi file (tao -> stat -> xoa) trong cong chuan
+- 19b7ca8 moc 9 (vong 129): self-test truncate (cat file + kiem noi dung con lai)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1475,6 +1476,8 @@ QEMU test:
 - `PAGER RECLAIM OK` — pager demo frames/TCBs returned to untyped
 - `RUN FS OK` — exec-from-filesystem loaded an ELF page-by-page and ran it
 - `HIARG` — program executed from the filesystem printed an argv-only marker
+- `FS RENAME OK` — rename made the old name disappear and kept the new name's size
+- `FS LINK OK` — hard link produced two names with the same inode/size
 - `FS TRUNC OK` — truncate to 4 bytes kept exactly the first 4 bytes on disk
 - `FS RM OK` — create + stat + unlink + stat cycle on the filesystem succeeded
 - `PROG MID OK` — a 16-byte window at the middle of /prog.elf matches the source image

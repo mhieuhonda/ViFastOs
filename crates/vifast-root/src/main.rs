@@ -1564,6 +1564,49 @@ fn root_vfs_truncate(endpoint_slot: u8, fd: u64, size: u64) -> bool {
     reply.error == KError::Ok && reply.label == vfs_abi::OK
 }
 
+/// Vòng 130: gửi lệnh VFS có HAI path (rename/link) — layout server:
+/// path1 ở offset 0, path2 ở offset MAX_PATH; data[0]/[1] là độ dài.
+fn root_vfs_two_paths(endpoint_slot: u8, op: u64, first: &[u8], second: &[u8]) -> bool {
+    if first.is_empty()
+        || second.is_empty()
+        || first.len() > vifast_abi::vfs::MAX_PATH
+        || second.len() > vifast_abi::vfs::MAX_PATH
+    {
+        return false;
+    }
+    unsafe {
+        let base = ROOT_IPC_BUF_VA as *mut u8;
+        let mut i = 0;
+        while i < first.len() {
+            core::ptr::write_volatile(base.add(i), first[i]);
+            i += 1;
+        }
+        i = 0;
+        while i < second.len() {
+            core::ptr::write_volatile(base.add(vifast_abi::vfs::MAX_PATH + i), second[i]);
+            i += 1;
+        }
+    }
+    let reply = unsafe {
+        vifast_user::call_message(
+            endpoint_slot,
+            op,
+            first.len() as u64,
+            second.len() as u64,
+            0,
+        )
+    };
+    reply.error == KError::Ok && reply.label == vfs_abi::OK
+}
+
+fn root_vfs_rename(endpoint_slot: u8, from: &[u8], to: &[u8]) -> bool {
+    root_vfs_two_paths(endpoint_slot, vfs_abi::RENAME, from, to)
+}
+
+fn root_vfs_link(endpoint_slot: u8, from: &[u8], to: &[u8]) -> bool {
+    root_vfs_two_paths(endpoint_slot, vfs_abi::LINK, from, to)
+}
+
 fn root_vfs_stat(endpoint_slot: u8, path: &[u8]) -> Option<u64> {
     if path.is_empty() || path.len() > vifast_abi::vfs::MAX_PATH {
         return None;
@@ -2903,6 +2946,31 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         b"FS TRUNC OK\n"
                     } else {
                         b"FS TRUNC BAD\n"
+                    });
+                    // Vòng 130: RENAME — tạo file, đổi tên, tên cũ phải biến
+                    // mất và tên mới giữ nguyên kích thước.
+                    let ren_ok = root_vfs_write_at(root_vfs_slot, b"/rn-old", 0, b"abc", true)
+                        && root_vfs_rename(root_vfs_slot, b"/rn-old", b"/rn-new")
+                        && root_vfs_stat(root_vfs_slot, b"/rn-old").is_none()
+                        && root_vfs_stat(root_vfs_slot, b"/rn-new") == Some(3);
+                    let _ = root_vfs_unlink(root_vfs_slot, b"/rn-new");
+                    let _ = root_vfs_unlink(root_vfs_slot, b"/rn-old");
+                    write(if ren_ok {
+                        b"FS RENAME OK\n"
+                    } else {
+                        b"FS RENAME BAD\n"
+                    });
+                    // Vòng 130: LINK cứng — hai tên cùng inode, cùng kích thước.
+                    let ln_ok = root_vfs_write_at(root_vfs_slot, b"/ln-a", 0, b"xyz", true)
+                        && root_vfs_link(root_vfs_slot, b"/ln-a", b"/ln-b")
+                        && root_vfs_stat(root_vfs_slot, b"/ln-a") == Some(3)
+                        && root_vfs_stat(root_vfs_slot, b"/ln-b") == Some(3);
+                    let _ = root_vfs_unlink(root_vfs_slot, b"/ln-a");
+                    let _ = root_vfs_unlink(root_vfs_slot, b"/ln-b");
+                    write(if ln_ok {
+                        b"FS LINK OK\n"
+                    } else {
+                        b"FS LINK BAD\n"
                     });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;

@@ -2259,3 +2259,16 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
 - Bài học nhỏ: `cargo fmt` gộp `write(if …);` thành một dòng nên mẫu nhiều dòng
   không khớp — lần này chèn theo **chỉ số dòng** và thêm helper riêng.
 - Gate: QEMU 3/3×3, persist 3/3, harness 541, docs PASS, fmt sạch, 0 warning.
+
+## 9.127 — Vòng 130: self-test RENAME + hard LINK
+
+- Thêm `root_vfs_two_paths()` (gửi lệnh VFS hai path: path1 ở offset 0, path2 ở
+  offset `MAX_PATH`, data[0]/[1] là độ dài — đúng layout server), cùng
+  `root_vfs_rename()` và `root_vfs_link()`.
+- Self-test RENAME: ghi `/rn-old` 3 byte → rename sang `/rn-new` → tên cũ phải
+  `None`, tên mới phải size 3 → xoá. In `FS RENAME OK`.
+- Self-test LINK: ghi `/ln-a` 3 byte → link sang `/ln-b` → **cả hai** phải size 3
+  → xoá cả hai. In `FS LINK OK`.
+- Cả hai marker đều in trên 3 arch; thêm vào `COMMON`: harness **541 → 547 ca**.
+- Dọn 2 cảnh báo `variable does not need to be mutable` (build về 0 warning).
+- Gate: QEMU 3/3×3, persist 3/3, harness 547, docs PASS, fmt sạch.
