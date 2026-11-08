@@ -312,6 +312,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 1975ea5 ha tang (vong 100b): serialize persist trong par-gate
 - 2c78288 moc 9 (vong 101): anh ELF demo 0x180 — headroom +4 KiB, sua thu tu ghi tham so
 - b4e034e moc 9 (vong 102): argv dong — runfs <path> <args> in ra tham so
+- 76f9026 moc 9 (vong 103): dua argv vao cong chuan (marker HIARG)
+- d033457 tai lieu (vong 103b): ghi nhan flake persist trong par-gate
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

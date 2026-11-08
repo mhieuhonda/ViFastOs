@@ -1415,7 +1415,7 @@ fn spawn_pager_server(
     pager3_tcb: u8,
     pager3_frame: u8,
     slots: &mut SlotAllocator,
-) {
+) -> (u8, u8, u8) {
     let server_tcb = slots.alloc();
     retype(meta_untyped, ObjType::Tcb, server_tcb);
     let stack_frame = slots.alloc();
@@ -1474,8 +1474,10 @@ fn spawn_pager_server(
     unsafe {
         PAGER_VFS_ENABLED = enable_vfs;
     }
+    let mut ipc_frame_slot = 0u8;
     if enable_vfs {
         let ipc_frame = slots.alloc();
+        ipc_frame_slot = ipc_frame;
         retype(data_untyped, ObjType::Frame, ipc_frame);
         map_with_tables(
             data_untyped,
@@ -1522,6 +1524,7 @@ fn spawn_pager_server(
         write(b"PAGER ROOT CAP BAD\n");
     }
     check(vifast_user::tcb_resume(server_tcb));
+    (server_tcb, stack_frame, ipc_frame_slot)
 }
 
 // Mốc 9 (vòng 46): root tự STAT path qua endpoint gốc. Gọi sau khi VFS
@@ -2383,7 +2386,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
         pager3_entry,
         &mut slots,
     );
-    spawn_pager_server(
+    let (pager_server_tcb, pager_server_stack, pager_server_ipc) = spawn_pager_server(
         meta_untyped,
         data_untyped,
         root_vspace,
@@ -2580,7 +2583,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut exec_used = [0u8; MAX_EXEC_SLOTS];
     let mut exec_len = 0usize;
     let mut exec_vspace = 0u8;
-    let mut exec_tcb = 0u8;
     let mut exit_demo_done = false;
     let mut tlb_remapped = false;
     let mut tlb_done = false;
@@ -2666,6 +2668,37 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 } else {
                     PAGER_RECLAIM_BAD
                 });
+                // Vòng 104: thu hồi pager server (TCB + stack + IPC frame)
+                // sau khi hết demo demand-load — trả 2 frame + 1 TCB.
+                if pager_server_tcb != 0 {
+                    let _ = vifast_user::cap_revoke(pager_server_stack);
+                    let _ = vifast_user::cap_revoke(pager_server_tcb);
+                    let dt = vifast_user::tcb_destroy(pager_server_tcb).error;
+                    let us = vifast_user::frame_unmap(
+                        root_vspace,
+                        PAGER_SERVER_STACK_BASE as u64,
+                        pager_server_stack,
+                    )
+                    .error;
+                    let ds = vifast_user::object_destroy(pager_server_stack).error;
+                    let mut di = KError::Ok;
+                    if pager_server_ipc != 0 {
+                        let _ = vifast_user::frame_unmap(
+                            root_vspace,
+                            PAGER_IPC_BUF_VA as u64,
+                            pager_server_ipc,
+                        );
+                        di = vifast_user::object_destroy(pager_server_ipc).error;
+                    }
+                    write(b"PAGER SRV ");
+                    write_decimal(dt as u64);
+                    write(b"/");
+                    write_decimal(ds as u64);
+                    write(b"/");
+                    write_decimal(di as u64);
+                    write(b"\n");
+                    let _ = us;
+                }
                 // Vòng 92: ngay sau thu hồi, tự chạy exec-thật từ FS (ghi
                 // ELF demo thành /prog.elf rồi nạp TỪNG PAGE từ file). Đây
                 // là điểm kiểm chứng tự động trong cổng chuẩn, không cần
@@ -2708,14 +2741,13 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         &mut slots,
                         &mut exec_used,
                     ) {
-                        Some(tcb) => {
+                        Some(_tcb) => {
                             let mut n = 0;
                             while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
                                 n += 1;
                             }
                             exec_len = n;
                             exec_vspace = exec_used[0];
-                            exec_tcb = tcb;
                             write(b"RUN FS OK\n");
                         }
                         None => write(b"RUN FS FAIL\n"),
@@ -2905,7 +2937,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             ),
                         };
                         match spawned {
-                            Some(tcb) => {
+                            Some(_tcb) => {
                                 let mut n = 0;
                                 while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
                                     n += 1;
@@ -2914,7 +2946,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                                 // exec_used[?] là vspace — tìm slot vspace? Lưu
                                 // riêng: vspace là slot đầu tiên được cấp.
                                 exec_vspace = exec_used[0];
-                                exec_tcb = tcb;
                                 if tcb_opt.is_none() {
                                     write(b"RUN OK\n");
                                 }
@@ -2947,69 +2978,68 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             };
                             i += 1;
                         }
-                        let args = if plen + 1 < vifast_abi::vfs::MAX_PATH {
-                            let mut ab = [0u8; 32];
-                            let mut n = 0usize;
-                            while n < 31 {
-                                let byte = unsafe {
-                                    core::ptr::read_volatile(
-                                        (ROOT_IPC_BUF_VA as *const u8).add(plen + 1 + n),
-                                    )
-                                };
-                                if byte == 0 {
-                                    break;
-                                }
-                                ab[n] = byte;
-                                n += 1;
-                            }
-                            if n > 0 {
-                                Some((ab, n))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        if root_vfs_stat(root_vfs_slot, &pbuf[..plen]).is_some() {
-                            destroy_exec(&mut slots, &exec_used, exec_len);
-                            exec_len = 0;
-                            exec_used = [0u8; MAX_EXEC_SLOTS];
-                            let msg: &[u8] = match &args {
-                                Some((ab, n)) => &ab[..*n],
-                                None => b"HI DK\n",
+                        let mut ab = [0u8; 32];
+                        let mut n = 0usize;
+                        while n < 31 {
+                            let byte = unsafe {
+                                core::ptr::read_volatile(
+                                    (ROOT_IPC_BUF_VA as *const u8).add(plen + 1 + n),
+                                )
                             };
-                            if let Some(tcb) = spawn_elf_from_fs(
-                                root_vfs_slot,
-                                &pbuf[..plen],
-                                msg,
-                                meta_untyped,
-                                data_untyped,
-                                0b01,
-                                &mut slots,
-                                &mut exec_used,
-                            ) {
+                            if byte == 0 {
+                                break;
+                            }
+                            ab[n] = byte;
+                            n += 1;
+                        }
+                        let msg: &[u8] = if n > 0 { &ab[..n] } else { b"HI DK\n" };
+                        // Vòng 104: luôn destroy + nạp lại từ file (không phụ
+                        // thuộc stat) để `runfs/exec` chạy được cả khi TCB cũ
+                        // đã có; fail thì rơi về demo copy như nhánh đầu.
+                        destroy_exec(&mut slots, &exec_used, exec_len);
+                        exec_len = 0;
+                        exec_used = [0u8; MAX_EXEC_SLOTS];
+                        exec_vspace = 0;
+                        if let Some(_tcb) = spawn_elf_from_fs(
+                            root_vfs_slot,
+                            &pbuf[..plen],
+                            msg,
+                            meta_untyped,
+                            data_untyped,
+                            0b01,
+                            &mut slots,
+                            &mut exec_used,
+                        ) {
+                            let mut n2 = 0;
+                            while n2 < MAX_EXEC_SLOTS && exec_used[n2] != 0 {
+                                n2 += 1;
+                            }
+                            exec_len = n2;
+                            exec_vspace = exec_used[0];
+                            write(b"RUN FS OK\n");
+                            fs_done = true;
+                        }
+                    }
+                    if !fs_done {
+                        match spawn_elf_copy(
+                            meta_untyped,
+                            data_untyped,
+                            EXEC_DEMO_ELF,
+                            b"HI FS\n",
+                            0b01,
+                            &mut slots,
+                            &mut exec_used,
+                        ) {
+                            Some(_tcb) => {
                                 let mut n = 0;
                                 while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
                                     n += 1;
                                 }
                                 exec_len = n;
                                 exec_vspace = exec_used[0];
-                                exec_tcb = tcb;
-                                write(b"RUN FS OK\n");
-                                fs_done = true;
+                                write(b"RUN OK\n");
                             }
-                        }
-                    }
-                    if !fs_done {
-                        // Tái dùng TCB cũ bằng restart (zombie sau exit, hoặc
-                        // Ready nếu `run` dồn dập chưa kịp chạy).
-                        let rr = vifast_user::tcb_restart(exec_tcb);
-                        if rr.error == KError::Ok {
-                            write(b"RUN OK\n")
-                        } else {
-                            write(b"RUN SKIP ");
-                            write_decimal(300 + rr.error as u64);
-                            write(b"\n");
+                            None => write(b"RUN SKIP\n"),
                         }
                     }
                 }

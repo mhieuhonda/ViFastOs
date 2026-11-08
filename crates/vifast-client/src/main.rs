@@ -347,10 +347,21 @@ fn shell_command(line: &[u8]) {
     if line.is_empty() {
         return;
     }
+    // `exec <path> [args]` là bí danh của `runfs` — dịch tiền tố rồi xử lý
+    // lại, để hai lệnh chia sẻ đúng một đường mã.
+    if let Some(rest) = line.strip_prefix(b"exec ") {
+        let mut buf = [0u8; 64];
+        buf[..6].copy_from_slice(b"runfs ");
+        let n = core::cmp::min(rest.len(), 57);
+        buf[6..6 + n].copy_from_slice(&rest[..n]);
+        shell_command(&buf[..6 + n]);
+        return;
+    }
     if line == b"help" {
         write(b"help time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> fsck run [path]\n");
+        write(b"runfs <path> [args...] exec <path> [args...]\n");
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");

@@ -1834,3 +1834,18 @@ follow-up `62b31f4`.
 - Chạy lại `test-persist.py` một mình: **3/3 PASS**. Kết luận: flake do tải
   máy khi QEMU local + persist remote chạy chồng; `timeout_hint()` đã chỉ
   đúng nhóm marker thiếu để phân biệt.
+
+## 9.97 — Vòng 104: thu hồi pager server + `exec` là bí danh của `runfs`
+
+- Thu hồi pager server sau demo demand-load: `PAGER SRV 0/0/0` trên cả 3
+  arch (TCB + stack frame + IPC frame destroy OK), objects untyped 76 → 74.
+  Headroom giữ 203 120 B (main) / 199 024 B (destroy-smp) — vẫn xanh.
+- Shell: `exec <path> [args...]` dịch tiền tố thành `runfs ...` rồi xử lý
+  lại → hai lệnh dùng chung một đường mã; `help` liệt kê cả hai.
+- Nhánh RUN khi TCB đã tồn tại: đổi từ "restart TCB cũ" sang **destroy +
+  nạp lại từ file kèm args**, fail-êm về demo copy (an toàn như trước).
+- Phát hiện còn tồn: `runfs` lần 2 trong cùng phiên rơi về demo copy
+  (`RUN OK`) — spawn từ FS lần hai không cấp được object. Đây là **rò rỉ/hụt
+  bộ nhớ sau destroy_exec**, không phải lỗi tham số; ghi nhận cho vòng sau.
+- Dọn 0 warning (bỏ `exec_tcb` không dùng, đổi binding `Some(_tcb)`).
+- Gate: QEMU 3/3×3, persist 3/3, harness 523, kernel 183, docs PASS, fmt sạch.
