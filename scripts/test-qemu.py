@@ -390,11 +390,20 @@ def run_qemu(
         # VIFAST_RETRY_TIMEOUT) hoặc guest chưa boot được dòng nào.
         retry_timeout = timed_out and attempt + 1 < attempts
         retry_boot = NEVER_BOOTED["flag"] and bonus > 0
-        if not (retry_timeout or retry_boot):
+        retry_exit = (
+            not timed_out and MARKERS_OK["flag"] and bonus > 0 and not retry_boot
+        )
+        if not (retry_timeout or retry_boot or retry_exit):
             return False
         if retry_boot and not retry_timeout:
             bonus -= 1
             print(f"RETRY {name}: guest không boot (nghi flake UEFI/QEMU), chạy lại MỘT lần")
+        elif retry_exit:
+            bonus -= 1
+            print(
+                f"RETRY {name}: guest in đủ marker nhưng QEMU thoát mã lạ "
+                f"(rc={rc}) — nghi race debug-exit, chạy lại MỘT lần"
+            )
         else:
             print(f"RETRY {name}: timeout, chạy lại (lần {attempt + 2}/{attempts})")
         attempt += 1
@@ -404,6 +413,9 @@ def run_qemu(
 # Vòng 162: đánh dấu lần chạy vừa rồi có "guest chưa hề boot" hay không.
 # Khi đó flake là của QEMU/UEFI (không phải sản phẩm) nên tự thử lại MỘT lần.
 NEVER_BOOTED = {"flag": False}
+# Vòng 177: guest in ĐỦ marker mà QEMU thoát mã lạ ⇒ nghi race của cơ chế
+# `isa-debug-exit`, không phải lỗi sản phẩm; cho phép thử lại một lần.
+MARKERS_OK = {"flag": False}
 
 
 def run_qemu_once(
@@ -462,6 +474,11 @@ def run_qemu_once(
             return False, timed_out
         print("PASS (expected TLB failure detected)")
         return True, False
+    from harness_spec import COMMON as _COMMON, EXACT_ONE as _EXACT
+
+    MARKERS_OK["flag"] = all(text in output for text, _ in _COMMON) and all(
+        output.count(text) == 1 for text in _EXACT
+    )
     ok = accept(name, output, rc, require_block, require_disk, feature_mode)
     if timed_out:
         # Phân biệt flake do tải máy với hỏng thật: nếu guest đã in ĐỦ hợp

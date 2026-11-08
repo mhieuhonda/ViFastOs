@@ -22,6 +22,7 @@ không (xem mục 3).
 | thiếu **đúng** `PREEMPT OK` | QEMU mồ côi chiếm CPU | `./scripts/diag.sh` → `qemu-system: N` | `pkill -f qemu-system`, chạy lại |
 | thiếu `PREEMPT OK` + `SMP IDLE OK` + `SMP POST IDLE OK` | kernel của cổng **thiếu feature `test-exit`** | `python3 -c "d=open('target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64','rb').read(); print(d.count(b'PREEMPT OK'))"` phải ra **2** | chạy `./scripts/build.sh`; **không** build tay `--no-default-features` vào cùng target |
 | guest in rất ít dòng | flake UEFI/QEMU (thường x86_64) | đếm số dòng serial | giờ đã **tự thử lại 1 lần** (vòng 162) |
+| `FAIL: banner or SELFTEST PASS missing` | guest in **đủ** marker nhưng QEMU thoát mã lạ (race `isa-debug-exit`) | đối chiếu: đủ `COMMON` + `EXACT_ONE` đúng | **tự thử lại 1 lần** (vòng 177) — không áp dụng khi thiếu marker |
 
 **Bài học**: lỗi "thiếu PREEMPT OK" đã làm tôi đi sai hướng ba vòng
 (149/151/153) — nguyên nhân thật là chính tôi build tay đè kernel cổng. Từ vòng

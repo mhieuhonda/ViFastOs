@@ -419,6 +419,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 044508f test (vong 173): chuyen capability qua IPC + reply (bao mat microkernel)
 - 8530864 test (vong 174): bo nho — W^X, VA trung, bien frame
 - 2317152 tai lieu (vong 175): bang tra lenh shell sinh tu dong tu ma nguon
+- 2893cb7 test (vong 176): ABI test + bang so test host sinh tu dong
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

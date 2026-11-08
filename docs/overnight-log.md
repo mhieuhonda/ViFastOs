@@ -3014,3 +3014,20 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   boot), ghi nhận làm việc tiếp theo.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
   sạch.
+
+## 9.174 — Vòng 177: tự thử lại khi "đủ marker nhưng QEMU thoát mã lạ"
+
+- Vòng 176 gặp aarch64 **2/3** với `FAIL: banner or SELFTEST PASS missing`. Đọc
+  `accept()` mới rõ: thông báo đó nghĩa là **mọi marker đều đúng**, thất bại nằm
+  ở `rc not in EXIT_CODES` — tức race của cơ chế `isa-debug-exit`, không phải
+  sản phẩm. Trước đây loại này **không** được auto-retry (chỉ retry khi guest
+  không boot).
+- Thêm cờ `MARKERS_OK` (đủ `COMMON` + `EXACT_ONE` đúng) và nhánh `retry_exit`
+  trong `run_qemu`: nếu guest in **đủ marker** mà QEMU thoát mã lạ thì thử lại
+  **một lần**, in lý do rõ ràng. Không áp dụng khi thiếu marker (để không che
+  lỗi thật).
+- Kiểm chứng: cổng xanh 3/3×3 sau thay đổi; **chưa tái hiện được** flake để
+  chứng kiến nhánh retry chạy (ghi nhận trung thực, sẽ xác nhận khi gặp lại).
+- Runbook `17-su-co.md` thêm dòng chẩn đoán cho loại lỗi này.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
+  sạch.
