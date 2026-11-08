@@ -23,7 +23,7 @@ use vifast_abi::user_layout::{
     WORKER_G_STACK_BASE, WORKER_G_STACK_TOP, WORKER_H_STACK_BASE, WORKER_H_STACK_TOP,
 };
 use vifast_abi::{
-    pager::{LABEL_RUN, RUN_BADGE},
+    pager::{LABEL_KILL, LABEL_RUN, RUN_BADGE},
     vfs as vfs_abi, BootInfo, KError, ObjType, Rights, BOOTINFO_MAGIC, BOOTINFO_VERSION, IRQ_TIMER,
     IRQ_UART, LABEL_FAULT,
 };
@@ -3135,6 +3135,18 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                         None => write(b"RUN FS FAIL\n"),
                     }
+                }
+            }
+            if message.label == LABEL_KILL {
+                // Vòng 169: `kill` từ shell — dừng TCB exec đang chạy.
+                if exec_len != 0 {
+                    destroy_exec(&mut slots, &exec_used, exec_len);
+                    exec_len = 0;
+                    exec_used = [0u8; MAX_EXEC_SLOTS];
+                    exec_vspace = 0;
+                    write(b"KILL EXEC OK\n");
+                } else {
+                    write(b"KILL EXEC SKIP\n");
                 }
             }
             if message.label == LABEL_RUN && message.badge == RUN_BADGE {

@@ -2883,3 +2883,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   - git (commit ngoài quét thay đổi; `content/` + `LICENSE.bak` untracked).
 - Thêm mục 17 vào `00-index.md`; `gen-docs`/`check-docs` PASS.
 - Gate: build 0 warning, QEMU 2/2×3 (chạy 2 lần), docs PASS.
+
+## 9.166 — Vòng 169: lệnh `kill` — dừng chương trình đang chạy từ shell
+
+- Thêm `LABEL_KILL` (0x5047_0007) vào ABI; client `kill` chỉ gửi tín hiệu, còn
+  **root** giữ cap TCB nên root mới huỷ được (đúng mô hình quyền: client không
+  có cap tới TCB của task khác).
+- Root: nhánh `LABEL_KILL` gọi `destroy_exec` và in `KILL EXEC OK`; khi không
+  có task nào đang chạy thì `KILL EXEC SKIP` (không đỏ oan).
+- Thử thật trong shell (kernel không `test-exit`, build sang `/tmp/tgt-noexit`):
+  `runfs` → `kill` → **`KILL EXEC OK`** → `kill` lần nữa → **`KILL EXEC SKIP`**.
+- Hai lỗi nhỏ đã sửa ngay: quên import `LABEL_KILL` ở client và root (dùng sai
+  dạng `use` của root — `pager::{...}` chứ không phải `pager::LABEL_KILL`).
+- Client vẫn 7/8/9 trang (thay thế đúng chỗ), headroom 2.29 MB.
+- Gate: QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt sạch, 0 warning.

@@ -3,7 +3,7 @@
 #![no_main]
 
 use core::panic::PanicInfo;
-use vifast_abi::pager::LABEL_RUN;
+use vifast_abi::pager::{LABEL_KILL, LABEL_RUN};
 use vifast_abi::user_layout::{
     CLIENT_CMD_SLOT, CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_UART_IRQ_SLOT,
     CLIENT_UART_NOTIFICATION_SLOT, DATA_VA, IPC_BUF_CLIENT_VA,
@@ -417,7 +417,7 @@ fn shell_command(line: &[u8]) {
         return;
     }
     if line == b"help" {
-        write(b"help history !! free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+        write(b"help history !! kill free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...] exec <path> [args...]\n");
@@ -446,6 +446,14 @@ fn shell_command(line: &[u8]) {
         } else {
             write(b"free: error\n");
         }
+    } else if line == b"kill" {
+        // Vòng 169: dừng chương trình exec đang chạy (root giữ cap TCB).
+        let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_KILL, 0, 0, 0);
+        write(if r.error == KError::Ok {
+            b"kill sent\n"
+        } else {
+            b"kill failed\n"
+        });
     } else if line == b"ps" {
         // Vòng 152: liệt kê TCB đang sống: "<slot> <prio> <state>".
         let mut index = 0u64;

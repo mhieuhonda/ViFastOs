@@ -32,6 +32,9 @@ pub mod pager {
     /// Shell `run` -> root exec demo (mốc 9, vòng 33): gửi trên
     /// fault_endpoint với badge RUN_BADGE, không phải fault thật.
     pub const LABEL_RUN: u64 = 0x5047_0006;
+    /// Vòng 169: shell `kill` -> root dừng TCB exec đang chạy (root giữ cap
+    /// nên chỉ root huỷ được; client chỉ gửi tín hiệu).
+    pub const LABEL_KILL: u64 = 0x5047_0007;
     /// Badge của cap lệnh root mint cho client (phân biệt với fault badge 0).
     pub const RUN_BADGE: u64 = 7;
 

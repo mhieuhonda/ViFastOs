@@ -411,6 +411,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 7247e0a moc 9 (vong 165): KILL OK — duong tien trinh (tao - huy) duoc khoa
 - 0f7f66f test (vong 166): driver block co test bien + dua FS test vao cong
 - a9d64a6 test (vong 167): net stack co test checksum trong cong
+- 2c0147e tai lieu (vong 168): runbook su co 17-su-co.md
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
