@@ -2135,3 +2135,18 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   tiếp**: tạm `putc`/klog trong platform ngay sau `write_pte` để đọc **PTE
   thật** (table_pa, idx, pte) rồi so với giá trị mong đợi.
 - Gate: QEMU 2/2×3, build 0 warning, headroom 199 024 B.
+
+## 9.118 — Vòng 121: trace PTE thật trong platform — PTE KHÔNG hỏng
+
+- Bật in PTE ngay trong `PageOps::write_pte` (platform riscv) cho entry trang
+  code (idx 1) và trang stack (idx 0x23):
+  - code: `P:00000000200dc4db` → R|X|U|A|D, PPN → PA 0x80371000
+  - stack: `P:00000000200e0cd7` → R|W|U|A|D, PPN → PA 0x80383000
+  - cùng một bảng (`T:0000000080382000`).
+- ⇒ **PTE hợp lệ**; giả thuyết "không map được / PTE hỏng" bị bác bỏ.
+- Trace còn bắt được **một lần ghi PTE = 0** (unmap) ở bảng khác trong boot ⇒
+  có thao tác unmap; cần đối chiếu xem có rơi vào vspace của task exec không.
+- Thêm dữ kiện: `USER FAULT ... cause=0x2 addr=0x0` (illegal instruction) xuất
+  hiện ngay sau khi chương trình in byte đầu ⇒ nghi **luồng thực thi bị lạc sau
+  syscall**, không phải lỗi đọc bộ nhớ.
+- Đã revert; gate xanh (QEMU 2/2×3, 0 warning, headroom 199 024 B).
