@@ -3296,3 +3296,15 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Chưa xong: cần biết vì sao slot TCB không được ghi vào `exec_used` (in toàn bộ
   mảng trước/sau spawn ở vòng sau).
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt sạch.
+
+## 9.192 — Vòng 195: `SPAWN LEN=6` — mất slot xảy ra BÊN TRONG hàm spawn
+
+- In độ dài `exec_used` **ngay sau khi spawn xong** ⇒ **`SPAWN LEN=6`** (không
+  phải 7). Vậy `spawn_elf_from_fs` chỉ để lại 6 slot dù có `track_alloc` cho TCB
+  ⇒ chỗ mất slot là **bên trong hàm spawn**, không phải ở chỗ huỷ (đã loại trừ
+  giả thuyết "destroy dùng len cũ").
+- Nghi vấn cụ thể: helper `map_frame(...)` nhận `&mut used_len`; nếu nó không
+  tăng/ghi đè `used_len` thì các slot sau (stack, TCB) đè lên nhau ⇒ tổng 6.
+- Việc cần làm (vòng sau): in `used_len` tại **từng** `track_alloc`, kiểm helper
+  `map_frame`, sửa để `SPAWN LEN=7`; khi đó mới có thể đạt `DESTROY DIAG` = 0.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt sạch.

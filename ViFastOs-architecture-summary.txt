@@ -437,6 +437,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 1c1dc01 tai lieu (vong 191): loai tru gia thuyet slot trong gioi han spawn
 - 8696861 loi (vong 192): tim ra 6 object ket moi chu ky exec + sua ro ri slot
 - b8bf39a chan doan (vong 193): do chi tiet 6 object ket (Busy/InvalidArg)
+- 47c569b loi (vong 194): TCB khong co trong danh sach huy (len=6) + sua TCB luon Busy
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

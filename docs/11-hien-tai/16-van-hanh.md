@@ -308,9 +308,16 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
   hàng chờ đã nằm trong `destroy_object`).
 - Đã thêm `used_len()` để luôn huỷ theo **độ dài thật** của `exec_used` thay vì
   `exec_len` có thể cũ.
-- **Chưa xong**: `len=6` vẫn còn ⇒ cần tìm vì sao slot **TCB** không nằm trong
-  `exec_used` tại thời điểm huỷ (in toàn bộ mảng + `exec_len`/`used_len` ngay
-  trước và sau khi spawn).
+- **Đo tiếp (vòng 195)**: in độ dài **ngay sau khi spawn xong** ⇒
+  `SPAWN LEN=6` (không phải 7). Nghĩa là `spawn_elf_from_fs` chỉ để lại **6**
+  slot trong `exec_used`, dù hàm có gọi `track_alloc` cho TCB. Vậy mất slot xảy
+  ra **bên trong hàm spawn**, không phải ở chỗ huỷ.
+- Nghi vấn cụ thể: helper `map_frame(...)` nhận `&mut used_len` — nếu nó ghi đè
+  hoặc không tăng `used_len` cho slot của nó thì các slot sau (stack, TCB) bị
+  ghi đè lên nhau ⇒ tổng cuối = 6.
+- Việc cần làm (vòng sau): in `used_len` tại **từng** `track_alloc` trong hàm
+  spawn (hoặc kiểm tra helper `map_frame` có ghi `used_len` đúng không), rồi sửa
+  để `SPAWN LEN=7`; khi đó `DESTROY DIAG` mới có thể về 0.
 
 ### 5p-b. Đo rò rỉ qua NHIỀU lần exec (vòng 187)
 
