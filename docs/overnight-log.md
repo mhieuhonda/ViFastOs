@@ -2541,3 +2541,23 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   vòng 116/141, tránh người trực đi sai hướng (tôi đã từng kết luận sai là do
   kích thước client).
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.
+
+## 9.146 — Vòng 149: phát hiện phụ thuộc NHỊP của test SMP idle (chưa sửa)
+
+- Định thêm `uptime` + `stat` in loại file (đã chạy được thủ công: `68 ticks`,
+  `512 bytes dir`) ⇒ client riscv 22456 → **22504 B** (vẫn 6 trang, headroom
+  không đổi 199 024 B).
+- Nhưng **riscv 0/3** ngay sau đó: serial dừng ở `shell>`, thiếu `PREEMPT OK`.
+  Kiểm tra: thiếu cả `SMP IDLE OK` / `SMP POST IDLE OK`, dù `SMP WORKERS OK` có.
+- Revert thay đổi client ⇒ riscv **1/1 PASS** ngay ⇒ thủ phạm là **+48 B** làm
+  lệch nhịp boot.
+- Cơ chế: `post_idle_ready()` (platform riscv) đòi
+  `POST_IDLE_ENTRIES >= POST_TIMER_TICKS - 2` **và**
+  `POST_TIMER_WAKES >= ticks - 2`. Chỉ cần hart phụ bận lâu hơn một chút là số
+  lần vào idle tụt lại ⇒ điều kiện không bao giờ đúng ⇒ `PREEMPT OK` không in.
+- Đây là **phụ thuộc nhịp** của test, không phải lỗi chức năng; nhưng nó làm
+  gate đỏ oan và đã hai lần (vòng 116, 141) khiến tôi kết luận sai.
+- Hướng sửa (vòng sau): thay so sánh tốc độ bằng **chờ tường minh** — ví dụ sau
+  `POST_STARTED` đếm đủ N lần hart phụ vào idle rồi mới cho phép in, hoặc
+  barrier "mọi việc phụ xong rồi mới mở pha POST".
+- Gate (sau revert): xanh như vòng 148.
