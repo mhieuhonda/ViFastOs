@@ -108,6 +108,13 @@ pub trait Platform: Arch + Console {
     fn switch_root(root_pa: u64, asid: u16) -> bool;
 
     fn page_table_ops() -> &'static dyn vifast_kernel::PageTableOps;
+    /// Số tick timer mỗi giây (nhịp lập lịch). Mặc định 100 Hz — cả ba port
+    /// hiện cấu hình đúng nhịp này (riscv: mtime 10 MHz / 100_000; aarch64:
+    /// `TIMER_HZ`; x86_64: LAPIC initial = hz/100). Port nào đổi nhịp phải
+    /// override.
+    fn tick_hz() -> u32 {
+        100
+    }
     /// Verify that trap entry, kernel stacks, descriptor tables, kernel
     /// storage and MMIO all live in KERNEL_SHARED_SLOTS before switching roots.
     fn check_kernel_mappings(root_pa: u64) -> bool;
@@ -424,6 +431,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     }
     let kernel = A::init_kernel();
     kernel.set_page_table_ops(A::page_table_ops());
+    kernel.set_timer_hz(A::tick_hz());
     // Guard against static-storage overflow: `Kernel` lives in a platform
     // `.data`/`.bss` static. If it grows past its neighbors (e.g. a pool
     // array added to `Kernel`), `reset()` silently clobbers them — on AArch64

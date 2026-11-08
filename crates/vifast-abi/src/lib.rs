@@ -916,6 +916,8 @@ pub enum SyscallId {
     TcbInfo = 52,
     /// Vòng 154: bộ nhớ Untyped — value = free_bytes | total_bytes << 32.
     MemInfo = 53,
+    /// Vòng 156: nhịp timer (tick/giây) — value = hz.
+    TimerInfo = 54,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -976,6 +978,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::TcbWait, true),
     (SyscallId::TcbInfo, true),
     (SyscallId::MemInfo, true),
+    (SyscallId::TimerInfo, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

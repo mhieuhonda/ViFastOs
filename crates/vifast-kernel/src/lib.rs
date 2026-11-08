@@ -261,6 +261,8 @@ pub struct Kernel {
     pub(crate) fs: fs::RamFs,
     pub(crate) stats: KernelStats,
     pub(crate) page_table_ops: Option<&'static dyn PageTableOps>,
+    /// Vòng 156: nhịp timer (tick/giây) do platform đẩy vào lúc init.
+    timer_hz: u32,
     /// Root's cspace is separate so ordinary TCBs stay compact.
     pub(crate) root_cspace: [Option<Cap>; MAX_CAPS_ROOT],
     pub(crate) next_cap_id: u64,
@@ -306,6 +308,7 @@ impl Kernel {
                 ticks: 0,
             },
             page_table_ops: None,
+            timer_hz: 100,
             root_cspace: [None; MAX_CAPS_ROOT],
             next_cap_id: 1,
             next_asid: 1,
@@ -499,6 +502,11 @@ impl Kernel {
 
     pub fn set_page_table_ops(&mut self, ops: &'static dyn PageTableOps) {
         self.page_table_ops = Some(ops);
+    }
+
+    /// Vòng 156: đặt nhịp timer (tick/giây).
+    pub fn set_timer_hz(&mut self, hz: u32) {
+        self.timer_hz = hz.max(1);
     }
 
     pub fn stats(&self) -> KernelStats {
@@ -6150,6 +6158,10 @@ impl Kernel {
                     error: KError::NotFound,
                 }
             }
+            n if n == SyscallId::TimerInfo as u64 => UserAction::Return {
+                value: self.timer_hz as u64,
+                error: KError::Ok,
+            },
             n if n == SyscallId::TcbWait as u64 => {
                 let target = match self.lookup_cap(
                     tcb,

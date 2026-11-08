@@ -2665,3 +2665,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `harness_spec` (cơ chế đã có từ vòng 138 nên `check-docs` bắt drift ngay).
 - Gate: QEMU 3/3×3, persist 3/3, harness 574, docs PASS, fmt sạch, 0 warning,
   headroom 199 024 B.
+
+## 9.153 — Vòng 156: nhịp timer vào kernel (`Platform::tick_hz`) + `uptime` dạng giây
+
+- Trước đây userspace **không biết** nhịp timer: riscv dùng `TIMER_INTERVAL =
+  100_000` đơn vị `mtime`, aarch64 có `TIMER_HZ = 100` rồi tự đổi sang interval,
+  x86_64 tính `LAPIC initial = hz/100`. Cả ba đều **100 Hz** nhưng không nơi nào
+  công bố cho kernel.
+- Thêm `Platform::tick_hz() -> u32` (mặc định **100**, có ghi chú nguồn gốc cho
+  từng port); runtime đẩy vào kernel bằng `kernel.set_timer_hz(A::tick_hz())`.
+- Kernel giữ `timer_hz` (mặc định 100) + syscall mới `TimerInfo = 54` trả hz;
+  helper `vifast_user::timer_hz()`.
+- `uptime` giờ in `<giây> s (<n> ticks @ <hz> Hz)`; đo thật:
+  **`0 s (64 ticks @ 100 Hz)`** — khớp nhịp QEMU.
+- Gate: QEMU 3/3×3, persist 3/3, harness 574, kernel 186, docs PASS, fmt sạch,
+  0 warning, headroom 199 024 B, client riscv 22552 B (6 trang), binary cổng có
+  feature `test-exit` (2 chuỗi PREEMPT OK) — đúng như guard mới yêu cầu.

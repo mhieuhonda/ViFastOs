@@ -660,6 +660,12 @@ pub fn mem_info() -> SyscallResult {
     result(e, v)
 }
 
+/// Vòng 156: nhịp timer (tick mỗi giây) — `value = hz`.
+pub fn timer_hz() -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::TimerInfo as u64, [0, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn tcb_set_affinity(tcb_slot: u8, mask: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

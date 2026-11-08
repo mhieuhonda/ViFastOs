@@ -72,7 +72,9 @@ Kết quả mẫu (vòng 36): 5/5×3 PASS trong 88.8s. Serial lần hỏng nằm
 `truncate <path> <size> df fsck run [path]`
 `runfs <path> [args...] exec <path> [args...]`
 
-- `uname` → `ViFastOs <arch> bootinfo-v3`; `uptime` → `<n> ticks` monotonic.
+- `uname` → `ViFastOs <arch> bootinfo-v3`.
+- `uptime` → `<giây> s (<n> ticks @ <hz> Hz)`; hz do platform công bố qua
+  `Platform::tick_hz()` (mặc định 100 Hz — cả ba port đang đúng nhịp này).
 - `free` → `<trống>/<tổng> KiB` của **arena lớn nhất** (Untyped gốc), qua
   syscall `MemInfo` (53). Đo thật: `24/344 KiB free` ≈ 6 trang còn trống.
 - `ps` → mỗi dòng `<slot> <prio> <state>` cho từng TCB đang sống (state theo

@@ -418,9 +418,15 @@ fn shell_command(line: &[u8]) {
             }
         }
     } else if line == b"uptime" {
-        // Vòng 150: số tick monotonic kể từ boot.
-        write_u64(vifast_user::get_time().value);
-        write(b" ticks\n");
+        // Vòng 156: in cả giây (dùng tick-rate do platform công bố) và tick.
+        let ticks = vifast_user::get_time().value;
+        let hz = vifast_user::timer_hz().value.max(1);
+        write_u64(ticks / hz);
+        write(b" s (");
+        write_u64(ticks);
+        write(b" ticks @ ");
+        write_u64(hz);
+        write(b" Hz)\n");
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");
