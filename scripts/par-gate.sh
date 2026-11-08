@@ -35,6 +35,10 @@ done
 cd "$(dirname "$0")/.." || exit 2
 PATH="$HOME/.cargo/bin:$PATH"
 export PATH
+# Vòng phát triển: tự chạy lại một lần khi QEMU timeout (đã gặp flake do tải
+# máy; cổng chuẩn `test-qemu.py` mặc định vẫn không retry).
+VIFAST_RETRY_TIMEOUT="${VIFAST_RETRY_TIMEOUT:-1}"
+export VIFAST_RETRY_TIMEOUT
 ROOT="$PWD"
 TMP="${TMPDIR:-/tmp}"
 LOCAL_LOG="$TMP/vifast-par-local.log"

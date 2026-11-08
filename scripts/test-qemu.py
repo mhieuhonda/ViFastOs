@@ -22,7 +22,7 @@ import time
 import glob
 import hashlib
 
-from harness_spec import accept
+from harness_spec import COMMON, accept
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QEMU_RV = "qemu-system-riscv64"
@@ -361,6 +361,46 @@ def run_qemu(
     index: int = 0,
     feature_mode: str | None = None,
 ) -> bool:
+    """Chạy một lần; nếu timeout và `VIFAST_RETRY_TIMEOUT` > 0 thì thử lại
+    (chỉ dùng cho vòng phát triển — cổng chuẩn để mặc định 0)."""
+    attempts = 1 + max(0, int(os.environ.get("VIFAST_RETRY_TIMEOUT", "0")))
+    for attempt in range(attempts):
+        ok, timed_out = run_qemu_once(
+            name,
+            cmd,
+            serial,
+            timeout,
+            ok_codes,
+            require_smp,
+            require_block,
+            require_disk,
+            monitor,
+            index,
+            feature_mode,
+        )
+        if ok:
+            if attempt:
+                print(f"PASS (sau {attempt} lần timeout trước đó)")
+            return True
+        if not timed_out or attempt + 1 >= attempts:
+            return False
+        print(f"RETRY {name}: timeout, chạy lại (lần {attempt + 2}/{attempts})")
+    return False
+
+
+def run_qemu_once(
+    name: str,
+    cmd: list[str],
+    serial: str,
+    timeout: int,
+    ok_codes: set[int],
+    require_smp: bool = False,
+    require_block: bool = False,
+    require_disk: bool = False,
+    monitor: str | None = None,
+    index: int = 0,
+    feature_mode: str | None = None,
+) -> tuple[bool, bool]:
     if os.path.exists(serial):
         os.unlink(serial)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -400,21 +440,30 @@ def run_qemu(
                 print("FAIL: mutation timeout without TLB REMAP BAD")
             else:
                 print("FAIL: mutation was not detected")
-            return False
+            return False, timed_out
         print("PASS (expected TLB failure detected)")
-        return True
+        return True, False
     ok = accept(name, output, rc, require_block, require_disk, feature_mode)
     if timed_out:
-        print("FAIL: timeout")
-        return False
+        # Phân biệt flake do tải máy với hỏng thật: nếu guest đã in ĐỦ hợp
+        # đồng marker mà QEMU không kịp thoát trong timeout, gần như chắc
+        # chắn là máy host quá tải (đã gặp nhiều lần với riscv64) — in rõ
+        # để người trực không mất thời gian điều tra sai hướng.
+        if ok:
+            print("FAIL: timeout (guest đã in đủ marker — nghi máy host quá tải; chạy lại)")
+        else:
+            missing = [text for text, _ in COMMON if text not in output]
+            shown = ", ".join(missing[:4])
+            print(f"FAIL: timeout (thiếu {len(missing)} marker: {shown})")
+        return False, timed_out
     if rc not in ok_codes:
         print(f"FAIL: unexpected QEMU exit code {rc}")
-        return False
+        return False, timed_out
     if not ok:
         print("FAIL: banner or SELFTEST PASS missing")
-        return False
+        return False, timed_out
     print("PASS")
-    return True
+    return True, False
 
 
 def test_riscv(index: int = 0, feature: str | None = None) -> bool:

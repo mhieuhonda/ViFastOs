@@ -1733,3 +1733,15 @@ follow-up `62b31f4`.
   cố định — cần trace phía kernel (entry/segment/icache) trước khi dùng lại.
 - Gate: QEMU 3/3×3, persist 7×3, harness 523, docs PASS, fmt sạch, 0 warning,
   headroom riscv 199 024 B.
+
+## 9.89 — Vòng 98: chẩn đoán flake + retry có kiểm soát
+
+- `test-qemu.py`: khi timeout, phân biệt hai trường hợp và in rõ:
+  - guest **đã in đủ marker** → "nghi máy host quá tải; chạy lại";
+  - thiếu marker → liệt kê 4 marker thiếu đầu tiên (chỉ đúng chỗ hỏng).
+- Thêm `VIFAST_RETRY_TIMEOUT=N`: chạy lại tối đa N lần **chỉ khi timeout**
+  (lỗi marker/exit code vẫn fail ngay). Mặc định 0 — cổng chuẩn không đổi.
+  `scripts/par-gate.sh` bật mặc định 1 cho vòng phát triển.
+- Lý do: các vòng trước gặp 0/3 riscv64 hàng loạt dù serial đã tới
+  `SHELL READY`; chạy lại khi máy rảnh thì 3/3. Giờ log tự nói rõ là flake.
+- Gate: QEMU 3/3×3, persist 7×3, harness 523, docs PASS, fmt sạch, 0 warning.
