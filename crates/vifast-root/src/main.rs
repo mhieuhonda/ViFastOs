@@ -3005,6 +3005,17 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"FS OPS FSCK BAD\n"
                     });
+                    // Vòng 155: sau toàn bộ chuỗi thao tác FS, bộ nhớ Untyped
+                    // phải còn nhất quán: trống > 0 và không vượt tổng.
+                    let mem = vifast_user::mem_info();
+                    let used = mem.value & 0xffff_ffff;
+                    let size = (mem.value >> 32) & 0xffff_ffff;
+                    let mem_ok = mem.error == KError::Ok && size > 0 && used < size;
+                    write(if mem_ok {
+                        b"MEM FREE OK\n"
+                    } else {
+                        b"MEM FREE BAD\n"
+                    });
                     // Vòng 132 (bảo mật cơ bản): các lời gọi SAI phải bị từ
                     // chối bằng mã lỗi đúng, không được làm sập kernel hay
                     // treo task gọi.

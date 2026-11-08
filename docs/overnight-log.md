@@ -2652,3 +2652,16 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Runbook cập nhật (`free` trong mục lệnh shell).
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch,
   0 warning, headroom 199 024 B, client riscv 22536 B (6 trang).
+
+## 9.152 — Vòng 155: `MEM FREE OK` — bộ nhớ phải nhất quán sau chuỗi thao tác FS
+
+- Thêm self-test ngay **sau** chuỗi FS của vòng 128–131: gọi `mem_info()` và yêu
+  cầu `size > 0 && used < size` (arena còn chỗ, không âm/vượt). In
+  `MEM FREE OK` / `MEM FREE BAD`.
+- Ý nghĩa: `free` (vòng 154) không chỉ là lệnh hiển thị mà giờ là **bất biến**
+  được cổng kiểm — nếu một đường FS rò rỉ hoặc trả bộ nhớ sai, marker này đỏ.
+- Marker vào `COMMON`: harness **571 → 574 ca**, cả 3 arch in.
+- Sinh lại danh sách marker trong `docs/11-hien-tai/09-testing.md` từ
+  `harness_spec` (cơ chế đã có từ vòng 138 nên `check-docs` bắt drift ngay).
+- Gate: QEMU 3/3×3, persist 3/3, harness 574, docs PASS, fmt sạch, 0 warning,
+  headroom 199 024 B.

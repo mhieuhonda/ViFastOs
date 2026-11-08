@@ -72,6 +72,10 @@ COMMON = [
         "invalid handles and out-of-range user pointers were all refused",
     ),
     (
+        "MEM FREE OK",
+        "arena usage stayed consistent (used < size) after the whole FS op chain",
+    ),
+    (
         "FS OPS FSCK OK",
         "fsck stayed clean after create/unlink/truncate/rename/link operations",
     ),
