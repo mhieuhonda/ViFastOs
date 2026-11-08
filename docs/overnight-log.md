@@ -2615,3 +2615,22 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   lần sau thấy ngay vì sao điều kiện không đạt.
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch,
   0 warning, headroom 199 024 B, client riscv 6 trang.
+
+## 9.150 — Vòng 153: TÌM RA NGUỒN "FLAKE" THẬT (build tay đè kernel cổng) + ps hiển thị tên
+
+- **Nguyên nhân thật của chuỗi đỏ oan** (vòng 149/151/153): khi thử nghiệm tôi
+  chạy tay `cargo build -p vifast-kernel-riscv64 --no-default-features`, ghi đè
+  đúng file kernel mà cổng dùng ⇒ bản đó **thiếu feature `test-exit`** ⇒ guest
+  không bao giờ in `PREEMPT OK` ⇒ cổng đỏ với "thiếu 1 marker: PREEMPT OK".
+  Bằng chứng: sau `./scripts/build.sh`, `grep -a "PREEMPT OK"` trên binary có
+  **2** kết quả; với bản build tay là **0**.
+- **Chặn tái diễn**: `test-qemu.py` thêm `check_gate_kernel()` — nếu binary
+  thiếu chuỗi `PREEMPT` thì dừng ngay với thông báo "chạy ./scripts/build.sh
+  trước khi chạy cổng — đừng build tay với --no-default-features".
+- **Chẩn đoán lỗi đầy đủ hơn**: khi `accept()` sai mà không thiếu marker, in cả
+  `EXACT_ONE` bị lặp và `FORBIDDEN` xuất hiện (trước chỉ in câu chung).
+- **Tính năng `ps` mở rộng**: kernel đóng gói thêm 4 byte đầu tên + affinity;
+  `ps` in `<slot> <prio> <state> aff=<n> <tên4>`; thử thật:
+  `0 15 4 aff=1 root`, `110 5 12 aff=1 rety`.
+- Runbook thêm mục **5a** cảnh báo không build tay đè kernel cổng.
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.

@@ -386,6 +386,17 @@ fn shell_command(line: &[u8]) {
             write_u64((info.value >> 8) & 0xff);
             write(b" ");
             write_u64((info.value >> 16) & 0xff);
+            write(b" aff=");
+            write_u64((info.value >> 56) & 0xff);
+            write(b" ");
+            let mut k = 0u32;
+            while k < 4 {
+                let byte = ((info.value >> (24 + k * 8)) & 0xff) as u8;
+                if byte != 0 {
+                    write(&[byte]);
+                }
+                k += 1;
+            }
             write(b"\n");
             index += 1;
             if index > 64 {

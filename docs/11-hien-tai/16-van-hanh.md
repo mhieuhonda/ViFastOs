@@ -184,6 +184,24 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5a. TUYỆT ĐỐI không build tay đè kernel của cổng
+
+`scripts/build.sh` build kernel **có feature `test-exit`** (mặc định của crate)
+và ghi vào `target/<triple>/release/vifast-kernel-*`. Nếu bạn chạy tay
+
+```bash
+cargo build -p vifast-kernel-riscv64 --release --no-default-features
+```
+
+thì **file đó bị ghi đè** bằng bản KHÔNG có `test-exit`; sau đó mọi lần chạy
+cổng sẽ đỏ với `thiếu 1 marker: PREEMPT OK` — dù hệ thống hoàn toàn khoẻ. Lỗi
+này đã làm tôi đi sai hướng ở vòng 149/151/153.
+
+Từ vòng 153 `test-qemu.py` **tự kiểm tra**: nếu binary thiếu chuỗi `PREEMPT`,
+nó dừng ngay với thông báo *"chạy ./scripts/build.sh trước khi chạy cổng"*.
+Khi cần thử kernel đặc biệt, dùng `--target-dir` khác hoặc build xong chạy lại
+`./scripts/build.sh` trước khi chạy cổng.
+
 ### 5b. Ba lớp lỗi đã gặp nhiều lần (phân biệt nhanh)
 
 | Triệu chứng | Cách phân biệt | Việc cần làm |

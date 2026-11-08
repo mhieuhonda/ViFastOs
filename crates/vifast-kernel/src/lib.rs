@@ -6097,9 +6097,21 @@ impl Kernel {
                     };
                     if let Some(table) = self.tcb(reference) {
                         if seen == wanted {
+                            // Vòng 153: đóng gói thêm 4 ký tự đầu của tên và
+                            // affinity để `ps` hiển thị được danh tính.
                             let state = table.state as u64;
-                            let value =
-                                (index as u64) | ((table.priority as u64) << 8) | (state << 16);
+                            let name = table.name.as_bytes();
+                            let mut tag = 0u64;
+                            let mut k = 0;
+                            while k < 4 && k < name.len() {
+                                tag |= (name[k] as u64) << (k * 8);
+                                k += 1;
+                            }
+                            let value = (index as u64)
+                                | ((table.priority as u64) << 8)
+                                | (state << 16)
+                                | (tag << 24)
+                                | ((table.affinity as u64) << 56);
                             return UserAction::Return {
                                 value,
                                 error: KError::Ok,

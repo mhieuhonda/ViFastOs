@@ -486,13 +486,47 @@ def run_qemu_once(
                     " chạy ./scripts/diag.sh và pkill -f qemu-system rồi thử lại"
                 )
         else:
-            print("FAIL: banner or SELFTEST PASS missing")
+            from harness_spec import EXACT_ONE, FORBIDDEN
+
+            dup = [t for t in EXACT_ONE if output.count(t) != 1]
+            bad = [t for t in FORBIDDEN if t in output]
+            if dup or bad:
+                print(f"FAIL: marker sai số lần/forbidden: dup={dup[:4]} bad={bad[:4]}")
+            else:
+                print("FAIL: banner or SELFTEST PASS missing")
         return False, timed_out
     print("PASS")
     return True, False
 
 
+def check_gate_kernel(name: str) -> None:
+    """Vòng 153: chặn lỗi 'kernel thiếu feature test-exit'.
+
+    Build thủ công (`cargo build --no-default-features`) ghi đè đúng file kernel
+    mà cổng dùng; hậu quả là guest không bao giờ in `PREEMPT OK` và cổng đỏ rất
+    khó hiểu (đã xảy ra ở vòng 149/151/153). Kiểm tra nhanh chuỗi đặc trưng
+    trước khi boot.
+    """
+    paths = {
+        "riscv64": "target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64",
+        "aarch64": "target/aarch64-unknown-none/release/vifast-kernel-aarch64",
+        "x86_64": "target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi",
+    }
+    path = os.path.join(ROOT, paths[name])
+    try:
+        data = open(path, "rb").read()
+    except OSError:
+        return
+    if b"PREEMPT" not in data:
+        raise SystemExit(
+            f"kernel {name} thiếu feature test-exit (không thấy 'PREEMPT'); "
+            "chạy ./scripts/build.sh trước khi chạy cổng — đừng build tay với "
+            "--no-default-features vào cùng target path"
+        )
+
+
 def test_riscv(index: int = 0, feature: str | None = None) -> bool:
+    check_gate_kernel("riscv64")
     if feature == "test-boot-handoff":
         kernel_name = "vifast-kernel-riscv64-handoff"
     elif feature == "test-panic-hart1":
@@ -559,6 +593,7 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
 
 
 def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
+    check_gate_kernel("aarch64")
     if feature == "test-panic-hart1":
         name = "vifast-kernel-aarch64-panic"
     elif feature == "test-destroy-smp":
@@ -647,6 +682,7 @@ def source_fingerprint() -> str:
 
 
 def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
+    check_gate_kernel("x86_64")
     code = find_ovmf_code()
     if not code:
         print("SKIP x86_64: OVMF firmware not found (set OVMF_CODE)")

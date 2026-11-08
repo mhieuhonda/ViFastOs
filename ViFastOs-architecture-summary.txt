@@ -394,6 +394,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 292b9df sua loi (vong 150): post_idle_ready cho tuong minh + them uptime/stat
 - dc91a31 web: moi lien ket mo tab moi (tru anchor trong trang)
 - 743e103 chan doan (vong 151): them SMP IDLE STALL + ghi nhan ps bi chan boi test idle
+- 525e314 sua loi (vong 152): dem idle cua HART PHU cho pha POST + them lenh ps
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
