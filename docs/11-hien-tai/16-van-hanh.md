@@ -289,9 +289,17 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
   ở **pass 1**, nhưng phần lớn object huỷ xong ngay **pass 0** ⇒ pass 1 trả lỗi
   ⇒ nhánh release **không bao giờ chạy** ⇒ mỗi chu kỳ mất ~7 slot allocator. Giờ
   trả slot ngay khi huỷ thành công ở bất kỳ pass nào.
-- Việc cần làm (vòng sau): xác định **6 object kẹt là loại gì** (frame? VSpace?
-  page table?) và sửa thứ tự/đường huỷ để chúng được giải phóng — mục tiêu là
-  `DESTROY DIAG stuck=0` và `EXEC MEM STABLE`.
+- **Đo chi tiết (vòng 193)**: in kèm slot + mã lỗi ⇒
+  `slot=115 err=6`, `slot=116..120 err=20`, `slot=121 err=6`.
+  `err=20` là **`Busy`** (5 object còn bị tham chiếu — nhiều khả năng 1 VSpace +
+  4 frame còn mapping); `err=6` là **`InvalidArg`** (2 slot đã trống, vô hại).
+- Đã thử **gỡ mapping trong nhánh `Kind::VSpace`** của `destroy_object` (giả
+  thuyết: VSpace huỷ mà không giảm `mapped_w`/`mapped_x` của frame) — **không
+  đổi kết quả** (`stuck=6` vẫn còn) ⇒ nhánh đó **không được chạy tới**, tức
+  `can_destroy(VSpace)` đã từ chối trước. Đã **revert** thay đổi chưa chứng minh.
+- Việc cần làm (vòng sau): in **loại object** của từng slot kẹt (root biết thứ
+  tự cấp: tcb → vspace → stack → code → pte) và kiểm `can_destroy` của VSpace
+  để biết **ai còn tham chiếu** nó (TCB Faulted? IOMMU? cnode?).
 
 ### 5p-b. Đo rò rỉ qua NHIỀU lần exec (vòng 187)
 

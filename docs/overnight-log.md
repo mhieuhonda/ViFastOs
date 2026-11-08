@@ -3264,3 +3264,20 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   page table) rồi sửa thứ tự huỷ; mục tiêu `stuck=0` + `EXEC MEM STABLE`.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
   sạch.
+
+## 9.190 — Vòng 193: đo chi tiết 6 object kẹt (Busy/InvalidArg) — giả thuyết mới bị bác
+
+- In kèm **slot + mã lỗi** cho từng object không huỷ được:
+  `slot=115 err=6`, `slot=116..120 err=20`, `slot=121 err=6`.
+  `err=20` = **Busy** (5 object còn bị tham chiếu — nghi 1 VSpace + 4 frame còn
+  mapping); `err=6` = **InvalidArg** (2 slot đã trống, vô hại).
+- Thử giả thuyết "VSpace huỷ mà không giảm `mapped_w`/`mapped_x` của frame":
+  thêm vòng gỡ mapping trong nhánh `Kind::VSpace` của `destroy_object`.
+  **Kết quả không đổi** (`stuck=6` vẫn còn) ⇒ nhánh đó **không được chạy tới**,
+  tức `can_destroy(VSpace)` từ chối trước. **Đã revert** thay đổi chưa chứng minh
+  (giữ cây sạch, không mang theo code không có bằng chứng).
+- Việc cần làm (vòng sau): in **loại object** từng slot kẹt (root biết thứ tự
+  cấp: tcb → vspace → stack → code → pte) và kiểm `can_destroy` của VSpace để
+  biết **ai còn tham chiếu** (TCB Faulted? IOMMU? cnode?).
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
+  sạch.

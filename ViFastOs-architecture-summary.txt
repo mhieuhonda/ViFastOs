@@ -435,6 +435,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 5abb2ec test (vong 189): mutation test cho check_invariants
 - b58463e tai lieu (vong 190): phat hien gioi han spawn lap lai (da revert thi nghiem)
 - 1c1dc01 tai lieu (vong 191): loai tru gia thuyet slot trong gioi han spawn
+- 8696861 loi (vong 192): tim ra 6 object ket moi chu ky exec + sua ro ri slot
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

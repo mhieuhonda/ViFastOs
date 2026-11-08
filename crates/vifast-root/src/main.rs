@@ -1119,13 +1119,18 @@ fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usi
     // Giờ: huỷ xong ở BẤT KỲ pass nào thì trả slot NGAY (trong hàm này không
     // cấp phát mới nên không thể bị cấp lại giữa chừng).
     let mut done = [false; MAX_EXEC_SLOTS];
+    let mut last_err = [0u64; MAX_EXEC_SLOTS];
     let mut pass = 0;
     while pass < 2 {
         let mut i = 0;
         while i < len {
-            if !done[i] && vifast_user::object_destroy(used[i]).error == KError::Ok {
-                done[i] = true;
-                slots.release(used[i]);
+            if !done[i] {
+                let result = vifast_user::object_destroy(used[i]);
+                last_err[i] = result.error as u64;
+                if result.error == KError::Ok {
+                    done[i] = true;
+                    slots.release(used[i]);
+                }
             }
             i += 1;
         }
@@ -1145,6 +1150,18 @@ fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usi
         write(b"DESTROY DIAG stuck=");
         write_decimal(stuck);
         write(b"\n");
+        // Vòng 193: in cả slot và mã lỗi để biết kernel từ chối vì lý do gì.
+        let mut j = 0;
+        while j < len {
+            if !done[j] {
+                write(b"  slot=");
+                write_decimal(used[j] as u64);
+                write(b" err=");
+                write_decimal(last_err[j]);
+                write(b"\n");
+            }
+            j += 1;
+        }
     }
 }
 
