@@ -2476,3 +2476,22 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   quay vô hạn), và thêm đếm/timeout để biến treo im lặng thành lỗi thấy được.
 - Dọn 1 cảnh báo `unused variable: root` trong test kernel (build về 0 warning).
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch.
+
+## 9.142 — Vòng 145: TÌM RA NGUYÊN NHÂN GỐC lỗi "exec không đọc được trang stack"
+
+- Đọc `UserAction::Debug` → runtime gọi `A::read_user(ptr, buf)`. Xem
+  `read_user` của platform riscv: **không walk page table**, mà kiểm **danh sách
+  cửa sổ VA được phép** (`USER_CODE_VA` 128 KiB, `USER_STACK_BASE..+0x8000`,
+  `USER_DATA_VA`, module/IPC…).
+- `EXEC_STACK_BASE = CODE_VA + 0x23000` **không nằm trong cửa sổ nào** (ngoài
+  `CODE_VA+0x2_0000` và ngoài `STACK_BASE..+0x8000`) ⇒ mọi copy đọc/ghi vào
+  trang stack của task exec bị trả `InvalidArg` **trước khi** chạm bảng trang.
+  Không page fault ⇒ fault endpoint không báo ⇒ "im lặng" suốt 14 vòng.
+- **Sửa**: thêm cửa sổ `EXEC_STACK_BASE..EXEC_STACK_TOP` vào `read_user` và
+  `write_user` của **cả ba platform**.
+- **Bằng chứng**: trước khi sửa chương trình đọc stack in **rỗng**; sau khi sửa
+  in **`HI FS`** (đếm được 1), không fault.
+- Thử đưa thành marker hồi quy (argv đọc từ stack): riscv mất `SMP IDLE OK` /
+  `SMP POST IDLE OK` ⇒ `PREEMPT OK` không in ⇒ **đã revert phần demo**, chỉ giữ
+  bản sửa platform. Việc làm marker bền vững để vòng sau (cần task phụ riêng).
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.

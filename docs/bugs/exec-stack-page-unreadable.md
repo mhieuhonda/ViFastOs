@@ -1,5 +1,45 @@
 # Lỗi: chương trình exec không đọc được trang RW (stack)
 
+**TRẠNG THÁI: ĐÃ TÌM RA NGUYÊN NHÂN GỐC VÀ SỬA (vòng 145).**
+
+## Nguyên nhân gốc
+
+`Arch::read_user` / `Arch::write_user` (cả 3 port riscv64/aarch64/x86_64) **không
+walk page table** mà kiểm **danh sách cửa sổ VA được phép**:
+
+- `USER_CODE_VA` (128 KiB), `USER_STACK_BASE..+0x8000`, `USER_DATA_VA`,
+  module windows, IPC buffers, `ROOT_ELF_*`.
+
+Cửa sổ của **stack task exec** (`EXEC_STACK_BASE = CODE_VA + 0x23000`) **không có
+trong danh sách** — nó nằm ngoài `USER_CODE_VA + 0x2_0000` và ngoài
+`USER_STACK_BASE..+0x8000`.
+
+⇒ Mọi `DebugWrite`/syscall copy đọc/ghi con trỏ trong trang stack của task exec
+bị platform trả `InvalidArg` **trước khi** chạm tới bảng trang. Task không fault
+(không có page fault) nên fault endpoint cũng không báo gì — đúng toàn bộ triệu
+chứng "in ra không có gì, không lỗi" từ vòng 112.
+
+## Cách sửa
+
+Thêm cửa sổ `EXEC_STACK_BASE .. EXEC_STACK_TOP` vào `read_user` **và**
+`write_user` của **cả ba** platform.
+
+## Bằng chứng
+
+- Trước khi sửa: chương trình exec đọc `EXEC_STACK_BASE + 0x100` (nơi root đã ghi
+  `"HI FS\n"`) → **không in gì**, không `USER FAULT`.
+- Sau khi sửa: cùng chương trình đó → in **`HI FS`** (`HI FS count: 1`), không
+  fault. Trace PTE (vòng 121) đã chứng minh PTE hợp lệ — khớp với kết luận này.
+
+## Việc còn lại (không chặn gate)
+
+- Biến nó thành **marker hồi quy** trong cổng chuẩn. Lần thử đầu (đổi argv của
+  demo sang đọc từ stack) làm nhịp boot riscv thay đổi khiến `SMP IDLE OK` /
+  `SMP POST IDLE OK` không in ⇒ `PREEMPT OK` không in. Cần thiết kế lại test
+  (ví dụ task phụ riêng) để giữ nguyên nhịp boot hiện tại.
+
+# Lỗi: chương trình exec không đọc được trang RW (stack)
+
 Trạng thái: **đang mở**, đã khoanh vùng mạnh (vòng 112–119).
 
 ## Triệu chứng

@@ -1621,6 +1621,15 @@ impl Platform for RiscvPlatform {
         }
         if page_in_range(ptr, out.len(), USER_CODE_VA, 0x2_0000)
             || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
+            // Vòng 145: exec task có stack RIÊNG ở EXEC_STACK_BASE — thiếu
+            // cửa sổ này thì mọi DebugWrite/read từ stack của task exec bị
+            // platform từ chối (lỗi "exec không đọc được trang stack").
+            || page_in_range(
+                ptr,
+                out.len(),
+                vifast_abi::user_layout::EXEC_STACK_BASE,
+                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
+            )
             || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
             || page_in_range(
                 ptr,
@@ -1667,6 +1676,12 @@ impl Platform for RiscvPlatform {
             return Err(KError::IllegalOperation);
         }
         if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
+            || page_in_range(
+                ptr,
+                input.len(),
+                vifast_abi::user_layout::EXEC_STACK_BASE,
+                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
+            )
             || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
             || page_in_range(
                 ptr,

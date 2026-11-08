@@ -2472,6 +2472,13 @@ impl Platform for X86Platform {
         }
         if !user_range(ptr, out.len(), USER_CODE_VA, 0x2_0000)
             && !user_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
+            // Vòng 145: cửa sổ stack RIÊNG của exec task.
+            && !user_range(
+                ptr,
+                out.len(),
+                vifast_abi::user_layout::EXEC_STACK_BASE,
+                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
+            )
             && !user_range(ptr, out.len(), USER_DATA_VA, 4096)
             && !user_range(
                 ptr,
@@ -2519,6 +2526,12 @@ impl Platform for X86Platform {
             return Err(KError::IllegalOperation);
         }
         if !user_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
+            && !user_range(
+                ptr,
+                input.len(),
+                vifast_abi::user_layout::EXEC_STACK_BASE,
+                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
+            )
             && !user_range(ptr, input.len(), USER_DATA_VA, 4096)
             && !user_range(
                 ptr,
