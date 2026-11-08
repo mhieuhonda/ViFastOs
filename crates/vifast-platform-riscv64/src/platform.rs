@@ -1164,10 +1164,16 @@ impl Platform for RiscvPlatform {
         if !POST_STARTED.load(Ordering::SeqCst) {
             return false;
         }
-        let ticks = POST_TIMER_TICKS.load(Ordering::Relaxed);
-        ticks >= 5
-            && POST_IDLE_ENTRIES.load(Ordering::Relaxed) >= ticks.saturating_sub(2)
-            && POST_TIMER_WAKES.load(Ordering::Relaxed) >= ticks.saturating_sub(2)
+        // Vòng 150: chờ TƯỜNG MINH thay vì so tốc độ với số tick.
+        // Ý nghĩa giữ nguyên: sau khi pha POST bắt đầu, hart phụ phải THỰC SỰ
+        // vào idle (nếu nó quay vòng bận thì POST_IDLE_ENTRIES không tăng).
+        // Điều kiện cũ `idle >= ticks - 2` đòi hart phụ vào idle gần như MỌI
+        // tick; chỉ cần một worker chạy lâu hơn một chút là trượt vĩnh viễn —
+        // đã làm đỏ gate oan ở vòng 116/141/149 dù hệ thống hoàn toàn khoẻ.
+        const POST_IDLE_MIN: usize = 5;
+        POST_IDLE_ENTRIES.load(Ordering::Relaxed) >= POST_IDLE_MIN
+            && POST_TIMER_WAKES.load(Ordering::Relaxed) >= POST_IDLE_MIN
+            && POST_TIMER_TICKS.load(Ordering::Relaxed) >= POST_IDLE_MIN
     }
 
     fn wake_hart(hart: usize) {

@@ -390,6 +390,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - ae6f380 moc 9 (vong 147): ba platform dung chung copy_window_ok (mot nguon su that)
 - f2aa915 tai lieu (vong 148): phan loai loi thuong gap + goi y tu dong khi thieu PREEMPT OK
 - ac909c2 web: menu mobile chạy được (nav.js, CSP), link cùng tab, header mobile
+- 842ead2 tai lieu (vong 149): phat hien phu thuoc NHIP cua test SMP idle tren riscv
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

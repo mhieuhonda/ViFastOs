@@ -358,7 +358,7 @@ fn shell_command(line: &[u8]) {
         return;
     }
     if line == b"help" {
-        write(b"help uname time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+        write(b"help uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...] exec <path> [args...]\n");
@@ -373,6 +373,10 @@ fn shell_command(line: &[u8]) {
             b"x86_64"
         });
         write(b" bootinfo-v3\n");
+    } else if line == b"uptime" {
+        // Vòng 150: số tick monotonic kể từ boot.
+        write_u64(vifast_user::get_time().value);
+        write(b" ticks\n");
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");
@@ -466,11 +470,14 @@ fn shell_command(line: &[u8]) {
             write(b"usage: ln <old> <new>\n");
         }
     } else if let Some(path) = line.strip_prefix(b"stat ") {
-        if let Some((fd, size)) = vfs_open(path, 0) {
-            let current = vfs_stat(fd).unwrap_or(size);
-            write_u64(current);
-            write(b" bytes\n");
-            let _ = vfs_close(fd);
+        // Vòng 150: in cả LOẠI (file/dir/link), không chỉ kích thước.
+        if let Some((size, _, kind)) = vfs_stat_path(path) {
+            write_u64(size);
+            write(match kind {
+                2 => b" bytes dir\n",
+                3 => b" bytes link\n",
+                _ => b" bytes file\n",
+            });
         } else {
             write(b"stat: not found\n");
         }

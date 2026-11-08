@@ -2561,3 +2561,20 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `POST_STARTED` đếm đủ N lần hart phụ vào idle rồi mới cho phép in, hoặc
   barrier "mọi việc phụ xong rồi mới mở pha POST".
 - Gate (sau revert): xanh như vòng 148.
+
+## 9.147 — Vòng 150: sửa gốc `post_idle_ready` (chờ tường minh) + thêm lại uptime/stat
+
+- **Sửa gốc**: `post_idle_ready()` ở **cả ba platform** không còn so tốc độ với
+  số tick (`idle >= ticks - 2`), thay bằng **chờ tường minh**:
+  `POST_IDLE_ENTRIES >= 5 && POST_TIMER_WAKES >= 5 && POST_TIMER_TICKS >= 5`.
+  Ý nghĩa kiểm định giữ nguyên (hart phụ phải **thực sự** vào idle; nếu nó quay
+  vòng bận thì `POST_IDLE_ENTRIES` không tăng), nhưng không còn phụ thuộc nhịp.
+- **Kiểm chứng ngược**: thêm lại đúng thay đổi client từng làm riscv đỏ
+  (`uptime` + `stat` in loại; client 22456 → **22504 B**) — lần này riscv
+  **2/2 rồi 3/3 PASS**, tức nguyên nhân đỏ trước đó đúng là nhịp, không phải
+  kích thước client.
+- **Tính năng**: `uptime` → `<n> ticks`; `stat <path>` → `<size> bytes
+  file|dir|link`. Đã thử tay trong shell thật: `68 ticks`, `512 bytes dir`.
+- Runbook: bổ sung hai lệnh vào mục "Lệnh shell có sẵn".
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch,
+  0 warning, headroom 199 024 B.
