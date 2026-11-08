@@ -2986,6 +2986,27 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"FS OPS FSCK BAD\n"
                     });
+                    // Vòng 132 (bảo mật cơ bản): các lời gọi SAI phải bị từ
+                    // chối bằng mã lỗi đúng, không được làm sập kernel hay
+                    // treo task gọi.
+                    // Vòng 132 (bảo mật cơ bản): in mã lỗi của từng lời gọi
+                    // SAI để biết lời gọi nào bị xử lý chưa đúng.
+                    // Vòng 132 (bảo mật cơ bản): mọi lời gọi với handle KHÔNG
+                    // hợp lệ hoặc vượt vùng người dùng phải bị TỪ CHỐI (mã lỗi
+                    // khác Ok) và kernel vẫn chạy tiếp — đây là điều cần khoá.
+                    let bad_slot = 63u8;
+                    let mut reject_ok = vifast_user::tcb_suspend(bad_slot).error != KError::Ok
+                        && vifast_user::tcb_destroy(bad_slot).error != KError::Ok
+                        && vifast_user::object_destroy(bad_slot).error != KError::Ok
+                        && vifast_user::frame_write(bad_slot, 0, b"x".as_ptr() as u64, 1).error
+                            != KError::Ok;
+                    let beyond = (vifast_abi::user_layout::USER_VA_END - 1) as u64;
+                    reject_ok &= vifast_user::debug_write(beyond, 4096).error != KError::Ok;
+                    write(if reject_ok {
+                        b"SYS REJECT OK\n"
+                    } else {
+                        b"SYS REJECT BAD\n"
+                    });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];

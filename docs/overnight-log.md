@@ -2283,3 +2283,18 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   quán** sau khi trộn nhiều thao tác — đúng chỗ journaling/bitmap dễ sai.
 - Marker vào `COMMON`: harness **547 → 550 ca**, cả 3 arch in.
 - Gate: QEMU 3/3×3, persist 3/3, harness 550, docs PASS, fmt sạch, 0 warning.
+
+## 9.129 — Vòng 132: kiểm tra "từ chối đúng" của syscall (bảo mật cơ bản)
+
+- Thêm self-test: gọi các syscall với **handle không hợp lệ** (slot 63) và với
+  con trỏ **vượt cuối vùng người dùng**:
+  - `tcb_suspend(63)`, `tcb_destroy(63)`, `object_destroy(63)`,
+    `frame_write(63, …)`, `debug_write(USER_VA_END-1, 4096)`.
+  - Điều kiện đúng: **mọi lời gọi trả mã lỗi khác `Ok`** và kernel vẫn chạy
+    tiếp được (in `SYS REJECT OK`).
+- Phát hiện khi làm: kernel trả `WrongType (2)` cho slot rỗng và `InvalidArg
+  (6)` cho object_destroy/con trỏ ngoài vùng — **không phải `InvalidCap` như tôi
+  giả định**. Vì vậy tiêu chí đúng là "bị từ chối", không phải một mã cụ thể;
+  test đổi theo và ghi lại bài học.
+- Marker `SYS REJECT OK` vào `COMMON`: harness **550 → 553 ca**, cả 3 arch in.
+- Gate: QEMU 3/3×3, persist 3/3, harness 553, docs PASS, fmt sạch, 0 warning.

@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "SYS REJECT OK",
+        "invalid handles and out-of-range user pointers were all refused",
+    ),
+    (
         "FS OPS FSCK OK",
         "fsck stayed clean after create/unlink/truncate/rename/link operations",
     ),
