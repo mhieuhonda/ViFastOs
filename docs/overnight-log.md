@@ -3409,3 +3409,13 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `17-su-co.md` dòng chẩn đoán mới.
 - Gate sau gỡ: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS,
   fmt sạch.
+
+## 9.200 — Vòng 203: soak 15/15 sau khi sửa rò rỉ (mốc ổn định mới)
+
+- Chạy soak **5 lần mỗi arch** sau các sửa vòng 199–200:
+  **riscv 5/5**, **aarch64 5/5**, **x86 5/5** — tổng **15/15**, **không lần nào
+  cần retry**.
+- Đây là mốc so sánh cho các vòng sau (ghi vào `09-testing.md`): soak tụt dưới
+  15/15 ⇒ khoanh vùng ngay.
+- Gate chuẩn vẫn xanh sau soak: build 0 warning, QEMU 3/3×3, persist 3/3,
+  harness 589, docs PASS, fmt sạch.

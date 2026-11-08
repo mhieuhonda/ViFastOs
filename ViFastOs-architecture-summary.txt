@@ -445,6 +445,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - ef0a561 loi (vong 199): destroy_cap_object khong cho phep TCB — goc ro ri 6 object
 - 88007f8 loi (vong 200): HET RO RI — vspace_in_use chan chinh thu no sap don
 - e122bbf tinh nang (vong 201): lenh loop <n> — tu kiem chung chay lap khong ro ri
+- 2ea9a7b sua loi (vong 202): go marker LOOP OK khoi cong (IPC luc boot khong on dinh)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

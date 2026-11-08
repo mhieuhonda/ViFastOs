@@ -234,3 +234,17 @@ SMP counter, thứ tự marker, exit code, feature mode.
 - Kani/Verus; soak dài nhiều giờ tự động.
 - Test trên phần cứng thật; test network/GPU/driver ngoài QEMU.
 - Hosted CI (đã bỏ theo yêu cầu; dùng `scripts/check-all.sh` cục bộ).
+
+## Soak sau khi sửa rò rỉ bộ nhớ (vòng 203)
+
+Chạy sau khi sửa `destroy_cap_object` (thiếu `ObjType::Tcb`) và `vspace_in_use`
+(chặn chính thứ nó sắp dọn) — tức sau khi bộ nhớ **thực sự được trả**:
+
+| Arch | Số lần | Kết quả |
+|---|---|---|
+| riscv64 | 5 | **5/5 PASS** |
+| aarch64 | 5 | **5/5 PASS** |
+| x86_64 | 5 | **5/5 PASS** |
+
+Tổng **15/15**, không lần nào cần retry. Đây là mốc so sánh cho các vòng sau: nếu
+soak tụt xuống dưới 15/15 thì phải khoanh vùng ngay thay vì bỏ qua.
