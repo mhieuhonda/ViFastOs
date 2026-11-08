@@ -2093,3 +2093,18 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   ở kernel core. Đây là bước thu hẹp quan trọng sau nhiều vòng đoán.
 - Kernel tests **183 → 184**.
 - Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, fmt sạch, 0 warning.
+
+## 9.115 — Vòng 118: test host Sv39 — phát hiện test harness cần `user_va_range`
+
+- Thử dựng test host mô phỏng **đúng Sv39 3 cấp** + cách mã hoá PTE của
+  `vifast-pte` (V|U|A|D|R|W|X, PPN<<10) để map 2 trang trong một vspace mới.
+- Chạy thử: `map_page_table` trả `InvalidArg` vì `PageTableOps::user_va_range`
+  mặc định là `(0,0)` — phải override (bài học cho mọi test platform giả).
+- Sau khi override: lần gọi thứ hai vẫn trả `Ok(1)` thay vì `Ok(2)` ⇒ bảng cấp
+  1 chưa được nối vào root trong môi trường giả (nghi `space.root` không phải
+  PA 0 nên `write_pte` ghi ra ngoài `FAKE_MEM`). Test này **chưa dùng được**,
+  đã bỏ; giữ lại test 4 cấp đang PASS.
+- Kết luận vòng: chưa tìm ra nguyên nhân lỗi stack; nhưng đã biết chính xác
+  cách viết test platform giả đúng (override `user_va_range`, kiểm tra PTE
+  thật thay vì chỉ `mapping_at`).
+- Gate: QEMU 3/3×3, persist 3/3, harness 535, kernel 184, docs PASS, fmt sạch.

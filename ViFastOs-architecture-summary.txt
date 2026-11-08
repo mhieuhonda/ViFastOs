@@ -334,6 +334,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 5e7eb18 tai lieu (vong 114): xac nhan loi exec khong doc duoc trang stack
 - 91bf3ca moc 9 (vong 115): PTE riscv set san A/D (dung dac ta)
 - f1d6d63 cong cu (vong 116): bien cong song song 2 may thanh skill + sua gen-docs guard
+- 5aa08f2 moc 9 (vong 117): test host chung minh kernel map 2 trang dung
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

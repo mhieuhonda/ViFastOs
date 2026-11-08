@@ -9368,7 +9368,12 @@ mod tests {
             .map_frame(space, stack, stack_va, Rights::READ | Rights::WRITE)
             .unwrap();
 
-        // Kiểm tra qua bảng mapping của vspace (không phụ thuộc mã hoá PTE giả).
+        // Kiểm tra CẢ PTE thật trong bộ nhớ bảng trang giả: bảng L0 là pt3
+        // (PA 0x3000 ⇒ base 1536). Entry 1 = code, entry 2 = stack.
+        let mem = FAKE_MEM.lock().unwrap();
+        assert_eq!(mem[1536 + 1] & !0xfff, 0x4000, "PTE code phải trỏ 0x4000");
+        assert_eq!(mem[1536 + 2] & !0xfff, 0x5000, "PTE stack phải trỏ 0x5000");
+        drop(mem);
         let code_map = kernel.mapping_at(space, code_va).expect("code mapping");
         assert_eq!(code_map.pa, 0x4000);
         let stack_map = kernel.mapping_at(space, stack_va).expect("stack mapping");
