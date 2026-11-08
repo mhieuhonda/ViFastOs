@@ -12546,6 +12546,44 @@ mod tests {
     }
 
     #[test]
+    fn irq_numbers_are_unique_and_reusable_after_destroy() {
+        // Vòng 184 (IRQ): mỗi số IRQ chỉ có MỘT object; huỷ rồi thì số đó dùng
+        // lại được. Nếu không, driver nạp lại sẽ không lấy lại được ngắt.
+        let mut kernel = Kernel::new();
+        let first = kernel.create_irq(9).unwrap();
+        assert!(
+            kernel.create_irq(9).is_none(),
+            "không được tạo hai object cho cùng số IRQ"
+        );
+        kernel.destroy_object(first).unwrap();
+        assert!(
+            kernel.create_irq(9).is_some(),
+            "huỷ IRQ phải trả số về để dùng lại"
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn irq_number_above_63_is_rejected() {
+        // Vòng 184 (K47): bit ngắt được ánh xạ `& 63`, nên số >= 64 sẽ alias
+        // cùng một bit — phải bị chặn ngay lúc tạo.
+        let mut kernel = Kernel::new();
+        assert!(kernel.create_irq(63).is_some());
+        assert!(kernel.create_irq(64).is_none(), "số 64 phải bị từ chối");
+        assert!(kernel.create_irq(u32::MAX).is_none());
+    }
+
+    #[test]
+    fn irq_raise_without_object_is_ignored() {
+        // Vòng 184: nếu không có object IRQ nào cho số đó, `irq_raise` trả
+        // false và KHÔNG được làm hỏng trạng thái kernel (đường gọi từ IRQ
+        // handler phần cứng có thể tới trước khi user đăng ký).
+        let mut kernel = Kernel::new();
+        assert!(!kernel.irq_raise(42));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn irq_ack_clears_the_notification_bit() {
         // Vòng 100 (K21): ack chỉ xoá `pending` thì bit cũ nằm lại trong
         // notification; edge kế tiếp dính vào cùng bit -> mất một wakeup.

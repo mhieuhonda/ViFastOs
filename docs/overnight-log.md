@@ -3132,3 +3132,16 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   chạy `gen-test-counts.py` xong thì xanh, tổng **289 test**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
   sạch.
+
+## 9.181 — Vòng 184: test IRQ (số duy nhất, tái dùng sau huỷ, chặn ≥ 64)
+
+- Thêm 3 host test kernel (**198 → 201**):
+  - `irq_numbers_are_unique_and_reusable_after_destroy` — một object cho mỗi số
+    IRQ; **huỷ rồi số dùng lại được** (nếu không, driver nạp lại mất ngắt);
+  - `irq_number_above_63_is_rejected` — `& 63` khi ánh xạ bit nên số ≥ 64 bị
+    chặn ngay (K47);
+  - `irq_raise_without_object_is_ignored` — ngắt tới trước khi user đăng ký thì
+    `irq_raise` trả `false`, kernel vẫn nhất quán.
+- Bảng kiểm test host tự cập nhật qua `gen-test-counts.py` ⇒ tổng **292**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
+  sạch.

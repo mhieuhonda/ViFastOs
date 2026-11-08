@@ -284,6 +284,16 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
   client đang `BlockedReply`, message trả lời nằm ở `resume`, `caller` của
   server được xoá.
 
+### 5s-2. IRQ: số duy nhất, tái dùng sau huỷ, chặn số ≥ 64
+
+- `irq_numbers_are_unique_and_reusable_after_destroy` — không tạo được hai
+  object cho cùng số IRQ; **huỷ rồi thì số dùng lại được** (nếu không, driver
+  nạp lại sẽ không lấy lại được ngắt).
+- `irq_number_above_63_is_rejected` — bit ngắt ánh xạ `& 63` nên số ≥ 64 bị
+  chặn ngay lúc tạo (K47), tránh hai IRQ alias cùng một bit.
+- `irq_raise_without_object_is_ignored` — ngắt tới trước khi user đăng ký thì
+  `irq_raise` trả `false` và không làm hỏng trạng thái kernel.
+
 ### 5s-1. Notification: block, không mất tín hiệu, đánh thức mọi waiter
 
 Ba bất biến đã có test (vòng 183):

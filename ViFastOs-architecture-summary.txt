@@ -426,6 +426,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - cdbfcd8 tinh nang (vong 180): payload ung dung hai chieu qua TCP
 - 1f85f48 tinh nang (vong 181): nhieu luot chay cung anh ELF voi tham so khac nhau
 - 9110f22 sua loi (vong 182): soak bat duoc flake boot x86 (1/5) + retry khi thieu SHELL READY
+- 6a93ebf test (vong 183): notification — block, khong mat bit, danh thuc moi waiter
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -473,7 +474,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 198/198 PASS
+- `cargo test -p vifast-kernel`: 201/201 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
