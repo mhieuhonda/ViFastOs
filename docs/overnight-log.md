@@ -2804,3 +2804,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Lỗi nhỏ đã sửa: test dùng `fs.rmdir` (không tồn tại) → `fs.unlink`.
 - Gate: QEMU 3/3×3, persist 3/3, harness 577, FS 28, docs PASS, fmt sạch,
   0 warning.
+
+## 9.161 — Vòng 164: `SEC PROBE OK` — khoá đường rò rỉ qua DebugWrite
+
+- Mối lo cụ thể: mọi lần guest ghi console đều đi qua `DebugWrite` → kernel
+  phải `read_user` hộ. Nếu kernel chịu đọc **bất kỳ** con trỏ nào thì đường đó
+  thành kênh **rò rỉ bộ nhớ kernel** cho user.
+- Self-test mới: `debug_write(USER_VA_START - 1, 4)` và `debug_write(0, 4)`
+  **phải bị từ chối** ⇒ in `SEC PROBE OK`. Đường hợp lệ vẫn chạy (mọi dòng
+  console khác trong cùng lần boot là phép thử dương tính tự nhiên).
+- Marker vào `COMMON`: harness **577 → 580 ca**.
+- Runbook thêm mục **5x** gom ba self-test bảo mật đang có: `SEC PROBE OK`,
+  `SYS REJECT OK` (slot 200 + vượt `USER_VA_END`), `WX OK` (ghi trang X bị chối).
+- Gate: QEMU 3/3×3, persist 3/3, harness 580, kernel 186, FS 28, docs PASS,
+  fmt sạch, 0 warning.

@@ -3040,6 +3040,17 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"SYS REJECT BAD\n"
                     });
+                    // Vòng 164 (bảo mật cơ bản): kernel KHÔNG được đọc hộ vùng
+                    // địa chỉ ngoài cửa sổ copy của user — nếu đọc được thì
+                    // DebugWrite trở thành kênh rò rỉ bộ nhớ kernel.
+                    let below = (vifast_abi::user_layout::USER_VA_START - 1) as u64;
+                    let sec_ok = vifast_user::debug_write(below, 4).error != KError::Ok
+                        && vifast_user::debug_write(0, 4).error != KError::Ok;
+                    write(if sec_ok {
+                        b"SEC PROBE OK\n"
+                    } else {
+                        b"SEC PROBE BAD\n"
+                    });
                     // Vòng 133: IPC phải chịu được yêu cầu rác — server trả
                     // lỗi EINVAL thay vì treo hoặc sập, và kênh VFS vẫn dùng
                     // được ngay sau đó.

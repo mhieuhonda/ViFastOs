@@ -406,6 +406,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - e7db52b toi uu (vong 160): thu hoi trang staging module (21-23 trang moi arch)
 - 3deeb3d tinh nang (vong 161): arena aarch64/x86 len 96 trang + history/!! vao cay
 - 2432b22 loi (vong 162): fsck ngay khi mount (FS MOUNT CLEAN) + tu thu lai khi guest khong boot
+- a974b03 loi (vong 163): tu sua dia khi mount, chi khi chac chan khong mat du lieu
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1535,6 +1536,7 @@ QEMU test:
 - `SLOT REUSE OK` — a slot destroyed and immediately retyped worked again (no leaked cap)
 - `IPC DEAD OK` — calling a destroyed endpoint returned an error instead of blocking
 - `IPC JUNK OK` — unknown VFS opcode got an error reply and the channel kept working
+- `SEC PROBE OK` — kernel refused to read user buffers outside the copy windows
 - `SYS REJECT OK` — invalid handles and out-of-range user pointers were all refused
 - `MEM FREE OK` — arena usage stayed consistent (used < size) after the whole FS op chain
 - `FS MOUNT CLEAN` — fsck ran at mount time and the loaded disk was consistent

@@ -194,6 +194,15 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5x. Bảo mật cơ bản đã khoá bằng self-test
+
+- `SEC PROBE OK` — kernel **từ chối đọc hộ** con trỏ nằm ngoài cửa sổ copy
+  (`USER_VA_START - 1` và `0`); nếu đọc được thì `DebugWrite` thành kênh rò rỉ
+  bộ nhớ kernel.
+- `SYS REJECT OK` — handle không hợp lệ (`slot 200`) và con trỏ vượt
+  `USER_VA_END` đều trả lỗi, kernel vẫn chạy tiếp.
+- `WX OK` — ghi vào trang đã map executable bị từ chối.
+
 ### 5y. Kiểm tra đĩa ngay khi mount
 
 Server chạy `fsck()` ngay sau khi nạp FS và in **`FS MOUNT CLEAN`**.
