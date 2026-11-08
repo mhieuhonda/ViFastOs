@@ -11,7 +11,7 @@
   --border: #EADBCC;
   --shadow: 0 1px 2px rgba(59, 42, 34, 0.06), 0 8px 24px rgba(59, 42, 34, 0.05);
   --radius: 14px;
-  --wrap: 1080px;
+  --wrap: 1180px;
 }
 
 *,
@@ -51,7 +51,12 @@ h3 { font-size: 1.06rem; font-weight: 650; }
 
 p { margin: 0 0 1em; }
 
-.wrap { width: 100%; max-width: var(--wrap); margin: 0 auto; padding: 0 20px; }
+.topline {
+  height: 5px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent) 62%, #F5A300 62%, #F5A300 100%);
+}
+
+.wrap { width: min(var(--wrap), calc(100% - 48px)); margin: 0 auto; padding: 0; }
 .wrap.narrow { max-width: 660px; }
 
 .skip-link {
@@ -94,13 +99,13 @@ p { margin: 0 0 1em; }
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 62px;
+  min-height: 70px;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   color: var(--text);
   text-decoration: none;
   font-weight: 700;
@@ -110,9 +115,9 @@ p { margin: 0 0 1em; }
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   background: var(--accent);
   color: #FFF8EC;
   font-size: 0.95rem;
@@ -585,7 +590,7 @@ textarea:focus {
 }
 
 @media (max-width: 420px) {
-  .wrap { padding: 0 16px; }
+  .wrap { width: calc(100% - 32px); }
   .hero-actions .btn { width: 100%; }
   .timeline li { padding-left: 54px; }
   .timeline li::before { left: 14px; }
@@ -604,9 +609,10 @@ textarea:focus {
 /* logo that (SVG) thay cho o chu V */
 img.brand-mark {
   display: block;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  box-shadow: 0 8px 18px -8px rgba(179, 20, 15, .55);
   background: none;
   object-fit: contain;
 }
@@ -617,7 +623,81 @@ img.brand-mark {
 .site-nav .nav-home:hover, .site-nav .nav-home:focus-visible { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
 
 /* wordmark: Vi do + Fast nghieng + hau to do (giong ViFastKey / ViFastTts) */
-.brand-word { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.8px; line-height: 1; }
+.brand-word { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.8px; line-height: 1; }
 .brand-word .red { color: var(--accent); }
 .brand-word em { font-style: italic; color: var(--text); }
 .brand:hover .brand-word .red { color: var(--accent-dark); }
+
+/* ---------- san pham cung he ---------- */
+
+.prod-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.prod-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+
+.prod-card.current {
+  border-color: #D9A99B;
+  background: linear-gradient(160deg, #FFFCF7 0%, #FDEDE6 100%);
+}
+
+.prod-tag {
+  align-self: flex-start;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: #FBE9E4;
+  border: 1px solid #F0D2C9;
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.prod-card.current .prod-tag {
+  color: #FFF8EC;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.prod-card h3 { margin: 0; font-size: 1.15rem; color: var(--text); }
+.prod-card p { margin: 0; font-size: 0.93rem; color: var(--muted); }
+.prod-card ul { margin: 0; padding-left: 1.1em; font-size: 0.9rem; color: #4A3529; }
+.prod-card ul li { margin-bottom: 3px; }
+
+.prod-actions {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.prod-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #FFF8EC;
+  text-decoration: none;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.prod-btn:hover { background: var(--accent-dark); color: #FFF8EC; }
+
+.prod-link { font-size: 0.88rem; font-weight: 600; text-decoration: none; }

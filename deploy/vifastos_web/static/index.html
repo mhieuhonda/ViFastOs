@@ -18,12 +18,13 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <div class="topline" aria-hidden="true"></div>
   <a class="skip-link" href="#dang-ky">Bỏ qua tới form đăng ký</a>
 
   <header class="site-header">
     <div class="wrap header-inner">
       <a class="brand" href="/">
-        <img class="brand-mark" src="/static/brand/vifastos-icon.svg" alt="" width="28" height="28">
+        <img class="brand-mark" src="/static/brand/vifastos-icon.svg" alt="" width="40" height="40">
         <span class="brand-word"><span class="red">Vi</span><em>Fast</em><span class="red">Os</span></span>
       </a>
       <nav class="site-nav" aria-label="Điều hướng chính">
@@ -32,6 +33,7 @@
         <a href="#hien-trang">Hiện trạng</a>
         <a href="#lo-trinh">Lộ trình</a>
         <a href="#ban-phat-hanh">Bản phát hành</a>
+        <a href="#san-pham">Sản phẩm</a>
         <a class="nav-cta" href="#dang-ky">Đăng ký sớm</a>
       </nav>
     </div>
@@ -208,7 +210,59 @@
       </div>
     </section>
 
-    <!-- 6. Đăng ký sớm -->
+    <!-- 6. Sản phẩm cùng hệ -->
+    <section class="section" id="san-pham">
+      <div class="wrap">
+        <h2>Sản phẩm cùng hệ</h2>
+        <p class="section-lead">Ba sản phẩm, một hệ sinh thái: gõ tiếng Việt, đọc tiếng Việt và giữ lõi hệ điều hành. Cùng chạy local-first, cùng giấy phép MIT.</p>
+        <div class="prod-grid">
+          <article class="prod-card current">
+            <span class="prod-tag">Đang xem · Hệ điều hành</span>
+            <h3>ViFastOs</h3>
+            <p>Microkernel viết bằng Rust, capability-based, chạy trên QEMU.</p>
+            <ul>
+            <li>Capability, IPC + notification, no_std</li>
+            <li>riscv64, aarch64 và x86_64 (UEFI/OVMF)</li>
+            <li>Đang phát triển — chưa có bản phát hành</li>
+            </ul>
+            <div class="prod-actions">
+              <a class="prod-btn" href="https://os.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-link" href="https://github.com/vifast-oss/ViFastOs" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
+            </div>
+          </article>
+          <article class="prod-card">
+            <span class="prod-tag">Cùng hệ sinh thái · Bộ gõ</span>
+            <h3>ViFastKey</h3>
+            <p>Bộ gõ tiếng Việt nhỏ, nhanh, thuần logic trên lõi Rust.</p>
+            <ul>
+            <li>Telex, Simple Telex, VNI, VIQR · 16 bảng mã</li>
+            <li>WASM gõ thử trong trình duyệt, C API, API Python</li>
+            <li>Windows, macOS, Linux, Android, iOS và demo UEFI</li>
+            </ul>
+            <div class="prod-actions">
+              <a class="prod-btn" href="https://key.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-link" href="https://github.com/vifast-oss/ViFastKey" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
+            </div>
+          </article>
+          <article class="prod-card">
+            <span class="prod-tag">Cùng hệ sinh thái · Giọng đọc</span>
+            <h3>ViFastTts</h3>
+            <p>Giọng đọc tiếng Việt chạy CPU trên ONNX, 24 kHz.</p>
+            <ul>
+            <li>Model Ngọc Huyền small 6,1M tham số</li>
+            <li>Windows, macOS, Linux, Android, extension</li>
+            <li>API REST/stream, CLI server, Python, ONNX</li>
+            </ul>
+            <div class="prod-actions">
+              <a class="prod-btn" href="https://tts.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-link" href="https://github.com/vifast-oss/ViFastTts" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. Đăng ký sớm -->
     <section class="section" id="dang-ky">
       <div class="wrap narrow">
         <h2>Đăng ký sớm</h2>
