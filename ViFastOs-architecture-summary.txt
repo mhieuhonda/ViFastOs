@@ -323,6 +323,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - c16d8a6 cong cu (vong 108b): khoa thu hoi pager bang marker PAGER SRV 0/0/0
 - 2970e13 moc 9 (vong 109): kiem tra toan ven kich thuoc file exec trong cong chuan
 - 01c9005 moc 9 (vong 110): kiem tra noi dung cuoi file exec trong cong chuan
+- 5459fc1 moc 9 (vong 111): kiem tra byte giua file exec trong cong chuan
+- 831fd07 tai lieu (vong 111b): ngan sach bo nho do duoc (pool, su dung cuoi boot, chi phi moi lan exec)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
