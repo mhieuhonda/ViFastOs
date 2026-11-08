@@ -647,6 +647,13 @@ pub fn tcb_configure_fault(
     result(e, v)
 }
 
+/// Vòng 152: lấy thông tin TCB thứ `index` đang sống.
+/// `value` = slot | priority << 8 | state << 16 (xem `ThreadState`).
+pub fn tcb_info(index: u64) -> SyscallResult {
+    let (e, v) = unsafe { syscall(SyscallId::TcbInfo as u64, [index, 0, 0, 0, 0, 0]) };
+    result(e, v)
+}
+
 pub fn tcb_set_affinity(tcb_slot: u8, mask: u8) -> SyscallResult {
     let (e, v) = unsafe {
         syscall(

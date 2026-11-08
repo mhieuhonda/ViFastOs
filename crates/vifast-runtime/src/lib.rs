@@ -1390,13 +1390,26 @@ pub mod timer {
             // MỘT lần và KHÔNG phải marker của gate.
             POST_IDLE_STALLED.store(true, core::sync::atomic::Ordering::SeqCst);
             let (timer_wakes, ipi_wakes) = A::secondary_wakeups();
-            vifast_kernel::klog!(
-                A,
-                "SMP IDLE STALL (ticks={}, wake_timer={}, wake_sgi={})",
-                kernel.ticks_on(0),
-                timer_wakes,
-                ipi_wakes
-            );
+            if let Some((post_ticks, idle_entries, timer_counts)) = A::post_idle_stats() {
+                vifast_kernel::klog!(
+                    A,
+                    "SMP IDLE STALL (ticks={}, wake_timer={}, wake_sgi={}, post_ticks={}, post_idle={}, post_wakes={})",
+                    kernel.ticks_on(0),
+                    timer_wakes,
+                    ipi_wakes,
+                    post_ticks,
+                    idle_entries,
+                    timer_counts
+                );
+            } else {
+                vifast_kernel::klog!(
+                    A,
+                    "SMP IDLE STALL (ticks={}, wake_timer={}, wake_sgi={}, post_idle_stats=none)",
+                    kernel.ticks_on(0),
+                    timer_wakes,
+                    ipi_wakes
+                );
+            }
         }
         #[cfg(feature = "test-exit")]
         if hart == 0

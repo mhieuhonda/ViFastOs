@@ -458,7 +458,10 @@ pub extern "C" fn rust_secondary(hartid: usize) -> ! {
         }
         // No task and no newly-ready task: enter the masked-WFI idle window.
         IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
-        if POST_STARTED.load(Ordering::Relaxed) {
+        // Vòng 152: chỉ đếm idle của HART PHỤ cho pha POST (giống aarch64/x86).
+        // Trước đây đếm cả hart 0 nên chỉ số bị "thổi" bởi nhịp nghỉ của hart 0,
+        // không còn phản ánh việc hart phụ có thực sự rảnh hay không.
+        if hart != 0 && POST_STARTED.load(Ordering::Relaxed) {
             POST_IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
         }
         unsafe {

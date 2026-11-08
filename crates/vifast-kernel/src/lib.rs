@@ -6084,6 +6084,37 @@ impl Kernel {
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
+            n if n == SyscallId::TcbInfo as u64 => {
+                // Vòng 152: liệt kê TCB đang sống theo thứ tự slot (a0 = chỉ
+                // số thứ tự). Chỉ trả thông tin tổng hợp; hết ⇒ NotFound.
+                let wanted = a0 as usize;
+                let mut seen = 0usize;
+                let mut index = 0usize;
+                while index < self.objs.len() {
+                    let reference = ObjRef {
+                        index: index as u8,
+                        gen: self.objs[index].gen,
+                    };
+                    if let Some(table) = self.tcb(reference) {
+                        if seen == wanted {
+                            let state = table.state as u64;
+                            let value =
+                                (index as u64) | ((table.priority as u64) << 8) | (state << 16);
+                            return UserAction::Return {
+                                value,
+                                error: KError::Ok,
+                            };
+                        }
+                        seen += 1;
+                    }
+                    index += 1;
+                }
+                UserAction::Return {
+                    value: 0,
+                    error: KError::NotFound,
+                }
+            }
+
             n if n == SyscallId::TcbWait as u64 => {
                 let target = match self.lookup_cap(
                     tcb,

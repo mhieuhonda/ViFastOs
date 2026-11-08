@@ -2596,3 +2596,22 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   sau `TIMER_TICKS`, in `SMP IDLE STALL (ticks=…, wake_timer=…, wake_sgi=…)`
   (không phải marker của gate) để lần sau thấy ngay vì sao.
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.
+
+## 9.149 — Vòng 152: sửa đúng gốc test SMP idle (đếm idle của HART PHỤ) + `ps` vào cây
+
+- **Nguyên nhân sâu hơn**: trên riscv, `POST_IDLE_ENTRIES` tăng cho **mọi hart**
+  vào idle (kể cả hart 0), nên chỉ số bị "thổi" bởi nhịp nghỉ của hart 0 và
+  **không còn phản ánh** hart phụ có rảnh thật hay không. aarch64/x86 đã đếm
+  riêng hart phụ (`SECONDARY_IDLE_ENTRIES`, `AP_IDLE_ENTRIES`).
+- **Sửa**: riscv chỉ tăng `POST_IDLE_ENTRIES` khi `hart != 0`, khớp ngữ nghĩa
+  hai port còn lại.
+- **Kiểm chứng**: riscv **3/3 PASS** với điều kiện chặt hơn; và quan trọng hơn —
+  thêm lại **`ps`** (thứ từng làm riscv 0/3) giờ **3/3 PASS**, rồi cả cổng
+  **3/3 × 3 arch** và persist **3/3**.
+- **Tính năng vào cây**: syscall `TcbInfo = 52` (kernel duyệt TCB sống, trả
+  `slot | prio<<8 | state<<16`), helper `vifast_user::tcb_info`, lệnh shell
+  `ps` in `<slot> <prio> <state>`. Runbook cập nhật.
+- Chẩn đoán `SMP IDLE STALL` giờ in kèm `post_ticks/post_idle/post_wakes` để
+  lần sau thấy ngay vì sao điều kiện không đạt.
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch,
+  0 warning, headroom 199 024 B, client riscv 6 trang.

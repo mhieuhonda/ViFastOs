@@ -911,6 +911,9 @@ pub enum SyscallId {
     /// Block until a TCB exits (reap rendezvous).  Immediate Ok when the
     /// target already exited; WouldBlock when it already has another waiter.
     TcbWait = 51,
+    /// Vòng 152: liệt kê TCB đang sống (a0 = thứ tự). value = slot | prio<<8
+    /// | state<<16; NotFound khi hết.
+    TcbInfo = 52,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -969,6 +972,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::TcbDestroy, true),
     (SyscallId::ObjectDestroy, true),
     (SyscallId::TcbWait, true),
+    (SyscallId::TcbInfo, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

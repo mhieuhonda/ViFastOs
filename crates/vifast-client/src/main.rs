@@ -358,7 +358,7 @@ fn shell_command(line: &[u8]) {
         return;
     }
     if line == b"help" {
-        write(b"help uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+        write(b"help ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...] exec <path> [args...]\n");
@@ -373,6 +373,25 @@ fn shell_command(line: &[u8]) {
             b"x86_64"
         });
         write(b" bootinfo-v3\n");
+    } else if line == b"ps" {
+        // Vòng 152: liệt kê TCB đang sống: "<slot> <prio> <state>".
+        let mut index = 0u64;
+        loop {
+            let info = vifast_user::tcb_info(index);
+            if info.error != KError::Ok {
+                break;
+            }
+            write_u64(info.value & 0xff);
+            write(b" ");
+            write_u64((info.value >> 8) & 0xff);
+            write(b" ");
+            write_u64((info.value >> 16) & 0xff);
+            write(b"\n");
+            index += 1;
+            if index > 64 {
+                break;
+            }
+        }
     } else if line == b"uptime" {
         // Vòng 150: số tick monotonic kể từ boot.
         write_u64(vifast_user::get_time().value);

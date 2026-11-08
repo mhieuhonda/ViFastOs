@@ -67,12 +67,15 @@ Kết quả mẫu (vòng 36): 5/5×3 PASS trong 88.8s. Serial lần hỏng nằm
 
 ## 2b. Lệnh shell có sẵn
 
-`help uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>`
+`help ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>`
 `mv <old> <new> ln <old> <new> stat <path> sync <path>`
 `truncate <path> <size> df fsck run [path]`
 `runfs <path> [args...] exec <path> [args...]`
 
 - `uname` → `ViFastOs <arch> bootinfo-v3`; `uptime` → `<n> ticks` monotonic.
+- `ps` → mỗi dòng `<slot> <prio> <state>` cho từng TCB đang sống (state theo
+  `ThreadState`: 1=Ready, 2=Running, 4=BlockedRecv, 12=Exited…), qua syscall
+  `TcbInfo` (52).
 - `stat <path>` → `<size> bytes file|dir|link`.
 - `df` → `<đã dùng>/<tổng>` block vùng dữ liệu (512 B/block), qua
   `vfs::STATFS`.
