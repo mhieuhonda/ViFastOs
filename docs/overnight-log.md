@@ -3504,3 +3504,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Cũng xác nhận: `CLIENT_IRQ_SLOT = 8` ⇒ **không** dùng slot 8 làm đích mint
   (đã gặp ở vòng 208) — dùng slot 20.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.207 — Vòng 210: thử kiểm W^X trên guest — hai lần đều VÔ NGHĨA, đã revert
+
+- Lần 1: map frame slot 4 với `WRITE|EXEC` ⇒ `WX PROBE BAD err=3` (`NoRights`).
+  Nguyên nhân: frame đó **đã bị `cap_revoke`** từ test trước ⇒ kernel chặn ở
+  bước **quyền cap**, chưa tới bước kiểm W^X ⇒ phép thử không kiểm gì cả.
+- Lần 2: cấp lại frame bằng `retype(3, Frame, 4)` rồi thử lại ⇒ **vẫn err=3**,
+  tức `retype` thất bại (untyped slot 3 đã cạn sau các test trước) và slot 4 vẫn
+  là frame cũ bị hạ quyền.
+- Muốn kiểm W^X trên guest cần **untyped dự trữ riêng** hoặc frame chưa hạ quyền;
+  hiện chỉ host test kiểm được. Đã **revert** probe + marker + việc nâng ngân
+  sách aarch64 (nâng 8→9 là hợp lý theo đo arena `82/96` nhưng không cần khi
+  không có probe; giữ 8 để không tạo dư địa mờ).
+- Ghi cả hai mã lỗi vào `17-su-co.md`.
+- Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS.

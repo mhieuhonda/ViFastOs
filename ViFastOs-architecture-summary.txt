@@ -452,6 +452,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 55315a7 tinh nang (vong 206): nang ngan sach client riscv 7->8 (co so do) + df thanh ty le
 - 28445a8 tai lieu (vong 207): huong dan dung nhanh cho nguoi dung cuoi
 - 64e7927 sua loi (vong 208): revert hai probe bao mat lam client im lang sau SHELL READY
+- e7de6f1 test (vong 209): IPC RIGHTS OK — cam rebadge, kiem tren guest
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
