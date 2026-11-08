@@ -321,9 +321,15 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
   `exec_used` mà chỗ huỷ đọc (hoặc giá trị bị ghi đè sau đó), và số slot khớp
   lệch (5 trước TCB thay vì 6) ⇒ có một đường cấp phát **không** đi qua
   `track_alloc` của caller.
-- Việc cần làm (vòng sau): soát mọi khai báo mảng được truyền vào
-  `spawn_elf_from_fs`/`spawn_elf_copy` (nghi có hai mảng `used`/`exec_used` song
-  song) và mọi chỗ reset mảng giữa spawn và destroy.
+- **Đo tiếp (vòng 197)**: đặt chẩn đoán ở **đường `runfs`** (cổng không gõ lệnh
+  nên an toàn) ⇒ `RUNFS USED …` **không bao giờ in** ⇒ lệnh `runfs` của shell đi
+  qua **nhánh xử lý khác**, không phải đoạn `match spawned` đã đọc. Vì vậy mọi
+  suy luận trước đó dựa trên nhánh đó **không áp dụng** cho `runfs`.
+- Việc cần làm (vòng sau): tìm **đúng handler** của `runfs` trong root (grep
+  `RUNFS`/`Label`), rồi in `&used as *const _` (địa chỉ mảng) tại `track_alloc`
+  và tại chỗ huỷ để xác nhận **cùng hay khác mảng** — thay vì suy đoán từ giá trị.
+- Ghi chú: chẩn đoán in ở boot ("FS TCB …") **đã gỡ** vì nó chạy trong cổng;
+  chỉ dùng chẩn đoán ở đường lệnh shell.
 - **Bài học vận hành (vòng 196)**: thêm 2 dòng in chẩn đoán ở boot làm riscv
   **2/3** — một lần guest dừng trước `SHELL READY` và lần retry **không nhận được
   TCP echo** (cửa sổ chờ quá ngắn khi boot chậm đi). Đã gỡ chẩn đoán ⇒ 3/3 trở

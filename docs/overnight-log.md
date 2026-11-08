@@ -3326,3 +3326,16 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   3×3 sau mỗi lần thêm và không giữ chẩn đoán trong cây.
 - Gate sau khi gỡ: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs
   PASS, fmt sạch.
+
+## 9.194 — Vòng 197: `runfs` đi qua NHÁNH KHÁC (chẩn đoán không bao giờ in)
+
+- Đặt chẩn đoán ở đường `runfs` (cổng không gõ lệnh ⇒ an toàn): **`RUNFS USED …`
+  không bao giờ in** ⇒ lệnh `runfs` của shell **không đi qua** đoạn `match
+  spawned` mà tôi đã đọc và suy luận suốt vòng 194–196. Đây là lần thứ hai tôi
+  suy luận trên **nhánh sai** (lần đầu: tưởng `destroy_exec` dùng `exec_len` cũ).
+- Vì vậy các kết luận dựa trên nhánh đó **không áp dụng** cho `runfs`; cần tìm
+  đúng handler (`grep RUNFS/Label`) trước khi kết luận thêm.
+- Kỷ luật: chẩn đoán in ở boot ("FS TCB …") **đã gỡ** vì nó chạy trong cổng —
+  chỉ dùng chẩn đoán ở đường lệnh shell để không đổi nhịp boot.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
+  sạch.
