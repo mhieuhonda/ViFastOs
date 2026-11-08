@@ -1661,6 +1661,39 @@ fn root_vfs_write_at(
 // nên chưa parse tại đây — vòng sau nạp segment theo page rồi parse trên
 // staging frames. Đọc tối đa `expected.len()` (kẹp 1KiB) và so khớp từng
 // byte với mẫu gọi truyền vào. Fail-êm.
+/// Vòng 110: so khớp N byte CUỐI của file — bắt lỗi ghi hụt/ghi lệch mà
+/// kiểm tra kích thước và prefix không phát hiện được.
+fn root_vfs_verify_tail(endpoint_slot: u8, path: &[u8], expected: &[u8]) -> bool {
+    if expected.is_empty() || expected.len() > 64 {
+        return false;
+    }
+    let Some(size) = root_vfs_stat(endpoint_slot, path) else {
+        return false;
+    };
+    if size < expected.len() as u64 {
+        return false;
+    }
+    let start = size - expected.len() as u64;
+    let Some(fd) = root_vfs_open(endpoint_slot, path) else {
+        return false;
+    };
+    let mut ok =
+        root_vfs_read_at(endpoint_slot, fd, start, expected.len() as u64) == expected.len() as u64;
+    if ok {
+        let mut i = 0;
+        while i < expected.len() {
+            let b = unsafe { core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i)) };
+            if expected[i] != b {
+                ok = false;
+                break;
+            }
+            i += 1;
+        }
+    }
+    root_vfs_close(endpoint_slot, fd);
+    ok
+}
+
 fn root_vfs_verify_prefix(endpoint_slot: u8, path: &[u8], expected: &[u8]) -> bool {
     if expected.is_empty() || expected.len() > 1024 {
         return false;
@@ -2739,6 +2772,13 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             write(b"\n");
                         }
                         None => write(b"PROG SIZE BAD 0\n"),
+                    }
+                    let tail_len = core::cmp::min(32, EXEC_DEMO_ELF.len());
+                    let tail = &EXEC_DEMO_ELF[EXEC_DEMO_ELF.len() - tail_len..];
+                    if root_vfs_verify_tail(root_vfs_slot, b"/prog.elf", tail) {
+                        write(b"PROG TAIL OK\n")
+                    } else {
+                        write(b"PROG TAIL BAD\n")
                     }
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;

@@ -1939,3 +1939,13 @@ follow-up `62b31f4`.
   thấy trên cả 3 arch. Harness **526 → 529 ca**.
 - Gate: QEMU 3/3×3, persist 3/3, harness 529, kernel 183, docs PASS, fmt sạch,
   0 warning, headroom 203 120/199 024 B.
+
+## 9.105 — Vòng 110: kiểm tra nội dung CUỐI file exec (không chỉ kích thước)
+
+- Thêm `root_vfs_verify_tail()`: STAT để lấy kích thước, rồi đọc và so khớp
+  **32 byte cuối** của `/prog.elf` với ảnh ELF gốc — bắt được lỗi ghi hụt ở
+  giữa/cuối file mà kiểm tra kích thước + prefix bỏ lọt.
+- Selftest in `PROG TAIL OK` / `PROG TAIL BAD`; thêm marker vào
+  `harness_spec.COMMON` → cổng chuẩn bắt buộc. Harness **529 → 532 ca**.
+- Gate: QEMU 3/3×3, persist 3/3, harness 532, docs PASS, fmt sạch, 0 warning,
+  headroom 203 120/199 024 B.
