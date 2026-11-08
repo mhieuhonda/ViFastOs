@@ -24,6 +24,33 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def check_harness_markers_documented() -> list[str]:
+    """Mọi marker trong harness_spec phải xuất hiện trong docs/11-hien-tai/09-testing.md.
+
+    Mục đích: danh sách "Điều kiện PASS" là bản sao của hợp đồng harness; nếu
+    thêm marker mà quên cập nhật tài liệu thì check-docs phải báo.
+    """
+    errors: list[str] = []
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    try:
+        import harness_spec as spec
+    except ImportError as exc:  # pragma: no cover
+        return [f"không import được harness_spec: {exc}"]
+    doc = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "docs", "11-hien-tai", "09-testing.md")
+    try:
+        text = open(doc, encoding="utf-8").read()
+    except OSError as exc:
+        return [f"không đọc được {doc}: {exc}"]
+    missing = [t for t, _ in spec.COMMON if f"`{t}`" not in text]
+    missing += [t for t in spec.EXACT_ONE if f"`{t}`" not in text]
+    if missing:
+        errors.append(
+            "09-testing.md thiếu marker trong hợp đồng harness: " + ", ".join(missing[:6])
+        )
+    return errors
+
+
 def main() -> int:
     import importlib.util
 
@@ -224,6 +251,12 @@ def main() -> int:
         if failures:
             return 1
         print(f"docs self-test: PASS ({len(forbidden)} stale phrases rejected)")
+
+    marker_errors = check_harness_markers_documented()
+    if marker_errors:
+        for message in marker_errors:
+            print(message, file=sys.stderr)
+        return 1
 
     print("docs check: PASS")
     return 0

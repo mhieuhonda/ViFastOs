@@ -368,6 +368,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a728f42 web: gop trang os.vifast.org (FastAPI + dang ky som) vao deploy/vifastos_web
 - 3189990 moc 9 (vong 136): W^X thanh marker + giam flake boot (chan doan + retry + timeout)
 - b61fa73 brand: logo ViFastOs (icon + lockup + PNG) + favicon/manifest
+- efa95d6 moc 9 (vong 137): slot sau destroy phai retype lai duoc
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

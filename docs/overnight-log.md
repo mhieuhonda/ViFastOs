@@ -2368,3 +2368,16 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   bằng chứng slot được tái dùng; test phải đặt **liền kề** destroy.
 - Gate: QEMU 3/3×3, persist 3/3, harness 568, kernel tests 185, docs PASS,
   fmt sạch, 0 warning, headroom 199 024 B.
+
+## 9.135 — Vòng 138: chống trôi tài liệu marker (docs phải khớp harness)
+
+- `docs/11-hien-tai/09-testing.md` mục "Điều kiện PASS" bị **lệch thực tế**:
+  thiếu toàn bộ marker mới (WX OK, MEM OOM OK, SLOT REUSE OK, FS RM/TRUNC/
+  RENAME/LINK/OPS FSCK, SYS REJECT OK, IPC JUNK/DEAD OK, PROG …, HIARG …).
+- Sinh lại danh sách "Chung" (47) và "Đúng một lần" (25) **từ
+  `harness_spec.py`**, và thêm hàm `check_harness_markers_documented()` trong
+  `scripts/check-docs.py`: mọi marker trong hợp đồng phải xuất hiện dạng
+  `` `MARKER` `` trong tài liệu, nếu không → `check-docs` fail.
+- Kiểm chứng **cả hai chiều**: chạy sạch → `docs check: PASS`; thêm marker giả
+  `ZZZ DRIFT PROBE` vào spec (trong bộ nhớ) → hàm trả lỗi nêu đúng marker thiếu.
+- Gate: QEMU 3/3×3, persist 3/3, harness 568, docs PASS, fmt sạch, 0 warning.
