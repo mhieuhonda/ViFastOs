@@ -2792,3 +2792,15 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   **3/3 PASS** ⇒ đúng là flake hạ tầng, giờ đã có cơ chế tự xử lý.
 - Gate: QEMU 3/3×3, persist 3/3, harness 577, kernel 186, docs PASS, fmt sạch,
   0 warning.
+
+## 9.160 — Vòng 163: tự SỬA đĩa khi mount — chỉ khi chắc chắn không mất dữ liệu
+
+- Thêm `Fs::root_is_empty()` (bỏ qua "." và ".."), kèm **host test**
+  `root_is_empty_reports_user_entries_only` (FS crate 27 → **28** test).
+- Chính sách khi `fsck()` lỗi lúc mount:
+  - gốc **trống** ⇒ `format` + `initialize` lại ⇒ in `FS MOUNT REPAIRED`;
+  - **có dữ liệu người dùng** ⇒ **không ghi gì vào đĩa**, in `FS MOUNT DIRTY`.
+  Đây là đánh đổi có chủ ý: thà báo bẩn còn hơn tự xoá dữ liệu người dùng.
+- Lỗi nhỏ đã sửa: test dùng `fs.rmdir` (không tồn tại) → `fs.unlink`.
+- Gate: QEMU 3/3×3, persist 3/3, harness 577, FS 28, docs PASS, fmt sạch,
+  0 warning.

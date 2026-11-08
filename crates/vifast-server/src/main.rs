@@ -271,9 +271,22 @@ fn init_fs() {
     }
     // Vòng 162: kiểm tra toàn vẹn NGAY khi mount. Đây là thứ người dùng cần
     // biết trước khi tin dữ liệu: đĩa vừa nạp có nhất quán hay không.
+    // Vòng 163: nếu bất nhất mà thư mục gốc TRỐNG thì được phép format lại;
+    // còn có dữ liệu người dùng thì KHÔNG đụng vào — an toàn dữ liệu trước.
     match fs().fsck() {
         Ok(()) => write(b"FS MOUNT CLEAN\n"),
-        Err(_) => write(b"FS MOUNT DIRTY\n"),
+        Err(_) => {
+            if fs().root_is_empty() && vifast_fs::format(fs().dev_mut()).is_ok() {
+                fs().dev_mut().clear();
+                if fs().initialize().is_ok() {
+                    write(b"FS MOUNT REPAIRED\n");
+                } else {
+                    write(b"FS MOUNT DIRTY\n");
+                }
+            } else {
+                write(b"FS MOUNT DIRTY\n");
+            }
+        }
     }
     if ensure_file(b"/motd", MOTD).is_err() {
         write(b"FS CORRUPT\n");

@@ -720,6 +720,21 @@ impl<D: BlockDev> Fs<D> {
         Ok(())
     }
 
+    /// Vòng 163: thư mục gốc có TRỐNG không (không tính "." và "..").
+    /// Dùng để quyết định có được phép format khi fsck phát hiện bất nhất
+    /// hay không: chỉ sửa khi chắc chắn không mất dữ liệu người dùng.
+    pub fn root_is_empty(&mut self) -> bool {
+        let mut index = 0usize;
+        while let Ok(Some((_, name, len))) = self.read_dir_entry(ROOT_INO, index) {
+            index += 1;
+            let entry = &name[..len.min(MAX_NAME)];
+            if entry != b"." && entry != b".." {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn fsck(&mut self) -> Result<(), FsError> {
         let mut superblock = zero_block();
         self.dev.read(1, &mut superblock)?;
@@ -3080,6 +3095,21 @@ mod tests {
         assert_eq!(&out, &data[..BLOCK_SIZE]);
         fs.unlink(b"/b", 1).unwrap();
         assert_eq!(fs.lookup(b"/b", 1), Err(FsError::NotFound));
+        fs.fsck().unwrap();
+    }
+
+    #[test]
+    fn root_is_empty_reports_user_entries_only() {
+        // Vòng 163: quyết định "được phép format lại khi fsck lỗi" dựa vào
+        // việc thư mục gốc có dữ liệu người dùng hay không.
+        let mut fs = fresh();
+        assert!(fs.root_is_empty(), "FS mới phải coi như trống");
+        fs.mkdir(b"/d", 1).unwrap();
+        assert!(!fs.root_is_empty(), "có thư mục con thì không còn trống");
+        fs.unlink(b"/d", 1).unwrap();
+        assert!(fs.root_is_empty(), "xoá hết thì trống lại");
+        fs.create(b"/f", 1, INODE_FILE).unwrap();
+        assert!(!fs.root_is_empty(), "có file thì không trống");
         fs.fsck().unwrap();
     }
 

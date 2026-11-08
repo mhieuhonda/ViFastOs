@@ -196,8 +196,11 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 
 ### 5y. Kiểm tra đĩa ngay khi mount
 
-Server chạy `fsck()` ngay sau khi nạp FS và in **`FS MOUNT CLEAN`** (hoặc
-`FS MOUNT DIRTY` nếu phát hiện bất nhất). Đây là marker của cổng: nếu một thay
+Server chạy `fsck()` ngay sau khi nạp FS và in **`FS MOUNT CLEAN`**.
+Nếu phát hiện bất nhất:
+- thư mục gốc **trống** ⇒ format lại và in **`FS MOUNT REPAIRED`**;
+- **có dữ liệu người dùng** ⇒ **không đụng vào đĩa**, in **`FS MOUNT DIRTY`**
+  (an toàn dữ liệu trước, người dùng tự quyết định). Đây là marker của cổng: nếu một thay
 đổi làm cấu trúc đĩa hỏng, sẽ thấy ngay ở dòng này thay vì đoán qua lỗi FS về
 sau.
 
