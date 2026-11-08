@@ -2381,3 +2381,25 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
 - Kiểm chứng **cả hai chiều**: chạy sạch → `docs check: PASS`; thêm marker giả
   `ZZZ DRIFT PROBE` vào spec (trong bộ nhớ) → hàm trả lỗi nêu đúng marker thiếu.
 - Gate: QEMU 3/3×3, persist 3/3, harness 568, docs PASS, fmt sạch, 0 warning.
+
+## 9.136 — Vòng 139: tính năng `df` đi trọn stack + bắt 2 lỗi thật
+
+**Tính năng**: lệnh shell `df` in `used/total` block của vùng dữ liệu FS.
+- `vifast-fs::usage()` — đếm block đã dùng trong vùng DATA (đúng biên `alloc_block`).
+- opcode `vfs::STATFS` + handler server trả `(OK, used, total, BLOCK_SIZE)`.
+- lệnh `df` trong client; self-test boot in `FS USAGE OK` (used ≤ total, total > 0,
+  block 512 B); marker vào `COMMON`: harness **568 → 571 ca**.
+
+**Lỗi thật #1 — trùng mã opcode**: tôi cấp `STATFS = 0x200D`, nhưng `0x200D` đã là
+`BADGE_PROBE` ⇒ lời gọi bị xử lý như badge probe, trả `65535` ⇒ `FS USAGE BAD`.
+Sửa: `STATFS = 0x2012`. Bài học: **luôn grep mã opcode mới** trước khi thêm.
+
+**Lỗi thật #2 — ngân sách headroom**: bản `df` đầu tiên làm client +32 B khiến
+kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp` tụt còn
+**194 928 B** < 196 608 ⇒ build đỏ (guard hoạt động đúng). Thu gọn output `df`
+(`used/total`) và bỏ đoạn debug in số ⇒ headroom về **199 024 B** cả hai bản.
+
+**Bài học CI**: `test-qemu.py` từng crash `NameError: ARCH` khi vào nhánh báo lỗi
+(thiếu import `ARCH`) — đã sửa import; nhánh chẩn đoán giờ chạy được.
+
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.

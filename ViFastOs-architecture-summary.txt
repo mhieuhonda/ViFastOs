@@ -369,6 +369,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 3189990 moc 9 (vong 136): W^X thanh marker + giam flake boot (chan doan + retry + timeout)
 - b61fa73 brand: logo ViFastOs (icon + lockup + PNG) + favicon/manifest
 - efa95d6 moc 9 (vong 137): slot sau destroy phai retype lai duoc
+- 54a53e5 tai lieu (vong 138): chong troi danh sach marker — docs phai khop harness_spec
+- 26ee7c9 web: them link ve vifast.org + tro GitHub sang org vifast-oss
+- 62d7a4a brand: 3 gach toc do bang nhau (bo kieu thut vao o gach giua) + giai thich hexagon
+- aaf0bef brand: wordmark Vi do + Fast nghieng; gach giua thut vao; cap nhat copy Fast (Rust native)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1490,6 +1494,7 @@ QEMU test:
 - `HIARG` — program executed from the filesystem printed an argv-only marker
 - `WX OK` — writing an executable-mapped frame was denied while the RW stack stayed writable
 - `MEM OOM OK` — oversized untyped request was refused with OutOfMemory and size 0 rejected
+- `FS USAGE OK` — STATFS reported a sane used/total block count with 512-byte blocks
 - `SLOT REUSE OK` — a slot destroyed and immediately retyped worked again (no leaked cap)
 - `IPC DEAD OK` — calling a destroyed endpoint returned an error instead of blocking
 - `IPC JUNK OK` — unknown VFS opcode got an error reply and the channel kept working

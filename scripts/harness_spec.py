@@ -52,6 +52,10 @@ COMMON = [
         "oversized untyped request was refused with OutOfMemory and size 0 rejected",
     ),
     (
+        "FS USAGE OK",
+        "STATFS reported a sane used/total block count with 512-byte blocks",
+    ),
+    (
         "SLOT REUSE OK",
         "a slot destroyed and immediately retyped worked again (no leaked cap)",
     ),
