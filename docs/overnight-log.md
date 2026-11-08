@@ -2164,3 +2164,19 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
 - Bài học: test asm tay phải **ngắn (≤8 lệnh)**, kiểm từng bước, tránh vùng
   0x140..0x180 mà root dùng cho tham số.
 - Gate: QEMU 2/2×3, build 0 warning, headroom 199 024 B.
+
+## 9.120 — Vòng 123: frame & PTE khớp — nghi task exec chạy sai vspace
+
+- Bật lại trace PTE (entry 1, 0x23, 0x24) và thêm probe map **frame stack ở
+  VA thứ hai** (0x24000) để lấy PA:
+  - `T:80380000 I:23 P:200e04d7` → PA `0x80381000`
+  - `T:80380000 I:24 P:200e04d7` → **cùng PA**
+  - `PMAP 0 68719624192` → `frame_map` trả về VA (không phải PA)
+- Root đã ghi `"HI FS"` vào đúng frame đó ở offset `0x100` ⇒ dữ liệu đúng PA,
+  đúng VA `0x23100`.
+- Thử map stack bằng `R|X` thay `R|W` → vẫn không đọc được ⇒ **không phải bit W**.
+- Kết luận vòng: **không phải lỗi map, PTE, hay ghi**. Còn hai khả năng: task
+  exec chạy với **vspace khác**, hoặc chương trình không chạy như ta tưởng.
+- Đề xuất thí nghiệm dứt điểm (vòng sau): ghi giá trị đặc trưng `0x41424344`
+  vào frame stack rồi cho **worker chắc chắn chạy** đọc cùng VA để đối chiếu.
+- Gate: QEMU 2/2×3, persist 3/3, build 0 warning, headroom 199 024 B.
