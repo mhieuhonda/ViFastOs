@@ -98,3 +98,17 @@ T:0000000080382000 I:0000000000000023 P:00000000200e0cd7   ← stack (R|W|U|A|D)
    chạy (thêm trace unmap kèm VA/table).
 2. Kiểm tra `cause=0x2`: task exec có bị `tcb_configure` lại entry sai không
    (gen=3 cho thấy TCB được tái dùng).
+
+## Bổ sung vòng 122 — chương trình dài fault `cause=2` (illegal instruction)
+
+- Chương trình test 18 lệnh (in byte từ trang code ở `entry+0x80`, in chuỗi từ
+  trang stack, in byte kiểm tra ở `entry+0x81`) **không in gì** và kết thúc
+  bằng `USER FAULT ... cause=0x2 addr=0x0` (illegal instruction).
+- Chương trình ngắn hiện tại (8 lệnh, đọc cặp `(ptr,len)` trong trang code)
+  **vẫn chạy đúng** trong cùng bản build.
+- ⇒ Nghi vấn mới: chương trình dài hơn **52 byte** (0x120..0x168) chạm vùng
+  nào đó khiến PC nhảy vào bộ nhớ 0; cần kiểm tra (a) độ dài segment
+  `filesz=0x60` có phủ đủ code + vùng phụ không, (b) `e_entry`/`p_memsz` có bị
+  lệch khi code vượt quá vùng 0x140 mà `write_program_args` ghi đè.
+- Đây là **lỗi của test harness tự chế**, chưa kết luận gì về lỗi stack; ghi
+  lại để lần sau viết test ngắn (≤ 8 lệnh) và kiểm tra từng bước.
