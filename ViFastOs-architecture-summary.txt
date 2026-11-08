@@ -384,6 +384,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 0960e27 moc 9 (vong 144): gan fault endpoint cho exec TCB — khong fault, task treo trong syscall
 - 313015e brand: PNG nen trong suot (het nen trang o goc)
 - c1421f8 seo: anh OG 1200x630 rieng cho os.vifast.org + meta day du
+- 1947206 sua loi (vong 145): exec doc duoc trang stack — thieu cua so VA trong read_user/write_user
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -430,7 +431,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-abi`: 4/4 PASS
+- `cargo test -p vifast-abi`: 5/5 PASS
 - `cargo test -p vifast-kernel`: 186/186 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS

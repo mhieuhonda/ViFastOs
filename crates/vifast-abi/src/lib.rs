@@ -138,6 +138,35 @@ pub mod pager {
 
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn copy_windows_cover_user_regions() {
+            use crate::user_layout as l;
+            // Mọi vùng mà task người dùng thật sự có thể đặt con trỏ đều phải
+            // nằm trong hợp đồng copy của platform — nếu thiếu, syscall copy
+            // trả InvalidArg dù PTE hợp lệ (lỗi exec-stack vòng 112-145).
+            let must = [
+                (l::CODE_VA + 0x40, 8),
+                (l::STACK_BASE + 0x100, 16),
+                (l::EXEC_STACK_BASE + 0x100, 16),
+                (l::EXEC_STACK_TOP - 8, 8),
+                (l::DATA_VA, 4),
+                (l::IPC_BUF_SERVER_VA, 8),
+                (l::IPC_BUF_CLIENT_VA, 8),
+            ];
+            for (ptr, len) in must {
+                assert!(
+                    l::copy_window_ok(ptr as u64, len),
+                    "cửa sổ copy thiếu vùng {:#x}+{}",
+                    ptr,
+                    len
+                );
+            }
+            // Vắt qua ranh giới cửa sổ hoặc ngoài toàn bộ vùng người dùng: từ chối.
+            assert!(!l::copy_window_ok((l::CODE_VA + 0x2_0000 - 4) as u64, 8));
+            assert!(!l::copy_window_ok(0xdead_0000_u64, 16));
+            assert!(!l::copy_window_ok(l::CODE_VA as u64, 0));
+        }
+
         use super::*;
 
         #[test]
@@ -302,6 +331,43 @@ pub mod user_layout {
     pub const ROOT_ELF_STACK_GUARD: usize = ROOT_ELF_BASE + 0x10_0000;
     pub const ROOT_ELF_STACK_BASE: usize = ROOT_ELF_STACK_GUARD + 0x1000;
     pub const ROOT_ELF_STACK_TOP: usize = ROOT_ELF_STACK_BASE + 0x4000;
+
+    /// Vòng 146: **hợp đồng** các cửa sổ VA mà `Arch::read_user`/`write_user`
+    /// được phép copy. Ba port (riscv64/aarch64/x86_64) đều kiểm đúng danh sách
+    /// này (không walk bảng trang) — thiếu một cửa sổ là mọi syscall copy trên
+    /// vùng đó bị `InvalidArg` dù PTE hợp lệ. Đây chính là nguyên nhân lỗi
+    /// "exec không đọc được trang stack" (vòng 112-145).
+    ///
+    /// Mọi thay đổi layout NGƯỜI DÙNG phải cập nhật danh sách này và test
+    /// `copy_windows_cover_user_regions` sẽ nhắc nếu thiếu.
+    pub const COPY_WINDOWS: &[(usize, usize)] = &[
+        (CODE_VA, 0x2_0000),
+        (STACK_BASE, STACK_LEN),
+        (EXEC_STACK_BASE, EXEC_STACK_TOP - EXEC_STACK_BASE),
+        (DATA_VA, 4096),
+        (
+            ROOT_MODULE_SERVER_VA,
+            ROOT_MODULE_END - ROOT_MODULE_SERVER_VA,
+        ),
+        (IPC_BUF_SERVER_VA, 4096),
+        (IPC_BUF_CLIENT_VA, 4096),
+        (ROOT_ELF_BASE, ROOT_ELF_STACK_TOP - ROOT_ELF_BASE),
+    ];
+
+    /// Cửa sổ copy hợp lệ cho `[ptr, ptr+len)` — range phải nằm TRỌN trong một
+    /// cửa sổ (không được vắt qua hai cửa sổ).
+    pub fn copy_window_ok(ptr: u64, len: usize) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let start = ptr as usize;
+        let Some(end) = start.checked_add(len) else {
+            return false;
+        };
+        COPY_WINDOWS
+            .iter()
+            .any(|&(base, size)| start >= base && end <= base.saturating_add(size))
+    }
     /// Read-only BootInfo page passed to the root task in its first argument.
     /// It is above the root ELF stack and outside the ELF parse window.
     pub const ROOT_BOOTINFO_VA: usize = ROOT_ELF_STACK_TOP + 0x1000;

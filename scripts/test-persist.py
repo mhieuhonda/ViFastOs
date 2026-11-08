@@ -159,9 +159,13 @@ def boot_retry(boot, disk: str, serial: str) -> tuple[int, str, bool]:
     """Boot một lần; nếu guest gần như không in gì (flake UEFI/QEMU) thì thử
     lại MỘT lần và nói rõ, để không lẫn flake với lỗi FS thật."""
     rc, output, timeout = boot(disk, serial)
-    if len(output.splitlines()) < 20:
+    # Guest "không boot" được nhận diện bằng việc thiếu marker cuối chuỗi boot
+    # (SHELL READY) — không chỉ dựa vào số dòng, vì flake UEFI có thể in vài
+    # chục dòng rồi treo. Chỉ thử lại MỘT lần và ghi chú rõ để không lẫn flake
+    # với lỗi FS thật.
+    if "SHELL READY" not in output:
         print(
-            f"note: guest không boot (chỉ {len(output.splitlines())} dòng serial) — thử lại một lần",
+            f"note: guest không đạt SHELL READY ({len(output.splitlines())} dòng serial) — thử lại một lần",
             file=sys.stderr,
         )
         rc, output, timeout = boot(disk, serial)

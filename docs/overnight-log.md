@@ -2495,3 +2495,21 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `SMP POST IDLE OK` ⇒ `PREEMPT OK` không in ⇒ **đã revert phần demo**, chỉ giữ
   bản sửa platform. Việc làm marker bền vững để vòng sau (cần task phụ riêng).
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.
+
+## 9.143 — Vòng 146: hợp đồng cửa sổ copy của platform thành hằng số + test
+
+- Thêm vào `vifast_abi::user_layout`:
+  - `COPY_WINDOWS` — danh sách cửa sổ VA mà `read_user`/`write_user` được phép
+    copy (đúng 8 cửa sổ ba port đang dùng, **đã có** `EXEC_STACK` từ vòng 145);
+  - `copy_window_ok(ptr, len)` — range phải nằm **trọn** trong một cửa sổ.
+- Test host `copy_windows_cover_user_regions` khẳng định: các vùng thật của task
+  (code, stack, **exec stack**, data, IPC) đều được phủ; range vắt qua ranh giới
+  cửa sổ, địa chỉ lạ, và `len = 0` đều bị từ chối. Đây là **hợp đồng** chống tái
+  phát lỗi vòng 112–145 (thiếu một cửa sổ ⇒ mọi syscall copy trên vùng đó trả
+  `InvalidArg` dù PTE hợp lệ).
+- `scripts/test-persist.py`: `boot_retry` nhận diện "guest không boot" bằng
+  **thiếu `SHELL READY`** thay vì chỉ đếm số dòng (flake UEFI có thể in vài chục
+  dòng rồi treo) — vẫn chỉ thử lại **một lần** kèm `note:` để không che lỗi thật.
+- Kiểm chứng: persist chạy **2 lần liền 3/3 PASS** (trước đó x86_64 fail 1 lần ở
+  phase "torn replay").
+- Gate: QEMU 3/3×3, persist 3/3 ×2, harness 571, abi tests 5, docs PASS, fmt sạch.
