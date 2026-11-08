@@ -1906,3 +1906,17 @@ follow-up `62b31f4`.
   truyền vào). Cần đọc lại hàm này và kiểm tra bằng một test host nếu có thể.
 - Gate xanh sau khi revert: QEMU 2/2×3, persist 3/3, harness 523, docs PASS,
   fmt sạch, 0 warning, headroom 203 120/199 024 B.
+
+## 9.102 — Vòng 108: ghi giới hạn `runfs` lặp vào runbook (thay vì đoán tiếp)
+
+- Chương trình sentinel `A … args … B` **không in cả `A`** trong bản thí nghiệm
+  ⇒ khi vùng args chuyển sang trang stack thì bản thân chương trình không chạy
+  nữa (khác hẳn bản đang xanh in `HI FS`), tức lỗi nằm ở **đường spawn**, không
+  phải ở phép đọc.
+- Để không mất thêm vòng đoán: ghi rõ giới hạn hiện tại vào runbook
+  `docs/11-hien-tai/16-van-hanh.md` mục 3b — `runfs`/`exec` chạy **1 lần mỗi
+  phiên**, lần 2 rơi về demo copy do cạn Untyped; kèm cách theo dõi
+  (`DATA UNTYPED pages=…/86`) và hai hướng sửa (tái dùng frame+PT, hoặc trả
+  trang khi destroy_exec).
+- Gate: QEMU 2/2×3, persist 3/3, harness 523, docs PASS, fmt sạch, 0 warning,
+  headroom 203 120/199 024 B.

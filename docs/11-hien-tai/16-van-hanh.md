@@ -79,6 +79,17 @@ hello
 - Cổng chuẩn tự chạy đường này sau thu hồi pager và in `HIARG` (marker chỉ
   đến từ argv, không nhúng trong ảnh trên đĩa).
 
+#### Giới hạn đã biết (vòng 108)
+
+- `runfs`/`exec` nạp được **một lần mỗi phiên**; lần thứ hai trong cùng phiên
+  hiện **rơi về demo copy** (`RUN OK`) vì Untyped đã sát trần: `destroy_exec`
+  không trả trang/page-table về pool, nên `spawn_elf_from_fs` dừng ở
+  `map_frame_fallible` (thiếu bộ nhớ để retype frame/page-table).
+- Theo dõi bằng: `DATA UNTYPED pages=…/86 objects=…/86` cuối serial. Muốn lặp
+  nhiều lần phải làm một trong hai: (a) tái dùng frame + page table của exec
+  (unmap → ghi lại → map, không cấp object), hoặc (b) trả trang về pool khi
+  `destroy_exec` (cần sửa kernel).
+
 ## 4. Đọc serial và chỉ số sức khỏe
 
 Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
