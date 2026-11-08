@@ -1881,3 +1881,15 @@ follow-up `62b31f4`.
   trước khi map) trước khi thử tiếp.
 - Đã revert; cây về HEAD `dda76c4`, gate xanh (QEMU 2/2×3, persist 3/3,
   harness 523, kernel 183, docs PASS, fmt sạch, 0 warning).
+
+## 9.100 — Vòng 106: kiểm chứng vùng args trong trang stack (âm tính)
+
+- Chương trình chẩn đoán in **1 byte** tại `EXEC_ARGS_VA + 0x40` (byte đầu chuỗi
+  "HI FS") để tách bạch "ghi args hỏng" với "đọc sai địa chỉ".
+- Kết quả: `EXEC OK` + `RUN FS OK` nhưng **không có byte nào** trên serial,
+  bất kể ghi args TRƯỚC hay SAU `frame_map` của trang stack. Vậy frame_write
+  không phải nghi phạm chính; nhiều khả năng **địa chỉ chương trình tính ra
+  không trùng `EXEC_ARGS_VA`** (kiểm tra lại `EXEC_DEMO_CODE`/`CODE_VA` thực
+  tế của từng arch, đặc biệt giới hạn `auipc/addi` 20+12 bit).
+- Đã revert toàn bộ thí nghiệm; cây về HEAD `52a5984`, gate xanh
+  (QEMU 2/2×3, persist 3/3, harness 523, docs PASS, fmt sạch, 0 warning).
