@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "PROG MID OK",
+        "a 16-byte window at the middle of /prog.elf matches the source image",
+    ),
+    (
         "PROG TAIL OK",
         "the last 32 bytes of /prog.elf match the source ELF image",
     ),

@@ -1949,3 +1949,13 @@ follow-up `62b31f4`.
   `harness_spec.COMMON` → cổng chuẩn bắt buộc. Harness **529 → 532 ca**.
 - Gate: QEMU 3/3×3, persist 3/3, harness 532, docs PASS, fmt sạch, 0 warning,
   headroom 203 120/199 024 B.
+
+## 9.106 — Vòng 111: kiểm tra byte GIỮA file exec (phủ lỗi ghi lệch chunk)
+
+- `root_vfs_verify_at(path, offset, expected)`: so khớp một đoạn bất kỳ ở
+  offset tuyệt đối (STAT trước để chặn đọc ngoài file).
+- Selftest kiểm tra thêm **16 byte quanh `len/2`** và in `PROG MID OK/BAD`.
+  Giờ cổng phủ cả **đầu** (`PROG SIZE OK` + prefix verify cũ), **giữa**
+  (`PROG MID OK`) và **cuối** (`PROG TAIL OK`) của ảnh ELF ghi xuống FS.
+- Thêm marker vào `COMMON` → harness **532 → 535 ca**.
+- Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, fmt sạch, 0 warning.

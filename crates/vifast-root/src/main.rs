@@ -1663,6 +1663,38 @@ fn root_vfs_write_at(
 // byte với mẫu gọi truyền vào. Fail-êm.
 /// Vòng 110: so khớp N byte CUỐI của file — bắt lỗi ghi hụt/ghi lệch mà
 /// kiểm tra kích thước và prefix không phát hiện được.
+/// Vòng 111: so khớp một đoạn bất kỳ trong file (offset tuyệt đối) — phủ
+/// trường hợp ghi lệch chunk ở giữa file.
+fn root_vfs_verify_at(endpoint_slot: u8, path: &[u8], offset: u64, expected: &[u8]) -> bool {
+    if expected.is_empty() || expected.len() > 64 {
+        return false;
+    }
+    let Some(size) = root_vfs_stat(endpoint_slot, path) else {
+        return false;
+    };
+    if offset + expected.len() as u64 > size {
+        return false;
+    }
+    let Some(fd) = root_vfs_open(endpoint_slot, path) else {
+        return false;
+    };
+    let mut ok =
+        root_vfs_read_at(endpoint_slot, fd, offset, expected.len() as u64) == expected.len() as u64;
+    if ok {
+        let mut i = 0;
+        while i < expected.len() {
+            let b = unsafe { core::ptr::read_volatile((ROOT_IPC_BUF_VA as *const u8).add(i)) };
+            if expected[i] != b {
+                ok = false;
+                break;
+            }
+            i += 1;
+        }
+    }
+    root_vfs_close(endpoint_slot, fd);
+    ok
+}
+
 fn root_vfs_verify_tail(endpoint_slot: u8, path: &[u8], expected: &[u8]) -> bool {
     if expected.is_empty() || expected.len() > 64 {
         return false;
@@ -2779,6 +2811,19 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         write(b"PROG TAIL OK\n")
                     } else {
                         write(b"PROG TAIL BAD\n")
+                    }
+                    // Đoạn giữa file: 16 byte quanh len/2 — phủ lỗi ghi lệch
+                    // chunk (kiểm tra đầu + cuối không phát hiện được).
+                    let mid = EXEC_DEMO_ELF.len() / 2;
+                    if root_vfs_verify_at(
+                        root_vfs_slot,
+                        b"/prog.elf",
+                        mid as u64,
+                        &EXEC_DEMO_ELF[mid..mid + 16],
+                    ) {
+                        write(b"PROG MID OK\n")
+                    } else {
+                        write(b"PROG MID BAD\n")
                     }
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;

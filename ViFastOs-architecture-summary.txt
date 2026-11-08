@@ -322,6 +322,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d32354d tai lieu (vong 108): ghi gioi han runfs lap vao runbook
 - c16d8a6 cong cu (vong 108b): khoa thu hoi pager bang marker PAGER SRV 0/0/0
 - 2970e13 moc 9 (vong 109): kiem tra toan ven kich thuoc file exec trong cong chuan
+- 01c9005 moc 9 (vong 110): kiem tra noi dung cuoi file exec trong cong chuan
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -1441,6 +1442,7 @@ QEMU test:
 - `PAGER RECLAIM OK` — pager demo frames/TCBs returned to untyped
 - `RUN FS OK` — exec-from-filesystem loaded an ELF page-by-page and ran it
 - `HIARG` — program executed from the filesystem printed an argv-only marker
+- `PROG MID OK` — a 16-byte window at the middle of /prog.elf matches the source image
 - `PROG TAIL OK` — the last 32 bytes of /prog.elf match the source ELF image
 - `PROG SIZE OK` — the ELF written to /prog.elf has exactly the expected byte size
 - `PAGER SRV 0/0/0` — pager server was reclaimed (tcb, stack frame, ipc frame destroyed)
