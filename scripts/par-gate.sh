@@ -48,9 +48,13 @@ start_local() {
     for arch in riscv64 aarch64; do
         python3 scripts/test-qemu.py --arch "$arch" --repeat "$REPEAT" || return 1
     done
+}
+
+# Persist/harness/docs chạy SAU khi remote xong: hai bộ persist x86_64 chạy
+# đồng thời (local + remote) từng làm boot UEFI timeout không có marker nào
+# (vòng 100). Serialize để tránh tranh chấp.
+post_local() {
     if [ "$FULL" -eq 1 ]; then
-        # Persist + harness chạy ở máy này (không đụng serial của QEMU thường
-        # vì test-persist dùng serial/disk riêng).
         python3 scripts/test-persist.py || return 1
         python3 scripts/test-harness-spec.py || return 1
         python3 scripts/gen-docs.py || return 1
@@ -91,6 +95,9 @@ if [ -n "${REMOTE_PID:-}" ]; then
     REMOTE_RC=$?
 else
     REMOTE_RC=0
+fi
+if [ "$FULL" -eq 1 ] && [ "$LOCAL_RC" -eq 0 ]; then
+    post_local >>"$LOCAL_LOG" 2>&1 || LOCAL_RC=1
 fi
 
 echo ""

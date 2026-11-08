@@ -1774,3 +1774,11 @@ follow-up `62b31f4`.
 - Bài học lặp lại: mọi thêm mã vào root đều ăn vào headroom destroy-smp
   (chỉ còn ~2.4 KiB); muốn thêm tính năng phải giải phóng chỗ trước.
 - Gate cuối vòng: QEMU 3/3×3 (x86 rerun), persist 3/3, harness 523 
+
+## 9.92 — Vòng 100b: serialize persist trong par-gate
+
+- `par-gate.sh --full` chạy persist x86_64 ở **cả hai máy cùng lúc** → boot
+  UEFI timeout không in marker nào (tái hiện 2 lần, đúng như cảnh báo mới
+  của `timeout_hint`: "thiếu marker: SELFTEST PASS, FS DISK OK, ...").
+- Sửa: persist/harness/docs chạy **sau khi remote xong** (tuần tự), QEMU
+  song song vẫn giữ. `par-gate --full --repeat 1` PASS cả hai máy.
