@@ -1849,3 +1849,20 @@ follow-up `62b31f4`.
   bộ nhớ sau destroy_exec**, không phải lỗi tham số; ghi nhận cho vòng sau.
 - Dọn 0 warning (bỏ `exec_tcb` không dùng, đổi binding `Some(_tcb)`).
 - Gate: QEMU 3/3×3, persist 3/3, harness 523, kernel 183, docs PASS, fmt sạch.
+
+## 9.98 — Vòng 105: chẩn đoán vì sao `runfs` lần 2 thất bại
+
+- Dựng lại thí nghiệm với **kernel mới thật** (bài học: chuỗi
+  `cargo build … >/dev/null && cp` đã nuốt lỗi build nên nhiều lần chạy
+  kernel CŨ — mọi kết luận trước đó phải xác minh bằng `strings` trên binary).
+- Kết quả có instrument: lần 1 `RUN FS OK` + in đúng tham số (`aa`); lần 2
+  dừng ở **F6 = `map_frame_fallible` thất bại** → không đủ bộ nhớ Untyped để
+  retype frame/page-table, và `destroy_exec` không trả trang về pool
+  (`DATA UNTYPED pages` không giảm).
+- Thử giữ vspace (chỉ dọn TCB + frame) để tái dùng page table: vẫn F6 vì
+  frame cũ bị destroy khi đang mapped → map địa chỉ cũ thất bại.
+- Kết luận hướng đúng (vòng sau): **chuyển vùng tham số sang trang stack
+  (RW)** để `runfs` lặp chỉ cần ghi args + restart TCB, không cấp object;
+  hoặc lưu frame/VAs và unmap trước khi destroy rồi tái dùng frame.
+- Cây làm việc trả về HEAD `9806d5c`; gate xanh (QEMU 2/2×3, build 0 warning,
+  headroom 203 120/199 024 B).
