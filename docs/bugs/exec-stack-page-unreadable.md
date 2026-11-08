@@ -166,3 +166,22 @@ Nhiều lần kết quả "không in gì" là do **bản sửa không rơi vào 
 **Quy tắc**: sau mỗi lần sửa, `grep -n` kèm **ngữ cảnh hàm** để xác nhận dòng đã
 đổi nằm giữa `fn spawn_elf_copy(` và hàm kế tiếp; và in dấu hiệu (như `TEST`)
 trước khi kết luận bất cứ điều gì về bộ nhớ.
+
+## Vòng 126 — chương trình 8 lệnh in errno cũng KHÔNG in
+
+- Sửa đúng vào nhánh riscv của `exec_demo_elf` (xác minh bằng `sed -n` sau khi
+  ghi): 8 lệnh `auipc a0,0x22 ; addi a0,a0,-0x20 ; a1=4 ; a7=32 ; ecall ;
+  a0+=0x30 ; a1=1 ; ecall` (in `'0'+errno` của `DebugWrite(0x23100,4)`).
+- Kết quả: sau `EXEC OK` **không có ký tự nào** (serial nhảy thẳng sang demo
+  Fault4) ⇒ ecall đầu tiên hoặc không chạy, hoặc không trả về như mong đợi.
+- Đối chiếu: chương trình 8 lệnh đọc **trang code** (`entry+0x80`) thì in được
+  (`TESTPAGER OK`, vòng 124). Hai chương trình chỉ khác **giá trị a0**
+  (`0x23100` vs `entry+0x80`).
+- ⇒ Nghi vấn mạnh: `DebugWrite` với VA nằm trong trang stack khiến **task chết
+  ngay trong syscall** (không kịp trả lỗi về user), hoặc kernel `return`s mà
+  không cập nhật PC.
+
+### Trạng thái
+
+Điều tra **tạm dừng** ở đây theo hướng chuyển sang hạng mục khác của mục tiêu;
+báo cáo này đã đủ dữ kiện cho một người có quyền sửa kernel kết luận nhanh.
