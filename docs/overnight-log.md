@@ -1866,3 +1866,18 @@ follow-up `62b31f4`.
   hoặc lưu frame/VAs và unmap trước khi destroy rồi tái dùng frame.
 - Cây làm việc trả về HEAD `9806d5c`; gate xanh (QEMU 2/2×3, build 0 warning,
   headroom 203 120/199 024 B).
+
+## 9.99 — Vòng 105b: thử đưa tham số sang trang stack (chưa xong)
+
+- Ý tưởng: tham số nằm trong trang STACK (RW) thay vì trang code (W^X) → `runfs`
+  lặp chỉ cần ghi lại args rồi `tcb_restart`, không cấp object mới.
+- Đã dựng: `EXEC_ARGS_VA = EXEC_STACK_BASE + 0x100`, chương trình đọc cặp
+  `(ptr,len)` bằng `auipc 0x22 ; addi -0x20` (riscv), `adr #0x21FE0`
+  (aarch64), `lea rsi,[rip+0x21FD9]` (x86); root ghi cặp/chuỗi vào frame
+  stack sau khi map.
+- Kết quả: spawn OK (`EXEC OK`, `RUN FS OK`) nhưng chương trình **không in** và
+  **không fault** tại vùng args ⇒ đọc được nhưng nội dung là 0 (hoặc len=0).
+  Cần kiểm chứng `frame_write` vào frame đã map RW (nghi khác biệt so với ghi
+  trước khi map) trước khi thử tiếp.
+- Đã revert; cây về HEAD `dda76c4`, gate xanh (QEMU 2/2×3, persist 3/3,
+  harness 523, kernel 183, docs PASS, fmt sạch, 0 warning).
