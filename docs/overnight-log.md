@@ -3234,3 +3234,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   nguyên không được trả.
 - Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs
   PASS, fmt sạch.
+
+## 9.188 — Vòng 191: truy nguyên giới hạn spawn — loại trừ giả thuyết slot
+
+- Giả thuyết ban đầu: `SlotAllocator.released` chỉ giữ **16** slot nên sau ~2 chu
+  kỳ exec là cạn. **Đã thử**: nới lên **32** (sửa cả khai báo, khởi tạo và ngưỡng
+  `release`) rồi chạy 4 lần `runfs` liên tiếp — kết quả vẫn **3** lần thành công
+  (`RUN FS OK` × 3), giống hệt trước khi sửa ⇒ **giả thuyết sai**, đã revert.
+- Số liệu chỉ về **bộ nhớ**: ngay sau 3 chu kỳ `free` chỉ còn **16/344 KiB**
+  (4 trang) trong khi một lần exec cần ~7 trang ⇒ lần thứ 4 fail vì **hết trang**.
+  Tức `destroy_exec` chưa trả đủ trang về free list **tái dùng được**.
+- Ghi vào runbook 5p-f: giả thuyết đã loại trừ + số liệu + việc cần làm (log số
+  trang theo từng loại object: stack, code frame, page table, vspace).
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 586, docs PASS, fmt
+  sạch.

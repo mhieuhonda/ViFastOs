@@ -274,8 +274,16 @@ Thực nghiệm vòng 190 (đã **revert** khỏi cây vì làm đỏ cổng):
   liền nhau; `MemInfo.used` là mốc `bump` nên chỉ giảm khi free-list được tái
   dùng. Đây là **giới hạn tần suất spawn** (và là rủi ro thật cho "OS dùng
   được"), chưa phải rò rỉ vô hạn.
-- Việc cần làm (vòng sau): tìm tài nguyên không được trả (slot? page table?
-  capability?) bằng cách log số slot/bảng trang trước–sau mỗi chu kỳ.
+- **Đã loại trừ một giả thuyết (vòng 191)**: nới pool slot trả về
+  `SlotAllocator.released` từ 16 → 32 **không** làm lần chạy thứ 4 thành công
+  (vẫn `RUN FS OK` × 3 trong 4 lần gõ `runfs`). Vậy nút thắt **không phải**
+  slot của root.
+- Số liệu chỉ về **bộ nhớ**: ngay sau 3 chu kỳ, `free` chỉ còn **16/344 KiB**
+  (4 trang) trong khi một lần exec cần ~7 trang ⇒ lần thứ 4 hết trang. Nghĩa là
+  `destroy_exec` **chưa trả đủ trang về free list tái dùng được**.
+- Việc cần làm (vòng sau): log số trang đã cấp/đã trả theo từng loại object
+  (stack, code frame, page table, vspace) trước–sau mỗi chu kỳ để tìm loại không
+  được trả.
 
 ### 5p-b. Đo rò rỉ qua NHIỀU lần exec (vòng 187)
 

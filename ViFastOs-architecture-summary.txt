@@ -433,6 +433,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - cd614f5 tai lieu (vong 187): do ro ri qua nhieu lan exec — ket qua khong ro ri
 - 63f7732 tai lieu (vong 188): bang marker sinh tu dong tu harness_spec
 - 5abb2ec test (vong 189): mutation test cho check_invariants
+- b58463e tai lieu (vong 190): phat hien gioi han spawn lap lai (da revert thi nghiem)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
