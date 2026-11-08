@@ -2009,3 +2009,22 @@ Thí nghiệm tách đôi (giữ nguyên chương trình cũ ở bước 1):
   trước). Muốn làm phải cấp cspace cho exec — việc lớn hơn, hoãn.
 - Trạng thái cây: revert toàn bộ, về HEAD `002ab78`; gate xanh (QEMU 2/2×3,
   0 warning, headroom 199 024 B cả hai bản).
+
+## 9.110 — Vòng 114: xác nhận lỗi "exec không đọc được stack" bằng đo đạc chuẩn
+
+Ba bước kiểm chứng độc lập (riscv64), loại trừ mọi sai sót mã hoá:
+
+1. **Đường đo cũ đúng**: chương trình `auipc a2,0 ; addi a2,a2,0x40` (auipc ở
+   lệnh ĐẦU) đọc `entry+0x40` → in `HI FS` ✔ (chứng minh khung test chuẩn).
+2. **Hằng số layout đúng**: root in `STK 68719620096/68719624192` =
+   `0x10_0002_3000`/`0x10_0002_4000` — khớp `CODE_VA+0x23000/0x24000`.
+3. **Đọc stack vẫn hỏng**: chương trình `auipc a2,0x23 ; addi a2,a2,-0x128`
+   (`auipc` ở lệnh đầu) đọc `EXEC_STACK_TOP-8` → **không in gì**, trong khi
+   `frame_write` vào đúng offset đó trả `Ok`.
+
+⇒ Lỗi nằm ở phía **map trang stack trong vspace của task**, không phải test.
+Ghi thành "lỗi đang mở" trong runbook (mục mới) kèm 3 hướng điều tra: klog
+trong `map_frame`, cấp cspace tối thiểu cho exec để nhận FAULT record, hoặc
+thử map stack ở VA khác để xem có phải lỗi VA-specific.
+
+- Gate: QEMU 2/2×3, build 0 warning, docs PASS, headroom 199 024 B.

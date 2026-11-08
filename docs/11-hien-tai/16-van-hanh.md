@@ -91,6 +91,23 @@ hello
 - Ngưỡng build: headroom kernel riscv phải ≥ **192 KiB** cho cả bản thường và
   bản `test-destroy-smp`; hiện 203 120 B (thường) và 199 024 B (destroy-smp).
 
+#### Lỗi đang mở: chương trình exec không đọc được trang stack (vòng 112–114)
+
+Bằng chứng thu thập (riscv64, kernel xanh):
+
+1. `frame_write(stack_frame, 0xFF8, "HI FS")` trả `Ok` (không có `TOP WRITE BAD`).
+2. Hằng số layout in ra từ root đúng: `EXEC_STACK_BASE = 68719620096`
+   (`0x10_0002_3000`), `EXEC_STACK_TOP = 68719624192` (`0x10_0002_4000`).
+3. Chương trình đọc `entry + 0x40` (trang code) → **in đúng** `HI FS`.
+4. Chương trình đọc `EXEC_STACK_TOP - 8` (cùng expression `auipc`+`addi`, đặt
+   `auipc` ở lệnh đầu để không lệch PC) → **không in gì**, không marker lỗi.
+
+Suy đoán: trang stack được map "thành công" theo API nhưng **không truy cập
+được từ user**; task chết im lặng vì TCB exec không có fault endpoint (muốn có
+phải cấp cspace cho exec). Bước kế tiếp: thêm `klog` phía kernel trong
+`map_frame` cho VA này (leaf PA + window base/end), hoặc cấp cspace tối thiểu
+cho exec để nhận FAULT record.
+
 #### Giới hạn đã biết (vòng 108)
 
 - `runfs`/`exec` nạp được **một lần mỗi phiên**; lần thứ hai trong cùng phiên
