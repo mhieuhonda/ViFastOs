@@ -233,6 +233,83 @@ pub mod pager {
             words[3] = 0;
             assert_eq!(Map::decode(words), None);
         }
+
+        #[test]
+        fn kerror_roundtrips_every_variant() {
+            // Vòng 176: kernel trả mã lỗi dạng u32; nếu `from_u32` lệch một
+            // nhánh thì userspace hiểu SAI loại lỗi (ví dụ NoRights thành Ok).
+            use crate::KError;
+            let all = [
+                KError::Ok,
+                KError::InvalidCap,
+                KError::WrongType,
+                KError::NoRights,
+                KError::SlotOccupied,
+                KError::OutOfMemory,
+                KError::InvalidArg,
+                KError::Alignment,
+                KError::AlreadyMapped,
+                KError::NotMapped,
+                KError::NoCaller,
+                KError::ObjectDestroyed,
+                KError::IrqInUse,
+                KError::PrioTooHigh,
+                KError::Cancelled,
+                KError::MissingPageTable,
+                KError::IllegalOperation,
+                KError::NotImplemented,
+                KError::WouldBlock,
+                KError::NotFound,
+                KError::Busy,
+                KError::HasDependents,
+            ];
+            for (expected, code) in all.iter().enumerate() {
+                assert_eq!(*code as u32, expected as u32, "mã lỗi phải liên tục");
+                assert_eq!(KError::from_u32(expected as u32), *code);
+            }
+        }
+
+        #[test]
+        fn syscall_status_table_covers_every_id_exactly_once() {
+            // Vòng 176: thêm syscall mà quên bảng trạng thái ⇒ gen-docs và
+            // userspace lệch nhau trong im lặng.
+            use crate::{SyscallId, SYSCALL_STATUS};
+            assert!(SYSCALL_STATUS.len() >= 55, "bảng phải phủ hết syscall");
+            let mut seen = [false; 64];
+            for (id, _) in SYSCALL_STATUS {
+                let index = *id as usize;
+                assert!(index < 64, "SyscallId ngoài phạm vi bảng");
+                assert!(!seen[index], "SyscallId lặp trong bảng trạng thái");
+                seen[index] = true;
+            }
+            // Mọi số từ 0..=SyscallId cuối cùng phải có mặt.
+            let last = SyscallId::ModuleRelease as usize;
+            for index in 0..=last {
+                assert!(
+                    seen[index],
+                    "thiếu SyscallId {} trong bảng trạng thái",
+                    index
+                );
+            }
+        }
+
+        #[test]
+        fn message_rejects_too_many_words_and_keeps_cap() {
+            // Vòng 176: Message::new phải từ chối quá số word, và `with_cap`
+            // phải giữ nguyên slot để kernel biết chuyển cap nào.
+            use crate::{Message, CAP_NONE, MSG_MAX_WORDS};
+            assert!(Message::new(1, &[0u64; MSG_MAX_WORDS]).is_ok());
+            assert_eq!(
+                Message::new(1, &[0u64; MSG_MAX_WORDS + 1]),
+                Err(crate::KError::InvalidArg)
+            );
+            let message = Message::new(2, &[7, 8]).unwrap();
+            assert_eq!(message.words(), &[7, 8]);
+            assert_eq!(message.cap, CAP_NONE);
+            let with_cap = message.with_cap(5);
+            assert_eq!(with_cap.cap, 5);
+            assert_eq!(with_cap.cap_slot(), Some(5));
+        }
     }
 }
 

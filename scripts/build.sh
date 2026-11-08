@@ -21,6 +21,8 @@ cargo test -p vifast-fs
 cargo test -p vifast-virtio
 # Vòng 175: bảng tra lệnh shell trong tài liệu phải khớp mã nguồn.
 python3 scripts/gen-shell-table.py --check
+# Vòng 176: bảng số test host cũng phải khớp kết quả thật.
+python3 scripts/gen-test-counts.py --check
 cargo test -p vifast-runtime
 cargo test -p vifast-user
 cargo test -p vifast-acpi

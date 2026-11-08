@@ -62,15 +62,16 @@ build complete (0 warning)
 
 | Crate | Số test | Ghi chú |
 |---|---|---|
-| `vifast-abi` | **4/4** | protocol pager v2: label, VA window, encode/decode |
-| `vifast-kernel` | **131/131** | + 2 test fuzz dài `#[ignore]`, chạy `--ignored` |
-| `vifast-arch` | 7/7 | |
-| `vifast-pte` | 11/11 | |
-| `vifast-elf` | 17/17 | |
-| `vifast-acpi` | 8/8 | |
-| `vifast-fs` | 22/22 | |
+| `vifast-abi` | **8/8** | protocol pager v2: label, VA window, encode/decode |
+| `vifast-kernel` | **195/195** | + 2 test fuzz dài `#[ignore]`, chạy `--ignored` |
+| `vifast-arch` | **7/7** |  |
+| `vifast-pte` | **11/11** |  |
+| `vifast-elf` | **19/19** |  |
+| `vifast-acpi` | **8/8** |  |
+| `vifast-fs` | **31/31** | định dạng đĩa, biên block, fsck; nằm trong cổng từ vòng 166 |
+| `vifast-virtio` | **7/7** | checksum TCP/IP; nằm trong cổng từ vòng 167 |
 | `vifast-runtime`, `vifast-user`, `vifast-fsutil` | 0 | kiểm qua QEMU/build |
-| **Tổng duy nhất** | **200** | |
+| **Tổng duy nhất** | **286** | |
 
 Phạm vi chính của `vifast-kernel`:
 

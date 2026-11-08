@@ -2989,3 +2989,28 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   tiếp qua helper nội bộ — suy luận sẽ sai mà không báo.
 - Gate: build (kèm check bảng) xanh, QEMU 3/3×3, persist 3/3, harness 583,
   docs PASS, fmt sạch, 0 warning.
+
+## 9.173 — Vòng 176: ABI test + bảng số test host sinh tự động
+
+- Thêm 3 host test `vifast-abi` (**5 → 8**):
+  - `kerror_roundtrips_every_variant` — `KError` liên tục từ 0 và `from_u32`
+    trả đúng biến thể (lệch một nhánh là userspace hiểu SAI loại lỗi);
+  - `syscall_status_table_covers_every_id_exactly_once` — mọi `SyscallId` tới
+    `ModuleRelease` có đúng một mục trong `SYSCALL_STATUS`;
+  - `message_rejects_too_many_words_and_keeps_cap` — `Message::new` từ chối quá
+    `MSG_MAX_WORDS`; `with_cap` giữ đúng slot.
+- **Phát hiện tài liệu sai nghiêm trọng**: bảng "Host test" trong
+  `09-testing.md` ghi kernel **131**, elf **17**, abi **4** — trong khi thực tế
+  **195 / 19 / 8**. Tài liệu đã lệch âm thầm nhiều vòng.
+- Sửa gốc: `scripts/gen-test-counts.py` chạy `cargo test` cho từng crate, cộng
+  các dòng `test result: ok. N passed` (khớp đúng con số `build.sh` dùng), cập
+  nhật bảng + dòng tổng, có `--check`. `build.sh` chạy bản `--check` ⇒ bảng
+  **không thể lệch** nữa. Kết quả: 8 crate, **286 test** đã chạy.
+- Ba lần sửa script mới đúng (đoán sai 3 kiểu): dùng `--list` (đếm cả test
+  `#[ignore]` chưa chạy); regex chỉ khớp dòng có in đậm; thiếu dòng tổng và
+  thiếu crate `vifast-virtio`.
+- Flake: aarch64 2/3 một lần (`banner or SELFTEST PASS missing`), chạy lại
+  **3/3** — loại flake này **không** được auto-retry (chỉ retry khi guest không
+  boot), ghi nhận làm việc tiếp theo.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
+  sạch.

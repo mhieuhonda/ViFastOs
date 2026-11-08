@@ -234,6 +234,17 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5p. ABI: mã lỗi, bảng trạng thái syscall, đóng gói Message
+
+- `kerror_roundtrips_every_variant` — mọi `KError` **liên tục** từ 0 và
+  `from_u32` trả lại đúng biến thể (lệch một nhánh là userspace hiểu sai loại
+  lỗi, ví dụ `NoRights` thành `Ok`).
+- `syscall_status_table_covers_every_id_exactly_once` — mọi `SyscallId` từ 0 tới
+  `ModuleRelease` có **đúng một** mục trong `SYSCALL_STATUS` (thêm syscall mà
+  quên bảng ⇒ `gen-docs` và userspace lệch trong im lặng).
+- `message_rejects_too_many_words_and_keeps_cap` — `Message::new` từ chối quá
+  `MSG_MAX_WORDS`; `with_cap` giữ đúng slot để kernel biết chuyển cap nào.
+
 ### 5q. Bộ nhớ: W^X, VA trùng, ghi vượt biên frame
 
 - `map_rejects_wx_overlap_and_duplicate_va` — `READ|WRITE|EXEC` trong **một**

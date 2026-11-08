@@ -418,6 +418,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - dda68fd test (vong 172): IPC trao truc tiep vs xep hang FIFO
 - 044508f test (vong 173): chuyen capability qua IPC + reply (bao mat microkernel)
 - 8530864 test (vong 174): bo nho — W^X, VA trung, bien frame
+- 2317152 tai lieu (vong 175): bang tra lenh shell sinh tu dong tu ma nguon
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -464,7 +465,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-abi`: 5/5 PASS
+- `cargo test -p vifast-abi`: 8/8 PASS
 - `cargo test -p vifast-kernel`: 195/195 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS

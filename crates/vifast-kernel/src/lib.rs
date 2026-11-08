@@ -7326,7 +7326,9 @@ mod tests {
             .map_frame(space, frame, 0x4000_1000, Rights::READ)
             .unwrap();
         kernel.unmap_frame(space, first.va).unwrap();
-        let again = kernel.map_frame(space, frame, first.va, Rights::READ).unwrap();
+        let again = kernel
+            .map_frame(space, frame, first.va, Rights::READ)
+            .unwrap();
         assert_eq!(again.va, first.va);
         assert!(kernel.check_invariants().is_ok());
     }
@@ -7710,7 +7712,11 @@ mod tests {
         let payload = kernel.create_endpoint().unwrap();
         // Không có GRANT: gửi phải bị từ chối ngay.
         kernel
-            .install_cap(sender, 1, Cap::new(payload, ObjType::Endpoint, Rights::READ))
+            .install_cap(
+                sender,
+                1,
+                Cap::new(payload, ObjType::Endpoint, Rights::READ),
+            )
             .unwrap();
         let msg = Message::new(0x31, &[]).unwrap().with_cap(1);
         assert_eq!(
@@ -7753,10 +7759,7 @@ mod tests {
         assert_eq!(kernel.recv(server, endpoint, 4), Ok(None));
         let call = Message::new(0x40, &[1]).unwrap();
         assert_eq!(kernel.send(client, endpoint, 0, call, true), Ok(true));
-        assert_eq!(
-            kernel.tcb(client).unwrap().state,
-            ThreadState::BlockedReply
-        );
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::BlockedReply);
         let reply = Message::new(0x41, &[2]).unwrap();
         kernel.reply(server, reply).unwrap();
         let table = kernel.tcb(client).unwrap();
@@ -7830,8 +7833,16 @@ mod tests {
         kernel.enqueue(same_a);
         kernel.enqueue(same_b);
         kernel.enqueue(high);
-        assert_eq!(kernel.pick(), Some(high), "ưu tiên cao nhất phải được chọn trước");
-        assert_eq!(kernel.pick(), Some(same_a), "cùng ưu tiên thì FIFO theo queue_seq");
+        assert_eq!(
+            kernel.pick(),
+            Some(high),
+            "ưu tiên cao nhất phải được chọn trước"
+        );
+        assert_eq!(
+            kernel.pick(),
+            Some(same_a),
+            "cùng ưu tiên thì FIFO theo queue_seq"
+        );
         assert_eq!(kernel.pick(), Some(same_b));
         assert_eq!(kernel.pick(), Some(low));
         assert_eq!(kernel.pick(), None, "hàng rỗng phải trả None");
@@ -7845,7 +7856,11 @@ mod tests {
         let pinned = kernel.create_tcb("pinned", 7).unwrap();
         kernel.tcb_mut(pinned).unwrap().affinity = 0b10;
         kernel.enqueue(pinned);
-        assert_eq!(kernel.pick_on(0), None, "hart 0 không được chạy task ghim hart 1");
+        assert_eq!(
+            kernel.pick_on(0),
+            None,
+            "hart 0 không được chạy task ghim hart 1"
+        );
         assert_eq!(kernel.pick_on(1), Some(pinned));
     }
 
