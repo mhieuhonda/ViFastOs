@@ -328,6 +328,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6fdad21 tai lieu (vong 111b): cap nhat docs sinh tu dong sau khi them muc ngan sach bo nho
 - e2a376c tai lieu (vong 112): bisect sach — ghi stack OK, doc stack hong
 - 6d7a0c1 tai lieu (vong 112b): doc dinh stack cung fault — nghi van trang stack khong truy cap duoc
+- 002ab78 tai lieu: cap nhat docs sinh tu dong
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
