@@ -2449,3 +2449,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   thuyết: PTE sai / ghi sai frame / sai vspace / flake đều **bị bác**; còn mở
   "có ai unmap sau đó" và "validate từ chối".
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.
+
+## 9.140 — Vòng 143: tách bạch "ghi stack" và "đọc stack" — task chết trong syscall
+
+- Thí nghiệm A: root ghi `"HI FS"` vào frame stack `0x100` trước map **và** giữ
+  chương trình gốc (đọc trang code) → **in `HI FS`** ⇒ ghi stack vô hại, spawn
+  và task chạy bình thường.
+- Thí nghiệm B: cùng bản build, đổi chương trình sang đọc
+  `EXEC_STACK_BASE + 0x100` → **không in gì**, kể cả ký tự mã lỗi.
+- ⇒ Task **chết ngay tại/trong lời gọi `DebugWrite` đầu tiên** khi con trỏ nằm
+  trong trang stack; do exec TCB **không có fault endpoint** nên chết im lặng.
+- Điểm mù còn lại duy nhất: **không thấy `cause`/`addr`** của cú fault đó. Việc
+  cần làm: cấp **cspace tối thiểu + fault endpoint cho exec TCB** để fault được
+  báo về root thay vì nuốt im lặng.
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.

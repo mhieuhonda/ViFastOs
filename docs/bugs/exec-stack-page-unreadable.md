@@ -209,3 +209,21 @@ nghi các kết luận trước đây bị nhiễu. Đã kiểm tra lại **có 
 | `validate_user_range` từ chối | Chưa quan sát trực tiếp được (chương trình in errno không chạy — do test tự chế lỗi) |
 | Huỷ ánh xạ sau đó (unmap) | **Còn mở** (trace bắt được một lần ghi PTE=0 ở bảng khác) |
 | Flake môi trường/QEMU | **Bác** (đã chạy trong môi trường sạch) |
+
+## Vòng 143 — tách biệt "ghi vào stack" khỏi "đọc từ stack"
+
+Hai thí nghiệm liên tiếp trên cùng một bản build riscv:
+
+| Thí nghiệm | Kết quả |
+|---|---|
+| Root ghi `"HI FS"` vào frame stack `0x100` **trước** khi map, chương trình **đọc trang code** (bản demo gốc) | **in `HI FS`** ✔ |
+| Chương trình 8 lệnh đọc `EXEC_STACK_BASE + 0x100` (root vẫn ghi stack như trên) | **không in gì**, không cả ký tự mã lỗi |
+
+- ⇒ Việc **ghi vào frame stack trước khi map là vô hại**; spawn và chạy task bình
+  thường (`HI FS` in ra từ trang code).
+- ⇒ Khi chương trình **đọc từ trang stack**, task **chết ngay tại/trong lời gọi
+  `DebugWrite` đầu tiên**: không có output, không có ký tự chẩn đoán tiếp theo.
+  Vì exec TCB **không có fault endpoint**, cái chết diễn ra im lặng — khớp với
+  toàn bộ triệu chứng từ vòng 112.
+- Bước tiếp theo tối thiểu: gắn **fault endpoint cho exec TCB** (cần cấp cspace
+  tối thiểu cho nó) để thấy `cause`/`addr` thật; hiện đây là điểm mù duy nhất.
