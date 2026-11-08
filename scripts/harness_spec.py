@@ -283,6 +283,9 @@ ARCH_EXACT_ONE = {
         "VIRTIO INPUT READY",
         "VIRTIO RNG READY",
         "VIRTIO TCP LISTEN OK",
+        # Vòng 185: FP/vector của EL0 bị tắt (sstatus.FS=0) — đối xứng với
+        # `EL0 FP TRAP` của aarch64 và `SSE USER OFF` của x86.
+        "EL0 FP TRAP",
     ],
     "aarch64": [
         "SMP OK",

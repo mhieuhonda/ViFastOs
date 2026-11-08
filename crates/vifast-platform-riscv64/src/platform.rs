@@ -15,6 +15,16 @@ pub struct RiscvPlatform;
 pub const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
 pub const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
 const USER_SSTATUS: u64 = 1 << 5;
+/// Vòng 185: người dùng KHÔNG được dùng FP/vector.
+///
+/// `sstatus.FS` (bit 13-14) phải bằng 0 ⇒ lệnh FP ở EL0 sẽ trap. Lý do: mỗi
+/// TCB chỉ có `TrapFrame` gồm 32 thanh ghi số — KHÔNG có vùng f0..f31, nên nếu
+/// bật FS mà không lưu/khôi phục FP thì hai task dùng FP sẽ ghi đè dữ liệu của
+/// nhau. Bất biến này được giữ ở mức BIÊN DỊCH để không ai vô tình bật.
+const _: () = assert!(
+    USER_SSTATUS & (0b11 << 13) == 0,
+    "bật sstatus.FS nhưng TrapFrame chưa có vùng FP"
+);
 const TIMER_INTERVAL: u64 = 100_000;
 const UART_BASE: usize = 0x1000_0000;
 const UART_IER: usize = 1;
@@ -657,6 +667,10 @@ impl Arch for RiscvPlatform {
     const NAME: &'static str = Riscv64::NAME;
     fn init() {
         Riscv64::init();
+        // Vòng 185: marker đối xứng với aarch64 (`EL0 FP TRAP`) và x86
+        // (`SSE USER OFF`) — nếu ai bật FS cho user mà chưa có FP context, cổng
+        // sẽ thấy marker này biến mất khỏi thiết lập mong đợi.
+        vifast_kernel::klog!(RiscvPlatform, "EL0 FP TRAP (FS=0, kernel không dùng FP)");
     }
     fn putc(byte: u8) {
         Riscv64::putc(byte);

@@ -3145,3 +3145,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Bảng kiểm test host tự cập nhật qua `gen-test-counts.py` ⇒ tổng **292**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
   sạch.
+
+## 9.182 — Vòng 185: FP/vector của user là TẮT có chủ ý — bất biến hoá bằng assert
+
+- Kiểm tra thay vì giả định: `TrapFrame` (riscv) **không có vùng `f0..f31`**,
+  `USER_SSTATUS` chỉ có `SPIE` ⇒ `sstatus.FS = 0` ⇒ lệnh FP ở EL0 trap. aarch64
+  đặt `FPEN=0b01` (có marker), x86 gọi `disable_sse()` từng hart (có marker).
+  ⇒ Không có "FP context switch" để hỏng, vì FP bị tắt; nhưng riscv **thiếu
+  marker** nên bất biến này có thể bị phá âm thầm.
+- Thêm: `const _: () = assert!(USER_SSTATUS & (0b11 << 13) == 0, …)` — chặn ở
+  mức **biên dịch**, kèm giải thích hậu quả (hai task dùng FP ghi đè của nhau).
+- Thêm marker riscv `EL0 FP TRAP (FS=0, kernel không dùng FP)` **và** đưa vào
+  `ARCH` của `harness_spec` ⇒ cổng đỏ nếu marker biến mất.
+- Tài liệu: mục mới trong `07-arch-ports.md` — bảng ba port + quy tắc "phải làm
+  cả hai việc cùng lúc: thêm vùng lưu VÀ bật FP".
+- Gate: build 0 warning, QEMU 3/3×3 (riscv có marker mới), persist 3/3, harness
+  583, docs PASS, fmt sạch.

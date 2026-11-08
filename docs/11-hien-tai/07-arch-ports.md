@@ -87,3 +87,23 @@ Files:
 3. Tạo `vifast-kernel-<arch>` entry/linker/user image.
 4. Thêm vào workspace, build script, test script.
 5. Không thêm `cfg(target_arch)` vào kernel/runtime.
+
+## FP / vector của người dùng: TẮT có chủ ý (vòng 185)
+
+Cả ba port đều **không cho EL0 dùng FP/vector**, và mỗi port có marker riêng để
+cổng phát hiện nếu ai đó bật lại mà chưa lưu trạng thái theo TCB:
+
+| Port | Cơ chế tắt | Marker |
+|---|---|---|
+| riscv64 | `sstatus.FS = 0` trong `USER_SSTATUS` (+ `const assert!` chặn bật) | `EL0 FP TRAP (FS=0, …)` |
+| aarch64 | `CPACR_EL1.FPEN = 0b01` | `EL0 FP TRAP (FPEN=0b01, …)` |
+| x86_64 | `disable_sse()` trên **từng hart** (CR0.TS) | `SSE USER OFF` |
+
+Lý do: `TrapFrame` của riscv chỉ có 32 thanh ghi số + `sepc/sstatus/scause`,
+**không có vùng `f0..f31`**; tương tự, q0..q31 trên aarch64 chưa được lưu theo
+TCB. Nếu bật FP khi chưa có vùng lưu, hai task dùng FP sẽ **ghi đè dữ liệu của
+nhau** — lỗi âm thầm, không có triệu chứng rõ.
+
+Hệ quả cần biết: chương trình người dùng dùng FP/SSE sẽ **trap** (không phải
+chạy sai). Muốn hỗ trợ FP thì phải làm **cả hai** việc cùng lúc: thêm vùng lưu
+vào TrapFrame **và** bật FS/FPEN/SSE — làm lẻ một trong hai là tạo lỗi bảo mật.

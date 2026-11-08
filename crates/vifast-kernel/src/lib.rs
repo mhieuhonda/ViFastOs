@@ -7714,7 +7714,11 @@ mod tests {
         );
         kernel.signal(ntfn, 0b100).unwrap();
         let table = kernel.tcb(waiter).unwrap();
-        assert_eq!(table.state, ThreadState::Ready, "signal phải đánh thức waiter");
+        assert_eq!(
+            table.state,
+            ThreadState::Ready,
+            "signal phải đánh thức waiter"
+        );
         let resume = table.resume.expect("phải có message thông báo");
         assert_eq!(resume.label, LABEL_NOTIFICATION);
         assert_eq!(resume.words()[0], 0b100, "bit đã báo phải tới waiter");
