@@ -3031,3 +3031,27 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Runbook `17-su-co.md` thêm dòng chẩn đoán cho loại lỗi này.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt
   sạch.
+
+## 9.175 — Vòng 178: BẮT TAY TCP THẬT guest -> host (và một lỗi boot nghiêm trọng tự gây)
+
+- **Tính năng**: guest (riscv) gửi **SYN** tới `10.0.2.2:8099`; slirp ánh xạ
+  `10.0.2.2` về loopback host. Harness mở listener TCP trên `127.0.0.1:8099`
+  trước khi boot và **yêu cầu** nhận được kết nối — nếu không, cổng đỏ
+  (`FAIL: host KHÔNG nhận được kết nối TCP từ guest`).
+- Kết quả thật: guest in `VIRTIO NET TCP SYN sent port=8099` + **`NET TCP
+  CONNECT OK`**; harness in `TCP PROBE: host accepted the guest connection`.
+  Đây là lần đầu tiên có **bắt tay TCP đầy đủ** đi ra khỏi máy ảo.
+- **Lỗi tự gây (nghiêm trọng, đã sửa)**: probe gọi vào MMIO mạng **kể cả khi
+  không có thiết bị net** (`persist` boot không có net). `NET_BASE = 0` ⇒ đọc
+  MMIO ở địa chỉ 0 ⇒ fault lặp lại ⇒ boot **bò** (40 s vẫn ở selftest).
+  Sửa: bọc toàn bộ probe trong `if vifast_virtio::net_ready() { … }`.
+- Cách tôi tìm ra: dựng kernel HEAD (không có probe) chạy đúng cấu hình persist
+  ⇒ boot xong bình thường; nhờ vậy khoanh vùng được thay đổi của mình thay vì
+  đoán.
+- **Lỗi thứ hai đã sửa**: đặt probe **trước** phần ping/DNS làm mất frame ICMP
+  ⇒ mất marker `VIRTIO NET PING REPLY` ⇒ cổng đỏ. Chuyển probe xuống **sau
+  `tcp_init()`**.
+- **Lỗi thứ ba**: dùng `rc` trong thông báo retry (không tồn tại trong scope)
+  ⇒ `NameError` khi retry chạy.
+- Gate: build 0 warning, QEMU 3/3×3 (kèm 3/3 lần host nhận kết nối TCP),
+  persist 3/3, harness 583, docs PASS, fmt sạch.

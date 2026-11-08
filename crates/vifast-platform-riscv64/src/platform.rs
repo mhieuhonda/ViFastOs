@@ -945,6 +945,10 @@ static mut TCP_SERVER: TcpServer = TcpServer {
 };
 
 const TCP_PORT: u16 = 8080;
+/// Vòng 178: cổng cục bộ cho phép thử TCP client, và cổng trên host mà harness
+/// mở listener (slirp chuyển 10.0.2.2:<port> tới loopback của host).
+const TCP_PROBE_LOCAL: u16 = 41_000;
+const TCP_PROBE_PORT: u16 = 8099;
 const TCP_IRQ_TX_BOUND: u64 = 250_000;
 
 /// Khởi tạo server một lần trong init_block: lấy ISN từ rng (nếu có), nạp
@@ -1488,6 +1492,53 @@ impl Platform for RiscvPlatform {
         // Vòng 79: TCP echo server thường trú — chỉ khởi tạo trạng thái ở
         // đây, việc phục vụ chạy trong timer IRQ nên không chặn boot.
         tcp_init();
+
+        // Vòng 178: TCP THẬT chiều guest -> host. Slirp
+        // ánh xạ 10.0.2.2 về loopback của host, nên nếu
+        // harness có listener ở TCP_PROBE_PORT thì ta nhận
+        // được SYN-ACK — bằng chứng bắt tay TCP đầy đủ.
+        // Vòng 178: chỉ chạy phép thử TCP khi CÓ thiết bị mạng. Không có
+        // net (ví dụ persist) mà vẫn đọc MMIO NET_BASE=0 sẽ fault liên tục.
+        if vifast_virtio::net_ready() {
+            vifast_virtio::net_rx_rearm();
+            let isn: u32 = 0x5150_1780;
+            match vifast_virtio::net_send_tcp_bounded(
+                [10u8, 0, 2, 2],
+                TCP_PROBE_PORT,
+                TCP_PROBE_LOCAL,
+                isn,
+                0,
+                vifast_virtio::TCP_SYN,
+                &[],
+                250_000,
+            ) {
+                Some(_) => vifast_kernel::klog!(
+                    RiscvPlatform,
+                    "VIRTIO NET TCP SYN sent port={}",
+                    TCP_PROBE_PORT
+                ),
+                None => vifast_kernel::klog!(RiscvPlatform, "VIRTIO NET TCP SYN FAIL"),
+            }
+            let mut tcp_payload = [0u8; 64];
+            let mut connected = false;
+            // Vòng 178: CHỈ một lần chờ với bound nhỏ. Chờ dài hoặc lặp 3 lần làm
+            // chậm boot khi máy không có listener (persist không mở listener).
+            if let Some(seg) =
+                vifast_virtio::net_recv_tcp_bounded(TCP_PROBE_LOCAL, &mut tcp_payload, 20_000)
+            {
+                if seg.flags & vifast_virtio::TCP_SYN != 0
+                    && seg.flags & vifast_virtio::TCP_ACK != 0
+                {
+                    connected = true;
+                }
+            }
+            if connected {
+                vifast_kernel::klog!(RiscvPlatform, "NET TCP CONNECT OK");
+            } else {
+                vifast_kernel::klog!(RiscvPlatform, "NET TCP CONNECT SKIP");
+            }
+        }
+        vifast_virtio::net_rx_rearm();
         // Vòng 75: virtio-rng (entropy source, device id 4).
         vifast_virtio::scan_devices(0x1000_1000, 0x1000_9000, 0x1000, |base, device| {
             if device == vifast_virtio::DEVICE_RNG {

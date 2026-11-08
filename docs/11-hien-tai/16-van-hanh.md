@@ -285,6 +285,20 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 - `pick_skips_tasks_whose_affinity_excludes_the_hart` — task ghim hart 1 **không
   bao giờ** được chọn trên hart 0, kể cả khi nó là task duy nhất.
 
+### 5u-a. Net stack: bắt tay TCP THẬT guest -> host (vòng 178)
+
+Cổng riscv64 mở một listener TCP trên host (`127.0.0.1:8099`) trước khi boot;
+slirp ánh xạ `10.0.2.2:8099` về loopback của host. Guest gửi **SYN** rồi chờ
+**SYN-ACK**:
+- guest in `VIRTIO NET TCP SYN sent port=8099` và **`NET TCP CONNECT OK`**;
+- harness in `TCP PROBE: host accepted the guest connection`;
+- **nếu host không nhận được kết nối, cổng đỏ** (`FAIL: host KHÔNG nhận được
+  kết nối TCP từ guest`) — đây là yêu cầu thật, không phải thông báo.
+
+Thứ tự quan trọng: phép thử đặt **sau `tcp_init()`**, không đặt trước phần
+ping/DNS — đặt trước sẽ "ăn" mất frame ICMP và làm mất marker
+`VIRTIO NET PING REPLY` (đã dính đúng lỗi này trong vòng).
+
 ### 5u. Net stack: checksum nằm trong cổng
 
 `cargo test -p vifast-virtio` (nay **trong cổng**, 7 test) khoá hai chỗ dễ sai

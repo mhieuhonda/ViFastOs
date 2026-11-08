@@ -402,7 +402,7 @@ def run_qemu(
             bonus -= 1
             print(
                 f"RETRY {name}: guest in đủ marker nhưng QEMU thoát mã lạ "
-                f"(rc={rc}) — nghi race debug-exit, chạy lại MỘT lần"
+                "— nghi race debug-exit, chạy lại MỘT lần"
             )
         else:
             print(f"RETRY {name}: timeout, chạy lại (lần {attempt + 2}/{attempts})")
@@ -561,8 +561,52 @@ def check_gate_kernel(name: str) -> None:
         )
 
 
+class TcpProbeListener:
+    """Vòng 178: listener TCP trên host để chứng minh guest bắt tay TCP thật.
+
+    Slirp ánh xạ `10.0.2.2:<port>` về loopback của host, nên guest gửi SYN tới
+    đó sẽ tới listener này. Chỉ nhận **một** kết nối rồi đóng.
+    """
+
+    def __init__(self, port: int) -> None:
+        import socket
+        import threading
+
+        self.accepted = 0
+        self.error: str | None = None
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self._sock.bind(("127.0.0.1", port))
+            self._sock.listen(1)
+            self._sock.settimeout(30)
+        except OSError as exc:  # cổng bận ⇒ guest sẽ in SKIP, cổng vẫn xanh
+            self.error = str(exc)
+            self._sock.close()
+            return
+
+        def serve() -> None:
+            try:
+                conn, _ = self._sock.accept()
+                self.accepted += 1
+                conn.close()
+            except OSError:
+                pass
+
+        self._thread = threading.Thread(target=serve, daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+
 def test_riscv(index: int = 0, feature: str | None = None) -> bool:
     check_gate_kernel("riscv64")
+    # Vòng 178: listener TCP cho phép thử bắt tay guest -> host.
+    listener = TcpProbeListener(8099) if feature is None else None
     if feature == "test-boot-handoff":
         kernel_name = "vifast-kernel-riscv64-handoff"
     elif feature == "test-panic-hart1":
@@ -613,7 +657,7 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         "-bios", "default",
         "-kernel", kernel,
     ]
-    return run_qemu(
+    ok = run_qemu(
         "riscv64",
         cmd,
         serial,
@@ -625,8 +669,21 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         monitor=monitor,
         index=index,
         feature_mode=feature,
-    )
-
+        )
+    if listener is not None:
+        accepted = listener.accepted
+        listener.close()
+        if accepted:
+            print("TCP PROBE: host accepted the guest connection")
+        elif listener.error:
+            print(f"TCP PROBE: không mở được listener ({listener.error}) — guest in SKIP")
+        else:
+            # Vòng 178: guest PHẢI chủ động kết nối TCP tới host — đây là yêu
+            # cầu của cổng (không phải chỉ thông báo), vì listener chắc chắn
+            # đang chờ trên đúng cổng đó.
+            print("FAIL: host KHÔNG nhận được kết nối TCP từ guest")
+            ok = False
+    return ok
 
 def test_aarch64(index: int = 0, feature: str | None = None) -> bool:
     check_gate_kernel("aarch64")
