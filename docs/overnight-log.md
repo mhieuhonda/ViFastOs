@@ -2321,3 +2321,18 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   chẩn đoán nhất trong hệ microkernel); đây là bất biến của scheduler/IPC.
 - Marker vào `COMMON`: harness **556 → 559 ca**, cả 3 arch in.
 - Gate: QEMU 3/3×3, persist 3/3, harness 559, docs PASS, fmt sạch, 0 warning.
+
+## 9.132 — Vòng 135: cấp phát vượt hạn mức phải trả `OutOfMemory`, không panic
+
+- Self-test: `retype_untyped(data_untyped, 256 GiB)` phải trả **OutOfMemory**
+  và `retype_untyped(size=0)` phải bị từ chối; in `MEM OOM OK`.
+- **Sự cố thật đã bắt được**: lần đầu tôi dùng `slots.alloc()` cho slot đích
+  ⇒ trên **aarch64 panic `root slot range exhausted` (main.rs:843)**, mất luôn
+  `RUN FS OK`/`HIARG`, gate đỏ. Nguyên nhân: vùng slot của root đã sát ngưỡng;
+  vòng 134 vừa thêm 1 endpoint.
+- Cách sửa: **dùng lại slot của endpoint đã destroy** ở test trước, không cấp
+  thêm slot. Sau đó cả 3 arch xanh.
+- Marker vào `COMMON`: harness **559 → 562 ca**.
+- Ghi nhận flake: persist có 1 lần riscv fail ở phase 3 (thiếu marker boot);
+  chạy lại 3/3 PASS ⇒ lại là flake boot, không phải lỗi FS.
+- Gate: QEMU 3/3×3, persist 3/3 (sau khi chạy lại), harness 562, docs PASS.
