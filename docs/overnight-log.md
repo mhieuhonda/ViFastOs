@@ -2864,3 +2864,22 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   về **0 warning**, virtio 7/7.
 - Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 186, FS 31, virtio 7,
   docs PASS, fmt sạch.
+
+## 9.165 — Vòng 168: runbook sự cố `docs/11-hien-tai/17-su-co.md`
+
+- Gom **mọi sự cố thật đã gặp trong phiên** thành một trang tra cứu:
+  - trước khi chạy cổng (diag + `pkill`);
+  - `PREEMPT OK` mất: QEMU mồ côi vs kernel thiếu `test-exit` (kèm câu lệnh
+    `python3 -c ... count(b'PREEMPT OK')` phải ra 2) vs flake UEFI;
+  - các marker khác thiếu nghĩa là gì (`SYS REJECT`, `SEC PROBE`, `MEM FREE`,
+    `FS MOUNT CLEAN`, `KILL OK`);
+  - ngân sách trang/headroom: thứ tự xử lý ưu tiên (đo → giảm → thu hồi →
+    nới có kỷ luật, nhớ **cả ba chỗ** của `DataPool`);
+  - sự cố khi thêm self-test vào guest (`slots.alloc` panic, `bad_slot` hết hợp
+    lệ, marker cuối biến mất khi chèn sai nhánh);
+  - sự cố khi chèn test Rust (trùng `#[test]`, mất doc comment, đoán sai tên
+    API/hằng số);
+  - tài liệu (`gen-docs` cần `--repeat 3`, `check-docs` thiếu marker);
+  - git (commit ngoài quét thay đổi; `content/` + `LICENSE.bak` untracked).
+- Thêm mục 17 vào `00-index.md`; `gen-docs`/`check-docs` PASS.
+- Gate: build 0 warning, QEMU 2/2×3 (chạy 2 lần), docs PASS.

@@ -32,6 +32,9 @@ lịch sử, nhưng nhiều chi tiết trong đó (CNode nhiều cấp, IOMMU, p
     CPU/DMA và danh mục audit K32–K75.
 16. [16-van-hanh.md](16-van-hanh.md) — runbook vận hành: build, gate, soak,
     shell `run`, đọc serial, xử lý flake, mở rộng arena, backup image.
+17. [17-su-co.md](17-su-co.md) — runbook **sự cố**: triệu chứng → nguyên nhân đã
+    gặp → cách xác minh → cách xử lý (QEMU mồ côi, kernel thiếu feature, ngân
+    sách trang, slot giả định trống, test Rust trùng thuộc tính, git).
 14. `vifast-elf` — parser ELF64 PT_LOAD và host test. Nạp root ELF là Bước 6.
 
 ## Bản đồ crate
