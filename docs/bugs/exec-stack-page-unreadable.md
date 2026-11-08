@@ -152,3 +152,17 @@ exec không thấy ⇒ **task exec chạy sai vspace**.
   VA trong trang stack, `DebugWrite` trả `InvalidArg` và chương trình **im
   lặng** (đúng triệu chứng). Cần một chương trình ngắn in mã lỗi trả về
   (`O`/`E`) — lưu ý đã có 2 lần thất bại vì chương trình dài chạm vùng tham số.
+
+## Bài học quy trình (vòng 125) — sửa code trong `spawn_elf_copy` rất dễ lạc chỗ
+
+Nhiều lần kết quả "không in gì" là do **bản sửa không rơi vào hàm đích**:
+
+- `let mut rights = Rights::READ;` xuất hiện ở cả `load_module` và `spawn_elf_copy`
+  → chèn theo mẫu này có thể ghi vào hàm sai, khiến frame không được ghi và
+  chương trình in ra NUL.
+- `let code: [u32; 8]` cũng xuất hiện ở 3 nhánh arch → thay theo mẫu dễ rơi vào
+  nhánh khác.
+
+**Quy tắc**: sau mỗi lần sửa, `grep -n` kèm **ngữ cảnh hàm** để xác nhận dòng đã
+đổi nằm giữa `fn spawn_elf_copy(` và hàm kế tiếp; và in dấu hiệu (như `TEST`)
+trước khi kết luận bất cứ điều gì về bộ nhớ.
