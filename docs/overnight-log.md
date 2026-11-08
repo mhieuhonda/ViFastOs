@@ -2435,3 +2435,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Đã ghi vào runbook mục **1c**: trước khi chạy cổng phải kiểm
   `./scripts/diag.sh` thấy `qemu-system: 0` (hoặc `pkill -f qemu-system`).
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.
+
+## 9.139 — Vòng 142: kiểm chứng lỗi exec-stack trong môi trường SẠCH (vẫn hỏng)
+
+- Sau bài học "QEMU mồ côi" ở vòng 141, tôi nghi các kết luận trước bị nhiễu nên
+  dựng lại thí nghiệm có kiểm soát: xác nhận `qemu-system: 0`, root ghi
+  `"HI FS\n"` vào frame stack `0x100` **trước** khi map, chương trình 8 lệnh đọc
+  `EXEC_STACK_BASE + 0x100`.
+- Kết quả: **`HI FS` count = 0**, serial sau `EXEC OK` không có **byte NUL** nào
+  ⇒ `DebugWrite` không phát ra gì (không phải in chuỗi rỗng).
+- ⇒ **Lỗi thật, tái hiện được trong môi trường sạch**, không phải flake.
+- Cập nhật `docs/bugs/exec-stack-page-unreadable.md` với bảng trạng thái giả
+  thuyết: PTE sai / ghi sai frame / sai vspace / flake đều **bị bác**; còn mở
+  "có ai unmap sau đó" và "validate từ chối".
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.

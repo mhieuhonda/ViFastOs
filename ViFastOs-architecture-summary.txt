@@ -376,6 +376,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d1276e8 moc 9 (vong 139): lenh df di tron stack (fs::usage -> STATFS -> server -> client)
 - 59177a4 moc 9 (vong 140): range vat trang chua map phai bi tu choi (kernel test)
 - 312beb3 brand: logo ViFastOs nen trong suot, luc giac boc ngoai gach + sao (dong bo Key/Tts)
+- 465f716 tai lieu (vong 141): lenh uname + bai hoc QEMU mo coi (dinh chinh vong 116)
+- 52f7b94 brand(os): nen do + vien luc giac 2 tang, dua 3 gach va sao vao giua
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

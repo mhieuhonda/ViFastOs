@@ -185,3 +185,27 @@ trước khi kết luận bất cứ điều gì về bộ nhớ.
 
 Điều tra **tạm dừng** ở đây theo hướng chuyển sang hạng mục khác của mục tiêu;
 báo cáo này đã đủ dữ kiện cho một người có quyền sửa kernel kết luận nhanh.
+
+## Vòng 142 — kiểm chứng trong môi trường SẠCH: lỗi vẫn tái hiện
+
+Bối cảnh: vòng 141 phát hiện "QEMU mồ côi" có thể gây timeout `PREEMPT OK`, nên
+nghi các kết luận trước đây bị nhiễu. Đã kiểm tra lại **có kiểm soát**:
+
+- Xác nhận `ps` không còn tiến trình `qemu-system` nào trước khi chạy.
+- Dựng lại đúng thí nghiệm: root ghi `"HI FS\n"` vào frame stack offset `0x100`
+  **trước** khi map; chương trình 8 lệnh đọc `EXEC_STACK_BASE + 0x100`.
+- Kết quả: **`HI FS` count = 0**; serial sau `EXEC OK` đi thẳng sang demo khác,
+  **không có byte NUL nào** ⇒ lời gọi `DebugWrite` không phát ra gì, chứ không
+  phải "in ra chuỗi rỗng".
+- Kết luận: đây là **lỗi thật, tái hiện được**, không phải flake môi trường.
+
+### Trạng thái các giả thuyết sau vòng 142
+
+| Giả thuyết | Trạng thái |
+|---|---|
+| PTE sai/thiếu | **Bác** (trace PTE hợp lệ, cùng bảng với trang code) |
+| Ghi sai frame/offset | **Bác** (PA khớp, `frame_write` = Ok) |
+| Task chạy sai vspace | **Bác** (`TESTPAGER OK` đọc được dữ liệu do root ghi) |
+| `validate_user_range` từ chối | Chưa quan sát trực tiếp được (chương trình in errno không chạy — do test tự chế lỗi) |
+| Huỷ ánh xạ sau đó (unmap) | **Còn mở** (trace bắt được một lần ghi PTE=0 ở bảng khác) |
+| Flake môi trường/QEMU | **Bác** (đã chạy trong môi trường sạch) |
