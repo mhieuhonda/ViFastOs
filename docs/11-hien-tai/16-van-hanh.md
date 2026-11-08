@@ -418,6 +418,19 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5x-1. Quyền hạn trên đường IPC: cấm rebadge (`IPC RIGHTS OK`)
+
+Client cố `cap_mint` từ cap endpoint **đã có badge** ⇒ kernel phải trả
+**`IllegalOperation` (16)** — không cap nào được đổi badge (biên giới danh tính).
+Đo thật trên guest: `IPC RIGHTS OK` in ra; khi cố tình dùng sai `dst_tcb_slot`,
+mã lỗi là `InvalidCap` (1) chứ không phải 16 ⇒ **phải đọc mã lỗi số**, đừng chỉ
+nhìn OK/BAD.
+
+Lưu ý khi viết probe trong client: **không dùng slot số cứng chưa kiểm** —
+`CLIENT_IRQ_SLOT = 8`, ghi đè vào đó làm shell im lặng (đã gặp ở vòng 208).
+Dùng slot trống đã biết (20) và kiểm `strings <elf> | grep PROBE` trước khi chạy
+VM để chắc probe **thật sự nằm trong binary**.
+
 ### 5p-g. Khoá hồi quy chuỗi dọn task exec (vòng 205)
 
 Test `exec_teardown_chain_frees_tcb_vspace_frame` làm **đúng thứ tự root dọn
@@ -633,6 +646,7 @@ arch liệt kê mới cần.
 | `IPC JUNK OK` | bắt buộc | unknown VFS opcode got an error reply and the channel kept working |
 | `SEC PROBE OK` | bắt buộc | kernel refused to read user buffers outside the copy windows |
 | `SYS REJECT OK` | bắt buộc | invalid handles and out-of-range user pointers were all refused |
+| `IPC RIGHTS OK` | bắt buộc | minting from an already-badged endpoint cap is rejected (IllegalOperation): no rebadge |
 | `EXEC MEM STABLE` | bắt buộc | three spawn/destroy cycles left arena usage unchanged (no leak) |
 | `EXEC MEM OK` | bắt buộc | destroying the previous exec task returned its pages (arena not growing) |
 | `MEM FREE OK` | bắt buộc | arena usage stayed consistent (used < size) after the whole FS op chain |

@@ -815,6 +815,17 @@ fn shell() -> ! {
     // Vòng 61 (pha 4 input): marker chứng minh input task (UART console_read
     // + IRQ notify) đã vào vòng lặp — harness khóa exact-one cả 3 arch.
     write(b"SHELL READY\n");
+    // Vòng 209 (bảo mật): cap endpoint slot 1 đã có badge ⇒ `cap_mint` phải bị
+    // từ chối `IllegalOperation`. Đích là slot 20 (trống) — KHÔNG dùng 8 vì
+    // `CLIENT_IRQ_SLOT = 8` (bài học vòng 208).
+    let rights_probe = vifast_user::cap_mint(1, 7, 20, 1, 9);
+    if rights_probe.error == KError::IllegalOperation {
+        write(b"IPC RIGHTS OK\n");
+    } else {
+        write(b"IPC RIGHTS BAD err=");
+        write_u64(rights_probe.error as u64);
+        write(b"\n");
+    }
     write(b"shell> ");
     loop {
         let input = vifast_user::console_read();

@@ -80,6 +80,10 @@ COMMON = [
         "invalid handles and out-of-range user pointers were all refused",
     ),
     (
+        "IPC RIGHTS OK",
+        "minting from an already-badged endpoint cap is rejected (IllegalOperation): no rebadge",
+    ),
+    (
         "EXEC MEM STABLE",
         "three spawn/destroy cycles left arena usage unchanged (no leak)",
     ),

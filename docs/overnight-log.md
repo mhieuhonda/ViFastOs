@@ -3489,3 +3489,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   chẩn đoán mới với trạng thái "chưa rõ".
 - Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs
   PASS.
+
+## 9.206 — Vòng 209: `IPC RIGHTS OK` — cấm rebadge, kiểm trên guest (và một phen hiểu sai)
+
+- Thêm probe ở client: `cap_mint(1, 7, 20, 1, 9)` từ cap endpoint **đã có badge**
+  ⇒ kernel trả **`IllegalOperation` (16)** ⇒ in `IPC RIGHTS OK`. Đưa vào `COMMON`
+  ⇒ harness **589 → 592 ca**.
+- **Hiểu sai đã sửa**: vòng 208 tôi kết luận "client im lặng khi syscall bị từ
+  chối" — thực ra probe **không hề nằm trong binary** (patch thất bại với
+  `AssertionError` mà tôi không để ý, và `strings … | grep PROBE` trả 0). Bài học:
+  **kiểm binary chứa probe trước khi chạy VM**.
+- Lần sửa kế tiếp: dùng `dst_tcb_slot=6` ⇒ lỗi `err=1` (`InvalidCap`) chứ không
+  phải 16, vì cap TCB của client ở slot **7**. In **mã lỗi số** mới thấy.
+- Cũng xác nhận: `CLIENT_IRQ_SLOT = 8` ⇒ **không** dùng slot 8 làm đích mint
+  (đã gặp ở vòng 208) — dùng slot 20.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
