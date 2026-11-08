@@ -1440,14 +1440,15 @@ fn root_vfs_stat(endpoint_slot: u8, path: &[u8]) -> Option<u64> {
     }
 }
 
-// Mốc 9 (vòng 74): root tự OPEN/READ/CLOSE qua endpoint gốc để verify nội
-// dung file (bước 2 exec-thật: đọc ELF từ FS). OPEN flags=data0, len=data1;
+// Mốc 9 (vòng 74/79): root tự OPEN/READ/CLOSE qua endpoint gốc để đọc
+// file từ FS (bước 2 exec-thật: đọc ELF từ FS). OPEN flags=data0, len=data1;
 // READ data=[fd, offset, len], label trả về là byte count, dữ liệu vào IPC
-// buffer của root (kernel copy từ server). Trả true khi đọc đúng 8 byte
-// đầu khớp DEMAND_VALUE. Fail-êm: chỉ quan sát, không đổi hành vi spawn.
-fn root_vfs_read_head(endpoint_slot: u8, path: &[u8]) -> bool {
+// buffer của root (kernel copy từ server). Tách open/read_at/close để vòng
+// sau nạp ELF theo từng page; read_head giữ nguyên để verify magic.
+// Fail-êm: chỉ quan sát, không đổi hành vi spawn.
+fn root_vfs_open(endpoint_slot: u8, path: &[u8]) -> Option<u64> {
     if path.is_empty() || path.len() > vifast_abi::vfs::MAX_PATH {
-        return false;
+        return None;
     }
     unsafe {
         let mut i = 0;
@@ -1465,16 +1466,38 @@ fn root_vfs_read_head(endpoint_slot: u8, path: &[u8]) -> bool {
             0,
         )
     };
-    if open.error != KError::Ok || open.label != vfs_abi::OK {
-        return false;
+    if open.error == KError::Ok && open.label == vfs_abi::OK {
+        Some(open.data[0])
+    } else {
+        None
     }
-    if open.error != KError::Ok || open.label != vfs_abi::OK {
-        return false;
+}
+
+/// Đọc tối đa `len` byte (kẹp MAX_IO=128) từ `offset` vào IPC buffer của
+/// root. Trả số byte đọc được.
+fn root_vfs_read_at(endpoint_slot: u8, fd: u64, offset: u64, len: u64) -> u64 {
+    let want = core::cmp::min(len, vifast_abi::vfs::MAX_IO as u64);
+    if want == 0 {
+        return 0;
     }
-    let fd = open.data[0];
-    let read = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::READ, fd, 0, 8) };
+    let read = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::READ, fd, offset, want) };
+    if read.error == KError::Ok && read.label == want {
+        want
+    } else {
+        0
+    }
+}
+
+fn root_vfs_close(endpoint_slot: u8, fd: u64) {
+    let _ = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::CLOSE, fd, 0, 0) };
+}
+
+fn root_vfs_read_head(endpoint_slot: u8, path: &[u8]) -> bool {
+    let Some(fd) = root_vfs_open(endpoint_slot, path) else {
+        return false;
+    };
     let mut ok = false;
-    if read.error == KError::Ok && read.label == 8 {
+    if root_vfs_read_at(endpoint_slot, fd, 0, 8) == 8 {
         let mut head = [0u8; 8];
         let mut i = 0;
         while i < 8 {
@@ -1483,7 +1506,7 @@ fn root_vfs_read_head(endpoint_slot: u8, path: &[u8]) -> bool {
         }
         ok = u64::from_le_bytes(head) == vifast_abi::pager::DEMAND_VALUE;
     }
-    let _ = unsafe { vifast_user::call_message(endpoint_slot, vfs_abi::CLOSE, fd, 0, 0) };
+    root_vfs_close(endpoint_slot, fd);
     ok
 }
 
