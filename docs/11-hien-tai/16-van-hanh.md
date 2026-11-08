@@ -49,6 +49,18 @@ python3 scripts/soak.py --iterations 50 --archs riscv64,aarch64
 Kết quả mẫu (vòng 36): 5/5×3 PASS trong 88.8s. Serial lần hỏng nằm dưới
 `artifacts/soak/`. Soak không thay thế gate chuẩn.
 
+## 2b. Lệnh shell có sẵn
+
+`help uname time echo ls [path] cat <path> mkdir <path> rm <path>`
+`mv <old> <new> ln <old> <new> stat <path> sync <path>`
+`truncate <path> <size> df fsck run [path]`
+`runfs <path> [args...] exec <path> [args...]`
+
+- `uname` → `ViFastOs <arch> bootinfo-v3`.
+- `df` → `<đã dùng>/<tổng>` block vùng dữ liệu (512 B/block), qua
+  `vfs::STATFS`.
+- `fsck` chạy kiểm tra toàn vẹn; `time` in tick monotonic.
+
 ## 3. Shell lệnh `run` (exec demo)
 
 Trong shell QEMU (interactive):

@@ -4,10 +4,12 @@ Logo cho sản phẩm **ViFastOs** (dùng cho `os.vifast.org`), cùng hệ với
 
 ## Ý nghĩa hình
 
-- **Nền đỏ + sao vàng**: Việt Nam.
-- **Ba vệt ngang**: tốc độ (Fast).
-- **Hai hình lục giác lồng nhau + lõi tròn**: *microkernel* — một lõi nhỏ nằm trong các vành
-  bảo vệ (mô hình capability: mọi quyền đều phải đi qua kernel).
+- **Nền trong suốt** — dùng được trên nền sáng, nền tối, avatar tròn hay favicon.
+- **Sao vàng** (Việt Nam) + **3 vệt tốc độ** (Fast): vẽ lại đúng tỉ lệ của ViFastKey / ViFastTts,
+  gạch giữa thụt vào, mép phải thẳng hàng.
+- **Lục giác bao ngoài**: *microkernel* — một lõi nhỏ (sao) nằm gọn trong ranh giới kernel;
+  mọi thứ bên trong đều do kernel kiểm soát, mọi quyền phải đi qua vành này. Hình lục giác gợi
+  tinh thể silicon và tổ ong — nhiều ô rời rạc khớp với cách capability chia quyền thành từng ô.
 
 ## Tệp
 

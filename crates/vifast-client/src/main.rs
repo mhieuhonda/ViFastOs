@@ -358,10 +358,21 @@ fn shell_command(line: &[u8]) {
         return;
     }
     if line == b"help" {
-        write(b"help time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+        write(b"help uname time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...] exec <path> [args...]\n");
+    } else if line == b"uname" {
+        // Vòng 141: định danh hệ thống — arch + phiên bản BootInfo.
+        write(b"ViFastOs ");
+        write(if cfg!(target_arch = "riscv64") {
+            b"riscv64"
+        } else if cfg!(target_arch = "aarch64") {
+            b"aarch64"
+        } else {
+            b"x86_64"
+        });
+        write(b" bootinfo-v3\n");
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");
