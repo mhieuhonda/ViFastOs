@@ -2725,6 +2725,21 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                         off += n;
                     }
+                    // Vòng 109: kiểm tra TOÀN VẸN file vừa ghi — kích thước
+                    // phải đúng bằng ảnh ELF dựng sẵn. Bắt lỗi ghi thiếu/
+                    // ghi đè âm thầm của đường VFS (trước đây chỉ verify 64
+                    // byte đầu).
+                    match root_vfs_stat(root_vfs_slot, b"/prog.elf") {
+                        Some(size) if size == EXEC_DEMO_ELF.len() as u64 => {
+                            write(b"PROG SIZE OK\n")
+                        }
+                        Some(size) => {
+                            write(b"PROG SIZE BAD ");
+                            write_decimal(size);
+                            write(b"\n");
+                        }
+                        None => write(b"PROG SIZE BAD 0\n"),
+                    }
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];

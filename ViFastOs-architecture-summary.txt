@@ -320,6 +320,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 477fbb6 tai lieu (vong 106): kiem chung vung args trong trang stack (am tinh)
 - f4e74ce tai lieu (vong 107): thu hep nghi pham sang map_frame_fallible
 - d32354d tai lieu (vong 108): ghi gioi han runfs lap vao runbook
+- c16d8a6 cong cu (vong 108b): khoa thu hoi pager bang marker PAGER SRV 0/0/0
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -378,7 +379,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 203120 byte (`kernel_end=0x803ce690`)
+- RISC-V headroom: 199024 byte (`kernel_end=0x803cf690`)
 - `Kernel = 550296`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
@@ -1439,6 +1440,7 @@ QEMU test:
 - `PAGER RECLAIM OK` — pager demo frames/TCBs returned to untyped
 - `RUN FS OK` — exec-from-filesystem loaded an ELF page-by-page and ran it
 - `HIARG` — program executed from the filesystem printed an argv-only marker
+- `PROG SIZE OK` — the ELF written to /prog.elf has exactly the expected byte size
 - `PAGER SRV 0/0/0` — pager server was reclaimed (tcb, stack frame, ipc frame destroyed)
 
 Mỗi dòng sau đúng một lần:

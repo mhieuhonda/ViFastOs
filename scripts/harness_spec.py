@@ -44,6 +44,10 @@ COMMON = [
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
     ("HIARG", "program executed from the filesystem printed an argv-only marker"),
     (
+        "PROG SIZE OK",
+        "the ELF written to /prog.elf has exactly the expected byte size",
+    ),
+    (
         "PAGER SRV 0/0/0",
         "pager server was reclaimed (tcb, stack frame, ipc frame destroyed)",
     ),

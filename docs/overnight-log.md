@@ -1928,3 +1928,14 @@ follow-up `62b31f4`.
   (TCB + stack + IPC frame) không thể bị lặng lẽ bỏ qua về sau.
 - Harness 523 → **526 ca** (fixture tự sinh từ COMMON), QEMU 3/3×3, persist
   3/3, docs PASS, fmt sạch, 0 warning.
+
+## 9.104 — Vòng 109: kiểm tra toàn vẹn kích thước file exec trong cổng chuẩn
+
+- Selftest sau thu hồi pager giờ **STAT `/prog.elf` và so kích thước** với
+  ảnh ELF dựng sẵn (trước đây chỉ verify 64 byte đầu): in `PROG SIZE OK` hoặc
+  `PROG SIZE BAD <size>`. Bắt được lỗi ghi thiếu/ghi đè âm thầm của đường VFS
+  mà verify prefix không thấy.
+- Thêm `("PROG SIZE OK", …)` vào `harness_spec.COMMON` → cổng chuẩn bắt buộc
+  thấy trên cả 3 arch. Harness **526 → 529 ca**.
+- Gate: QEMU 3/3×3, persist 3/3, harness 529, kernel 183, docs PASS, fmt sạch,
+  0 warning, headroom 203 120/199 024 B.
