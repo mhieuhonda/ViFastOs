@@ -1682,3 +1682,20 @@ follow-up `62b31f4`.
   QEMU trên mọi arch giờ đều phải thấy marker này.
 - Gate: QEMU 3/3×3 PASS, persist 7×3 PASS, harness 523, docs PASS, fmt sạch,
   0 warning, headroom riscv 199 024 B.
+
+## 9.86 — Vòng 95: truyền tham số cho chương trình nạp từ FS (argv tối giản)
+
+- Chương trình demo không còn chuỗi nhúng: nó đọc chuỗi tham số ở
+  `entry + 0x200` (riscv `auipc+addi`, aarch64 `adr`, x86 `lea rip`) rồi
+  `DebugWrite` 6 byte. Root ghi chuỗi vào **trang code của chương trình**
+  trước khi map: bản RAM → `HI FS`, bản trên đĩa → `HI DK`.
+- Cùng một binary trên đĩa in nội dung khác nhau tuỳ tham số root truyền —
+  minh hoạ argv/exec thật, không cần sửa kernel.
+- Bài học W^X: `frame_write` lên frame **đã map executable** bị kernel từ
+  chối; phải ghi tham số TRƯỚC `frame_map` (đã chuyển vào vòng nạp segment).
+- Bài học mã hoá lệnh: `adr` aarch64 là `0x10000000 | (immhi<<5) | rd`
+  (imm=0x200 → `0x10001000`), tự suy ra sai một lần (`0x10010000`) nên
+  aarch64 không in — đã sửa và xác nhận cả 3 arch.
+- Marker gate đổi thành `HI DK` (6 byte, có newline nên không dính dòng sau).
+- Gate: QEMU 3/3×3 PASS, persist 7×3 PASS, harness 523, docs PASS, fmt sạch,
+  0 warning.

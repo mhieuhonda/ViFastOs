@@ -986,7 +986,7 @@ fn map_frame_fallible(
 const EXEC_DEMO_CODE: u64 = CODE_VA as u64 + 0x1000;
 /// Dựng ELF demo nhỏ: 1 trang code in `msg` (DebugWrite) rồi exit.
 /// `len` là độ dài chuỗi, được nhúng thẳng vào lệnh nạp tham số độ dài.
-const fn exec_demo_elf(msg: &[u8], len: u32) -> [u8; 0x1000 + 0x48] {
+const fn exec_demo_elf() -> [u8; 0x1000 + 0x48] {
     let mut elf = [0u8; 0x1000 + 0x48];
     // ELF header.
     elf[0] = 0x7f;
@@ -1036,14 +1036,16 @@ const fn exec_demo_elf(msg: &[u8], len: u32) -> [u8; 0x1000 + 0x48] {
     }
     // Code: in msg bằng DebugWrite rồi Exit. Chuỗi ở offset 0x40 trong trang.
     if cfg!(target_arch = "riscv64") {
+        // auipc a0,0 ; addi a0,a0,0x200 ; addi a1,x0,6 ; addi a7,x0,32 ;
+        // ecall ; addi a7,x0,34 ; ecall
         let code: [u32; 7] = [
-            0x0000_0517,                    // auipc a0, 0
-            0x0405_0513,                    // addi a0, a0, 0x40
-            (len << 20) | (11 << 7) | 0x13, // addi a1, x0, len
-            0x0200_0893,                    // addi a7, x0, 32
-            0x0000_0073,                    // ecall
-            0x0220_0893,                    // addi a7, x0, 34
-            0x0000_0073,                    // ecall
+            0x0000_0517, // auipc a0, 0
+            0x2005_0513, // addi a0, a0, 0x200 (chuỗi tham số)
+            0x0060_0593, // addi a1, x0, 6
+            0x0200_0893, // addi a7, x0, 32 (DebugWrite)
+            0x0000_0073, // ecall
+            0x0220_0893, // addi a7, x0, 34 (Exit)
+            0x0000_0073, // ecall
         ];
         let mut i = 0;
         while i < code.len() {
@@ -1056,13 +1058,14 @@ const fn exec_demo_elf(msg: &[u8], len: u32) -> [u8; 0x1000 + 0x48] {
             i += 1;
         }
     } else if cfg!(target_arch = "aarch64") {
+        // adr x0, #0x200 ; movz x1, #6 ; movz x8, #32 ; svc ; movz x8,34 ; svc
         let code: [u32; 6] = [
-            0x1000_0200,                  // adr x0, #0x40
-            0xD280_0000 | (len << 5) | 1, // movz x1, #len
-            0xD280_0408,                  // movz x8, #32
-            0xD400_0001,                  // svc #0
-            0xD280_0448,                  // movz x8, #34
-            0xD400_0001,                  // svc #0
+            0x1000_1000, // adr x0, #0x200 (chuỗi tham số)
+            0xD280_00C1, // movz x1, #6
+            0xD280_0408, // movz x8, #32
+            0xD400_0001, // svc #0
+            0xD280_0448, // movz x8, #34
+            0xD400_0001, // svc #0
         ];
         let mut i = 0;
         while i < code.len() {
@@ -1077,39 +1080,27 @@ const fn exec_demo_elf(msg: &[u8], len: u32) -> [u8; 0x1000 + 0x48] {
     } else {
         // x86_64: lea rdi,[rip+0x39] ; mov esi,len ; mov eax,32 ; int 0x80 ;
         // mov eax,34 ; int 0x80
-        let mut i = 0;
-        let prefix: [u8; 7] = [0x48, 0x8D, 0x3D, 0x39, 0x00, 0x00, 0x00];
-        while i < prefix.len() {
-            elf[0x1000 + i] = prefix[i];
-            i += 1;
-        }
-        elf[0x1007] = 0xBE;
-        elf[0x1008] = (len & 0xff) as u8;
-        elf[0x1009] = 0;
-        elf[0x100A] = 0;
-        elf[0x100B] = 0;
-        let tail: [u8; 14] = [
+        // lea rdi,[rip+0x1F9] ; mov esi,6 ; mov eax,32 ; int 0x80 ;
+        // mov eax,34 ; int 0x80
+        let code: [u8; 26] = [
+            0x48, 0x8D, 0x3D, 0xF9, 0x01, 0x00, 0x00, // lea rdi,[rip+0x1F9]
+            0xBE, 0x06, 0x00, 0x00, 0x00, // mov esi,6
             0xB8, 0x20, 0x00, 0x00, 0x00, // mov eax,32
             0xCD, 0x80, // int 0x80
             0xB8, 0x22, 0x00, 0x00, 0x00, // mov eax,34
             0xCD, 0x80, // int 0x80
         ];
-        let mut j = 0;
-        while j < tail.len() {
-            elf[0x100C + j] = tail[j];
-            j += 1;
+        let mut i = 0;
+        while i < code.len() {
+            elf[0x1000 + i] = code[i];
+            i += 1;
         }
-    }
-    let mut k = 0;
-    while k < msg.len() {
-        elf[0x1040 + k] = msg[k];
-        k += 1;
     }
     elf
 }
 
 /// Bản chạy từ RAM (boot EXEC demo) — in "HI FS".
-const EXEC_DEMO_ELF: &[u8] = &exec_demo_elf(b"HI FS\n", 6);
+const EXEC_DEMO_ELF: &[u8] = &exec_demo_elf();
 
 /// Số slot tối đa spawn_elf_copy cấp cho ELF demo (tcb + vspace + stack +
 /// frame code + page tables). ELF demo cố định 1 page code nên 8 là dư;
@@ -1168,6 +1159,19 @@ fn track_alloc(
 // tables cho 2 vùng VA trên Sv39 3-level). Đếm thực tế đúng 8 nhưng sát
 // trần → lần 2 SKIP; dư 4 cho chắc.
 const MAX_EXEC_SLOTS: usize = 12;
+/// Ghi chuỗi tham số vào trang code của chương trình tại offset 0x200.
+/// Chương trình đọc bằng `auipc+addi` (cùng trang) rồi DebugWrite — cơ chế
+/// truyền tham số tối giản, không phụ thuộc quy ước sp của kernel.
+fn write_program_args(code_frame: u8, msg: &[u8]) -> bool {
+    let mut out = [0u8; 32];
+    let mut i = 0;
+    while i < msg.len() && i < out.len() {
+        out[i] = msg[i];
+        i += 1;
+    }
+    vifast_user::frame_write(code_frame, 0x200, out.as_ptr() as u64, i as u64).error == KError::Ok
+}
+
 fn spawn_elf_copy(
     meta_untyped: u8,
     data_untyped: u8,
@@ -1196,6 +1200,11 @@ fn spawn_elf_copy(
             let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
             let frame = track_alloc(slots, used, &mut used_len)?;
             if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
+                return None;
+            }
+            // Ghi chuỗi tham số vào trang code TRƯỚC khi map (kernel chặn
+            // frame_write lên frame đã map executable — W^X).
+            if page == 0 && segment.executable() && !write_program_args(frame, b"HI FS\n") {
                 return None;
             }
             // Copy nội dung segment (chunk 256B như load_module).
@@ -1805,6 +1814,10 @@ fn spawn_elf_from_fs(
                 va + vifast_abi::DEFAULT_PAGE_SIZE,
                 segment.vaddr + segment.file_size as u64,
             );
+            if page == 0 && segment.executable() && !write_program_args(frame, b"HI DK\n") {
+                root_vfs_close(endpoint_slot, fd);
+                return None;
+            }
             if copy_start < copy_end {
                 let source = segment.file_offset + (copy_start - segment.vaddr) as usize;
                 if !root_vfs_copy_to_frame(
@@ -2666,38 +2679,6 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                         off += n;
                     }
-                    // Vòng 93/94: vá bản trên đĩa thành "HI DSK" (7 byte) để
-                    // chuỗi in ra chứng minh chương trình nạp TỪ ĐĨA. Chỉ vá
-                    // 2 chỗ (lệnh độ dài + chuỗi) — rẻ hơn giữ ảnh ELF thứ hai
-                    // (headroom kernel riscv chỉ còn ~2.4 KiB).
-                    let mut patch = [0u8; vifast_abi::vfs::MAX_IO];
-                    let (len_at, len_bytes): (u64, [u8; 4]) = if cfg!(target_arch = "riscv64") {
-                        (0x1008, (0x0070_0593u32).to_le_bytes()) // addi a1,x0,7
-                    } else if cfg!(target_arch = "aarch64") {
-                        (0x1004, (0xD280_00E1u32).to_le_bytes()) // movz x1,#7
-                    } else {
-                        (0x1007, [0xBE, 0x07, 0x00, 0x00]) // mov esi,7
-                    };
-                    let mut j = 0;
-                    while j < len_bytes.len() {
-                        patch[j] = len_bytes[j];
-                        j += 1;
-                    }
-                    let _ =
-                        root_vfs_write_at(root_vfs_slot, b"/prog.elf", len_at, &patch[..4], false);
-                    let disk_msg = b"HI DSK\n";
-                    j = 0;
-                    while j < disk_msg.len() {
-                        patch[j] = disk_msg[j];
-                        j += 1;
-                    }
-                    let _ = root_vfs_write_at(
-                        root_vfs_slot,
-                        b"/prog.elf",
-                        0x1040,
-                        &patch[..disk_msg.len()],
-                        false,
-                    );
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
