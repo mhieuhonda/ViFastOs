@@ -194,6 +194,15 @@ Mỗi lần boot in một dòng cho mỗi hạng mục. Các dòng cần có:
 | PAGER3 fault 2 lần | race evict/demand khi đổi interleaving | bình thường (harness cho phép 1–2) |
 | `torn replay boot` persist | flake replay x86 | rerun; FAIL liên tiếp mới điều tra |
 
+### 5u. Net stack: checksum nằm trong cổng
+
+`cargo test -p vifast-virtio` (nay **trong cổng**, 7 test) khoá hai chỗ dễ sai
+nhất của stack:
+- `tcp_checksum_over_pseudo_header_is_consistent` — checksum TCP có pseudo-header
+  đúng; điền checksum vào rồi tính lại phải bằng 0;
+- `ip_checksum_of_icmp_echo_is_zero_after_fill` — checksum IP/ICMP sau khi điền
+  phải bằng 0 (lệch một byte là phát hiện ngay).
+
 ### 5v. Driver block: biên đĩa đã có test
 
 `cargo test -p vifast-fs` (nay **trong cổng**) khoá ba tính chất dễ hỏng nhất:

@@ -2848,3 +2848,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   không nằm trong cổng nên sửa định dạng đĩa có thể phá ngầm mà vẫn xanh.
 - Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 186, **FS 31**, docs PASS,
   fmt sạch, 0 warning.
+
+## 9.164 — Vòng 167: net stack có test checksum trong cổng
+
+- Thêm 2 host test cho `vifast-virtio` (5 → **7**):
+  - `tcp_checksum_over_pseudo_header_is_consistent` — checksum TCP có
+    pseudo-header; điền checksum rồi tính lại **phải bằng 0**;
+  - `ip_checksum_of_icmp_echo_is_zero_after_fill` — checksum IP/ICMP sau khi
+    điền phải bằng 0.
+- `scripts/build.sh` chạy thêm `cargo test -p vifast-virtio`. Cùng với vòng 166
+  (FS), cổng giờ phủ cả **định dạng đĩa** và **checksum mạng** — hai chỗ hỏng
+  ngầm nguy hiểm nhất.
+- Lỗi do chính tôi gây ra khi chèn test: **đặt trùng `#[test]`** và làm mất doc
+  comment của test cũ ⇒ 2 cảnh báo lẫn 1 test bị `never used`. Đã sửa, build
+  về **0 warning**, virtio 7/7.
+- Gate: QEMU 3/3×3, persist 3/3, harness 583, kernel 186, FS 31, virtio 7,
+  docs PASS, fmt sạch.

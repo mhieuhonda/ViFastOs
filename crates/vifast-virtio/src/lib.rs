@@ -1334,8 +1334,43 @@ mod tests {
         assert_eq!(super::parse_dns_a(&bytes), None);
     }
 
-    /// Độ dài lẻ được đệm 0 ở byte cuối.
+    /// Vòng 167: checksum TCP phải khớp khi cộng pseudo-header — đây là chỗ
+    /// dễ sai nhất của stack (một byte lệch là mọi segment bị rơi im lặng).
     #[test]
+    fn tcp_checksum_over_pseudo_header_is_consistent() {
+        let src = [10u8, 0, 2, 15];
+        let dst = [10u8, 0, 2, 2];
+        // TCP header tối thiểu 20 byte + 4 byte payload.
+        let mut seg = [0u8; 24];
+        seg[0..2].copy_from_slice(&(8080u16).to_be_bytes()); // src port
+        seg[2..4].copy_from_slice(&(1234u16).to_be_bytes()); // dst port
+        seg[4..8].copy_from_slice(&1u32.to_be_bytes()); // seq
+        seg[12] = 0x50; // data offset = 5 word
+        seg[13] = 0x10; // ACK
+        seg[20..24].copy_from_slice(b"ping");
+        // Với checksum bằng 0, giá trị tính ra khác 0.
+        let computed = super::tcp_checksum(src, dst, &seg);
+        assert_ne!(computed, 0, "checksum phải khác 0 với dữ liệu thật");
+        // Nhét checksum vào đúng vị trí rồi tính lại: tổng phải bằng 0.
+        seg[16..18].copy_from_slice(&computed.to_be_bytes());
+        assert_eq!(super::tcp_checksum(src, dst, &seg), 0);
+    }
+
+    /// Vòng 167: checksum IP của một datagram đã điền đúng phải bằng 0 —
+    /// dùng để phát hiện lỗi lệch một byte trong header.
+    #[test]
+    fn ip_checksum_of_icmp_echo_is_zero_after_fill() {
+        let mut icmp = [0u8; 12];
+        icmp[0] = 8; // echo request
+        icmp[4..6].copy_from_slice(&1u16.to_be_bytes());
+        icmp[8..12].copy_from_slice(b"abcd");
+        let sum = checksum(&icmp);
+        icmp[2..4].copy_from_slice(&sum.to_be_bytes());
+        assert_eq!(checksum(&icmp), 0);
+    }
+
+    #[test]
+    /// Độ dài lẻ được đệm 0 ở byte cuối.
     fn checksum_handles_odd_length() {
         assert_eq!(
             checksum(&[0x12, 0x34, 0x56]),

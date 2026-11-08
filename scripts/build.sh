@@ -17,6 +17,8 @@ cargo test -p vifast-elf
 # Vòng 166: test của FS (quy tắc đĩa, biên block, fsck) phải nằm trong cổng —
 # đây là nơi dễ hỏng ngầm nhất khi sửa driver/định dạng đĩa.
 cargo test -p vifast-fs
+# Vòng 167: checksum/parse của net stack cũng phải nằm trong cổng.
+cargo test -p vifast-virtio
 cargo test -p vifast-runtime
 cargo test -p vifast-user
 cargo test -p vifast-acpi
