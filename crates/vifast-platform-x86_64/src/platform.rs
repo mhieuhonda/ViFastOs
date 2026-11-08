@@ -27,8 +27,6 @@ const USER_CODE_RPL3: u64 = USER_CODE_SEL | 3;
 
 const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
 const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
-const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
-const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
 const PAGE_PRESENT: u64 = 1;
 const PAGE_WRITE: u64 = 2;
 const PAGE_USER: u64 = 4;
@@ -976,21 +974,6 @@ unsafe fn build_kernel_page_tables() {
             }
         }
     }
-}
-
-fn user_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
-    // Vòng 80 (audit P0-1): dùng checked_add để con trỏ gần u64::MAX không
-    // tràn qua phép cộng và lọt kiểm tra cửa sổ.
-    if ptr < base as u64 {
-        return false;
-    }
-    let Some(end) = ptr.checked_add(len as u64) else {
-        return false;
-    };
-    let Some(limit) = (base as u64).checked_add(size as u64) else {
-        return false;
-    };
-    end <= limit
 }
 
 fn active_root_matches_current() -> bool {
@@ -2470,43 +2453,7 @@ impl Platform for X86Platform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if !user_range(ptr, out.len(), USER_CODE_VA, 0x2_0000)
-            && !user_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
-            // Vòng 145: cửa sổ stack RIÊNG của exec task.
-            && !user_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::EXEC_STACK_BASE,
-                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
-            )
-            && !user_range(ptr, out.len(), USER_DATA_VA, 4096)
-            && !user_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-                vifast_abi::user_layout::ROOT_MODULE_END
-                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-            )
-            && !user_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::IPC_BUF_SERVER_VA,
-                4096,
-            )
-            && !user_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
-                4096,
-            )
-            && !user_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::ROOT_ELF_BASE,
-                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
-                    - vifast_abi::user_layout::ROOT_ELF_BASE,
-            )
-        {
+        if !vifast_abi::user_layout::copy_window_ok(ptr, out.len() as usize) {
             return Err(KError::InvalidArg);
         }
         unsafe {
@@ -2525,41 +2472,7 @@ impl Platform for X86Platform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if !user_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
-            && !user_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::EXEC_STACK_BASE,
-                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
-            )
-            && !user_range(ptr, input.len(), USER_DATA_VA, 4096)
-            && !user_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-                vifast_abi::user_layout::ROOT_MODULE_END
-                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-            )
-            && !user_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::IPC_BUF_SERVER_VA,
-                4096,
-            )
-            && !user_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
-                4096,
-            )
-            && !user_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::ROOT_ELF_BASE,
-                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
-                    - vifast_abi::user_layout::ROOT_ELF_BASE,
-            )
-        {
+        if !vifast_abi::user_layout::copy_window_ok(ptr, input.len() as usize) {
             return Err(KError::InvalidArg);
         }
         unsafe {

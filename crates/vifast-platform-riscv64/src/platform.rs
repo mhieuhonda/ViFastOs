@@ -14,8 +14,6 @@ pub struct RiscvPlatform;
 
 pub const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
 pub const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
-pub const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
-pub const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
 const USER_SSTATUS: u64 = 1 << 5;
 const TIMER_INTERVAL: u64 = 100_000;
 const UART_BASE: usize = 0x1000_0000;
@@ -366,21 +364,6 @@ fn pte(pa: u64, flags: u64) -> u64 {
 
 fn table_pa(table: *const Table) -> u64 {
     table as u64
-}
-
-fn page_in_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
-    // Vòng 80 (audit P0-1): dùng checked_add để con trỏ gần u64::MAX không
-    // tràn qua phép cộng và lọt kiểm tra cửa sổ.
-    if ptr < base as u64 {
-        return false;
-    }
-    let Some(end) = ptr.checked_add(len as u64) else {
-        return false;
-    };
-    let Some(limit) = (base as u64).checked_add(size as u64) else {
-        return false;
-    };
-    end <= limit
 }
 
 unsafe fn set_timer(at: u64) {
@@ -1619,45 +1602,7 @@ impl Platform for RiscvPlatform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if page_in_range(ptr, out.len(), USER_CODE_VA, 0x2_0000)
-            || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
-            // Vòng 145: exec task có stack RIÊNG ở EXEC_STACK_BASE — thiếu
-            // cửa sổ này thì mọi DebugWrite/read từ stack của task exec bị
-            // platform từ chối (lỗi "exec không đọc được trang stack").
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::EXEC_STACK_BASE,
-                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
-            )
-            || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-                vifast_abi::user_layout::ROOT_MODULE_END
-                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-            )
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::IPC_BUF_SERVER_VA,
-                4096,
-            )
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
-                4096,
-            )
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::ROOT_ELF_BASE,
-                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
-                    - vifast_abi::user_layout::ROOT_ELF_BASE,
-            )
-        {
+        if vifast_abi::user_layout::copy_window_ok(ptr, out.len() as usize) {
             unsafe {
                 /* SUM is kept clear while in S-mode; enable it only for the
                 explicit copy window. */
@@ -1675,41 +1620,7 @@ impl Platform for RiscvPlatform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::EXEC_STACK_BASE,
-                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
-            )
-            || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-                vifast_abi::user_layout::ROOT_MODULE_END
-                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-            )
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::IPC_BUF_SERVER_VA,
-                4096,
-            )
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
-                4096,
-            )
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::ROOT_ELF_BASE,
-                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
-                    - vifast_abi::user_layout::ROOT_ELF_BASE,
-            )
-        {
+        if vifast_abi::user_layout::copy_window_ok(ptr, input.len() as usize) {
             unsafe {
                 core::arch::asm!("csrs sstatus, {}", in(reg) 1u64 << 18);
                 core::ptr::copy_nonoverlapping(input.as_ptr(), ptr as *mut u8, input.len());

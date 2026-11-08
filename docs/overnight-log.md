@@ -2513,3 +2513,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 - Kiểm chứng: persist chạy **2 lần liền 3/3 PASS** (trước đó x86_64 fail 1 lần ở
   phase "torn replay").
 - Gate: QEMU 3/3×3, persist 3/3 ×2, harness 571, abi tests 5, docs PASS, fmt sạch.
+
+## 9.144 — Vòng 147: ba platform dùng chung `copy_window_ok` (một nguồn sự thật)
+
+- Thay toàn bộ danh sách cửa sổ VA lặp lại trong `read_user`/`write_user` của
+  **cả ba** platform bằng một lời gọi
+  `vifast_abi::user_layout::copy_window_ok(ptr, len)`.
+- Xoá code chết kéo theo: `page_in_range` (riscv/aarch64), `user_range` (x86_64),
+  và hai hằng `USER_STACK_BASE`/`USER_STACK_LEN` không còn dùng — build về
+  **0 warning**.
+- Lợi ích: chỉ còn **một** danh sách cửa sổ (trong `vifast-abi`) đã có test host
+  `copy_windows_cover_user_regions`; thêm vùng người dùng mới mà quên cập nhật
+  sẽ bị test bắt ngay thay vì lặp lại lỗi exec-stack.
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, abi 5, docs PASS,
+  fmt sạch, 0 warning, headroom 199 024 B.

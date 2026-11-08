@@ -14,8 +14,6 @@ pub struct Aarch64Platform;
 
 pub const USER_CODE_VA: usize = vifast_abi::user_layout::CODE_VA;
 pub const USER_DATA_VA: usize = vifast_abi::user_layout::DATA_VA;
-const USER_STACK_BASE: usize = vifast_abi::user_layout::STACK_BASE;
-const USER_STACK_LEN: usize = vifast_abi::user_layout::STACK_LEN;
 const USER_SPSR: u64 = 0x340;
 const GICD: u64 = 0x0800_0000;
 const GICC: u64 = 0x0801_0000;
@@ -484,21 +482,6 @@ fn init_timer() {
         core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval);
         core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) 1u64);
     }
-}
-
-fn page_in_range(ptr: u64, len: usize, base: usize, size: usize) -> bool {
-    // Vòng 80 (audit P0-1): dùng checked_add để con trỏ gần u64::MAX không
-    // tràn qua phép cộng và lọt kiểm tra cửa sổ.
-    if ptr < base as u64 {
-        return false;
-    }
-    let Some(end) = ptr.checked_add(len as u64) else {
-        return false;
-    };
-    let Some(limit) = (base as u64).checked_add(size as u64) else {
-        return false;
-    };
-    end <= limit
 }
 
 fn pan_supported() -> bool {
@@ -1182,45 +1165,7 @@ impl Platform for Aarch64Platform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if page_in_range(ptr, out.len(), USER_CODE_VA, 0x2_0000)
-            || page_in_range(ptr, out.len(), USER_STACK_BASE, USER_STACK_LEN)
-            // Vòng 145: exec task có stack RIÊNG ở EXEC_STACK_BASE — thiếu
-            // cửa sổ này thì mọi DebugWrite/read từ stack của task exec bị
-            // platform từ chối (lỗi "exec không đọc được trang stack").
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::EXEC_STACK_BASE,
-                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
-            )
-            || page_in_range(ptr, out.len(), USER_DATA_VA, 4096)
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-                vifast_abi::user_layout::ROOT_MODULE_END
-                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-            )
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::IPC_BUF_SERVER_VA,
-                4096,
-            )
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
-                4096,
-            )
-            || page_in_range(
-                ptr,
-                out.len(),
-                vifast_abi::user_layout::ROOT_ELF_BASE,
-                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
-                    - vifast_abi::user_layout::ROOT_ELF_BASE,
-            )
-        {
+        if vifast_abi::user_layout::copy_window_ok(ptr, out.len() as usize) {
             unsafe {
                 if pan_supported() {
                     core::arch::asm!(".arch armv8.1-a", "msr pan, #0");
@@ -1240,41 +1185,7 @@ impl Platform for Aarch64Platform {
         if !active_root_matches_current() {
             return Err(KError::IllegalOperation);
         }
-        if page_in_range(ptr, input.len(), USER_STACK_BASE, USER_STACK_LEN)
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::EXEC_STACK_BASE,
-                vifast_abi::user_layout::EXEC_STACK_TOP - vifast_abi::user_layout::EXEC_STACK_BASE,
-            )
-            || page_in_range(ptr, input.len(), USER_DATA_VA, 4096)
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-                vifast_abi::user_layout::ROOT_MODULE_END
-                    - vifast_abi::user_layout::ROOT_MODULE_SERVER_VA,
-            )
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::IPC_BUF_SERVER_VA,
-                4096,
-            )
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::IPC_BUF_CLIENT_VA,
-                4096,
-            )
-            || page_in_range(
-                ptr,
-                input.len(),
-                vifast_abi::user_layout::ROOT_ELF_BASE,
-                vifast_abi::user_layout::ROOT_ELF_STACK_TOP
-                    - vifast_abi::user_layout::ROOT_ELF_BASE,
-            )
-        {
+        if vifast_abi::user_layout::copy_window_ok(ptr, input.len() as usize) {
             unsafe {
                 if pan_supported() {
                     core::arch::asm!(".arch armv8.1-a", "msr pan, #0");
