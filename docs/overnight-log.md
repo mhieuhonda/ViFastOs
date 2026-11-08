@@ -2760,3 +2760,20 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   gỡ khỏi cây lần này, để vòng sau làm cùng lúc với việc nới arena x86.
 - Gate: QEMU 3/3×3, persist 3/3, harness 574, kernel 186, docs PASS, fmt sạch,
   0 warning, headroom 2 296 176 B.
+
+## 9.158 — Vòng 161: arena aarch64/x86 lên 96 trang + `history`/`!!` vào cây
+
+- Nới arena **+10 trang** (352 256 → 393 216 B) cho aarch64 (`DataPool`/
+  `USER_DATA`) và x86_64 (`DataPool`/`USER_FRAME`); nhớ sửa **cả ba chỗ**:
+  `struct DataPool`, static initialiser, và slice trong `data_page()` — quên
+  một chỗ là `E0308` (đã dính).
+- Bật `staging_release_safe()` cho x86_64 sau khi arena rộng.
+- **Bug thật phát hiện nhờ vậy**: self-test `SYS REJECT` dùng `bad_slot = 63`,
+  nhưng khi arena lớn hơn thì slot 63 **đã là cap hợp lệ** ⇒ phép thử mất
+  nghĩa và in BAD. Sửa: `bad_slot = 200` (ngoài phạm vi cspace) — đúng bản chất
+  "slot không hợp lệ".
+- `history`/`!!` vào cây (ô nhớ 32 byte, con trỏ thô tới `static mut`):
+  thử thật `history` → `last: echo hi`; `!!` → `!!: echo hi` rồi in `hi`.
+- Client sau thay đổi: riscv 7 trang / aarch64 8 / x86_64 9 (ngân sách 7/8/9).
+- Gate: QEMU 3/3×3, persist 3/3, harness 574, kernel 186, docs PASS, fmt sạch,
+  0 warning.

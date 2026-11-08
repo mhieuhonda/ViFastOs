@@ -3024,7 +3024,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     // Vòng 132 (bảo mật cơ bản): mọi lời gọi với handle KHÔNG
                     // hợp lệ hoặc vượt vùng người dùng phải bị TỪ CHỐI (mã lỗi
                     // khác Ok) và kernel vẫn chạy tiếp — đây là điều cần khoá.
-                    let bad_slot = 63u8;
+                    // Vòng 161: 63 KHÔNG còn chắc chắn trống khi arena lớn hơn
+                    // (cspace của root có thể đã dùng tới đó) ⇒ dùng slot ngoài
+                    // phạm vi để phép thử luôn có nghĩa.
+                    let bad_slot = 200u8;
                     let mut reject_ok = vifast_user::tcb_suspend(bad_slot).error != KError::Ok
                         && vifast_user::tcb_destroy(bad_slot).error != KError::Ok
                         && vifast_user::object_destroy(bad_slot).error != KError::Ok

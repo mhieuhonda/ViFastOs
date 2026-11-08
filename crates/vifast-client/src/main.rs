@@ -343,6 +343,40 @@ fn write_u64(mut value: u64) {
     write(&digits[at..]);
 }
 
+/// Vòng 161: nhớ lệnh trước đó cho `!!` và `history` (một ô 32 byte).
+/// Dùng con trỏ thô để không tạo tham chiếu tới `static mut`.
+static mut LAST_CMD: [u8; 32] = [0; 32];
+
+fn last_cmd_at(index: usize) -> u8 {
+    unsafe { *core::ptr::addr_of!(LAST_CMD).cast::<u8>().add(index) }
+}
+
+fn remember_last(line: &[u8]) {
+    let n = core::cmp::min(line.len(), 32);
+    unsafe {
+        let dst = core::ptr::addr_of_mut!(LAST_CMD).cast::<u8>();
+        core::ptr::copy_nonoverlapping(line.as_ptr(), dst, n);
+        let mut i = n;
+        while i < 32 {
+            *dst.add(i) = 0;
+            i += 1;
+        }
+    }
+}
+
+fn last_cmd_into(buf: &mut [u8; 32]) -> usize {
+    let mut i = 0;
+    while i < 32 {
+        let byte = last_cmd_at(i);
+        if byte == 0 {
+            return i;
+        }
+        buf[i] = byte;
+        i += 1;
+    }
+    32
+}
+
 fn shell_command(line: &[u8]) {
     if line.is_empty() {
         return;
@@ -357,8 +391,33 @@ fn shell_command(line: &[u8]) {
         shell_command(&buf[..6 + n]);
         return;
     }
+    if line == b"history" {
+        let mut buf = [0u8; 32];
+        let len = last_cmd_into(&mut buf);
+        write(b"last: ");
+        if len == 0 {
+            write(b"(empty)\n");
+        } else {
+            write(&buf[..len]);
+            write(b"\n");
+        }
+        return;
+    }
+    if line == b"!!" {
+        let mut owned = [0u8; 32];
+        let len = last_cmd_into(&mut owned);
+        if len == 0 {
+            write(b"(empty)\n");
+            return;
+        }
+        write(b"!!: ");
+        write(&owned[..len]);
+        write(b"\n");
+        shell_command(&owned[..len]);
+        return;
+    }
     if line == b"help" {
-        write(b"help free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+        write(b"help history !! free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...] exec <path> [args...]\n");
@@ -729,6 +788,9 @@ fn shell() -> ! {
                 hist_len[slot] = len;
             }
             hist_pos = None;
+            if &line[..len] != b"!!" && &line[..len] != b"history" {
+                remember_last(&line[..len]);
+            }
             shell_command(&line[..len]);
             len = 0;
             write(b"shell> ");

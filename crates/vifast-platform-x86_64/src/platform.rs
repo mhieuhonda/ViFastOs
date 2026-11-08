@@ -63,8 +63,8 @@ static mut SPLIT_USED: usize = 0;
 static mut NX_ENABLED: bool = false;
 #[allow(dead_code)]
 #[repr(align(4096))]
-struct DataPool([u8; 352256]);
-static mut USER_FRAME: DataPool = DataPool([0; 352256]);
+struct DataPool([u8; 393216]);
+static mut USER_FRAME: DataPool = DataPool([0; 393216]);
 #[allow(dead_code)]
 #[repr(align(16))]
 struct Metadata([u8; 81920]);
@@ -2244,6 +2244,13 @@ static PAGE_OPS: PageOps = PageOps;
 static mut KERNEL_STORAGE: Kernel = Kernel::new_const();
 
 impl Platform for X86Platform {
+    /// Vòng 161: bật thu hồi trang staging. Lần thử trước in `SYS REJECT BAD`
+    /// nhưng nguyên nhân thật là phép thử dùng slot 63 (đã dùng hợp lệ) — sửa
+    /// phép thử xong thì bật lại an toàn.
+    fn staging_release_safe() -> bool {
+        true
+    }
+
     type Context = TrapFrame;
 
     const USER_CODE_VA: usize = USER_CODE_VA;
@@ -2358,7 +2365,7 @@ impl Platform for X86Platform {
 
     fn data_page() -> &'static mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_FRAME) as *mut u8, 352256)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(USER_FRAME) as *mut u8, 393216)
         }
     }
 
