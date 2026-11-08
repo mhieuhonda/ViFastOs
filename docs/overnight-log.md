@@ -2403,3 +2403,18 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
 (thiếu import `ARCH`) — đã sửa import; nhánh chẩn đoán giờ chạy được.
 
 - Gate: QEMU 3/3×3, persist 3/3, harness 571, docs PASS, fmt sạch, 0 warning.
+
+## 9.137 — Vòng 140: range vắt trang chưa map phải bị từ chối (kernel test)
+
+- Thêm test host `user_range_spanning_unmapped_page_is_rejected` (kernel lib
+  **185 → 186**): vspace mới, map MỘT trang RW; TCB gắn vspace đó rồi kiểm
+  `validate_user_range`:
+  - 4 byte cuối trang (trong trang đã map) → `Ok`;
+  - 8 byte vắt sang trang **chưa map** → `InvalidArg`;
+  - 8 byte trong trang RW với `need_write=true` → `Ok`.
+- Đây là bất biến bảo mật kinh điển: nếu chỉ kiểm trang đầu của range thì
+  userspace có thể đọc/ghi lậu sang trang kế. Test khoá lại hành vi đúng.
+- Liên quan trực tiếp tới lỗi "exec không đọc được trang stack": xác nhận thêm
+  rằng **đường validate không phải thủ phạm** khi range nằm gọn trong trang.
+- Gate: QEMU 3/3×3, persist 3/3, harness 571, kernel 186, docs PASS, fmt sạch,
+  0 warning, headroom 199 024 B (client riscv 6 trang).

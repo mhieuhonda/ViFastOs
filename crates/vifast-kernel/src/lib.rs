@@ -7855,6 +7855,46 @@ mod tests {
     }
 
     #[test]
+    fn user_range_spanning_unmapped_page_is_rejected() {
+        // Vòng 140: một range bắt đầu ở trang CÓ map nhưng vắt sang trang
+        // KHÔNG map phải bị từ chối — lỗ hổng bảo mật kinh điển nếu chỉ kiểm
+        // trang đầu.
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x4000_0000, 0x8000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let root = kernel.root().unwrap();
+        let space = kernel
+            .create_vspace_with_page_size(0, 0x4000_0000, 0x4000_0000, 4096)
+            .unwrap();
+        let pt1 = kernel.create_page_table(0x1000, 0).unwrap();
+        let pt2 = kernel.create_page_table(0x2000, 0).unwrap();
+        let pt3 = kernel.create_page_table(0x3000, 0).unwrap();
+        let frame = kernel.create_frame(0x4000, 4096).unwrap();
+        let va = 0x4000_1000;
+        assert_eq!(kernel.map_page_table(pt1, space, va), Ok(1));
+        assert_eq!(kernel.map_page_table(pt2, space, va), Ok(2));
+        assert_eq!(kernel.map_page_table(pt3, space, va), Ok(3));
+        kernel
+            .map_frame(space, frame, va, Rights::READ | Rights::WRITE)
+            .unwrap();
+
+        let tcb = kernel.create_tcb("range", 5).unwrap();
+        kernel.set_tcb_vspace(tcb, space).unwrap();
+
+        // Trang có map: 4 byte cuối trang vẫn hợp lệ.
+        assert_eq!(kernel.validate_user_range(tcb, va + 4092, 4, false), Ok(()));
+        // Vắt sang trang kế (chưa map) phải bị từ chối.
+        assert_eq!(
+            kernel.validate_user_range(tcb, va + 4092, 8, false),
+            Err(KError::InvalidArg)
+        );
+        // Cần quyền ghi: mapping RW nên vẫn Ok.
+        assert_eq!(kernel.validate_user_range(tcb, va, 8, true), Ok(()));
+    }
+
+    #[test]
     fn destroyed_slot_can_be_retyped_again() {
         // Vòng 137: sau khi destroy, slot phải THỰC SỰ trống để retype lại.
         let mut kernel = Kernel::new();

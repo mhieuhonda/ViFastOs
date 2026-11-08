@@ -373,6 +373,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 26ee7c9 web: them link ve vifast.org + tro GitHub sang org vifast-oss
 - 62d7a4a brand: 3 gach toc do bang nhau (bo kieu thut vao o gach giua) + giai thich hexagon
 - aaf0bef brand: wordmark Vi do + Fast nghieng; gach giua thut vao; cap nhat copy Fast (Rust native)
+- d1276e8 moc 9 (vong 139): lenh df di tron stack (fs::usage -> STATFS -> server -> client)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -420,7 +421,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 4/4 PASS
-- `cargo test -p vifast-kernel`: 185/185 PASS
+- `cargo test -p vifast-kernel`: 186/186 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
