@@ -3473,3 +3473,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   kèm ghi chú rằng số đo phụ thuộc tốc độ máy nhưng `free` trước/sau `loop` phải
   giữ nguyên.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs PASS, fmt sạch.
+
+## 9.205 — Vòng 208: hai probe bảo mật làm client IM LẶNG sau SHELL READY (đã revert)
+
+- Probe 1: `recv_message(1, 5)` trên cap endpoint **chỉ-WRITE** (kỳ vọng
+  `NoRights`). Kết quả: serial có `SHELL READY` rồi **không còn dòng nào** —
+  không có cả `IPC RIGHTS BAD`. Nghi client **block** (recv có thể trả Blocked).
+- Probe 2 (thay thế, không chặn): `cap_mint(1, 7, 8, WRITE, badge=9)` từ cap đã
+  có badge ⇒ kỳ vọng `IllegalOperation`. Kết quả **giống hệt**: im lặng sau
+  `SHELL READY`.
+- ⇒ Có hiện tượng **client im lặng khi gọi syscall bị từ chối** — chưa rõ là
+  block, bị dừng, hay panic không in. Đây là **phát hiện cần điều tra**, không
+  phải thứ để đoán.
+- **Đã revert cả hai probe + marker** để cổng xanh; ghi vào `17-su-co.md` dòng
+  chẩn đoán mới với trạng thái "chưa rõ".
+- Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 589, docs
+  PASS.

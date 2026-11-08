@@ -23,6 +23,7 @@ không (xem mục 3).
 | thiếu `PREEMPT OK` + `SMP IDLE OK` + `SMP POST IDLE OK` | kernel của cổng **thiếu feature `test-exit`** | `python3 -c "d=open('target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64','rb').read(); print(d.count(b'PREEMPT OK'))"` phải ra **2** | chạy `./scripts/build.sh`; **không** build tay `--no-default-features` vào cùng target |
 | guest in rất ít dòng | flake UEFI/QEMU (thường x86_64) | đếm số dòng serial | giờ đã **tự thử lại 1 lần** (vòng 162) |
 | `FAIL: thiếu marker (1): LOOP OK` | marker dựa trên **IPC một lần** từ client lúc boot — có lần root chưa xử lý kịp | thử gửi 3 lần + yield **vẫn 2/3** ⇒ không phải đua đơn thuần | **không dùng marker phụ thuộc IPC lúc boot**; `loop` vẫn kiểm bằng tay (đã ghi runbook 2c-1) |
+| client **im lặng ngay sau `SHELL READY`** | thêm probe syscall vào client (`recv` trên cap chỉ-WRITE; `cap_mint` từ cap có badge) | serial có `SHELL READY` nhưng không có dòng nào sau đó, không panic | **chưa rõ** block hay task bị dừng — cần điều tra ở vòng sau; **không** đưa probe vào cổng khi chưa hiểu |
 | guest dừng giữa boot (serial hết ở `USER EXIT`, chưa `SHELL READY`) | flake giai đoạn boot (x86_64, tần suất thấp: 1/5 lần đo) | serial ngắn hơn bình thường (~126 vs 216 dòng) | **tự thử lại 1 lần** (vòng 182); nếu lần hai vẫn hỏng thì đó là lỗi thật |
 | `FAIL: banner or SELFTEST PASS missing` | guest in **đủ** marker nhưng QEMU thoát mã lạ (race `isa-debug-exit`) | đối chiếu: đủ `COMMON` + `EXACT_ONE` đúng | **tự thử lại 1 lần** (vòng 177) — không áp dụng khi thiếu marker |
 
