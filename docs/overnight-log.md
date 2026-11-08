@@ -2122,3 +2122,16 @@ leaf có ghi mà không ai thấy. Cần đối chiếu `map_frame_fallible` v�
   frame_write, kernel core, API map, thứ tự map, A/D), 3 giả thuyết còn lại và
   cách kiểm tra nhanh (QEMU monitor xem PTE thật / klog platform).
 - Gate: QEMU 3/3×3, persist 3/3, harness 535, docs PASS, fmt sạch, 0 warning.
+
+## 9.117 — Vòng 120: probe `frame_map` lần hai (STKR) + kiểm ASID
+
+- Thêm probe ngay sau khi map stack: gọi lại `frame_map(vspace, stack_frame,
+  EXEC_STACK_BASE, RW)` và in mã lỗi.
+- Kết quả: **`STKR 8`** = `AlreadyMapped` ⇒ kernel **có** ghi nhận mapping;
+  `map_leaf` đã chạy không lỗi (mọi lỗi đều propagate trong `map_frame`).
+- Kiểm tiếp ASID: `take_asid` cấp ASID duy nhất/không bao giờ 0 ⇒ khó xảy ra
+  TLB stale do trùng ASID.
+- Cập nhật báo cáo lỗi: thêm thí nghiệm 9 + mục "đã loại trừ" + **đề xuất kế
+  tiếp**: tạm `putc`/klog trong platform ngay sau `write_pte` để đọc **PTE
+  thật** (table_pa, idx, pte) rồi so với giá trị mong đợi.
+- Gate: QEMU 2/2×3, build 0 warning, headroom 199 024 B.
