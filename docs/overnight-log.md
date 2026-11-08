@@ -1699,3 +1699,20 @@ follow-up `62b31f4`.
 - Marker gate đổi thành `HI DK` (6 byte, có newline nên không dính dòng sau).
 - Gate: QEMU 3/3×3 PASS, persist 7×3 PASS, harness 523, docs PASS, fmt sạch,
   0 warning.
+
+## 9.87 — Vòng 96: điều tra argv động + headroom (chưa đổi hành vi)
+
+- Thiết kế argv: chương trình đọc cặp `(ptr, len)` ở `entry+0x80` rồi
+  `DebugWrite(ptr,len)` → độ dài ĐỘNG; root ghi cặp + chuỗi vào trang code.
+  Hai điểm phải nhớ: (1) phải ghi tham số **sau khi copy nội dung segment**
+  (nếu ghi trước sẽ bị nội dung file ghi đè); (2) phải ghi **trước frame_map**
+  vì kernel chặn `frame_write` lên frame đã map executable (W^X).
+- Thử thu nhỏ ảnh ELF demo từ `0x1000+0x48` xuống `0x200` (code ở 0x80, vùng
+  tham số 0x100/0x120): headroom riscv tăng 199 024 → **203 120 B**, nhưng
+  chương trình không in — cần rà lại `p_offset/p_vaddr/e_entry` và vùng đè
+  giữa segment và tham số trước khi dùng lại.
+- Thử sửa `runfs <path>` (cắt từ index 6) hai lần: mỗi lần build xong thì
+  riscv64 timeout 0/3 ở cổng (`shell>` rồi treo), revert lại thì 2/2–3/3 PASS.
+  Chưa kết luận nhân quả — ghi nhận để điều tra bằng bisect sạch.
+- Kết luận vòng: giữ nguyên hành vi hệ thống ở `9fd145a`; gate xanh
+  (riscv 3/3, aarch64 3/3, x86 3/3 sau rerun), harness 523.
