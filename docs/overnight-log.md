@@ -2897,3 +2897,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   dạng `use` của root — `pager::{...}` chứ không phải `pager::LABEL_KILL`).
 - Client vẫn 7/8/9 trang (thay thế đúng chỗ), headroom 2.29 MB.
 - Gate: QEMU 3/3×3, persist 3/3, harness 583, docs PASS, fmt sạch, 0 warning.
+
+## 9.167 — Vòng 170: `jobs`, và một bug thật trong `kill` (suspend slot cũ)
+
+- Thêm `jobs` ở client: đếm TCB trạng thái Ready/Running qua `TcbInfo` và in
+  `jobs: N runnable` (đo thật: **2** — client + server).
+- **Bug thật phát hiện khi chạy persist**: `kill` cần `tcb_suspend` TRƯỚC khi
+  dọn tài nguyên (huỷ VSpace lúc task còn chạy trên hart khác là nguy hiểm),
+  nhưng tôi chỉ gán `exec_tcb` mà **không reset** ở các nhánh khác ⇒ khi slot
+  đã được cấp lại, lần `kill` sau có thể suspend **nhầm TCB** (client/server)
+  ⇒ persist đỏ: riscv `timeout`, x86 `blank timeout (thiếu FS FORMAT OK)`.
+- Sửa: reset `exec_tcb = 0` ở **mọi chỗ** đặt `exec_len = 0` (5 chỗ) và bỏ một
+  lần gán trùng sinh ra cảnh báo `value assigned is never read`.
+- Kiểm chứng sau sửa: QEMU 3/3×3, persist **3/3** xanh trở lại; `jobs: 2
+  runnable`, `KILL EXEC OK` khi đang chạy task.
+- Bài học ghi vào `17-su-co.md` (mục về self-test/slot): biến theo dõi slot
+  **phải** được reset cùng nhịp với biến đếm.

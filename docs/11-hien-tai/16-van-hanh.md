@@ -67,7 +67,7 @@ Kết quả mẫu (vòng 36): 5/5×3 PASS trong 88.8s. Serial lần hỏng nằm
 
 ## 2b. Lệnh shell có sẵn
 
-`help history !! kill free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>`
+`help history !! jobs kill free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>`
 `mv <old> <new> ln <old> <new> stat <path> sync <path>`
 `truncate <path> <size> df fsck run [path]`
 `runfs <path> [args...] exec <path> [args...]`
@@ -78,6 +78,8 @@ Kết quả mẫu (vòng 36): 5/5×3 PASS trong 88.8s. Serial lần hỏng nằm
 - Sau `SHELL READY`, client gọi syscall `ModuleRelease` (55) để kernel thu hồi
   các trang staging module (riscv thu 21, aarch64 22, x86_64 23 trang) — xem
   mục "Ngân sách cứng đã đo".
+- `jobs` → `jobs: N runnable` — đếm TCB ở trạng thái Ready/Running qua
+  `TcbInfo` (xấp xỉ "việc đang sống"; client + server thường thấy 2).
 - `kill` → dừng TCB exec đang chạy (root giữ cap TCB; client chỉ gửi tín
   hiệu `LABEL_KILL`). In `KILL EXEC OK`, hoặc `KILL EXEC SKIP` khi không có gì
   đang chạy.

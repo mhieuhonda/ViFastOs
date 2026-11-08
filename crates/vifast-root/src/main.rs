@@ -2751,6 +2751,9 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut exec_used = [0u8; MAX_EXEC_SLOTS];
     let mut exec_len = 0usize;
     let mut exec_vspace = 0u8;
+    // Vòng 170: nhớ TCB của task exec để `kill` suspend TRƯỚC khi dọn tài
+    // nguyên — huỷ VSpace khi task còn chạy trên hart khác là nguy hiểm.
+    let mut exec_tcb = 0u8;
     let mut exit_demo_done = false;
     let mut tlb_remapped = false;
     let mut tlb_done = false;
@@ -3110,6 +3113,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     });
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
+                    exec_tcb = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
                     // Vòng 103: truyền tham số RIÊNG ("HIARG") để cổng chuẩn
                     // chứng minh cả exec-từ-FS lẫn argv: chuỗi này không nằm
@@ -3124,7 +3128,8 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         &mut slots,
                         &mut exec_used,
                     ) {
-                        Some(_tcb) => {
+                        Some(tcb) => {
+                            exec_tcb = tcb;
                             let mut n = 0;
                             while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
                                 n += 1;
@@ -3140,10 +3145,16 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
             if message.label == LABEL_KILL {
                 // Vòng 169: `kill` từ shell — dừng TCB exec đang chạy.
                 if exec_len != 0 {
+                    // Vòng 170: suspend TRƯỚC khi dọn — task có thể đang chạy
+                    // trên hart khác; huỷ VSpace lúc nó còn chạy là nguy hiểm.
+                    if exec_tcb != 0 {
+                        let _ = vifast_user::tcb_suspend(exec_tcb);
+                    }
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
                     exec_vspace = 0;
+                    exec_tcb = 0;
                     write(b"KILL EXEC OK\n");
                 } else {
                     write(b"KILL EXEC SKIP\n");
@@ -3295,6 +3306,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         destroy_exec(&mut slots, &exec_used, exec_len);
                         exec_len = 0;
+                        exec_tcb = 0;
                         exec_used = [0u8; MAX_EXEC_SLOTS];
                         // Vòng 84: ưu tiên exec-thật từ FS khi path là ELF
                         // hợp lệ (đọc header+phdr rồi nạp từng page thẳng từ
@@ -3318,6 +3330,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                         let spawned = match tcb_opt {
                             Some(tcb) => {
+                                exec_tcb = tcb;
                                 write(b"RUN FS OK\n");
                                 Some(tcb)
                             }
@@ -3393,9 +3406,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         // đã có; fail thì rơi về demo copy như nhánh đầu.
                         destroy_exec(&mut slots, &exec_used, exec_len);
                         exec_len = 0;
+                        exec_tcb = 0;
                         exec_used = [0u8; MAX_EXEC_SLOTS];
                         exec_vspace = 0;
-                        if let Some(_tcb) = spawn_elf_from_fs(
+                        if let Some(tcb) = spawn_elf_from_fs(
                             root_vfs_slot,
                             &pbuf[..plen],
                             msg,
@@ -3405,6 +3419,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             &mut slots,
                             &mut exec_used,
                         ) {
+                            exec_tcb = tcb;
                             let mut n2 = 0;
                             while n2 < MAX_EXEC_SLOTS && exec_used[n2] != 0 {
                                 n2 += 1;
@@ -3697,6 +3712,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                 if info.sched_harts & 0b01 != 0 {
                     destroy_exec(&mut slots, &exec_used, exec_len);
                     exec_len = 0;
+                    exec_tcb = 0;
                     exec_used = [0u8; MAX_EXEC_SLOTS];
                     match spawn_elf_copy(
                         meta_untyped,

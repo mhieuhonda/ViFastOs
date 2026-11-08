@@ -417,7 +417,7 @@ fn shell_command(line: &[u8]) {
         return;
     }
     if line == b"help" {
-        write(b"help history !! kill free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
+        write(b"help history !! jobs kill free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...] exec <path> [args...]\n");
@@ -446,6 +446,27 @@ fn shell_command(line: &[u8]) {
         } else {
             write(b"free: error\n");
         }
+    } else if line == b"jobs" {
+        // Vòng 170: đếm TCB đang chạy/ready qua TcbInfo (xấp xỉ "job đang sống").
+        let mut index = 0u64;
+        let mut running = 0u64;
+        loop {
+            let info = vifast_user::tcb_info(index);
+            if info.error != KError::Ok {
+                break;
+            }
+            let state = (info.value >> 16) & 0xff;
+            if state == 1 || state == 2 {
+                running += 1;
+            }
+            index += 1;
+            if index > 64 {
+                break;
+            }
+        }
+        write(b"jobs: ");
+        write_u64(running);
+        write(b" runnable\n");
     } else if line == b"kill" {
         // Vòng 169: dừng chương trình exec đang chạy (root giữ cap TCB).
         let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_KILL, 0, 0, 0);
