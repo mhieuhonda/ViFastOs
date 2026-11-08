@@ -77,6 +77,11 @@ pub mod riscv {
     pub const PTE_W: u64 = 4;
     pub const PTE_X: u64 = 8;
     pub const PTE_U: u64 = 16;
+    /// A (accessed) / D (dirty): kernel này không xử lý page fault do thiếu
+    /// A/D (không có Svade/Svadu handler), nên luôn bật sẵn — đúng đặc tả cho
+    /// kiểu kernel "set once" và tránh fault phụ thuộc cấu hình CPU.
+    pub const PTE_A: u64 = 64;
+    pub const PTE_D: u64 = 128;
     const PTE_PPN_SHIFT: u64 = 10;
 
     pub fn index(va: u64, level: usize) -> usize {
@@ -84,7 +89,7 @@ pub mod riscv {
     }
 
     pub fn encode_leaf(pa: u64, access: Rights) -> u64 {
-        let mut flags = PTE_V | PTE_U;
+        let mut flags = PTE_V | PTE_U | PTE_A | PTE_D;
         let writable = access.contains(Rights::WRITE);
         if access.contains(Rights::READ) || writable {
             flags |= PTE_R;

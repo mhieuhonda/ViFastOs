@@ -2028,3 +2028,18 @@ trong `map_frame`, cấp cspace tối thiểu cho exec để nhận FAULT record
 thử map stack ở VA khác để xem có phải lỗi VA-specific.
 
 - Gate: QEMU 2/2×3, build 0 warning, docs PASS, headroom 199 024 B.
+
+## 9.111 — Vòng 115: PTE riscv set sẵn A/D (đúng đặc tả) — không phải nguyên nhân
+
+- Đọc `vifast-pte`: `encode_leaf` cho riscv chỉ set `V|U|R|W|X`, **thiếu bit
+  A (accessed) và D (dirty)**. Kernel không có handler A/D fault ⇒ trên CPU
+  không có Svadu, **mọi truy cập** (kể cả fetch) sẽ fault.
+- Sửa: luôn set `PTE_A | PTE_D` trong leaf (đúng cho kernel "set once"),
+  test pte vẫn xanh (11 test). Đây là cải thiện robustness thật.
+- Kiểm chứng giả thuyết: chạy lại test đọc `EXEC_STACK_TOP-8` sau khi sửa →
+  **vẫn không in** ⇒ A/D **không phải** nguyên nhân lỗi stack (QEMU đang tự
+  cập nhật A/D).
+- Trạng thái: giữ thay đổi PTE; lỗi "exec không đọc được stack" vẫn mở, đã ghi
+  trong runbook với 3 hướng điều tra phía kernel.
+- Gate: QEMU 3/3×3, persist 3/3, harness 535, kernel 183, docs PASS, fmt sạch,
+  0 warning, headroom 199 024 B.
