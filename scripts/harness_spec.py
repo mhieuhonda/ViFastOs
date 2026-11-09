@@ -447,6 +447,19 @@ def accept(
     require_disk: bool = True,
     feature_mode: str | None = None,
 ) -> bool:
+    if feature_mode == "test-check-boundary":
+        # D19: bản biến thể bật phép kiểm ở ranh giới user — phải xanh.
+        if output.count("BOUNDARY OK (") != 1 or "BOUNDARY BAD" in output:
+            return False
+    if feature_mode == "test-check-boundary-mutation":
+        # D18: bản cố ý làm hỏng bất biến phải in ĐÚNG MỘT BOUNDARY BAD và
+        # không được in BOUNDARY OK — nếu không, phép kiểm là vô nghĩa.
+        if output.count("BOUNDARY BAD (") != 1 or "BOUNDARY OK (" in output:
+            return False
+        # Và phép tổng hợp ở test-exit phải thấy đúng MỘT vi phạm: chứng minh
+        # lỗi được đếm, không chỉ in rồi quên.
+        if "BOUNDARY VIOLATIONS (" not in output or "violations=1" not in output:
+            return False
     if feature_mode == "test-destroy-smp":
         # Variant of the normal run: the generic lifecycle demo runs again
         # after a secondary hart is executing a worker.
@@ -476,6 +489,10 @@ def accept(
     if not all(output.count(text) == 1 for text in EXACT_ONE):
         return False
     if any(text in output for text in FORBIDDEN):
+        return False
+    if feature_mode is None and "BOUNDARY VIOLATIONS (" in output:
+        # r259 (T21): boot chuẩn không bật check-boundary, nên marker vi phạm
+        # chỉ có thể xuất hiện nếu ai đó bật nhầm bản biến thể.
         return False
     if feature_mode == "test-boot-handoff":
         if output.count("BOOT HANDOFF OK (from=1)") != 1:

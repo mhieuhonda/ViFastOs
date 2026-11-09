@@ -452,3 +452,86 @@ buffer 32–256 B nên bản byte-loop là đủ và nhỏ hơn nhiều.
 
 ⇒ Tiêu chí G1 "client dư ≥ 2 / ≥ 1 / ≥ 2" nay đạt **2 / 2 / 2**.
 Gate full PASS 9/9 (log `/tmp/gate-r255.log`).
+
+### Đính chính r259 (D17) — số của r255 không tái lập được
+
+Đo lại tại HEAD `0e60423` bằng đúng lệnh build của `build.sh`:
+
+| Nguồn | aarch64 client (stripped) |
+|---|---|
+| `d3f2472` (trước r255) | **24 944 B = 7 trang** |
+| `0e60423` (sau r255, HEAD) | **24 944 B = 7 trang** |
+
+⇒ Bảng "24 944 → 20 848" ở trên **sai**. Hàm `memset`/`memcpy`/`memmove`
+tại chỗ vẫn có trong ảnh (đo `llvm-nm`: `memcpy`=0x20, `memmove`=0x50,
+`memset`=0x1c, đều là symbol `T` của client), nhưng chênh lệch aarch64–riscv64
+(24 944 − 21 008 = 3 936 B) **không** đến từ compiler_builtins: nó vẫn còn sau
+khi thay. Ngân sách thực tế tại HEAD là **6 / 7 / 7 trang**, dư **2 / 1 / 2** —
+vẫn đạt sàn G1 (≥2 / ≥1 / ≥2) nhưng aarch64 **không** đạt mục tiêu dư 2.
+Bài học: con số trong commit message phải kèm lệnh đo tái lập được (D17) —
+r255 đã ghi số của một lần build khác, không phải của cây tại HEAD.
+
+## T21 — bất biến sched ở ranh giới user (r259) — DONE
+
+### Vì sao chỉ kiểm ở "ranh giới"
+
+r251 đã thử đưa "Running ⇔ là `current`" thành bất biến TOÀN CỤC và bị dữ liệu
+bác bỏ: ba test sẵn có đỏ (`selftest_passes`,
+`per_hart_runqueue_serves_hart2_and_hart3`,
+`round69_steal_respects_affinity_and_counts_stats`) vì bên trong một syscall
+TCB hiện tại vẫn `Running` trong khi đã nằm chờ đối tác. D19 chốt: chỉ kiểm ở
+ranh giới trả về user — nơi trạng thái vừa được `pick_on` thiết lập xong.
+
+### Hợp đồng được mã hoá
+
+`Kernel::check_boundary(hart) -> Result<(), BoundaryError>`:
+
+| Lỗi | Nghĩa |
+|---|---|
+| `NoCurrent` | hart ở ranh giới mà không có `current` |
+| `CurrentNotRunning` | `current` không ở trạng thái Running |
+| `RunningAndQueued` | TCB Running còn nằm trong ready queue (lớp K40) |
+
+### Đỏ trước (D18)
+
+6 host test mới, mỗi test là một mutation; đã chạy đỏ-trước rồi xanh:
+
+| Test | Mutation được tiêm |
+|---|---|
+| `boundary_check_accepts_consistent_current` | không (đường xanh) |
+| `boundary_check_rejects_missing_current` | hart không có `current` |
+| `boundary_check_rejects_current_not_running` | `current` bị Suspend |
+| `boundary_check_rejects_running_but_queued` | `poison_running_queued` |
+| `boundary_check_rejects_running_tcb_inside_queue` | TCB khác Running mà vẫn queued |
+| `boundary_summary_detects_running_tcb_without_a_hart` | TCB Running không hart nào sở hữu |
+
+### Nối vào đường trả về user
+
+`switch_blocked` và `resume_blocked` gọi `boundary::check::<A>()` ngay sau khi
+cài TCB kế tiếp (feature `check-boundary`, chỉ bật ở kernel biến thể). Bản
+`check-boundary-mutation` tiêm lỗi **đúng một lần** rồi dọn ngay, nên serial
+chỉ có một `BOUNDARY BAD` — đếm được, không nhiễu.
+
+### Kết quả đo (QEMU thật, r259)
+
+| Bản | Marker đo được |
+|---|---|
+| riscv64 `check-boundary` | `BOUNDARY OK (checks=167884, running=1, harts=2)` |
+| x86_64 `check-boundary` | `BOUNDARY OK (checks=95930, running=1, harts=2)` |
+| riscv64 `check-boundary-mutation` | `BOUNDARY BAD (hart=0, kind=2)` + `BOUNDARY VIOLATIONS (checks=156788, violations=1, ...)` |
+| x86_64 `check-boundary-mutation` | `BOUNDARY BAD` + `violations=1` |
+
+Gate có thêm bước `boundary` chạy cả hai bản (riscv64 + x86_64, cùng phạm vi
+với `test-skip-tlb-ipi`; phần logic dùng chung đã có host test).
+
+### Giả định "số TCB Running == số hart" bị dữ liệu bác bỏ
+
+Ở test-exit đo được `running=1` nhưng `harts=2`: hart1 đã idle vẫn giữ
+`current` (TCB đang park, không Running). Vậy đẳng thức nguyên văn trong T21
+là **sai ở thời điểm exit**. Bất biến đúng — và nay được kiểm — là:
+
+- mỗi TCB `Running` thuộc đúng một hart đang chạy user: `running == running_harts`;
+- `running <= harts` (hart idle được phép giữ `current`);
+- và `violations == 0` trên toàn bộ phép kiểm ở ranh giới.
+
+Đã đổi phép kiểm theo số đo thay vì giữ giả định.

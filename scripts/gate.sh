@@ -56,6 +56,9 @@ if [ "$QUICK" -eq 0 ]; then
         QEMU_ARGS="$QEMU_ARGS --input-check"
     fi
     step "qemu" sh -c "python3 scripts/test-qemu.py --repeat 3 $QEMU_ARGS"
+    # r259 (T21/D19): bất biến sched ở ranh giới user — bản xanh phải in
+    # BOUNDARY OK, bản mutation (D18) phải in đúng một BOUNDARY BAD.
+    step "boundary" sh -c "python3 scripts/test-qemu.py --feature test-check-boundary && python3 scripts/test-qemu.py --feature test-check-boundary-mutation"
     step "persist" python3 scripts/test-persist.py
     step "docs" sh -c 'python3 scripts/gen-docs.py >/dev/null && python3 scripts/check-docs.py'
 fi

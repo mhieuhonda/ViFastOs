@@ -11,6 +11,10 @@ default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
 test-panic-hart1 = ["vifast-runtime/test-panic-hart1"]
 test-shell-linger = ["vifast-runtime/test-shell-linger"]
+# r259 (T21/D19): bản biến thể kiểm bất biến sched ở ranh giới user.
+check-boundary = ["vifast-runtime/check-boundary"]
+# D18: bản biến thể cố ý làm hỏng bất biến (phải in BOUNDARY BAD).
+check-boundary-mutation = ["vifast-runtime/check-boundary-mutation"]
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }

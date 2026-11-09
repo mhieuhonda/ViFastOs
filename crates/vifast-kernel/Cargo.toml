@@ -5,6 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# r259 (T21/D19): chỉ bật phép kiểm bất biến ở ranh giới user trong bản
+# kernel biến thể; kernel phát hành không trả chi phí này.
+check-boundary = []
+check-boundary-mutation = ["check-boundary"]
+
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
 vifast-pte = { path = "../vifast-pte" }

@@ -661,6 +661,10 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         kernel_name = "vifast-kernel-riscv64-skip-tlb"
     elif feature == "test-destroy-smp":
         kernel_name = "vifast-kernel-riscv64-destroy-smp"
+    elif feature == "test-check-boundary":
+        kernel_name = "vifast-kernel-riscv64-boundary"
+    elif feature == "test-check-boundary-mutation":
+        kernel_name = "vifast-kernel-riscv64-boundary-mut"
     else:
         kernel_name = "vifast-kernel-riscv64"
     kernel = os.path.join(
@@ -854,7 +858,15 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
             else (
                 "vifast-kernel-x86_64-uefi-destroy-smp.efi"
                 if feature == "test-destroy-smp"
-                else "vifast-kernel-x86_64-uefi.efi"
+                else (
+                    "vifast-kernel-x86_64-uefi-boundary.efi"
+                    if feature == "test-check-boundary"
+                    else (
+                        "vifast-kernel-x86_64-uefi-boundary-mut.efi"
+                        if feature == "test-check-boundary-mutation"
+                        else "vifast-kernel-x86_64-uefi.efi"
+                    )
+                )
             )
         ),
     )
@@ -1499,6 +1511,8 @@ def main() -> int:
             "test-panic-hart1",
             "test-skip-tlb-ipi",
             "test-destroy-smp",
+            "test-check-boundary",
+            "test-check-boundary-mutation",
         ),
         help="run a test-only feature build",
     )
@@ -1533,6 +1547,12 @@ def main() -> int:
         parser.error("--feature test-boot-handoff only applies to riscv64")
     if args.feature == "test-skip-tlb-ipi" and args.arch == "aarch64":
         parser.error("--feature test-skip-tlb-ipi only applies to riscv64/x86_64")
+    # r259 (T21): biến thể bất biến ranh giới chỉ dựng cho riscv64/x86_64 —
+    # cùng phạm vi với test-skip-tlb-ipi; phần logic dùng chung đã có host test.
+    if args.feature in ("test-check-boundary", "test-check-boundary-mutation") and args.arch == "aarch64":
+        parser.error(
+            f"--feature {args.feature} only applies to riscv64/x86_64"
+        )
     if not all(shutil.which(q) for q in (QEMU_RV, QEMU_ARM, QEMU_X86)):
         print("missing QEMU binaries")
         return 2
@@ -1543,7 +1563,11 @@ def main() -> int:
     }
     if args.arch:
         names = [args.arch]
-    elif args.feature == "test-skip-tlb-ipi":
+    elif args.feature in (
+        "test-skip-tlb-ipi",
+        "test-check-boundary",
+        "test-check-boundary-mutation",
+    ):
         names = ["riscv64", "x86_64"]
     else:
         names = ["riscv64", "aarch64", "x86_64"]

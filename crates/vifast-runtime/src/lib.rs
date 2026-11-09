@@ -395,6 +395,62 @@ fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
     );
 }
 
+/// D19 (r259): bất biến sched kiểm ở RANH GIỚI trả về user.
+///
+/// Hợp đồng "Running ⇔ là `current`" chỉ đúng ở ranh giới: bên trong một
+/// lời gọi syscall, TCB hiện tại có thể vừa bị chặn vừa còn trong trạng thái
+/// Running (chờ đối tác), nên kiểm ở đó sẽ báo sai. Vì thế phép kiểm nằm
+/// ngay sau khi hạt nhân đã chọn và cài TCB kế tiếp, trước khi trả về user.
+///
+/// Bản biến thể `check-boundary-mutation` cố ý làm hỏng bất biến đúng MỘT
+/// lần (D18) để chứng minh phép kiểm không im lặng.
+#[cfg(feature = "check-boundary")]
+pub mod boundary {
+    use super::*;
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    static CHECKS: AtomicU64 = AtomicU64::new(0);
+    static VIOLATIONS: AtomicU64 = AtomicU64::new(0);
+    static POISONED: AtomicBool = AtomicBool::new(false);
+
+    /// Số ranh giới đã kiểm.
+    pub fn checks() -> u64 {
+        CHECKS.load(Ordering::Relaxed)
+    }
+
+    /// Số lần bất biến bị vi phạm.
+    pub fn violations() -> u64 {
+        VIOLATIONS.load(Ordering::Relaxed)
+    }
+
+    /// Kiểm ngay sau khi TCB kế tiếp đã được cài vào `current[hart]`.
+    pub fn check<A: Platform>() {
+        let hart = A::hart_id();
+        #[cfg(feature = "check-boundary-mutation")]
+        {
+            if !POISONED.swap(true, Ordering::SeqCst) {
+                let _ = A::kernel().poison_running_queued(hart);
+            }
+        }
+        let result = A::kernel().check_boundary(hart);
+        CHECKS.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "check-boundary-mutation")]
+        {
+            // Trả lại trạng thái sạch để chỉ có ĐÚNG MỘT marker BAD.
+            let _ = A::kernel().clear_running_queued(hart);
+        }
+        if let Err(error) = result {
+            VIOLATIONS.fetch_add(1, Ordering::Relaxed);
+            let kind = match error {
+                vifast_kernel::BoundaryError::NoCurrent => 0,
+                vifast_kernel::BoundaryError::CurrentNotRunning => 1,
+                vifast_kernel::BoundaryError::RunningAndQueued => 2,
+            };
+            vifast_kernel::klog!(A, "BOUNDARY BAD (hart={}, kind={})", hart, kind);
+        }
+    }
+}
+
 /// Load the root owned by the current TCB, if it still has one.  The root is
 /// deliberately not cached in a context: TcbConfigure can replace the VSpace,
 /// and a revoked VSpace must never remain reachable through stale state.
@@ -1311,6 +1367,8 @@ pub mod syscall {
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
         }
+        #[cfg(feature = "check-boundary")]
+        boundary::check::<A>();
         true
     }
 
@@ -1329,6 +1387,8 @@ pub mod syscall {
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
         }
+        #[cfg(feature = "check-boundary")]
+        boundary::check::<A>();
         true
     }
 }
@@ -1557,6 +1617,37 @@ pub mod timer {
                     ipi,
                     skipped
                 );
+            }
+            #[cfg(feature = "check-boundary")]
+            {
+                let checks = boundary::checks();
+                let violations = boundary::violations();
+                let (running, harts, running_harts) = kernel.boundary_summary();
+                // Bất biến toàn cục ở test-exit: mỗi TCB Running thuộc đúng
+                // một hart đang chạy user, và không TCB Running nào thừa.
+                // Hart idle vẫn giữ `current` nên `harts` có thể lớn hơn —
+                // đó KHÔNG phải vi phạm (đo được ở r259: harts=2, running=1).
+                if violations == 0 && running > 0 && running == running_harts && running <= harts {
+                    vifast_kernel::klog!(
+                        A,
+                        "BOUNDARY OK (checks={}, running={}, harts={})",
+                        checks,
+                        running,
+                        harts
+                    );
+                } else {
+                    // Marker riêng cho "có vi phạm": BOUNDARY BAD chỉ in tại
+                    // ranh giới vi phạm (đúng một lần nhờ clear sau kiểm), nên
+                    // ở đây phải là marker khác để không đếm trùng.
+                    vifast_kernel::klog!(
+                        A,
+                        "BOUNDARY VIOLATIONS (checks={}, violations={}, running={}, harts={})",
+                        checks,
+                        violations,
+                        running,
+                        harts
+                    );
+                }
             }
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
             vifast_kernel::klog!(A, "CTX SIZE {}", core::mem::size_of::<A::Context>());

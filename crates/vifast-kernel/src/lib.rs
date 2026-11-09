@@ -215,6 +215,26 @@ pub trait PageTableOps {
     fn zero_frame(&self, _pa: u64, _size: usize) {}
 }
 
+/// Bất biến sched ở RANH GIỚI trả về user (D19, r259).
+///
+/// Chỉ kiểm ở ranh giới — nơi hạt nhân vừa chọn TCB kế tiếp và sắp trả về
+/// user — chứ không kiểm trên mọi lời gọi syscall: chi phí O(MAX_TCBS) chỉ
+/// trả một lần cho mỗi lần chuyển ngữ cảnh, và ở ranh giới thì trạng thái
+/// "đang chạy" là thứ vừa được thiết lập xong.
+///
+/// Hợp đồng: `current[hart]` tồn tại, TCB đó đang `Running`, và nó KHÔNG
+/// còn nằm trong ready queue. Vi phạm nghĩa là TCB có thể chạy hai lần
+/// hoặc bị chọn trong khi đang chạy — đúng lớp lỗi K40.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoundaryError {
+    /// Hart ở ranh giới nhưng không có `current` (không thể quay về user).
+    NoCurrent,
+    /// `current` không ở trạng thái Running.
+    CurrentNotRunning,
+    /// TCB vừa Running vừa nằm trong ready queue (sẽ chạy hai lần).
+    RunningAndQueued,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct KernelStats {
     pub ipc_sent: u64,
@@ -5428,6 +5448,114 @@ impl Kernel {
         self.current[hart] = Some(reference);
         self.stats.context_switches += 1;
         Some(reference)
+    }
+
+    /// D19 (r259): kiểm bất biến sched ở ranh giới trả về user.
+    ///
+    /// Trả `Ok(())` khi `current[hart]` tồn tại, đang `Running`, không còn
+    /// queued, và không TCB nào trong ready queue đang `Running`.
+    pub fn check_boundary(&self, hart: usize) -> Result<(), BoundaryError> {
+        let reference = self
+            .current
+            .get(hart)
+            .copied()
+            .flatten()
+            .ok_or(BoundaryError::NoCurrent)?;
+        let tcb = self.tcb(reference).ok_or(BoundaryError::NoCurrent)?;
+        if tcb.state != ThreadState::Running {
+            return Err(BoundaryError::CurrentNotRunning);
+        }
+        if tcb.queued {
+            return Err(BoundaryError::RunningAndQueued);
+        }
+        for owner in 0..MAX_HARTS {
+            let len = self.runq_len[owner];
+            for slot in self.runq[owner].iter().take(len) {
+                let Some(entry) = slot else {
+                    continue;
+                };
+                if let Some(queued) = self.tcb(*entry) {
+                    if queued.state == ThreadState::Running {
+                        return Err(BoundaryError::RunningAndQueued);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Số TCB đang `Running` trên toàn hệ thống (kiểm ở test-exit, T21).
+    ///
+    /// Ở trạng thái nhất quán, mỗi hart đang chạy user phải có đúng một TCB
+    /// Running, nên đại lượng này bằng `current_harts()`. Lệch nghĩa là có
+    /// TCB Running mà không hart nào sở hữu (hoặc ngược lại).
+    pub fn running_tcbs(&self) -> usize {
+        self.objs
+            .iter()
+            .filter(|object| {
+                matches!(&object.kind, Kind::Tcb(tcb) if tcb.state == ThreadState::Running)
+            })
+            .count()
+    }
+
+    /// Số hart đang giữ `current` (kiểm ở test-exit, T21).
+    pub fn current_harts(&self) -> usize {
+        self.current.iter().filter(|slot| slot.is_some()).count()
+    }
+
+    /// Tổng hợp cho phép kiểm ở test-exit: `(running, harts_có_current,
+    /// harts_đang_chạy_user)`.
+    ///
+    /// Bất biến toàn cục đúng đắn là `running == đang_chạy_user` và
+    /// `running <= harts_có_current`: mỗi TCB Running phải thuộc về đúng một
+    /// hart, còn hart idle vẫn giữ `current` (TCB đang park) nên
+    /// `harts_có_current` có thể LỚN hơn — điều đó không phải vi phạm.
+    pub fn boundary_summary(&self) -> (usize, usize, usize) {
+        let running = self.running_tcbs();
+        let mut harts = 0usize;
+        let mut running_harts = 0usize;
+        for hart in 0..MAX_HARTS {
+            let Some(reference) = self.current[hart] else {
+                continue;
+            };
+            harts += 1;
+            if self
+                .tcb(reference)
+                .is_some_and(|tcb| tcb.state == ThreadState::Running)
+            {
+                running_harts += 1;
+            }
+        }
+        (running, harts, running_harts)
+    }
+
+    /// D18/D19: làm hỏng bất biến một cách có chủ đích để chứng minh
+    /// `check_boundary` bắt được (test host, hoặc kernel biến thể
+    /// `check-boundary-mutation`; kernel phát hành không biên dịch hàm này).
+    #[cfg(any(test, feature = "check-boundary-mutation"))]
+    pub fn poison_running_queued(&mut self, hart: usize) -> bool {
+        let Some(reference) = self.current_on(hart) else {
+            return false;
+        };
+        let Some(tcb) = self.tcb_mut(reference) else {
+            return false;
+        };
+        tcb.queued = true;
+        true
+    }
+
+    /// D18/D19: khôi phục trạng thái sau khi đã tiêm lỗi, để biến thể
+    /// mutation chỉ in ĐÚNG MỘT `BOUNDARY BAD` thay vì mỗi ranh giới.
+    #[cfg(any(test, feature = "check-boundary-mutation"))]
+    pub fn clear_running_queued(&mut self, hart: usize) -> bool {
+        let Some(reference) = self.current_on(hart) else {
+            return false;
+        };
+        let Some(tcb) = self.tcb_mut(reference) else {
+            return false;
+        };
+        tcb.queued = false;
+        true
     }
 
     pub fn yield_current(&mut self) -> Option<ObjRef> {
@@ -13252,6 +13380,99 @@ mod tests {
         assert!(kernel
             .lookup_cap(root, 1, Some(ObjType::BlockDevice), Rights::WRITE)
             .is_ok());
+    }
+
+    #[test]
+    fn boundary_check_accepts_consistent_current() {
+        // D19 (r259): ở ranh giới trả về user, `current[hart]` phải Running và
+        // không còn queued. Đây là trạng thái mà `pick_on` vừa thiết lập.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("user", 5).unwrap();
+        kernel.enqueue(tcb);
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        assert_eq!(kernel.check_boundary(0), Ok(()));
+        assert_eq!(kernel.current_harts(), 1);
+        assert_eq!(kernel.running_tcbs(), 1);
+    }
+
+    #[test]
+    fn boundary_check_rejects_missing_current() {
+        // Mutation: hart ở ranh giới mà không có `current` — quay về user sẽ
+        // chạy nhầm context (không hart nào sở hữu TCB đang chạy).
+        let kernel = Kernel::new();
+        assert_eq!(kernel.check_boundary(0), Err(BoundaryError::NoCurrent));
+        assert_eq!(kernel.current_harts(), 0);
+        assert_eq!(kernel.running_tcbs(), 0);
+    }
+
+    #[test]
+    fn boundary_check_rejects_current_not_running() {
+        // Mutation: `current` bị treo nhưng hart vẫn tưởng nó đang chạy.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("user", 5).unwrap();
+        kernel.enqueue(tcb);
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::Suspended;
+        assert_eq!(
+            kernel.check_boundary(0),
+            Err(BoundaryError::CurrentNotRunning)
+        );
+    }
+
+    #[test]
+    fn boundary_check_rejects_running_but_queued() {
+        // Mutation D18: TCB vừa Running vừa nằm trong ready queue ⇒ có thể
+        // được chọn chạy lần thứ hai. `poison_running_queued` tạo đúng trạng
+        // thái đó để chứng minh phép kiểm không im lặng.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("user", 5).unwrap();
+        kernel.enqueue(tcb);
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        assert!(kernel.poison_running_queued(0));
+        assert_eq!(
+            kernel.check_boundary(0),
+            Err(BoundaryError::RunningAndQueued)
+        );
+    }
+
+    #[test]
+    fn boundary_summary_detects_running_tcb_without_a_hart() {
+        // D19/T21: ở test-exit, mỗi TCB Running phải thuộc một hart đang chạy
+        // user. TCB Running mà không hart nào sở hữu là lỗi "chạy hai lần"
+        // phía ngược lại — phép tổng hợp phải lộ ra.
+        let mut kernel = Kernel::new();
+        let owned = kernel.create_tcb("owned", 5).unwrap();
+        kernel.enqueue(owned);
+        assert_eq!(kernel.pick_on(0), Some(owned));
+        let (running, harts, running_harts) = kernel.boundary_summary();
+        assert_eq!((running, harts, running_harts), (1, 1, 1));
+
+        // Mutation: thêm TCB Running nhưng không hart nào sở hữu.
+        let stray = kernel.create_tcb("stray", 5).unwrap();
+        kernel.tcb_mut(stray).unwrap().state = ThreadState::Running;
+        let (running, harts, running_harts) = kernel.boundary_summary();
+        assert_eq!((running, harts, running_harts), (2, 1, 1));
+        assert!(running != running_harts);
+    }
+
+    #[test]
+    fn boundary_check_rejects_running_tcb_inside_queue() {
+        // Mutation thứ hai: một TCB KHÁC `current` đang Running mà vẫn nằm
+        // trong queue — `check_boundary` phải quét cả ready queue, không chỉ
+        // nhìn `current`.
+        let mut kernel = Kernel::new();
+        let first = kernel.create_tcb("first", 5).unwrap();
+        kernel.enqueue(first);
+        assert_eq!(kernel.pick_on(0), Some(first));
+        let second = kernel.create_tcb("second", 5).unwrap();
+        kernel.enqueue(second);
+        kernel.tcb_mut(second).unwrap().state = ThreadState::Running;
+        assert_eq!(
+            kernel.check_boundary(0),
+            Err(BoundaryError::RunningAndQueued)
+        );
+        assert_eq!(kernel.running_tcbs(), 2);
+        assert_eq!(kernel.current_harts(), 1);
     }
 
     #[test]
