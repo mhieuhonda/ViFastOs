@@ -219,3 +219,65 @@ multicall theo `argv[0]`; (c) ghi vào vùng EXEC trước khi map là ràng bu�
   lệnh gửi lúc prompt tới root khi Untyped đã cạn giữa boot nên root bỏ exec.
   Giữ làm **chẩn đoán** (in `SAW`/`NOT SEEN`), không phải điều kiện đỏ; bằng
   chứng argv cứng nằm ở EXACT_ONE của boot.
+
+## T13 — cwd + chuyển lệnh không trạng thái ra applet + ngân sách trang — DONE
+
+### Mục tiêu và cách đo
+
+Mục tiêu của D13/T13 là **dư trang**: mỗi trang client bị cấp một Frame staging
+lúc boot nên nó ăn trực tiếp pool Untyped. Đo bằng `client(...) B = N trang
+(ngân sách M)` in ra ở `scripts/build.sh`, kèm SHA-256 file đã strip.
+
+| Thời điểm | riscv64 | aarch64 | x86_64 |
+|---|---|---|---|
+| Đầu T13 (r248) | 25 088 = 7/8 | 29 024 = 8/8 | 33 192 = 9/9 |
+| Sau `cd`/`pwd` + `ps`/`jobs` (r249) | 29 256 = **8/8** | 29 096 = 8/8 | 29 096 = 8/9 |
+| Sau `linkers/module.ld` (r249) | **21 008 = 6/8** | **24 944 = 7/8** | **24 968 = 7/9** |
+| Dư trang | **2** | **1** | **2** |
+
+### Kết quả lớn nhất: script linker, không phải mã nguồn
+
+`riscv64.ld` (dùng chung cho kernel/root/server/client) `ALIGN(4096)` **từng**
+section. Với chương trình người dùng, mỗi khoảng đệm 4 KiB ấy là **một trang
+thật trong file ELF**: client có 4 segment căn trang ⇒ 4 trang chỉ để đệm.
+
+`linkers/module.ld` (mới, chỉ dùng cho client + chương trình ngoài) gộp
+`.rodata` vào **chính** output section `.text`, còn `.data`/`.bss` chung một
+section RW. Kết quả: 2 segment, client **29 256 → 21 008 B** (8 → 6 trang) mà
+không xoá một dòng mã nào. Chương trình ngoài: 8 9xx → 6 6xx B.
+
+### Ba cách đã thử và bị dữ liệu bác bỏ
+
+1. **Bỏ `-z separate-code`** cho `build_modules`: **0 byte** thay đổi — script
+   linker tự đặt section nên cờ đó không có tác dụng.
+2. **Bỏ hẳn `ALIGN(4096)` (căn 16)**: client 21 176 B (6 trang) nhưng boot in
+   `MODULE PARSE BAD` + `ROOT PANIC` trên **cả 3 arch**. Nguyên nhân đo được:
+   `vifast_elf::parse` làm tròn `memory_end` của mỗi segment lên trang rồi đòi
+   các khoảng **không chồng nhau**, vì loader map theo trang — hai segment nằm
+   chung một trang bị trả `Overlap`. ⇒ căn trang là ràng buộc của loader, không
+   phải thẩm mỹ của linker script.
+3. **Chỉ gộp `.rodata` (giữ `.data` riêng)**: đây là phương án chọn. `.text`
+   0x4026 → segment R-X kết thúc ở 0x5026; `.data` ở 0x6000 ⇒ file 25 104 B
+   (7 trang). Gọt thêm 38 B chú thích trong `help` thì `.text` còn 0x3fxx và
+   **toàn bộ ảnh tụt một trang** — đúng bài học "byte ≠ trang", lần này ở chiều
+   ngược lại.
+
+### Lệnh nào rời shell, lệnh nào phải ở lại
+
+- `ps` và `jobs` → **applet** `/bin/ps`, `/bin/jobs`: chúng chỉ dùng `TcbInfo`
+  (syscall toàn cục, không cần cap) nên chạy được ngoài shell. Đúng D10 (builtin
+  chỉ dành cho lệnh có trạng thái).
+- `cd`/`pwd` → **builtin**, có `CWD` tĩnh 48 B: cwd là trạng thái **của tiến
+  trình shell**, chương trình ngoài không chia sẻ. `cd` chỉ nhận đường dẫn
+  tuyệt đối và xác minh bằng `vfs_open` trước khi đổi.
+- `df` → **giữ builtin**, ghi vào open-items: `df` cần `STATFS` trên endpoint
+  VFS, mà exec hiện **không chuyển cap** cho chương trình ngoài. Muốn đưa `df`
+  ra applet phải làm uỷ quyền cap trong ABI exec trước — việc của G2, không
+  phải T13.
+
+### Ghi chú vận hành
+
+Đổi nội dung file `.ld` **không** làm cargo relink (linker script không nằm
+trong fingerprint của nó). Lần đầu tôi đo nhầm vì artifact cũ: số đo không đổi
+dù đã sửa script. Cách đúng: `touch` một file `.rs` của crate đích (hoặc xoá
+artifact) rồi build lại.
