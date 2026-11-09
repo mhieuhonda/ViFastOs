@@ -793,6 +793,9 @@ arch liệt kê mới cần.
 | `PROG TAIL OK` | bắt buộc | the last 32 bytes of /prog.elf match the source ELF image |
 | `PROG SIZE OK` | bắt buộc | the ELF written to /prog.elf has exactly the expected byte size |
 | `PAGER SRV 0/0/0` | bắt buộc | pager server was reclaimed (tcb, stack frame, ipc frame destroyed) |
+| `BIN OK args` | đúng 1 lần | không được thiếu hoặc lặp |
+| `BIN OK uname` | đúng 1 lần | không được thiếu hoặc lặp |
+| `BIN OK uptime` | đúng 1 lần | không được thiếu hoặc lặp |
 | `KSTORE CANARY OK` | đúng 1 lần | không được thiếu hoặc lặp |
 | `VFS SERVER OK` | đúng 1 lần | không được thiếu hoặc lặp |
 | `VFS OK` | đúng 1 lần | không được thiếu hoặc lặp |

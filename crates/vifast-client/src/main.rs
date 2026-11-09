@@ -731,23 +731,26 @@ fn shell_command(line: &[u8]) {
         // r241 (T5/D10): không phải builtin ⇒ chạy chương trình ngoài trong FS
         // qua exec-from-FS. Chỉ nhận tên đơn giản (a-z, 0-9, '-') để không mở
         // đường biến chuỗi người dùng thành path tuỳ ý.
-        let mut path = [0u8; 16];
+        // r247 (T12/D14): chương trình ngoài nằm ở `/bin` (một ảnh multicall
+        // + hard link), nên fallback tìm `/bin/<tên>` thay vì `/<tên>`.
+        const PREFIX: &[u8] = b"/bin/";
+        let mut path = [0u8; 20];
         let mut ok = !line.is_empty() && line.len() < 15;
         let mut k = 0;
         if ok {
-            path[0] = b'/';
+            path[..PREFIX.len()].copy_from_slice(PREFIX);
             while k < line.len() {
                 let c = line[k];
                 if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') {
                     ok = false;
                     break;
                 }
-                path[1 + k] = c;
+                path[PREFIX.len() + k] = c;
                 k += 1;
             }
         }
         if ok {
-            copy_path_args(&path[..1 + line.len()], b"");
+            copy_path_args(&path[..PREFIX.len() + line.len()], b"");
             if vifast_user::send(CLIENT_CMD_SLOT, LABEL_RUN, 0, 0, 0).error != KError::Ok {
                 write(b"bin failed\n");
             }

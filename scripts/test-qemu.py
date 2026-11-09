@@ -84,18 +84,20 @@ def populate_disk(path: str, arch: str) -> None:
     target = TARGETS.get(arch)
     if target is None or not os.path.exists(fsutil):
         return
-    programs = []
-    for mode in ("uname", "uptime", "free"):
-        host = os.path.join(ROOT, "target", target, "root-task",
-                            f"vifast-bin.{mode}.stripped")
-        if os.path.exists(host):
-            programs.append((mode, host))
-    if not programs:
+    host = os.path.join(ROOT, "target", target, "root-task",
+                        "vifast-bin.stripped")
+    if not os.path.exists(host):
         return
+    # D14 (r247): một ảnh multicall + hard link, không còn 3 ảnh riêng.
+    links = ("uname", "uptime", "free", "args")
     subprocess.run([fsutil, "mkfs", path], stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL)
-    for mode, host in programs:
-        subprocess.run([fsutil, "put-file", path, f"/{mode}", host],
+    subprocess.run([fsutil, "mkdir", path, "/bin"], stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+    subprocess.run([fsutil, "put-file", path, "/bin/vf", host],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for name in links:
+        subprocess.run([fsutil, "link", path, "/bin/vf", f"/bin/{name}"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

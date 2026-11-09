@@ -42,7 +42,10 @@ COMMON = [
     ("FS DISK OK", "filesystem disk path responded"),
     ("PAGER RECLAIM OK", "pager demo frames/TCBs returned to untyped"),
     ("RUN FS OK", "exec-from-filesystem loaded an ELF page-by-page and ran it"),
-    ("HIARG", "program executed from the filesystem printed an argv-only marker"),
+    (
+        "HIARG",
+        "program executed from the filesystem printed an argv-only marker",
+    ),
     (
         "WX OK",
         "writing an executable-mapped frame was denied while the RW stack stayed writable",
@@ -139,6 +142,11 @@ COMMON = [
 
 # Exactly one occurrence is required for each of these lines.
 EXACT_ONE = [
+    # D14 (r247): mọi tên lệnh là HARD LINK tới cùng ảnh multicall `/bin/vf`;
+    # mỗi tên đúng một lần ở boot ⇒ chứng minh argv[0] chọn đúng mode.
+    "BIN OK args",
+    "BIN OK uname",
+    "BIN OK uptime",
     "KSTORE CANARY OK",
     "VFS SERVER OK",
     "VFS OK",
@@ -168,6 +176,9 @@ EXACT_ONE = [
 ]
 
 FORBIDDEN = [
+    "BIN BAD",
+    "BIN EXEC FAIL",
+    "BIN PANIC",
     "KSTORE CANARY BAD",
     "PERCPU CLOBBER BAD",
     "VFS BAD",

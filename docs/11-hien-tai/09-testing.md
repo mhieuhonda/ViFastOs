@@ -145,7 +145,12 @@ Tóm tắt:
   `FS OPEN FLAGS OK`, `FS STAT PATH OK`, `HARD LINK OK`, `SYMLINK OK`,
   `IRQ OK`, `CNODE OK`, `TCB REAP OK`, `WAIT REAP OK`, `PAGER OK`,
   `PAGER2 OK`, `PAGER EVICT OK`, `PAGER3 OK`, `SHELL READY`, `DESTROY OK`,
-  `KSTORE CANARY OK` (r229: canary vùng đệm 4 KiB sau `KERNEL_STORAGE`, cả 3 arch)
+  `KSTORE CANARY OK` (r229: canary vùng đệm 4 KiB sau `KERNEL_STORAGE`, cả 3 arch),
+  `BIN OK args`, `BIN OK uname`, `BIN OK uptime` (r247/T12: cả ba tên lệnh là
+  hard link tới cùng ảnh multicall `/bin/vf` nên mỗi tên chỉ được in đúng một
+  lần ở boot — đó là bằng chứng `argv[0]` chọn đúng mode)
+- **Cấm**: `BIN BAD`, `BIN EXEC FAIL`, `BIN PANIC` (r247: một chương trình
+  ngoài hỏng phải làm cổng đỏ, không được lặng lẽ thiếu marker)
 - **Fault**: đúng **6** dòng `USER FAULT`; phải có các địa chỉ `0x80000000`,
   `0x1000002000`, `0x1000301000`, `0x1001000000`, `0x1001001000`
   (record còn lại hiện là `0x0`).

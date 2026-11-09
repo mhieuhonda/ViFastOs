@@ -1123,6 +1123,23 @@ const fn exec_demo_elf() -> [u8; 0x180] {
             i += 1;
         }
     }
+    // D15 (r246): cặp (ptr,len) và chuỗi nằm TĨNH trong ảnh — lúc spawn
+    // không còn vá byte nào vào trang code. Ảnh demo in cố định "HI FS";
+    // muốn truyền tham số thật thì dùng ABI argv (`write_exec_args`).
+    let ptr = (EXEC_DEMO_CODE + 0x160).to_le_bytes();
+    let len = 6u64.to_le_bytes();
+    let mut n = 0;
+    while n < 8 {
+        elf[0x140 + n] = ptr[n];
+        elf[0x148 + n] = len[n];
+        n += 1;
+    }
+    let text = b"HI FS\n";
+    n = 0;
+    while n < text.len() {
+        elf[0x160 + n] = text[n];
+        n += 1;
+    }
     elf
 }
 
@@ -1244,55 +1261,145 @@ fn track_alloc(
 // Vòng 34: 12 slots (tcb + vspace + stack + frame code + tới 8 page
 // tables cho 2 vùng VA trên Sv39 3-level). Đếm thực tế đúng 8 nhưng sát
 // trần → lần 2 SKIP; dư 4 cho chắc.
-const MAX_EXEC_SLOTS: usize = 12;
-/// Ghi chuỗi tham số vào trang code của chương trình tại offset 0x200.
-/// Chương trình đọc bằng `auipc+addi` (cùng trang) rồi DebugWrite — cơ chế
-/// truyền tham số tối giản, không phụ thuộc quy ước sp của kernel.
-fn write_program_args(code_frame: u8, msg: &[u8]) -> bool {
-    // Cặp (ptr, len) ở frame 0x140 = entry+0x20; chuỗi ở 0x160 = entry+0x40.
-    // Độ dài ĐỘNG nên chương trình in đúng tham số truyền vào.
-    // Vòng 181: chương trình in y nguyên chuỗi nhận được, nên nếu người dùng
-    // gọi `runfs /prog.elf ONE` (không có '\n') thì output sẽ dính vào lời nhắc
-    // kế tiếp (`ONEshell> `). Thêm '\n' khi thiếu — sửa lỗi thấy được khi chạy
-    // hai lần liên tiếp với hai tham số khác nhau.
-    let mut src = [0u8; 32];
-    let mut src_len = core::cmp::min(msg.len(), 31);
-    let mut k = 0;
-    while k < src_len {
-        src[k] = msg[k];
-        k += 1;
-    }
-    if src_len == 0 || src[src_len - 1] != b'\n' {
-        src[src_len] = b'\n';
-        src_len += 1;
-    }
-    let msg = &src[..src_len];
-    let len = core::cmp::min(msg.len() as u64, 32);
-    let mut pair = [0u8; 16];
-    let ptr = EXEC_DEMO_CODE + 0x160;
-    let mut i = 0;
-    while i < 8 {
-        pair[i] = (ptr >> (i * 8)) as u8;
-        pair[8 + i] = (len >> (i * 8)) as u8;
-        i += 1;
-    }
-    if vifast_user::frame_write(code_frame, 0x140, pair.as_ptr() as u64, 16).error != KError::Ok {
+// r247 (T12/D14): chương trình thật `/bin/vf` là ảnh Rust ~6 KiB (2-4 trang
+// code) chứ không phải ảnh demo 1 trang, nên nới trần lên 20 — vẫn là mảng
+// `[u8; N]` trên stack của root, không tốn frame Untyped.
+const MAX_EXEC_SLOTS: usize = 20;
+/// D15/D14 (r247): self-test exec-từ-FS ở boot. Chạy xong PHẢI chờ task con
+/// exit rồi mới dọn, nếu không frame của nó chưa được giải phóng và lần exec
+/// sau sẽ cạn Untyped (`PAGER RECLAIM OK` / `MEM OOM OK` đỏ — bài học r238).
+/// `tcb_wait` trả `ObjectDestroyed` khi con exit trước lời gọi; cả hai đều là
+/// "đã exit".
+fn boot_exec_once(
+    root_vfs_slot: u8,
+    path: &[u8],
+    args: &[&[u8]],
+    meta_untyped: u8,
+    data_untyped: u8,
+    slots: &mut SlotAllocator,
+    used: &mut [u8; MAX_EXEC_SLOTS],
+) -> bool {
+    destroy_exec(slots, used, used_len(used));
+    *used = [0u8; MAX_EXEC_SLOTS];
+    let spawned = spawn_elf_from_fs(
+        root_vfs_slot,
+        path,
+        args,
+        meta_untyped,
+        data_untyped,
+        0b01,
+        slots,
+        used,
+    );
+    let Some(tcb) = spawned else {
+        write(b"BIN EXEC FAIL\n");
         return false;
+    };
+    let waited = vifast_user::tcb_wait(tcb);
+    if waited.error != KError::Ok && waited.error != KError::ObjectDestroyed {
+        write(b"BIN EXEC FAIL\n");
     }
-    let mut out = [0u8; 32];
-    i = 0;
-    while i < len as usize {
-        out[i] = msg[i];
+    // Dọn NGAY sau khi con đã exit: frame/TCB/VSpace phải trả về Untyped,
+    // nếu không lần exec sau (và `MEM OOM OK`) sẽ cạn — tái hiện đúng bài
+    // học r238 nhưng ở đường boot.
+    destroy_exec(slots, used, used_len(used));
+    *used = [0u8; MAX_EXEC_SLOTS];
+    true
+}
+
+/// D15 (r246): tách chuỗi tham số (cách nhau bởi dấu cách) thành `argv`.
+/// `argv[0]` luôn là đường dẫn chương trình, giống exec của Unix — nhờ đó
+/// multicall `/bin/vf` chọn được mode từ tên hard link đã gọi.
+fn build_argv<'a>(path: &'a [u8], words: &'a [u8], out: &mut [&'a [u8]; 8]) -> usize {
+    out[0] = path;
+    let mut argc = 1usize;
+    let mut a = 0usize;
+    while a < words.len() && argc < out.len() {
+        while a < words.len() && words[a] == b' ' {
+            a += 1;
+        }
+        if a >= words.len() {
+            break;
+        }
+        let start = a;
+        while a < words.len() && words[a] != b' ' {
+            a += 1;
+        }
+        out[argc] = &words[start..a];
+        argc += 1;
+    }
+    argc
+}
+
+/// D15 (r246): ghi khối argv vào frame stack của exec TRƯỚC khi map.
+/// Trả `(argc, argv_va)` để đặt `a0`/`a1`, hoặc `None` khi vượt giới hạn
+/// (quá 8 tham số hoặc chuỗi không vừa 192 B).
+///
+/// Đây là chỗ thay thế cơ chế "vá byte vào trang code" cũ: tham số giờ nằm
+/// trên trang stack — vùng dữ liệu đúng nghĩa — nên chương trình Rust thật
+/// đọc được, và cùng một ảnh ELF chạy được nhiều tên lệnh (multicall).
+fn write_exec_args(stack_frame: u8, args: &[&[u8]]) -> Option<(u64, u64)> {
+    let layout = vifast_abi::user_layout::EXEC_ARGS_BASE - vifast_abi::user_layout::EXEC_STACK_BASE;
+    let mut ptrs = [0u8; vifast_abi::user_layout::EXEC_ARGS_MAX * 8];
+    let mut strings = [0u8; 256];
+    let mut used = 0usize;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if used + arg.len() + 1 > vifast_abi::user_layout::EXEC_ARGS_STR_BYTES {
+            return None;
+        }
+        let addr = (vifast_abi::user_layout::EXEC_ARGS_STR_BASE + used) as u64;
+        let mut j = 0;
+        while j < 8 {
+            ptrs[i * 8 + j] = (addr >> (j * 8)) as u8;
+            j += 1;
+        }
+        let mut k = 0;
+        while k < arg.len() {
+            strings[used + k] = arg[k];
+            k += 1;
+        }
+        strings[used + arg.len()] = 0;
+        used += arg.len() + 1;
         i += 1;
     }
-    vifast_user::frame_write(code_frame, 0x160, out.as_ptr() as u64, len).error == KError::Ok
+    if args.is_empty() {
+        return Some((0, 0));
+    }
+    if vifast_user::frame_write(
+        stack_frame,
+        layout as u64,
+        ptrs.as_ptr() as u64,
+        (args.len() * 8) as u64,
+    )
+    .error
+        != KError::Ok
+    {
+        return None;
+    }
+    if vifast_user::frame_write(
+        stack_frame,
+        (layout + vifast_abi::user_layout::EXEC_ARGS_MAX * 8) as u64,
+        strings.as_ptr() as u64,
+        used as u64,
+    )
+    .error
+        != KError::Ok
+    {
+        return None;
+    }
+    Some((
+        args.len() as u64,
+        vifast_abi::user_layout::EXEC_ARGS_BASE as u64,
+    ))
 }
 
 fn spawn_elf_copy(
     meta_untyped: u8,
     data_untyped: u8,
     bytes: &[u8],
-    msg: &[u8],
+    args: &[&[u8]],
     affinity: u8,
     slots: &mut SlotAllocator,
     used: &mut [u8; MAX_EXEC_SLOTS],
@@ -1346,11 +1453,6 @@ fn spawn_elf_copy(
                     done += chunk;
                 }
             }
-            // Tham số ghi SAU khi copy segment (vùng 0x140 nằm trong segment)
-            // và TRƯỚC khi map (kernel chặn ghi lên frame đã map executable).
-            if page == 0 && segment.executable() && !write_program_args(frame, msg) {
-                return None;
-            }
             let mut rights = Rights::READ;
             if segment.writable() {
                 rights = rights | Rights::WRITE;
@@ -1378,6 +1480,8 @@ fn spawn_elf_copy(
     if vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame).error != KError::Ok {
         return None;
     }
+    // D15: khối argv ghi vào frame stack TRƯỚC khi map.
+    let (argc, argv) = write_exec_args(stack_frame, args)?;
     if !map_frame_fallible(
         data_untyped,
         vspace,
@@ -1411,9 +1515,21 @@ fn spawn_elf_copy(
     if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
         return None;
     }
-    if vifast_user::tcb_configure(tcb, image.entry as u64, EXEC_STACK_TOP as u64, vspace, 5).error
+    // r247: `sp` khởi tạo ở ĐÁY khối argv để stack mọc xuống không xoá tham
+    // số (x86 prologue ăn ~256 B — đủ chạm tới khối nếu sp ở đỉnh trang).
+    if vifast_user::tcb_configure(
+        tcb,
+        image.entry as u64,
+        vifast_abi::user_layout::EXEC_ARGS_BASE as u64,
+        vspace,
+        5,
+    )
+    .error
         != KError::Ok
     {
+        return None;
+    }
+    if vifast_user::tcb_set_args(tcb, argc, argv).error != KError::Ok {
         return None;
     }
     if vifast_user::tcb_set_affinity(tcb, affinity).error != KError::Ok {
@@ -2054,7 +2170,7 @@ fn root_vfs_copy_to_frame(
 fn spawn_elf_from_fs(
     endpoint_slot: u8,
     path: &[u8],
-    msg: &[u8],
+    args: &[&[u8]],
     meta_untyped: u8,
     data_untyped: u8,
     affinity: u8,
@@ -2115,10 +2231,6 @@ fn spawn_elf_from_fs(
                     return None;
                 }
             }
-            if page == 0 && segment.executable() && !write_program_args(frame, msg) {
-                root_vfs_close(endpoint_slot, fd);
-                return None;
-            }
             let mut rights = Rights::READ;
             if segment.writable() {
                 rights = rights | Rights::WRITE;
@@ -2149,6 +2261,8 @@ fn spawn_elf_from_fs(
     if stack_r.error != KError::Ok {
         return None;
     }
+    // D15: khối argv ghi vào frame stack TRƯỚC khi map.
+    let (argc, argv) = write_exec_args(stack_frame, args)?;
     if !map_frame_fallible(
         data_untyped,
         vspace,
@@ -2165,9 +2279,21 @@ fn spawn_elf_from_fs(
     if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
         return None;
     }
-    if vifast_user::tcb_configure(tcb, image.entry as u64, EXEC_STACK_TOP as u64, vspace, 5).error
+    // r247: `sp` khởi tạo ở ĐÁY khối argv để stack mọc xuống không xoá tham
+    // số (x86 prologue ăn ~256 B — đủ chạm tới khối nếu sp ở đỉnh trang).
+    if vifast_user::tcb_configure(
+        tcb,
+        image.entry as u64,
+        vifast_abi::user_layout::EXEC_ARGS_BASE as u64,
+        vspace,
+        5,
+    )
+    .error
         != KError::Ok
     {
+        return None;
+    }
+    if vifast_user::tcb_set_args(tcb, argc, argv).error != KError::Ok {
         return None;
     }
     if vifast_user::tcb_set_affinity(tcb, affinity).error != KError::Ok {
@@ -3242,7 +3368,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             meta_untyped,
                             data_untyped,
                             EXEC_DEMO_ELF,
-                            b"LOOP\n",
+                            &[],
                             0b01,
                             &mut slots,
                             &mut exec_used,
@@ -3266,13 +3392,12 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     } else {
                         b"EXEC MEM LEAK\n"
                     });
-                    // Vòng 103: truyền tham số RIÊNG ("HIARG") để cổng chuẩn
-                    // chứng minh cả exec-từ-FS lẫn argv: chuỗi này không nằm
-                    // trong ảnh trên đĩa, chỉ đến từ tham số root truyền.
+                    // Vòng 92/103: exec-từ-FS đầu tiên (ảnh demo trên RAM
+                    // ghi thành /prog.elf rồi nạp TỪNG PAGE từ file).
                     match spawn_elf_from_fs(
                         root_vfs_slot,
                         b"/prog.elf",
-                        b"HIARG\n",
+                        &[b"/prog.elf"],
                         meta_untyped,
                         data_untyped,
                         0b01,
@@ -3281,16 +3406,49 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     ) {
                         Some(tcb) => {
                             exec_tcb = tcb;
-                            let mut n = 0;
-                            while n < MAX_EXEC_SLOTS && exec_used[n] != 0 {
-                                n += 1;
-                            }
-                            exec_len = n;
+                            exec_len = used_len(&exec_used);
                             exec_vspace = exec_used[0];
                             write(b"RUN FS OK\n");
                         }
                         None => write(b"RUN FS FAIL\n"),
                     }
+                    // D15 (r246): tham số KHÔNG còn vá vào trang code mà đi
+                    // qua ABI argv (`a0 = argc`, `a1 = argv`, khối 256 B trên
+                    // trang stack). Ba chứng minh tự động:
+                    //  1. `/bin/args HIARG` — chuỗi "HIARG" không có trong ảnh
+                    //     trên đĩa, chỉ đến từ argv.
+                    //  2. `/bin/uname` và `/bin/uptime` — hai HARD LINK tới
+                    //     cùng ảnh multicall `/bin/vf` (D14); mode chọn theo
+                    //     basename(argv[0]).
+                    boot_exec_once(
+                        root_vfs_slot,
+                        b"/bin/args",
+                        &[b"/bin/args", b"HIARG"],
+                        meta_untyped,
+                        data_untyped,
+                        &mut slots,
+                        &mut exec_used,
+                    );
+                    boot_exec_once(
+                        root_vfs_slot,
+                        b"/bin/uname",
+                        &[b"/bin/uname"],
+                        meta_untyped,
+                        data_untyped,
+                        &mut slots,
+                        &mut exec_used,
+                    );
+                    boot_exec_once(
+                        root_vfs_slot,
+                        b"/bin/uptime",
+                        &[b"/bin/uptime"],
+                        meta_untyped,
+                        data_untyped,
+                        &mut slots,
+                        &mut exec_used,
+                    );
+                    exec_tcb = 0;
+                    exec_len = 0;
                 }
             }
             if message.label == LABEL_LOOP {
@@ -3313,7 +3471,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         meta_untyped,
                         data_untyped,
                         EXEC_DEMO_ELF,
-                        b"LOOP\n",
+                        &[],
                         0b01,
                         &mut slots,
                         &mut exec_used,
@@ -3393,11 +3551,11 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         args_buf[alen] = byte;
                         alen += 1;
                     }
-                    let args_msg: &[u8] = if alen > 0 {
-                        &args_buf[..alen]
-                    } else {
-                        b"HI DK\n"
-                    };
+                    // D15 (r246): argv[0] = path, phần còn lại tách theo dấu
+                    // cách (tối đa 8 tham số, 192 B chuỗi — xem EXEC_ARGS_*).
+                    let mut argv_buf: [&[u8]; 8] = [&[]; 8];
+                    let argc_runfs = build_argv(&path[..plen], &args_buf[..alen], &mut argv_buf);
+                    let args: &[&[u8]] = &argv_buf[..argc_runfs];
                     let mut stat_ok = plen == 0;
                     // Vòng 75: chỉ STAT/READ khi có cap VFS badge SUPERUSER
                     // (root_vfs_slot != 0) — cap gốc badge 0 bị server từ
@@ -3511,7 +3669,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             tcb_opt = spawn_elf_from_fs(
                                 root_vfs_slot,
                                 &path[..plen],
-                                args_msg,
+                                args,
                                 meta_untyped,
                                 data_untyped,
                                 0b01,
@@ -3529,7 +3687,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                                 meta_untyped,
                                 data_untyped,
                                 EXEC_DEMO_ELF,
-                                b"HI FS\n",
+                                &[],
                                 0b01,
                                 &mut slots,
                                 &mut exec_used,
@@ -3591,7 +3749,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             ab[n] = byte;
                             n += 1;
                         }
-                        let msg: &[u8] = if n > 0 { &ab[..n] } else { b"HI DK\n" };
+                        // D15: argv[0] = path + tham số sau đó.
+                        let mut argv_buf: [&[u8]; 8] = [&[]; 8];
+                        let argc_exec = build_argv(&pbuf[..plen], &ab[..n], &mut argv_buf);
+                        let exec_args: &[&[u8]] = &argv_buf[..argc_exec];
                         // Vòng 104: luôn destroy + nạp lại từ file (không phụ
                         // thuộc stat) để `runfs/exec` chạy được cả khi TCB cũ
                         // đã có; fail thì rơi về demo copy như nhánh đầu.
@@ -3607,7 +3768,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         if let Some(tcb) = spawn_elf_from_fs(
                             root_vfs_slot,
                             &pbuf[..plen],
-                            msg,
+                            exec_args,
                             meta_untyped,
                             data_untyped,
                             0b01,
@@ -3630,7 +3791,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             meta_untyped,
                             data_untyped,
                             EXEC_DEMO_ELF,
-                            b"HI FS\n",
+                            &[],
                             0b01,
                             &mut slots,
                             &mut exec_used,
@@ -3928,7 +4089,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         meta_untyped,
                         data_untyped,
                         EXEC_DEMO_ELF,
-                        b"HI FS\n",
+                        &[],
                         0b01,
                         &mut slots,
                         &mut exec_used,

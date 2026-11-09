@@ -72,25 +72,23 @@ for elf in "$SERVER_RV" "$CLIENT_RV" "$SERVER_ARM" "$CLIENT_ARM" "$SERVER_X86" "
     "$OBJCOPY" --strip-all "$elf" "$elf.stripped"
 done
 
-# r237 (T5/D10): chương trình ngoài chạy từ FS cho các lệnh chỉ đọc thông tin.
-# Mỗi mode là một ảnh riêng (exec hiện patch byte vào offset cố định của ảnh
-# demo nên không truyền được argv cho chương trình Rust thật).
+# r237 (T5/D10): chương trình ngoài chạy từ FS.
+# r247 (T12/D14): MỘT ảnh multicall `/bin/vf` cho mọi tên lệnh — mode chọn
+# theo argv[0] qua ABI D15, nên không còn build 3 ảnh riêng.
 build_bins() {
     target="$1"
     linker="$2"
     tag="$3"
     shift 3
-    for mode in uname uptime free; do
-        VIFAST_BIN_MODE="$mode" cargo rustc -p vifast-bin --profile root-task \
-            --target "$target" -- "$@" \
-            -C link-arg=-T -C link-arg="$linker" \
-            -C link-arg=--defsym=ROOT_ELF_BASE=0x1000010000 \
-            -C link-arg=-z -C link-arg=max-page-size=4096 \
-            -C link-arg=-z -C link-arg=separate-code
-        out="target/$target/root-task/vifast-bin"
-        "$OBJCOPY" --strip-all "$out" "$out.$mode.stripped"
-        echo "bin(${tag}.${mode}) $(wc -c < "$out.$mode.stripped" | tr -d ' ') B"
-    done
+    cargo rustc -p vifast-bin --profile root-task \
+        --target "$target" -- "$@" \
+        -C link-arg=-T -C link-arg="$linker" \
+        -C link-arg=--defsym=ROOT_ELF_BASE=0x1000010000 \
+        -C link-arg=-z -C link-arg=max-page-size=4096 \
+        -C link-arg=-z -C link-arg=separate-code
+    out="target/$target/root-task/vifast-bin"
+    "$OBJCOPY" --strip-all "$out" "$out.stripped"
+    echo "bin(${tag}) $(wc -c < "$out.stripped" | tr -d ' ') B"
 }
 
 build_bins riscv64imac-unknown-none-elf crates/vifast-root/linkers/riscv64.ld rv \
@@ -102,9 +100,7 @@ build_bins x86_64-unknown-none crates/vifast-root/linkers/x86_64.ld x86 \
 
 bin_env() {
     tag="$1"
-    export VIFAST_BIN_UNAME_ELF="$PWD/target/$tag/root-task/vifast-bin.uname.stripped"
-    export VIFAST_BIN_UPTIME_ELF="$PWD/target/$tag/root-task/vifast-bin.uptime.stripped"
-    export VIFAST_BIN_FREE_ELF="$PWD/target/$tag/root-task/vifast-bin.free.stripped"
+    export VIFAST_BIN_ELF="$PWD/target/$tag/root-task/vifast-bin.stripped"
 }
 
 bin_env riscv64imac-unknown-none-elf

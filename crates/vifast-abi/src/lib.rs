@@ -396,6 +396,11 @@ pub mod user_layout {
     ///
     /// Trình spawn ghi khối này vào frame stack TRƯỚC khi map (chỉ lúc đó
     /// root mới ghi được vào frame), rồi đặt `a0 = argc`, `a1 = argv`.
+    ///
+    /// `sp` khởi tạo là `EXEC_ARGS_BASE` (đáy khối) chứ KHÔNG phải
+    /// `EXEC_STACK_TOP`: khối nằm trên `sp` nên stack mọc xuống không bao giờ
+    /// ghi đè tham số. Bài học r247 — đặt `sp` ở đỉnh trang làm frame đầu
+    /// tiên của chương trình x86 (prologue ~256 B) xoá sạch khối argv.
     pub const EXEC_ARGS_MAX: usize = 8;
     pub const EXEC_ARGS_SIZE: usize = 0x100;
     pub const EXEC_ARGS_BASE: usize = EXEC_STACK_TOP - EXEC_ARGS_SIZE;

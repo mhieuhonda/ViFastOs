@@ -1,10 +1,11 @@
-//! Chương trình ngoài (D10): các lệnh chỉ ĐỌC thông tin, chạy từ FS qua
-//! exec-from-FS thay vì nằm trong shell builtin.
+//! Chương trình ngoài (D10, D14): MỘT ảnh ELF multicall `/bin/vf` trên đĩa,
+//! các tên lệnh là HARD LINK tới cùng ảnh đó (`/bin/uname`, `/bin/uptime`,
+//! `/bin/free`, `/bin/args`). Mode được chọn theo `argv[0]` — nhờ ABI argv
+//! của D15 (r246): kernel đặt `a0 = argc`, `a1 = argv`, tham số nằm trên
+//! trang stack của exec.
 //!
-//! Cùng một crate được build 4 lần với `VIFAST_BIN_MODE` khác nhau
-//! (`uname`, `uptime`, `free`, `df`) để tránh phải truyền argv qua ELF (cơ chế
-//! hiện tại của exec là patch byte vào offset cố định của ảnh demo, không dùng
-//! được cho chương trình Rust thật).
+//! Trước r246 crate này phải build 3 ảnh riêng vì exec chỉ biết "vá byte" vào
+//! offset cố định của ảnh demo, không truyền được argv cho chương trình Rust.
 
 #![no_std]
 #![no_main]
@@ -19,11 +20,6 @@ core::arch::global_asm!(include_str!("start_aarch64.S"));
 
 #[cfg(target_arch = "riscv64")]
 core::arch::global_asm!(include_str!("start_riscv64.S"));
-
-const MODE: &str = match option_env!("VIFAST_BIN_MODE") {
-    Some(value) => value,
-    None => "uname",
-};
 
 fn write(bytes: &[u8]) {
     let _ = vifast_user::debug_write(bytes.as_ptr() as u64, bytes.len() as u64);
@@ -53,7 +49,31 @@ fn arch_name() -> &'static [u8] {
     }
 }
 
-/// `uname`: định danh hệ thống (vòng 141, chuyển ra chương trình ngoài ở r237).
+/// Đọc một chuỗi NUL-terminated do kernel/root đặt trên trang stack.
+/// Giới hạn 256 B để một con trỏ hỏng không làm treo vòng quét.
+unsafe fn c_str(ptr: *const u8) -> &'static [u8] {
+    if ptr.is_null() {
+        return b"";
+    }
+    let mut len = 0usize;
+    while len < 256 && core::ptr::read_volatile(ptr.add(len)) != 0 {
+        len += 1;
+    }
+    core::slice::from_raw_parts(ptr, len)
+}
+
+fn basename(path: &[u8]) -> &[u8] {
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < path.len() {
+        if path[i] == b'/' {
+            start = i + 1;
+        }
+        i += 1;
+    }
+    &path[start..]
+}
+
 fn run_uname() {
     write(b"ViFastOs ");
     write(arch_name());
@@ -91,19 +111,57 @@ fn run_uptime() {
     write(b"s\n");
 }
 
-#[no_mangle]
-pub extern "C" fn bin_main() -> ! {
-    // Marker tự kiểm chứng: mỗi chương trình ngoài in đúng một dòng
-    // `BIN OK <tên>` khi được exec, để cổng biết nó THẬT SỰ chạy từ FS.
-    write(b"BIN OK ");
-    write(MODE.as_bytes());
+/// `args`: in các tham số nhận được. Đây là chương trình chứng minh ABI argv:
+/// chuỗi in ra KHÔNG có trong ảnh trên đĩa, chỉ đến từ `argv` của exec.
+fn run_args(argc: usize, argv: *const *const u8) {
+    write(b"argv:");
+    let mut i = 1usize;
+    while i < argc && i < vifast_abi::user_layout::EXEC_ARGS_MAX {
+        let ptr = unsafe { core::ptr::read_volatile(argv.add(i)) };
+        write(b" ");
+        write(unsafe { c_str(ptr) });
+        i += 1;
+    }
     write(b"\n");
-    if MODE == "uname" {
+}
+
+#[no_mangle]
+pub extern "C" fn bin_main(argc: usize, argv: *const *const u8) -> ! {
+    // D14: chọn mode theo basename(argv[0]) — cùng một ảnh, nhiều tên lệnh.
+    let mut argv0: &[u8] = b"";
+    if argc > 0 && !argv.is_null() {
+        argv0 = unsafe { c_str(core::ptr::read_volatile(argv)) };
+    }
+    let base = basename(argv0);
+    if base == b"uname" {
+        write(b"BIN OK uname\n");
         run_uname();
-    } else if MODE == "uptime" {
+    } else if base == b"uptime" {
+        write(b"BIN OK uptime\n");
         run_uptime();
-    } else if MODE == "free" {
+    } else if base == b"free" {
+        write(b"BIN OK free\n");
         run_free();
+    } else if base == b"args" {
+        write(b"BIN OK args\n");
+        run_args(argc, argv);
+    } else {
+        // Không nhánh nào in "BIN BAD": marker đó bị cổng cấm tuyệt đối.
+        write(b"vf: unknown applet '");
+        write(base);
+        write(b"'\n");
+        write(b"vf: usage: uname | uptime | free | args\n");
+        if argc > 1 {
+            write(b"vf argv:");
+            let mut i = 1usize;
+            while i < argc && i < vifast_abi::user_layout::EXEC_ARGS_MAX {
+                let ptr = unsafe { core::ptr::read_volatile(argv.add(i)) };
+                write(b" ");
+                write(unsafe { c_str(ptr) });
+                i += 1;
+            }
+            write(b"\n");
+        }
     }
     vifast_user::exit();
 }
