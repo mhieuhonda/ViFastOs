@@ -568,7 +568,7 @@ class Portal:
             + '<a class="vf-shell-out" href="/logout">Đăng xuất</a>'
             "</div></header>"
             f'<main class="vf-admin">{content}</main>'
-            '<p class="vf-shell-foot">ViFast · mã nguồn MIT · '
+            '<p class="vf-shell-foot">ViFast · mã nguồn MIT / Apache-2.0 · '
             '<a href="/">← Về trang chủ</a></p>'
             "</body></html>"
         )
