@@ -418,6 +418,19 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5y-6. `fsck()` đã được chứng minh BẮT ĐƯỢC hỏng (vòng 217)
+
+`fsck()` được gọi ~42 lần trong test nhưng **chưa bao giờ** được chứng minh là
+phát hiện được hỏng — giống `check_invariants` trước vòng 189. Test
+`fsck_detects_corrupt_bitmap_and_dangling_dir_entry` cố ý tạo hỏng và **yêu cầu**
+`Err(Corrupt)`:
+- **bitmap thiếu bit** cho block mà inode còn trỏ tới ⇒ `Corrupt`;
+- **entry trỏ tới inode đã free** (dangling) ⇒ `Corrupt`.
+
+**Lưu ý khi viết mutation cho FS**: `fsck` kiểm theo **`self.bitmap` trong bộ
+nhớ**, không đọc lại block bitmap trên dev — sửa `fs.dev` sẽ **không** làm fsck
+báo lỗi (lần đầu tôi làm vậy và tưởng fsck "mù").
+
 ### 5y-5. Đĩa ĐẦY: báo `NoSpace` gọn, dữ liệu cũ còn nguyên (vòng 216)
 
 Test `no_space_is_reported_and_old_data_survives` (dev 64 block):

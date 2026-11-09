@@ -2269,6 +2269,40 @@ mod tests {
     }
 
     #[test]
+    fn fsck_detects_corrupt_bitmap_and_dangling_dir_entry() {
+        // Vòng 217: `fsck()` được gọi ~42 lần trong test nhưng CHƯA BAO GIỜ được
+        // chứng minh là BẮT ĐƯỢC hỏng — giống hệt `check_invariants` ở vòng 189.
+        // Lưu ý: fsck kiểm theo `self.bitmap` trong bộ nhớ, nên mutation phải
+        // sửa bitmap TRONG BỘ NHỚ, không phải block trên dev.
+        let mut fs = fresh();
+        let ino = fs.create(b"/keep", 0, INODE_FILE).unwrap();
+        fs.write(ino, 0, &[0x11u8; BLOCK_SIZE], 0).unwrap();
+        fs.fsck().unwrap();
+
+        // (a) Bitmap nói block của file là FREE trong khi inode vẫn trỏ tới nó.
+        let block = fs.inodes[ino as usize - 1].blocks[0];
+        assert_ne!(block, 0);
+        let byte = block as usize / 8;
+        let bit = 1u8 << (block % 8);
+        fs.bitmap[byte] &= !bit;
+        assert_eq!(
+            fs.fsck(),
+            Err(FsError::Corrupt),
+            "bitmap thiếu block phải bị bắt"
+        );
+
+        // Khôi phục rồi phá kiểu khác: entry trỏ tới inode đã free.
+        fs.bitmap[byte] |= bit;
+        fs.fsck().unwrap();
+        fs.inodes[ino as usize - 1].kind = INODE_FREE;
+        assert_eq!(
+            fs.fsck(),
+            Err(FsError::Corrupt),
+            "dangling dir entry phải bị bắt"
+        );
+    }
+
+    #[test]
     fn no_space_is_reported_and_old_data_survives() {
         // Vòng 216: đĩa ĐẦY phải báo `NoSpace` gọn, và dữ liệu đã ghi trước đó
         // phải còn đọc được. Đây là loại lỗi mà "hết chỗ" thường làm hỏng file

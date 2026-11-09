@@ -3600,3 +3600,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   ai kiểm**, và "hết chỗ" là loại điều kiện hay làm mất dữ liệu nhất.
 - FS test **36 → 37**, tổng host test **303 → 304**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.214 — Vòng 217: `fsck()` chưa từng được chứng minh BẮT ĐƯỢC hỏng — giờ có
+
+- Phát hiện: `fsck()` xuất hiện ~42 lần trong test nhưng **luôn được kỳ vọng
+  `Ok`** ⇒ chưa ai chứng minh nó phát hiện được hỏng (đúng loại lỗ hổng đã gặp
+  với `check_invariants` ở vòng 189).
+- Test `fsck_detects_corrupt_bitmap_and_dangling_dir_entry` (FS **37 → 38**):
+  cố ý (a) xoá bit bitmap của block mà inode còn trỏ tới, (b) đánh dấu inode của
+  entry là free ⇒ **cả hai đều `Err(Corrupt)`**.
+- **Sai lầm tự sửa trong vòng**: lần đầu tôi sửa bitmap trên `fs.dev` rồi thấy
+  `Ok` và tưởng fsck "mù"; thực ra fsck kiểm `self.bitmap` trong bộ nhớ. Sửa
+  mutation đúng chỗ ⇒ bắt được ngay.
+- Tổng host test **304 → 305**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
