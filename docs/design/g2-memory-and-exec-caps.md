@@ -82,12 +82,30 @@ tự chọn frame khi user hỏi "cho tôi một trang". Cả hai đều phá m�
 
 `df` hiện nằm trong shell (`crates/vifast-client/src/main.rs`, nhánh
 `line == b"df"`) và gọi `call_message(1, vfs::STATFS, …)` — tức nó dùng
-**endpoint VFS của chính shell** (slot 1). Đưa `df` ra `/bin/vf` thì chương
-trình con phải có cap tới endpoint đó, nhưng `TcbConfigure` hiện chỉ đặt
-entry/stack/vspace — **không có đường truyền cap**.
+**endpoint VFS của chính shell** (slot 1). Chương trình con exec từ FS thì
+không có cap đó.
 
-Đây là lý do kỹ thuật, không phải "chưa kịp làm": `exec` không có kênh uỷ
-quyền cap thì mọi lệnh cần VFS đều phải ở lại trong shell.
+**ĐÍNH CHÍNH (r267)** — bản đầu của tài liệu này viết "exec không có đường
+truyền cap", và đó là **sai**. Đường đó đã có sẵn:
+
+- `CapMint(src_slot, dst_tcb_slot, dst_slot, rights, badge)`: caller cần WRITE
+  trên TCB đích; cap nguồn phải **chưa có badge** thì mới được đặt badge mới.
+  Root dùng đúng lời gọi này để cấp cho client slot 1 (badge 1) và slot 6
+  (badge 2) ngay lúc boot (`crates/vifast-root/src/main.rs`, khối `cap_mint`
+  cho `client_tcb`) — tức cơ chế "cấp cap cho task khác" **đã được dùng thật**.
+- `CapCopy`: bản sao không đổi badge (root dùng để đưa endpoint cho server).
+
+Vậy thứ thiếu **không phải primitive** mà là hai việc nhỏ:
+
+1. `spawn_elf_from_fs` không `cap_mint` cho chương trình con (chỉ thiếu 3 dòng).
+2. **Chính sách badge**: con thừa hưởng badge nào (badge 1 = danh tính shell,
+   hay badge riêng)? Badge là `uid` mà FS server dùng để kiểm quyền file, nên
+   đây là quyết định bảo mật chứ không phải chi tiết kỹ thuật.
+
+`TcbGrantCap` (r264) vẫn có chỗ đứng riêng: nó là bản **không đặc quyền** —
+uỷ quyền một cap ĐÃ CÓ badge mà không cần mint badge mới, dùng khi người uỷ
+quyền không phải root. Nhưng nó **không phải** điều kiện tiên quyết để đưa
+`df` ra applet.
 
 ### B.2 Hợp đồng đề xuất: cap đi qua CNode của chương trình con
 
@@ -122,7 +140,10 @@ Hệ quả cần nói rõ: `df` chạy bằng badge của shell nên **thấy đ
 được thấy**. Nếu sau này muốn `df` thấy toàn bộ FS, đó là quyết định riêng
 (badge mới hoặc quyền `STATFS` toàn cục) — không được làm ngầm.
 
-### B.3bis Trạng thái triển khai (r264)
+### B.3bis Trạng thái triển khai (r264, đính chính r267)
+
+> Đọc kèm đính chính ở B.1: primitive đã có (`CapMint`), thiếu chỉ là wiring +
+> chính sách badge. `TcbGrantCap` là bản không đặc quyền, không phải blocker.
 
 `SyscallId::TcbGrantCap = 57` đã có trong kernel với 5 ràng buộc ở B.2, mỗi
 ràng buộc một host test:

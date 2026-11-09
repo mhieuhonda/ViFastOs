@@ -442,6 +442,24 @@ ghi lại ở đây để Agent 0 có trạng thái cuối, không phải đọc
 (tính/ghi khối SHA-256 theo quy ước r253) + sửa số case harness 462 → 632 trong
 `docs/11-hien-tai/09-testing.md`.
 
+### Đính chính kỹ thuật (r267) — quan trọng cho G2
+
+Bản đầu của báo cáo này (và của `docs/design/g2-memory-and-exec-caps.md`) nói
+`exec` **không có kênh uỷ quyền cap**. Sau khi đọc lại mã root: **sai**.
+
+`CapMint`/`CapCopy` đã là kênh đó, và root **đang dùng thật** để cấp cho client
+slot 1 (badge 1 — danh tính shell) và slot 6 (badge 2) ngay lúc boot
+(`crates/vifast-root/src/main.rs`, khối `cap_mint` cho `client_tcb`). Vậy thứ
+thiếu để đưa `df` ra applet chỉ là:
+
+1. `spawn_elf_from_fs` chưa `cap_mint` cho chương trình con (khoảng 3 dòng), và
+2. **quyết định chính sách badge** — con thừa hưởng badge 1 (danh tính shell)
+   hay badge riêng; badge là `uid` mà FS server dùng để kiểm quyền file.
+
+`TcbGrantCap` (r264) vẫn có giá trị riêng (bản không đặc quyền: uỷ quyền cap đã
+có badge mà không cần mint badge mới), nhưng **không phải** điều kiện tiên
+quyết của G2 Phần B — và nó không đáng bị coi là "việc lớn" như bản đầu mô tả.
+
 ### r264 — T27 (một phần): `TcbGrantCap`
 
 Đây là **đường mà `exec` đang thiếu** (G2 Phần B). Đã có:
@@ -486,7 +504,7 @@ thiếu 37 marker) ⇒ đã hoàn nguyên toàn bộ, build lại, boot 3/3 PASS
 ## SHA-256
 
 ```text
-56c97fdb33c38ccfd4c598ade633ad1042e6868a903a8f5bbab2a59d9c9aa0ef  docs/reviews/ViFastOs-report-r262.md
+bebd15d1ba26f3e34553c75829673d282fe7f75a1aeb6576a6f7e4378ca22331  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
