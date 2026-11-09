@@ -487,6 +487,38 @@ thiếu 37 marker) ⇒ đã hoàn nguyên toàn bộ, build lại, boot 3/3 PASS
 `Exit` dọn dẹp. Hướng đúng nhiều khả năng là cho `destroy_object` chấp nhận TCB
 `Exited` và tự gỡ `current` của chính nó, không phải dọn ở đường park.
 
+### r268 — T27 hoàn tất: `df` thành applet, con nhận cap VFS
+
+Đây là **applet đầu tiên cần capability**, nên nó chứng minh end-to-end đường
+uỷ quyền cap cho tiến trình con — đúng mục tiêu G2 Phần B.
+
+| Việc | Chi tiết |
+|---|---|
+| Root | `spawn_elf_from_fs` mint endpoint VFS từ cap GỐC (badge 0) vào slot 1 của con với **badge 1** = danh tính shell (không phải badge root) |
+| `vifast-bin` | applet `df` gọi `STATFS` qua slot 1 (không cần IPC buffer: mọi tham số nằm trong message words) |
+| Client | bỏ builtin `df` (960 B mã); shell fallback exec `/bin/df` |
+| Ảnh đĩa | hard link `/bin/df` cùng inode `/bin/vf` |
+| Cổng | `--interactive` thêm bước `df` với marker `blocks`; nếu cap thiếu thì applet in `df: error` ⇒ bước ĐỎ |
+
+Quyết định **chính sách badge** (câu hỏi 4 ở Part 6): con thừa hưởng badge 1
+(danh tính shell). Cấp badge root sẽ cho applet quyền đọc/ghi toàn bộ FS — vượt
+xa nhu cầu của `df`.
+
+Đo được trên QEMU thật:
+
+```text
+[riscv64] df -> 'blocks': OK      -- riscv64 interactive PASS
+[aarch64] df -> 'blocks': OK      -- aarch64 interactive PASS
+```
+
+QEMU chuẩn 3 arch × 3 lần: 9/9 PASS. Gate full: xem dòng trạng thái cuối.
+
+Bài học lặp lại lần thứ ba trong phiên này: **giả định kỹ thuật phải kiểm bằng
+mã**. Bản đầu của tài liệu G2 khẳng định "exec không có kênh uỷ quyền cap" và
+đề xuất viết syscall mới; đọc lại mã root thì thấy `CapMint` đã làm đúng việc
+đó và đang được dùng thật cho client. Việc thật cần làm chỉ là **3 dòng nối
+dây + một quyết định chính sách**.
+
 ### Trạng thái cuối phiên
 
 | Chỉ số | Giá trị |
@@ -497,6 +529,7 @@ thiếu 37 marker) ⇒ đã hoàn nguyên toàn bộ, build lại, boot 3/3 PASS
 | Soak 30 × 3 arch (tại r265, sau T27) | **90/90 = 100%** (657 s) |
 | Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
 | Audit P | P1-7 và P2 `AP_GDT` đóng |
+| G2 Phần B | **XONG** (r268): `df` là applet, con nhận cap VFS badge 1 |
 | Việc tiếp theo | bảng T26–T32 trong `docs/reviews/progress-g1.md` |
 
 <!-- SHA-256: phần dưới đây KHÔNG nằm trong hash -->
@@ -504,7 +537,7 @@ thiếu 37 marker) ⇒ đã hoàn nguyên toàn bộ, build lại, boot 3/3 PASS
 ## SHA-256
 
 ```text
-bebd15d1ba26f3e34553c75829673d282fe7f75a1aeb6576a6f7e4378ca22331  docs/reviews/ViFastOs-report-r262.md
+1ab85a631c58a2e50c04282a59ccd88057c72416ab8823fc2550e19a070b192e  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
