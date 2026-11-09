@@ -1179,8 +1179,12 @@ fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usi
     // cấp phát mới nên không thể bị cấp lại giữa chừng).
     let mut done = [false; MAX_EXEC_SLOTS];
     let mut last_err = [0u64; MAX_EXEC_SLOTS];
+    // r279 (T33b): 2 pass là quá ít khi task con CHƯA kịp exit — mỗi object
+    // không huỷ được là một rò rỉ ~6 trang Untyped, vài lần là cạn bộ nhớ giữa
+    // boot (đo được: `MEM OOM BAD` rồi applet fault vì trang chưa map). Nay
+    // nhường CPU giữa các pass và thử tối đa 8 lần trước khi bỏ cuộc.
     let mut pass = 0;
-    while pass < 2 {
+    while pass < 8 {
         let mut i = 0;
         while i < len {
             if !done[i] {
@@ -1193,6 +1197,19 @@ fn destroy_exec(slots: &mut SlotAllocator, used: &[u8; MAX_EXEC_SLOTS], len: usi
             }
             i += 1;
         }
+        let mut all_done = true;
+        let mut k = 0;
+        while k < len {
+            if !done[k] {
+                all_done = false;
+            }
+            k += 1;
+        }
+        if all_done {
+            break;
+        }
+        // Nhường CPU để task con kịp chạy nốt đường exit rồi hẵng huỷ lại.
+        let _ = vifast_user::yield_now();
         pass += 1;
     }
     // Vòng 192: chẩn đoán TẠM THỜI — đếm slot không huỷ được (nếu > 0 thì tài
