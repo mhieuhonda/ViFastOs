@@ -960,3 +960,11 @@ python3 scripts/fs-smp-regression.py --iterations 20 --expect red  # phải có 
 Đo trong phiên: `--expect green` 8/8 xanh ở `MAX_IO = 128`; đỏ đã đo ở
 `MAX_IO = 256` là 12/47 lần boot (Part 4 của báo cáo). Quy ước: **nâng `MAX_IO`
 phải kèm `--expect green` với N ≥ 40**.
+
+### Ghi chú: bảng tổng hợp kiến trúc luôn "chậm một commit"
+
+`ViFastOs-architecture-summary.txt` chứa cả **danh sách commit sinh tự động**, nên
+mỗi lần commit là một lần file đó "cũ" đi — `check-docs.py` sẽ báo
+`summary generated sections are stale` ngay sau khi commit. Đó là vòng lặp tự
+tham chiếu, không phải lỗi: cổng xử lý bằng cách chạy `gen-docs.py` TRƯỚC bước
+docs, nên gate vẫn xanh. Đừng cố "sửa" bằng cách commit lại file này từng lần.
