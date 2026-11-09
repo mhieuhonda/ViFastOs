@@ -476,6 +476,7 @@ thiếu 37 marker) ⇒ đã hoàn nguyên toàn bộ, build lại, boot 3/3 PASS
 | `main` | gate full **PASS** (sau khi `cargo fmt`) |
 | Kernel host test | 242 |
 | Soak 100 × 3 arch (tại r262) | 298/300 = 99,3% (không còn lỗi `FS V2 OK`) |
+| Soak 30 × 3 arch (tại r265, sau T27) | **90/90 = 100%** (657 s) |
 | Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
 | Audit P | P1-7 và P2 `AP_GDT` đóng |
 | Việc tiếp theo | bảng T26–T32 trong `docs/reviews/progress-g1.md` |
@@ -485,7 +486,7 @@ thiếu 37 marker) ⇒ đã hoàn nguyên toàn bộ, build lại, boot 3/3 PASS
 ## SHA-256
 
 ```text
-ec9602028106eb6a78af83f8fa0e061c2e5527ee1ae8c1e3967aced426c8df2a  docs/reviews/ViFastOs-report-r262.md
+56c97fdb33c38ccfd4c598ade633ad1042e6868a903a8f5bbab2a59d9c9aa0ef  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

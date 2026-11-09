@@ -523,6 +523,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - b912632 r263 docs: (T25) báo cáo G1 hoàn tất r254…r262 (6 phần + SHA-256 tự kiểm)
 - 1fab089 r264 feat: (T27) TcbGrantCap — uỷ quyền cap sang TCB khác (G2 Phần B)
 - 22e496c r264 style: cargo fmt sau TcbGrantCap (sửa bước fmt của gate)
+- db3dc5a r265 docs: phụ lục r263–r264 vào báo cáo (TcbGrantCap, gate PASS) + ký lại SHA-256
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

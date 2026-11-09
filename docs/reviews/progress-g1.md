@@ -726,3 +726,16 @@ context và để `Exit` dọn dẹp; nhả nó ở nhánh park làm mất liên
 đúng nhiều khả năng là: cho `destroy_object` chấp nhận TCB `Exited` và tự gỡ
 `current` **của chính nó** trong cùng một giao dịch, thay vì dọn `current` ở
 đường park.
+
+### Soak 30 sau r264/r265 (kiểm chứng T27 không hồi quy)
+
+```
+riscv64  30/30 PASS (100.0%)
+aarch64  30/30 PASS (100.0%)
+x86_64   30/30 PASS (100.0%)
+iterations: 30, elapsed: 657.3s
+soak: all iterations passed
+```
+
+90/90 lần boot xanh — cả hai lỗi hiếm gặp ở soak 100 (vòng 53, 62) không tái
+hiện. Gate full tại r264 cũng PASS 10/10.
