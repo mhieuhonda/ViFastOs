@@ -337,3 +337,23 @@ không ai thêm lại bất biến đó, và để lại đúng lý do trong b�
 - `check_invariants` **không** thêm ràng buộc mới (đã chứng minh ràng buộc
   tưởng đúng là sai). Giá trị của vòng này nằm ở chỗ **đóng được 5 mục audit
   bằng bằng chứng**, không phải bằng cách nới lỏng.
+
+## T16 — soak 100 × 3 arch tại HEAD cuối — DONE (96,0%)
+
+`python3 scripts/soak.py --iterations 100` tại `a0b6acc`, máy rảnh, không build
+song song (đúng yêu cầu "no parallel work" của T16).
+
+```
+iterations: 100, elapsed: 2037.4s
+riscv64   97/100
+aarch64  100/100
+x86_64    99/100
+```
+
+4 lần hỏng: vòng 25/56/79 (boot chậm làm hết cửa sổ `PREEMPT OK`) và vòng 55
+(chỉ probe TCP phía host thua race, marker boot vẫn đủ). Artifact ở
+`artifacts/soak/iter-*`.
+
+Đây là **flake đã ghi nhận từ r224**, không phải hồi quy: cùng HEAD đó gate
+3×3 PASS 9/9 ngay trước soak. Đề xuất G2: nới cửa sổ `PREEMPT OK` theo thời
+gian thực, hoặc cho demo tự chạy lại khi bị bỏ lỡ.

@@ -509,6 +509,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 9dc1ba2 r249 feat: (T13) ps/jobs via TcbInfo + cd/pwd builtin cwd
 - 718416a r250 docs: (T13) bảng đo trang client + ba cách đã bị dữ liệu bác bỏ
 - ffaeada r251 fix: (T14/K40) pick_on chỉ chọn TCB Ready + đóng 5 mục audit bằng bằng chứng
+- a0b6acc r252 docs: (T15) sửa lệch tài liệu — §18 hết trùng số, trần trang, soak, teardown
+- 194145e r253 docs: (T16) báo cáo G1 phần còn lại r246..r253 + soak 100×3
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
