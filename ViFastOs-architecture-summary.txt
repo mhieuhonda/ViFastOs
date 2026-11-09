@@ -534,6 +534,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 043b478 r272 docs: ghi T32 đã sửa (r271) + ký lại báo cáo
 - 07fa3e3 r273 revert: hoàn nguyên T32 (r271) — soak 100 phát hiện hồi quy TREO
 - d741800 r273 docs: ký lại báo cáo + bảng tổng hợp sau khi hoàn nguyên T32
+- be10b4a r274 fix: (T32) áp lại bản vá huỷ TCB đã Exited — treo `PREEMPT OK` là lỗi CÓ SẴN
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

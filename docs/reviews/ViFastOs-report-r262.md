@@ -542,6 +542,27 @@ rồi mới sửa lại.
 Bài học giữ nguyên: **một bản vá "xanh gate + xanh soak 30" vẫn có thể là hồi
 quy** — soak 100 mới đủ để bắt.
 
+### r274 — áp lại T32, và một lỗi MỚI được phát hiện: treo `PREEMPT OK` (T33)
+
+Dữ kiện quyết định (tất cả x86_64, `-smp 2`):
+
+| Đợt | Có bản vá T32? | Lần boot | Treo `PREEMPT OK` |
+|---|---|---:|---:|
+| soak 100 @ r262 | không | 300 | 0 |
+| soak 30 @ r265, r269 | không | 180 | 0 |
+| soak 30 @ r271 | có | 90 | 0 |
+| soak 100 @ r272 | có | ~6 | 1 (vòng 2) ⇒ đã hoàn nguyên |
+| soak 40 @ r273 | **không** (sau hoàn nguyên) | 120 | **1 (vòng 10)** |
+
+⇒ treo **không do T32**: nó xuất hiện cả khi đã gỡ bản vá. Tỉ lệ ~0,3–1%, điểm
+treo ngay sau `shell>` và trước marker `PREEMPT OK` (hart không in được gì
+thêm). Đã áp lại T32 (r274) và mở **T33** với bảng dữ kiện + hướng điều tra.
+
+Bài học thứ hai của phiên, và là bài học về phương pháp: **một lần hỏng ngay
+sau khi vá không đủ để buộc tội bản vá** — phải chạy lại trên bản đã hoàn
+nguyên để có đối chứng. Chính đối chứng đó (soak 40 @ r273) mới là thứ chứng
+minh bản vá vô can.
+
 ### Trạng thái cuối phiên
 
 | Chỉ số | Giá trị |
@@ -562,7 +583,7 @@ quy** — soak 100 mới đủ để bắt.
 ## SHA-256
 
 ```text
-bc557e456f53d66a252547aba9fc64d7d23f39d4e7b194ac37d07cffdfafd276  docs/reviews/ViFastOs-report-r262.md
+64f9aef5ee23f8a4e2dfe8befeff1b2154dd51c789f214fc26281b7a2694912c  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
