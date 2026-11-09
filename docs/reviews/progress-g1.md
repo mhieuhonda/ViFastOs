@@ -874,3 +874,36 @@ Việc cần làm (vòng sau):
 cho `test-qemu.py`, mà argparse ở đó chỉ nhận `x86_64`. Nay soak map tên ngắn
 (`rv`, `arm`, `x86`) sang tên đầy đủ và báo lỗi rõ nếu tên không hợp lệ.
 Smoke: `soak.py --iterations 1 --archs x86` → 1/1 PASS trong 8,9 s.
+
+
+### T33b — chẩn đoán chi tiết (r279)
+
+Chạy soak MỘT kiến trúc cho thấy tỉ lệ cao hơn hẳn (riscv 197/200 và 197/200 ở
+hai đợt, tức ~1,5–2%):
+
+| Lần chạy | Kết quả | Bằng chứng |
+|---|---|---|
+| lần 1 (hỏng) | `rc=0` sau ~2,8 s, thiếu 45–50 marker | tail serial: `MEM OOM BAD` ×11, rồi `USER FAULT … cause=0xd` ở `0x1001000000`, `0x1001001000`, `0x1001002000`, rồi `USER EXIT` |
+| lần 2 (thử lại) | PASS | nhưng bước TCP echo ĐỎ: `không mở được listener ([Errno 48] Address already in use)` |
+
+⇒ có **hai** vấn đề chồng lên nhau: (1) thỉnh thoảng cạn bộ nhớ giữa boot khiến
+trang của applet chưa được map ⇒ fault; (2) sau một lần hỏng, cổng 18080 còn
+bận nên lần thử lại bị đếm hỏng thêm một lần nữa.
+
+Đã thử:
+- `destroy_exec` thử lại 8 pass có `yield_now()` — **không** đo được cải thiện
+  (giữ lại vì đúng ngữ nghĩa, có chặn trên).
+- Cổng TCP động cho probe — **hỏng ngay** (probe và `hostfwd` tranh cùng cổng),
+  đã hoàn nguyên. Hướng đúng: đổi thiết kế probe (dùng cổng riêng cho từng lần
+  chạy hoặc chờ cổng cũ nhả), không phải đổi mỗi số cổng.
+
+### Bài học vận hành (r279): build dở dang làm QEMU đỏ hàng loạt
+
+Sau khi build lẻ một crate (`cargo rustc -p vifast-root …`) rồi chạy QEMU, riscv
+đỏ **liên tục** (gate 0/3, `MEM OOM BAD` lặp, `USER FAULT` ở ba TCB mới) trong
+khi trước đó cùng mã nguồn vẫn xanh. Chạy lại `./scripts/build.sh` (build đầy
+đủ, đúng bộ binary chuẩn) thì xanh trở lại ngay (riscv 2/2, gate 10/10).
+
+⇒ Quy ước: **luôn `./scripts/build.sh` trước mọi lần chạy QEMU**, không để cây
+ở trạng thái build một phần (gate/soak dùng chung `target/…/release`, một crate
+được build lẻ là đủ để lệch bộ binary).
