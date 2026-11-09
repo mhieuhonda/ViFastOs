@@ -108,3 +108,26 @@ mục tiêu T5. Chương trình ngoài phải nằm trên **ảnh đĩa**, khôn
    frame dùng xong phải trả lại (kiểm bằng `EXEC MEM STABLE`).
 
 Việc này còn ~2–3 vòng; khung build đã sẵn nên không phải làm lại từ đầu.
+
+## T10 — đo lại kích thước client sạch (D17), giải thích chuyện "trùng byte"
+
+Đo bằng dựng lại từ `cargo clean` trong worktree riêng `/tmp/vf-before` (mốc `8deeb02`,
+trước r241) và trên `main` sau r241. Mỗi số kèm SHA-256 của file đã strip.
+
+| Arch | text trước → sau | rodata trước → sau | ELF trước → sau | SHA trước / sau |
+|---|---|---|---|---|
+| riscv64 | 0x40ce (16 590) → 0x3fec (16 364) **−226** | 0x6de → 0x6b8 | 29 184 → **25 088** | `e24267b3…` / `070b3051…` |
+| aarch64 | 0x4fa4 (20 388) → 0x4e74 (20 084) **−304** | 0x640 → 0x62a | **29 024 → 29 024** | `521ced8d…` / `9db831e4…` |
+| x86_64 | 0x4c74 (19 572) → 0x4b84 (19 332) **−240** | 0x656 → 0x641 | **33 192 → 33 192** | `c2038f28…` / `a0e7c6c7…` |
+
+**Trả lời Agent 0 (điểm 1):** không phải đo nhầm artifact, và không phải code không bị loại.
+SHA **khác nhau** ở cả 3 arch ⇒ binary thật sự đã đổi. Nhưng phần co lại chỉ **226–304 byte**,
+trong khi **một trang là 4 096 byte**:
+
+- riscv64: nhờ 226 byte mà vượt được biên trang ⇒ **−1 trang** (8 → 7).
+- aarch64/x86: co 240–304 byte nhưng **không vượt biên trang** ⇒ số trang và kích thước file
+  **không đổi một byte**.
+
+⇒ Bài học đo lường (đưa vào D17): **"byte" không phải đại lượng quyết định, "trang" mới là.**
+Muốn giảm 1 trang phải cắt ≥ phần dư tới biên trang kế tiếp, hoặc cắt cả trang.
+Từ nay mỗi lần đo ghi: `offset trong trang của PT_LOAD cuối` + số trang thật.
