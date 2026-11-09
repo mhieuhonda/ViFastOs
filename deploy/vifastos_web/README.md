@@ -22,8 +22,11 @@ at **https://os.vifast.org**.
 | POST   | `/api/signup`       | —                 | Body `{"email","note?","source?"}` → `200 {"ok":true,"position":N}`, `409 already_registered`, `422 invalid_email`, `429 rate_limited` |
 | GET    | `/api/stats`        | —                 | `{"total": N}` — public count only |
 | GET    | `/api/releases`     | —                 | GitHub releases proxy, 5 newest, cached 10 min; on upstream failure `200 {"releases": [], "error": "unavailable"}` |
-| GET    | `/admin`            | HTTP Basic        | Minimal HTML table of signups (500 newest) |
-| GET    | `/admin/export.csv` | HTTP Basic        | Full CSV export |
+| GET    | `/login`            | —                 | Form đăng nhập quản trị (mật khẩu = `ADMIN_PASSWORD`) |
+| GET    | `/logout`           | —                 | Xoá cookie phiên |
+| GET    | `/admin`            | phiên đăng nhập   | Thống kê truy cập + bảng đăng ký sớm (500 mới nhất) |
+| GET    | `/admin/export.csv` | phiên đăng nhập   | Full CSV export |
+| GET    | `/admin/stats.csv`  | phiên đăng nhập   | CSV lượt xem 30 ngày |
 
 `/static/*` is served by `StaticFiles`. OpenAPI/docs routes are disabled on
 purpose.

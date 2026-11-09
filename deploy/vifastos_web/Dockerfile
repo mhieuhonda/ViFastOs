@@ -14,6 +14,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py ./
+COPY admin_portal.py ./
 COPY static ./static
 
 # Non-root runtime user; /app/data must stay writable so SQLite can create the DB.

@@ -3,13 +3,13 @@
 A deliberately small FastAPI application: serves the static landing page,
 collects early-access signups into SQLite (stdlib ``sqlite3``, no ORM), proxies
 the public GitHub release feed with a 10 minute in-memory cache, and exposes an
-HTTP-Basic protected admin table plus CSV export. No cookies, no third-party
-analytics, and no raw IP addresses are ever stored.
+admin table plus CSV export behind the shared ``admin_portal`` login form
+(password from ``ADMIN_PASSWORD``, signed session cookie) with visit
+statistics. No third-party analytics and no raw IP addresses are ever stored.
 """
 
 from __future__ import annotations
 
-import base64
 import csv
 import hashlib
 import html
@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import sqlite3
 import threading
 import time
@@ -33,6 +32,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from admin_portal import Portal
 
 # --- configuration ---------------------------------------------------------- #
 
@@ -149,25 +150,6 @@ def split_host(value: str) -> str:
     return raw.rsplit(":", 1)[0] if raw.count(":") == 1 else raw
 
 
-def require_admin(request: Request) -> None:
-    """HTTP Basic auth; any username is accepted, only the password matters."""
-    if not ADMIN_PASSWORD:
-        raise HTTPException(status_code=503, detail="admin_disabled")
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("basic "):
-        try:
-            decoded = base64.b64decode(header[6:].strip(), validate=True).decode("utf-8")
-        except Exception:  # malformed header -> treat as unauthenticated
-            decoded = ""
-        _, _, password = decoded.partition(":")
-        if password and secrets.compare_digest(password, ADMIN_PASSWORD):
-            return
-    raise HTTPException(
-        status_code=401,
-        detail="unauthorized",
-        headers={"WWW-Authenticate": 'Basic realm="ViFastOs admin", charset="UTF-8"'},
-    )
-
 
 class SignupIn(BaseModel):
     email: str
@@ -196,6 +178,11 @@ app = FastAPI(
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Đăng nhập quản trị bằng form + thống kê truy cập (dùng chung admin_portal.py).
+portal = Portal(site="os.vifast.org", title="ViFastOs", db_path=DB_PATH,
+                accent="#C0392B", log=log)
+portal.install(app)
+
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
@@ -216,6 +203,7 @@ async def security_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith("/api/") or path.startswith("/admin"):
         headers["Cache-Control"] = "no-store"
+    portal.track(request, response.status_code)
     return response
 
 
@@ -360,7 +348,7 @@ def api_releases() -> JSONResponse:
 # --- admin ------------------------------------------------------------------ #
 
 
-def _render_admin(rows: List[sqlite3.Row], total: int, limit: int) -> str:
+def _render_admin(rows: List[sqlite3.Row], total: int, limit: int, panel: str = "") -> str:
     body = "".join(
         "<tr>"
         f"<td>{row['id']}</td>"
@@ -380,10 +368,12 @@ def _render_admin(rows: List[sqlite3.Row], total: int, limit: int) -> str:
 <meta name="robots" content="noindex, nofollow">
 <title>ViFastOs · signups</title>
 <link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="/admin/portal.css">
 </head>
 <body class="admin-body">
 <main class="admin">
   <h1>Đăng ký sớm · ViFastOs</h1>
+  {panel}
   <p class="muted">Tổng: <strong>{total}</strong> · hiển thị {min(total, limit)} bản ghi mới nhất. IP chỉ được lưu dưới dạng hash, không lưu địa chỉ thô.</p>
   <p><a class="btn btn-secondary" href="/admin/export.csv">Tải CSV</a></p>
   <div class="admin-table-wrap">
@@ -400,8 +390,9 @@ def _render_admin(rows: List[sqlite3.Row], total: int, limit: int) -> str:
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin(request: Request) -> HTMLResponse:
-    require_admin(request)
+def admin(request: Request) -> Response:
+    if (denied := portal.guard(request)) is not None:
+        return denied
     limit = 500
     conn = db_connect()
     try:
@@ -413,12 +404,13 @@ def admin(request: Request) -> HTMLResponse:
         total = conn.execute("SELECT COUNT(*) AS n FROM signups").fetchone()["n"]
     finally:
         conn.close()
-    return HTMLResponse(_render_admin(rows, total, limit))
+    return HTMLResponse(_render_admin(rows, total, limit, portal.panel_html()))
 
 
 @app.get("/admin/export.csv")
 def admin_export(request: Request) -> Response:
-    require_admin(request)
+    if (denied := portal.guard(request)) is not None:
+        return denied
     conn = db_connect()
     try:
         rows = conn.execute(

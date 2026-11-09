@@ -25,7 +25,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
-    "Noto Sans", Arial, "Apple Color Emoji", sans-serif;
+    "Noto Sans", Arial, "Liberation Sans", "DejaVu Sans", "Apple Color Emoji", sans-serif;
   font-size: 16px;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
