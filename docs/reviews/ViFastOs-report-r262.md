@@ -577,27 +577,32 @@ Cơ chế retry có sẵn của harness che hai lỗi này ở đường `--repe
 **Bài học phương pháp (lần thứ tư)**: khi có retry, phải xác định **serial thuộc
 lần chạy nào**; `run.log` mới là nơi ghi rõ `rc` và thời lượng của từng lần.
 
-### Trạng thái cuối phiên
+### Trạng thái cuối phiên (r254 → r277)
 
 | Chỉ số | Giá trị |
 |---|---|
-| `main` | gate full **PASS** (sau khi `cargo fmt`) |
-| Kernel host test | 242 |
-| Soak 100 × 3 arch (tại r262) | 298/300 = 99,3% (không còn lỗi `FS V2 OK`) |
-| Soak 30 × 3 arch (tại r269) | 90/90 = 100% (576 s) |
-| Soak 30 × 3 arch (tại r271, sau T32) | 90/90 = 100% (568 s) — nhưng sau đó soak 100 hỏng vòng 2 ⇒ r273 hoàn nguyên T32 |
-| Soak 30 × 3 arch (tại r265, sau T27) | 90/90 = 100% (657 s) |
+| `main` | **gate full PASS 10/10**; đã push lên `origin/main` |
+| Kernel host test | 244 (242 chạy + 2 fuzz `#[ignore]`) |
+| Harness | 632 ca âm tính PASS |
+| Soak 100 @ r262 (chưa có T32) | 298/300 = 99,3% |
+| Soak 100 @ r274 (có T32) | 299/300 = 99,7% |
+| Soak 100 @ r276 (có T32) | 298/300 = 99,3% |
+| Soak x86-only 120 @ r277 | **120/120 = 100%** (1 216 s) |
+| Lỗi còn lại | T33a (x86 treo ~1% trước `PREEMPT OK`), T33b (riscv thoát sớm ~1%), T31 (message lặp ~1%) |
+| Lỗi đã đóng trong phiên | `FS V2 OK` (giảm nhờ `MAX_IO` 128, gốc mở), `DESTROY DIAG` (T32), 3 lỗi harness (T17/T19/T33) |
 | Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
-| Audit P | P1-7 và P2 `AP_GDT` đóng |
-| G2 Phần B | **XONG** (r268): `df` là applet, con nhận cap VFS badge 1 |
-| Việc tiếp theo | bảng T26–T32 trong `docs/reviews/progress-g1.md` |
+| G2 Phần B | **XONG** — `df` là applet, con nhận cap VFS badge 1 |
+| Việc tiếp theo | T26 (gốc race FS), T28 (`-smp 4`), T29 (`!!`), T30 (aarch64), T31, T33a/T33b |
+
+Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
+phiên bản hiện tại.
 
 <!-- SHA-256: phần dưới đây KHÔNG nằm trong hash -->
 
 ## SHA-256
 
 ```text
-105037ab06cac3aa64ac18867ce26c7bce1a5d42761b61bab739ba4825ff0281  docs/reviews/ViFastOs-report-r262.md
+ea95f85640d11aacbf436c8a82d6d5e0e47ee8ad15d7ad92ad8f24594d7e5050  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

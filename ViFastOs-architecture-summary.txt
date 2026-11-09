@@ -539,6 +539,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a4145b4 r275 fix: (T33) đính chính — "treo PREEMPT OK" là flake của HARNESS, không phải kernel
 - 688f2ae r275 docs: ký lại báo cáo (105037ab…ff0281) + bảng tổng hợp sau đính chính T33
 - 53c4be4 r276 fix: (T33) đọc lại serial SAU khi QEMU chết rồi mới kết luận thiếu marker
+- 62f5104 r277 fix: (T33) soak nhận tên arch ngắn + đính chính lần 2 về "treo PREEMPT OK"
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
