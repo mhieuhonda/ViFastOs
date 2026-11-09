@@ -2269,6 +2269,42 @@ mod tests {
     }
 
     #[test]
+    fn no_space_is_reported_and_old_data_survives() {
+        // Vòng 216: đĩa ĐẦY phải báo `NoSpace` gọn, và dữ liệu đã ghi trước đó
+        // phải còn đọc được. Đây là loại lỗi mà "hết chỗ" thường làm hỏng file
+        // dở dang thay vì từ chối sạch.
+        let mut dev = MemDev::with_blocks(64);
+        format(&mut dev).unwrap();
+        let mut fs = Fs::mount(dev).unwrap();
+        let keep = fs.create(b"/keep", 0, INODE_FILE).unwrap();
+        fs.write(keep, 0, b"before-full", 0).unwrap();
+        // Ghi một file lớn cho tới khi hết chỗ.
+        let big = fs.create(b"/big", 0, INODE_FILE).unwrap();
+        let chunk = [0x5Au8; BLOCK_SIZE];
+        let mut written = 0usize;
+        let mut full_error = None;
+        while written < 512 * BLOCK_SIZE {
+            match fs.write(big, written, &chunk, 0) {
+                Ok(n) => written += n,
+                Err(error) => {
+                    full_error = Some(error);
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            full_error,
+            Some(FsError::NoSpace),
+            "ghi tới khi hết đĩa phải trả NoSpace, không phải lỗi khác"
+        );
+        // Dữ liệu cũ phải nguyên vẹn và FS vẫn nhất quán.
+        let mut buf = [0u8; 16];
+        let n = fs.read(keep, 0, &mut buf, 0).unwrap();
+        assert_eq!(&buf[..n], b"before-full");
+        fs.fsck().unwrap();
+    }
+
+    #[test]
     fn other_uid_is_read_only_and_cannot_unlink() {
         // Vòng 215: kiểm ĐƯỜNG THẤT BẠI của quyền hạn (phần lớn test trước đây
         // chỉ đi đường thành công). Mode mặc định `0b0111` = owner rwx, other

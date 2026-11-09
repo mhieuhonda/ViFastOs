@@ -3590,3 +3590,13 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   lại lý do.
 - Tổng host test **302 → 303**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.213 — Vòng 216: đĩa ĐẦY phải báo `NoSpace` gọn và không làm hỏng dữ liệu cũ
+
+- Test `no_space_is_reported_and_old_data_survives` (dev **64 block**):
+  ghi file lớn tới khi hết chỗ ⇒ **`NoSpace`** (không phải lỗi khác); file ghi
+  **trước** khi đầy vẫn đọc đúng; **`fsck()` vẫn sạch** sau khi đầy.
+- Đây là **xác nhận hành vi đúng**, không phải sửa lỗi — nhưng trước đó **không
+  ai kiểm**, và "hết chỗ" là loại điều kiện hay làm mất dữ liệu nhất.
+- FS test **36 → 37**, tổng host test **303 → 304**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.

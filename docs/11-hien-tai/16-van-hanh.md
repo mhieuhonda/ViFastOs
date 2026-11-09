@@ -418,6 +418,16 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5y-5. Đĩa ĐẦY: báo `NoSpace` gọn, dữ liệu cũ còn nguyên (vòng 216)
+
+Test `no_space_is_reported_and_old_data_survives` (dev 64 block):
+- ghi một file lớn cho tới khi hết chỗ ⇒ **`NoSpace`** (không phải lỗi khác);
+- file ghi **trước** khi đầy vẫn đọc đúng (`before-full`);
+- **`fsck()` vẫn sạch** sau khi đĩa đầy ⇒ FS không bị hỏng dở.
+
+Đây là loại lỗi mà "hết chỗ" thường làm **mất dữ liệu** thay vì từ chối sạch —
+giờ hành vi đúng đã được khoá.
+
 ### 5y-4. Quyền hạn FS: uid khác chỉ ĐỌC, và bị chặn ở đúng chỗ (vòng 215)
 
 Test `other_uid_is_read_only_and_cannot_unlink` đi **đường thất bại**:
