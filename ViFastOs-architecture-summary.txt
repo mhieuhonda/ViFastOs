@@ -521,6 +521,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 78e1752 r261 refactor: (T24) GDT/TSS theo TỪNG hart trên x86_64 (bỏ hart gắn cứng)
 - 6c65091 r262 fix: (T25) hạ MAX_IO 256→128 vì gây hỏng boot x86_64 24% + công cụ tái hiện
 - b912632 r263 docs: (T25) báo cáo G1 hoàn tất r254…r262 (6 phần + SHA-256 tự kiểm)
+- 1fab089 r264 feat: (T27) TcbGrantCap — uỷ quyền cap sang TCB khác (G2 Phần B)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

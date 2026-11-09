@@ -6983,15 +6983,11 @@ impl Kernel {
                 let target_slot = slot_or_invalid!(a0);
                 let src_slot = slot_or_invalid!(a1);
                 let dst_slot = slot_or_invalid!(a2);
-                let target = match self.lookup_cap(
-                    tcb,
-                    target_slot,
-                    Some(ObjType::Tcb),
-                    Rights::WRITE,
-                ) {
-                    Ok(cap) => cap,
-                    Err(error) => return UserAction::Return { value: 0, error },
-                };
+                let target =
+                    match self.lookup_cap(tcb, target_slot, Some(ObjType::Tcb), Rights::WRITE) {
+                        Ok(cap) => cap,
+                        Err(error) => return UserAction::Return { value: 0, error },
+                    };
                 let mask = Rights((a3 as u8) & Rights::ALL.0);
                 match self.grant_cap_to_tcb(tcb, target.obj, src_slot, dst_slot, mask) {
                     Ok(()) => UserAction::Return {
@@ -13470,11 +13466,7 @@ mod tests {
         let target = kernel.create_tcb("child", 5).unwrap();
         let endpoint = kernel.create_endpoint().unwrap();
         kernel
-            .install_cap(
-                caller,
-                1,
-                Cap::new(endpoint, ObjType::Endpoint, Rights::RW),
-            )
+            .install_cap(caller, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::RW))
             .unwrap();
         assert_eq!(
             kernel.grant_cap_to_tcb(caller, target, 1, 3, Rights::ALL),
@@ -13593,16 +13585,7 @@ mod tests {
             .install_cap(root, 2, Cap::new(target, ObjType::Tcb, Rights::READ))
             .unwrap();
         assert_eq!(
-            kernel.user_syscall(
-                root,
-                SyscallId::TcbGrantCap as u64,
-                2,
-                1,
-                3,
-                0,
-                0,
-                0
-            ),
+            kernel.user_syscall(root, SyscallId::TcbGrantCap as u64, 2, 1, 3, 0, 0, 0),
             UserAction::Return {
                 value: 0,
                 error: KError::NoRights,
