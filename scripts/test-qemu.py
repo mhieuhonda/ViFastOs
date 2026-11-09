@@ -53,9 +53,14 @@ def make_disk(name: str) -> str:
     """Create a fresh disk in a unique per-run directory.
 
     r240 (T5/D10): nếu có chương trình ngoài đã build, dựng ảnh FS ngay trên
-    host bằng `vifast-fsutil` rồi chèn vào `/{uname,uptime,free,df}`. Chương
+    host bằng `vifast-fsutil` rồi chèn `/bin/vf` + các hard link. Chương
     trình nằm trên ĐĨA nên không tốn frame Untyped lúc boot (bài học r238:
     nhúng vào ảnh root làm pool Untyped cạn 79→84/86 page).
+
+    r248: `name` có thể mang hậu tố (`riscv64-ial`, `x86_64-tcp`…). Trước đây
+    đưa nguyên tên đó cho `populate_disk` ⇒ `TARGETS.get()` trả None ⇒ đĩa
+    RỖNG ở mọi cấu hình không chuẩn (interactive/tcp/input/gpu), nên chế độ
+    interactive không thể chạy chương trình ngoài nào.
     """
     directory = tempfile.mkdtemp(prefix=f"vifast-{name}-disk-")
     if os.environ.get("VIFAST_KEEP_DISK") != "1":
@@ -63,7 +68,7 @@ def make_disk(name: str) -> str:
     path = os.path.join(directory, "disk.img")
     with open(path, "wb") as disk:
         disk.truncate(4 * 1024 * 1024)
-    populate_disk(path, name)
+    populate_disk(path, name.split("-")[0])
     return path
 
 
@@ -167,6 +172,13 @@ def run_qemu_interactive(
         # Gửi dồn một lệnh (13 byte vừa RX queue 64): cửa sổ shell→PREEMPT
         # hẹp, gửi chậm từng byte làm guest thoát (test-exit) trước khi đọc
         # hết. Flake mất byte giữa chừng là do tải máy, rerun là qua.
+        # r248 (T12/D14): gõ `uname` NGAY khi kết nối — lệnh không còn là
+        # builtin nên shell phải exec `/bin/uname` (hard link `/bin/vf`).
+        # Gửi trước `echo` vì cửa sổ shell hẹp và root còn nhiều Untyped.
+        try:
+            s.sendall(b"uname\r")
+        except OSError:
+            pass
         try:
             s.sendall(b"echo hello-123")
         except OSError:
@@ -178,7 +190,12 @@ def run_qemu_interactive(
             try:
                 buf += s.recv(65536)
             except socket.timeout:
-                pass
+                # r248: prompt có thể đã in TRƯỚC khi socket kết nối; gõ '\r'
+                # để shell in lại prompt thay vì bỏ cuộc ("no shell prompt").
+                try:
+                    s.sendall(b"\r")
+                except OSError:
+                    break
         if b"shell> " not in buf:
             proc.kill()
             proc.wait()
@@ -252,7 +269,6 @@ def run_qemu_interactive(
                     buf += s.recv(65536)
                 except socket.timeout:
                     pass
-            got = marker in buf
         s.close()
         # Để guest chạy tiếp cho tới khi tự thoát hoặc timeout.
         try:
@@ -266,6 +282,13 @@ def run_qemu_interactive(
         # cửa sổ trước test-exit chỉ đủ chắc chắn cho một lệnh.
         if "hello-123" not in output:
             return False, output
+        # r248: `uname` là CHẨN ĐOÁN, không phải điều kiện đỏ. Lý do (đo được):
+        # cửa sổ shell→test-exit rất hẹp, và lệnh gõ lúc prompt thường tới root
+        # khi Untyped đã cạn giữa boot ⇒ root bỏ exec (không in gì). Bằng chứng
+        # argv CỨNG đã nằm ở boot với EXACT_ONE `BIN OK args/uname/uptime`.
+        echo_at = buf.find(b"shell> uname")
+        seen = echo_at >= 0 and buf.find(b"BIN OK uname", echo_at + 5) >= 0
+        print(f"[interactive] uname qua shell: {'SAW' if seen else 'NOT SEEN'}")
         # Lưu ý: riscv64 có flake nhận byte UART ở chế độ interactive (kể cả
         # trước vòng 89), nên `RUN FS OK` chỉ là bonus best-effort ở đây;
         # bằng chứng cứng của exec-from-FS nằm ở test tay QEMU + (vòng sau)
@@ -959,7 +982,7 @@ def test_interactive(name: str, index: int) -> bool:
             ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
         )
         cmd = [
-            QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "128M",
+            QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "256M",
             "-display", "none",
             "-serial", f"file:{serial}",
             "-global", "virtio-mmio.force-legacy=false",
@@ -974,7 +997,7 @@ def test_interactive(name: str, index: int) -> bool:
         kernel = os.path.join(ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64")
         cmd = [
             QEMU_ARM, "-machine", "virt,gic-version=2", "-semihosting",
-            "-cpu", "max", "-smp", "2", "-m", "128M",
+            "-cpu", "max", "-smp", "2", "-m", "256M",
             "-display", "none",
             "-serial", f"file:{serial}",
             "-global", "virtio-mmio.force-legacy=false",
@@ -992,7 +1015,7 @@ def test_interactive(name: str, index: int) -> bool:
     ok, output = run_qemu_interactive(name, cmd, serial, 30)
     print(f"--- {name} interactive {'PASS' if ok else 'FAIL'} ---")
     if not ok:
-        print(output[-500:])
+        print(output[-4000:])
     return ok
 
 
@@ -1641,6 +1664,12 @@ def main() -> int:
         passed = sum(runs)
         print(f"{name:8} {passed}/{len(runs)} PASS")
         if passed != len(runs):
+            failed = True
+    # r248 (D11): trước đây `--interactive` chạy nhưng kết quả bị bỏ — cổng
+    # xanh dù input/flake hỏng. Giờ mọi lần interactive thất bại đều làm đỏ.
+    for name, runs in interactive_results.items():
+        if runs and not all(runs):
+            print(f"{name:8} interactive {sum(runs)}/{len(runs)} PASS")
             failed = True
     return 1 if failed else 0
 

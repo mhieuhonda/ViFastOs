@@ -165,3 +165,57 @@ cần ≥512 B mới vượt biên trên riscv64) — **ghi nhận là kết qu�
 **Hiện tại:** RV 7/8, A64 7/8, x86 8/9 ⇒ **dư 1 trang mỗi arch** (mục tiêu 2, sàn 1).
 Cần thêm 1 trang: theo kế hoạch là T12 (ABI argv) + T13 (df/ps cần cap) — không thể
 đạt bằng cắt chuỗi nhỏ lẻ.
+
+## T12 — D15 (ABI argv) + D14 (multicall `/bin/vf`) — DONE
+
+### Vì sao phải làm trước mọi thứ khác
+
+Exec cũ không có argv. Nó "truyền tham số" bằng cách **vá byte**: root ghi cặp
+`(ptr,len)` vào `entry+0x20` và chuỗi vào `entry+0x40` của trang code, còn ảnh
+demo đọc đúng offset cứng đó. Hệ quả: (a) chương trình Rust thật không dùng
+được ⇒ phải build **3 ảnh riêng** cho `uname`/`uptime`/`free`; (b) không thể
+multicall theo `argv[0]`; (c) ghi vào vùng EXEC trước khi map là ràng buộc ngầm.
+
+### Hợp đồng mới (D15) — chi tiết ở `docs/design/exec-argv-abi.md`
+
+- `a0 = argc` (≤ 8), `a1 = argv`, `sp = EXEC_ARGS_BASE` (= `EXEC_STACK_TOP − 256`).
+- Khối 256 B trên **trang stack**: 8 con trỏ (64 B) + 192 B chuỗi NUL-terminated.
+- Syscall mới `TcbSetArgs = 56`; kernel kiểm `argc ≤ 8`, `argc≠0 ⇒ argv≠0`,
+  `argv` canh 8 B, TCB phải `Inactive`/`Exited`.
+- `TcbRestart` mang theo `argc/argv` (restart giữ tham số); `TcbConfigure` xoá.
+
+### Kết quả (gate full PASS, QEMU 3 arch × 3 lần)
+
+| Kiểm chứng | Trước r247 | Sau r247 |
+|---|---|---|
+| Ảnh chương trình ngoài | 3 ảnh × 3 arch (8.5–12.6 KiB mỗi ảnh) | **1 ảnh** `/bin/vf` (8.6–8.8 KiB) + 4 hard link |
+| Tham số exec | vá byte trang code | khối argv trên trang stack + `a0`/`a1` |
+| Marker argv | `HIARG` (từ vá byte) | `HIARG` (từ argv), `BIN OK args`, `BIN OK uname`, `BIN OK uptime` (EXACT_ONE) |
+| Shell fallback | `/<tên>` | `/bin/<tên>` (hard link ⇒ multicall) |
+
+### Hai lỗi thật phát hiện trong vòng này
+
+1. **`sp` ở đỉnh trang làm khối argv bị xoá.** Bản đầu đặt `sp = EXEC_STACK_TOP`;
+   x86_64 in `BIN OK args` nhưng `argv:` **rỗng** (thiếu `HIARG`), riscv64/aarch64
+   lại đúng. Nguyên nhân: prologue x86 ăn ~256 B ⇒ `rsp` đi xuống dưới
+   `EXEC_ARGS_BASE` và ghi đè khối trước khi chương trình đọc. Sửa: `sp =
+   EXEC_ARGS_BASE` (khối nằm NGOÀI vùng stack tăng trưởng).
+2. **Rò rỉ ở self-test exec của boot.** Ba lần exec mới ở boot giữ TCB/VSpace/
+   frame của lần cuối. Đo: `DATA UNTYPED objects=74/86` trước khi sửa,
+   `68/86` sau khi sửa; và x86_64 có **1/3 lần đỏ** vì thiếu `MEM OOM OK`
+   trước khi sửa. Sửa: `boot_exec_once` gọi `tcb_wait` rồi `destroy_exec` ngay.
+
+### Nợ kỹ thuật ghi nhận (đưa sang T15)
+
+- `--interactive` trước r248 **không hề có tác dụng chặn cổng**: kết quả
+  `interactive_results` được thu nhưng không dùng ⇒ input hỏng vẫn xanh. Nay đã
+  chặn (mọi lần interactive thất bại đều đỏ) — và ngay lập tức lộ ra 2 lỗi:
+  - interactive/tcp/input/gpu boot với **đĩa rỗng** vì `make_disk` truyền
+    `"riscv64-ial"` cho `populate_disk` (khóa `TARGETS` không có) ⇒ không có
+    chương trình ngoài nào. Sửa: `name.split("-")[0]`.
+  - interactive boot `-m 128M` trong khi test chuẩn `-m 256M` ⇒ `MEM OOM BAD`
+    hàng loạt. Sửa: dùng 256M.
+- Gõ `uname` qua shell ở chế độ interactive vẫn **NOT SEEN**: cửa sổ shell hẹp,
+  lệnh gửi lúc prompt tới root khi Untyped đã cạn giữa boot nên root bỏ exec.
+  Giữ làm **chẩn đoán** (in `SAW`/`NOT SEEN`), không phải điều kiện đỏ; bằng
+  chứng argv cứng nằm ở EXACT_ONE của boot.

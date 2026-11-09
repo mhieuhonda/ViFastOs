@@ -504,6 +504,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 1a48b9b r246 docs: cap nhat progress G1 (T9/T10/T11)
 - 6073dca revert: gop deploy/ tro lai main, bo tach D8
 - 16927a5 r246 feat: (T12/D15) ABI argv trên trang stack exec — TcbSetArgs + a0/a1
+- e29af30 r247 feat: (T12/D14+D15) multicall /bin/vf + bỏ vá byte, argv thật ở boot
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
