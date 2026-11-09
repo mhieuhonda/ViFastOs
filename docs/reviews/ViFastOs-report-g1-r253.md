@@ -277,3 +277,14 @@ cho demo chạy lại nếu bị bỏ lỡ (xem Part 6).
 
 Cách kiểm: `python3 - <<'PY'` cắt file tại dòng `---` đầu tiên của khối này
 rồi băm phần còn lại, phải ra đúng chuỗi trên.
+
+<!-- SHA-256: phần dưới đây KHÔNG nằm trong hash -->
+
+## SHA-256
+
+```text
+87dd358670bdb6af9d4cd4345c0d638427ace99b5bbfe1a4933509bcb1c8ee2a  docs/reviews/ViFastOs-report-g1-r253.md
+```
+
+Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm một `\n`),
+phải ra đúng chuỗi trên.
