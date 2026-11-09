@@ -602,3 +602,37 @@ Tạo `docs/design/g2-memory-and-exec-caps.md` (178 dòng, trần 300):
   VFS quyền `READ` + badge shell.
 - **Phần C** — 5 bước triển khai, 5 rủi ro có dấu hiệu nhận biết, 5 câu hỏi
   mở cần chốt trước khi viết mã.
+
+### Kiểm nhận D21 — soak 20 sau thay đổi boot path (r261)
+
+```
+riscv64  20/20 PASS (100.0%)
+aarch64  20/20 PASS (100.0%)
+x86_64   15/20 PASS (75.0%)
+iterations: 20, elapsed: 369.8s
+```
+
+5 lần hỏng của x86_64 **đều** là `FS V2 OK` (flake đã bisect về `d3f2472`), không
+có loại lỗi mới nào — quan trọng vì T24 đụng đường khởi động AP. Đã merge vào
+`main` (ff) sau đó.
+
+## T24 — GDT/TSS theo hart (r261) — DONE (phần cốt lõi)
+
+Trước: `GDT`/`GDT_PTR` cho BSP và `AP_GDT`/`AP_GDT_PTR` cho AP, `ap_entry` dùng
+**hằng** `AP_HART` ⇒ trampoline chỉ dựng được cho đúng hart 1 (audit #4 P1-7).
+
+Sau: `GDTS[MAX_HARTS]` + `GDT_PTRS[MAX_HARTS]`; một đường duy nhất
+`setup_hart_gdt_tss_idt(hart)` dùng `TSSS/TRAP_STACKS/IST_STACKS` theo hart cho
+cả BSP (hart 0) và AP; danh tính hart của AP đi qua **dữ liệu** trong trang
+trampoline (ô `0x204`) thay vì hằng số trong mã.
+
+Đóng thêm một mục P2 cùng lúc: `AP_GDT` từng không nằm trong
+`kernel_data_ranges`; nay `GDTS` là mảng duy nhất và đã nằm trong danh sách đó.
+
+**Chưa làm (ghi rõ giới hạn):** khởi động hart 2–3. `AP_MAINT_*` hiện giả định
+đúng **một** AP (một `AP_APIC_ID`, một ACK counter), nên `-smp 4` cần fan-out
+IPI trước. GDT/TSS đã sẵn sàng theo hart nên đây là việc của vòng sau.
+
+## T25 — soak 100 × 3 arch + đóng G1 (r262)
+
+SOAK100_PROGRESS

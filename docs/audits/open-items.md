@@ -83,10 +83,10 @@ Quy ước trạng thái:
 
 | Mục | Trạng thái | Ghi chú |
 |---|---|---|
-| Hart index hard-code (`TSSS[1]`, `CPU_STATES[1]`, `pick_on(1)`) | **OPEN (P1)** | Latent: chỉ hart 1 dùng được trampoline |
+| Hart index hard-code (`TSSS[1]`, `CPU_STATES[1]`, `pick_on(1)`) | **CLOSED (r261)** | `GDTS[MAX_HARTS]` + `GDT_PTRS[MAX_HARTS]`, một đường `setup_hart_gdt_tss_idt(hart)` cho cả BSP và AP; danh tính hart của AP đi qua dữ liệu trong trang trampoline (ô 0x204). Còn lại (khác phạm vi): khởi động hart 2–3 cần fan-out IPI cho `AP_MAINT_*` — ghi ở `docs/reviews/ViFastOs-report-r262.md` T24 |
 | **3 assert vacuous trong `ap_entry`** | **CLOSED (r233)** | Thay bằng (a) APIC ID đọc từ LAPIC phải khớp `AP_APIC_ID`, (b) `GS_BASE` phải nằm trong `CPU_STATES`; thêm 3 const assert cho GDT 7 entry. Ba assert cũ đọc lại giá trị vừa ghi nên **không thể fail** (D11) |
 | `fault_frame_complete()` | CLOSED | v92 |
-| `AP_GDT` chưa nằm trong `kernel_data_ranges` ⇒ executable dưới NX | **OPEN (P2)** | Rủi ro thấp nhưng đúng là lỗ hổng NX |
+| `AP_GDT` chưa nằm trong `kernel_data_ranges` ⇒ executable dưới NX | **CLOSED (r261)** | `AP_GDT`/`AP_GDT_PTR` đã gộp vào `GDTS`/`GDT_PTRS`, và cả hai đã nằm trong danh sách `kernel_data_ranges` ⇒ áp NX đúng |
 
 ## 5. Việc phải làm tiếp (đề xuất thứ tự)
 

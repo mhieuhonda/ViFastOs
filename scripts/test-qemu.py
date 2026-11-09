@@ -536,6 +536,18 @@ def run_qemu_once(
                     "      gợi ý: chỉ thiếu PREEMPT OK ⇒ nghi QEMU mồ côi/tải máy;"
                     " chạy ./scripts/diag.sh và pkill -f qemu-system rồi thử lại"
                 )
+            # r262: nêu NGAY marker bị cấm nếu có. Trước đây một lần boot in
+            # `FS V2 BAD` (bị cấm) chỉ được báo là "thiếu FS V2 OK", và câu
+            # đó đã làm điều tra đi sai hướng suốt một vòng: thiếu marker là
+            # TRIỆU CHỨNG, marker bị cấm mới là NGUYÊN NHÂN.
+            from harness_spec import FORBIDDEN as _FORBIDDEN
+
+            forbidden_seen = [token for token in _FORBIDDEN if token in output]
+            if forbidden_seen:
+                print(
+                    "      kèm marker BỊ CẤM: "
+                    f"{forbidden_seen[:4]} — đây là lỗi thật, không phải flake"
+                )
         else:
             from harness_spec import BOOT_STACK_RE, EXACT_ONE, FORBIDDEN
 

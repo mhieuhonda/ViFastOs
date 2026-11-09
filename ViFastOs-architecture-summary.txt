@@ -517,6 +517,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 31ad161 r254 feat: (T17) cổng interactive thật + xác nhận shell và trang client
 - 0e60423 r255 perf: (T18) aarch64 về 6 trang — thay compiler_builtins mem* bằng bản tại chỗ
 - 72985df r259 feat: (T21) bất biến sched ở ranh giới user + biến thể mutation đỏ
+- b5d4743 r260 fix: (T22) đóng 4 mục audit cuối (K42, K45, K46, K60) + (T23) thiết kế G2
+- 78e1752 r261 refactor: (T24) GDT/TSS theo TỪNG hart trên x86_64 (bỏ hart gắn cứng)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -897,7 +899,7 @@ Giới hạn cố định (sinh từ code, ghi kèm crate):
 - `vifast-abi::MAX_CLIENTS = 4`
 - `vifast-abi::MAX_NAME = 8`
 - `vifast-abi::MAX_COMPONENT = 28`
-- `vifast-abi::MAX_IO = 256`
+- `vifast-abi::MAX_IO = 128`
 - `vifast-abi::MAX_FILES = 16`
 - `vifast-abi::MAX_PATH = 128`
 - `vifast-abi::MAX_FD = 8`

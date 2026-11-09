@@ -669,13 +669,24 @@ pub mod vfs {
     pub const ERR: u64 = u64::MAX;
     pub const MAX_NAME: usize = 8;
     pub const MAX_COMPONENT: usize = 28;
-    /// (#10) Max bytes per READ/WRITE round-trip.  Raised 128 -> 256 to match
-    /// `USER_COPY_MAX` and the kernel IPC copy width
-    /// (`IPC_BUFFER_WORDS * 8 = 256B`), so one VFS READ/WRITE carries a full
-    /// 256B instead of needing 4 round-trips per 512B FS block paired with
-    /// 4 journal commits.  Both IPC buffer pages are 4 KiB; 256B payloads
-    /// stay well inside them on both client and server stacks.
-    pub const MAX_IO: usize = 256;
+    /// Max bytes per READ/WRITE round-trip.
+    ///
+    /// r262 (T25): HẠ 256 -> 128. Bản 256 (từ `d3f2472`) làm boot **x86_64**
+    /// hỏng 12/49 lần (~24%) với `FS V2 BAD`: `mkdir` trả OK nhưng `readdir`
+    /// ngay sau đó đọc ảnh CŨ của block thư mục gốc (vi phạm
+    /// read-your-own-write ở tầng FS server). Đo có đối chứng, cùng máy/đĩa:
+    ///
+    /// | MAX_IO | lần boot | hỏng |
+    /// |---|---:|---:|
+    /// | 256 | 49 | 12 |
+    /// | 128 | 32 | **0** |
+    ///
+    /// Đây là **thu hẹp cửa sổ race**, không phải sửa gốc: race nằm ở đường
+    /// FS/cache khi có ≥2 hart (smp=1 thì 8/8 xanh), thuộc commit `d3f2472`
+    /// chứ không phải phiên r254–r262. Muốn nâng lại 256 thì phải kèm một
+    /// test tái hiện được và sửa gốc trước — xem
+    /// `docs/reviews/ViFastOs-report-r262.md` Phần 4.
+    pub const MAX_IO: usize = 128;
     pub const MAX_FILES: usize = 16;
     pub const MAX_PATH: usize = 128;
     pub const MAX_FD: usize = 8;
