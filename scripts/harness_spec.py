@@ -397,6 +397,35 @@ def smp_idle(output: str) -> tuple[int, int, int, int]:
     return tuple(int(match.group(i)) for i in range(1, 5))
 
 
+TCP_ECHO_MARKER = "NET TCP ECHO OK"
+
+
+def tcp_echo_verdict(listener_present: bool, output: str) -> tuple[bool, str]:
+    """Điều kiện tiên quyết của marker ``NET TCP ECHO OK`` (r226 / T1 / D11).
+
+    Marker này chỉ có nghĩa khi harness THẬT SỰ mở ``TcpProbeListener``. Ở
+    feature-mode (``feature is not None``) ``test-qemu.py`` không mở listener và
+    guest không chạy TCP probe, nên marker vắng mặt là ĐÚNG.
+
+    Trước r226 check được áp vô điều kiện, khiến mọi feature test riscv64
+    (destroy-smp, panic-hart1, skip-tlb-ipi, boot-handoff) đỏ giả từ v179 và
+    làm mutation TLB trên RV trông "không phát hiện được" — bài học r224.
+
+    Trả ``(ok, thông điệp)``; caller in nguyên văn thông điệp để log trung thực.
+    """
+    has_marker = TCP_ECHO_MARKER in output
+    if not listener_present:
+        # Không có tiền đề: SKIP tường minh, không FAIL và không PASS giả.
+        if has_marker:
+            return True, (
+                "TCP PROBE: SKIP — không có listener (marker xuất hiện nhưng vô nghĩa)"
+            )
+        return True, "TCP PROBE: SKIP — feature-mode không mở listener TCP (D11)"
+    if not has_marker:
+        return False, "FAIL: guest không nhận được dữ liệu TCP echo từ host"
+    return True, "TCP PROBE: guest đã nhận dữ liệu echo từ host"
+
+
 def accept(
     name: str,
     output: str,

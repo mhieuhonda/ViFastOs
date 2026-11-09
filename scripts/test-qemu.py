@@ -22,7 +22,7 @@ import time
 import glob
 import hashlib
 
-from harness_spec import ARCH, COMMON, accept
+from harness_spec import ARCH, COMMON, accept, tcp_echo_verdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QEMU_RV = "qemu-system-riscv64"
@@ -696,16 +696,16 @@ def test_riscv(index: int = 0, feature: str | None = None) -> bool:
         index=index,
         feature_mode=feature,
         )
-    # Vòng 179: yêu cầu guest THẬT SỰ nhận được dữ liệu echo (marker nằm trong
-    # serial; không đưa vào ARCH vì phụ thuộc listener của harness).
+    # Vòng 179 / r226 (T1, D11): marker echo chỉ có nghĩa khi harness CÓ listener.
+    # Feature-mode không tạo TcpProbeListener nên marker vắng mặt là đúng; trước
+    # đây check vô điều kiện làm MỌI feature test riscv64 đỏ giả từ v179.
     if ok:
         try:
             text = open(serial, "rb").read().decode("utf-8", errors="replace")
         except OSError:
             text = ""
-        if "NET TCP ECHO OK" not in text:
-            print("FAIL: guest không nhận được dữ liệu TCP echo từ host")
-            ok = False
+        ok, message = tcp_echo_verdict(listener is not None, text)
+        print(message)
     if listener is not None:
         accepted = listener.accepted
         listener.close()
