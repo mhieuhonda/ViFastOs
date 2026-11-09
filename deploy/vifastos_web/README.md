@@ -2,7 +2,7 @@
 
 Landing page + early-access signup collector for
 [ViFastOs](https://github.com/vifast-oss/ViFastOs), a small seL4-style,
-capability-based microkernel written in Rust (`no_std`, MIT).
+capability-based microkernel written in Rust (`no_std`, MIT OR Apache-2.0).
 
 The app is deliberately tiny: one FastAPI file, stdlib `sqlite3`, three static
 files. No ORM, no frontend framework, no external fonts, no analytics, no
@@ -152,5 +152,6 @@ docker-compose.yml  minimal; proxy network configured at deploy time
 
 ## License
 
-MIT — same license as the kernel. ViFastOs itself lives at
+MIT OR Apache-2.0 — same dual license as the kernel (see `LICENSE-MIT` and
+`LICENSE-APACHE` at the repo root). ViFastOs itself lives at
 https://github.com/vifast-oss/ViFastOs.

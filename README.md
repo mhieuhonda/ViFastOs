@@ -292,3 +292,15 @@ Biến môi trường: `ADMIN_PASSWORD` (bảo vệ `/admin`), `STATS_SALT`, `DA
 
 Trang lấy danh sách bản phát hành công khai từ GitHub Releases của repo này qua
 `/api/releases` (cache 10 phút).
+
+## Giấy phép
+
+Mã nguồn phát hành theo **giấy phép kép MIT HOẶC Apache-2.0** — người dùng chọn một trong hai:
+
+- [`LICENSE-MIT`](LICENSE-MIT) — bản ngắn gọn, tương thích GPLv2.
+- [`LICENSE-APACHE`](LICENSE-APACHE) — có điều khoản cấp phép bằng sáng chế (§3).
+
+Biểu thức SPDX: `MIT OR Apache-2.0` (khai báo ở `[workspace.package]` trong `Cargo.toml`).
+
+Logo, wordmark và tài nguyên thương hiệu **không** thuộc phạm vi hai giấy phép trên — xem
+[`TRADEMARKS.md`](TRADEMARKS.md).

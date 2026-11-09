@@ -37,4 +37,5 @@ Logo chính thức của dự án. Tên hiển thị luôn viết **ViFastOs** (
   `VIFASTOS`, `ViFast OS` hay `vifastos`.
 - Không dùng icon trên nền đỏ cùng tông, không bóp méo tỉ lệ, chừa lề ≥ 12% cạnh ngắn.
 
-Giấy phép: MIT (xem `LICENSE` ở gốc repo). Chi tiết nhãn hiệu: `TRADEMARKS.md`.
+Giấy phép: MIT hoặc Apache-2.0 (xem `LICENSE-MIT` / `LICENSE-APACHE` ở gốc repo). Chi tiết
+nhãn hiệu: `TRADEMARKS.md`.
