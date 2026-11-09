@@ -547,6 +547,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d96ecc1 r282 docs: đồng bộ bảng tổng hợp kiến trúc sau lần gen-docs cuối
 - f0ef3f6 r283 docs: hợp nhất phân tích T18 từ nhánh r254 rồi xoá nhánh
 - ed81338 r284 test: (T26) bài test hồi quy D18 cho BLOCKER `FS V2 OK` + dọn kho nhánh
+- 07f831b r285 docs: ghi nhận T33a đã bắt được cả gate (x86_64 2/3, timeout PREEMPT OK) + ký lại báo cáo
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
