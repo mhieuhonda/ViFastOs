@@ -33,3 +33,49 @@ Mốc gốc: `5150d0c` (= HEAD `main` lúc mở G1)
 - `main` vẫn bẩn (2 file `crates/` của vòng 224 + file web của tiến trình khác) — **không chạm**.
 - Mọi commit G1 nằm trên nhánh `g1`; chưa merge vào `main` (chờ D8 được xử lý).
 - Gate nhánh `g1`: `--quick` PASS; QEMU 3/3 arch PASS; harness 605 cases.
+
+## T5 — phân tích trước khi code (đo tại r234, KHÔNG phải ước lượng)
+
+**Hiện trạng ngân sách trang client:**
+
+| Arch | Size (stripped) | Trang | Ngân sách | Dư |
+|---|---|---|---|---|
+| riscv64 | 29 184 B | 8 | 8 | **0** |
+| aarch64 | 29 024 B | 8 | 8 | **0** |
+| x86_64 | 33 192 B | 9 | 9 | **0** |
+
+Mục tiêu T5: dư **≥ 2 trang** ⇒ RV/A64 phải xuống ≤ 24 576 B (**giảm ≥ 4 608 B**),
+x86 ≤ 28 672 B (**giảm ≥ 4 520 B**).
+
+**Chi phí thật của phần điều khiển lệnh (nm trên client chưa strip, RV):**
+
+| Symbol | Size | Ghi chú |
+|---|---|---|
+| `shell_command` | **5 192 B** | toàn bộ dispatcher + thân mọi lệnh |
+| `shell` | 1 314 B | vòng nhập, lịch sử, ↑/↓ |
+| `client_main` | 7 030 B | khởi tạo + IPC + vòng chính |
+| `memmove`/`memcpy` | 926 + 432 B | do compiler-builtins |
+
+⇒ Bốn lệnh đọc thông tin (`uname`, `uptime`, `free`, `df`) nằm **bên trong**
+`shell_command` 5 192 B. Kể cả bỏ cả 4 thân lệnh, phần tiết kiệm **chưa chắc**
+đạt 4,6 KiB — cần đo bằng build loại trừ chứ không được đoán.
+
+**Kết luận (TIMEBOX-NEGATIVE cho vòng này, có lý do):**
+1. Chỉ di chuyển 4 lệnh **có thể không đủ** 2 trang; cần thêm: gộp hàm in số
+   (`write_u64`, `write_decimal`), bỏ bảng chuỗi trùng, và có thể chuyển cả
+   `ps`/`jobs` (nhưng D10 giữ `jobs` vì cần trạng thái shell).
+2. Đường ống "chương trình ngoài" **chưa tồn tại**: root chỉ có một mảng byte
+   `exec_demo_elf()` 0x180 viết vào `/prog.elf`; **không có** `build.rs`, không
+   có `/bin`, shell không có nhánh fallback. Muốn có 1 chương trình ngoài thật
+   phải: crate mới → `build.sh` build 3 target + strip → biến môi trường cho
+   root `include_bytes!` → root ghi vào FS → shell fallback `runfs /<tên>`.
+   Đây là ~4–6 vòng như đã báo trong Part 6 của báo cáo r230.
+
+**Đề xuất làm ngay ở vòng kế (theo thứ tự, mỗi bước có số đo):**
+1. Tạo `crates/vifast-bin` (multicall: `uname/uptime/free/df`) — **một** ELF
+   duy nhất để giảm chi phí build/embed; `argv[1]` chọn lệnh.
+2. Wire `build.sh` + env + `include_bytes!` + root ghi `/bin` (nếu FS chưa có
+   `mkdir` thì ghi thẳng `/uname` … và ghi rõ sai lệch D10 trong báo cáo).
+3. Client: xóa 4 thân lệnh, thêm fallback `runfs /<line>`; đo lại trang.
+4. Nếu chưa đủ 2 trang: tiếp tục gộp hàm in số + chuyển `stat`/`ls` (nếu D10
+   cho phép) trước khi nghĩ tới nới ngân sách.
