@@ -125,10 +125,14 @@ def main() -> int:
         "hai fault pager/fault4",
         "hai fault của fault4",
         "còn 11-13 trang",
+        "Chưa có driver network/GPU",
+        "object table cố định 147",
+        "TCB quota 18",
+        "MAX_CAPS_TASK=64",
     ]
     if "KError::Busy = 20" not in summary or "KError::HasDependents = 21" not in summary:
         fail("generated error table is missing Busy/HasDependents")
-    if "RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B" not in summary:
+    if "RISC-V 41.472 B, AArch64 49.504 B, x86 49.576 B" not in summary:
         fail("summary root ELF sizes are stale")
     for value in forbidden:
         needle = value.casefold()
@@ -230,6 +234,8 @@ def main() -> int:
             "hai fault pager/fault4",
             "hai fault của fault4",
             "còn 11-13 trang",
+            "Chưa có driver network/GPU",
+            "object table cố định 147",
         ]
         base = SUMMARY.read_text()
         for phrase in forbidden:

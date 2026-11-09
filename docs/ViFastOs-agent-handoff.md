@@ -78,12 +78,15 @@ hệ điều hành production.
 ### Chưa có / còn yếu
 
 - Hardware IOMMU (VT-d/SMMU); DMA hiện chưa dùng thật vì block driver polling.
-- Network (VirtIO net), GPU/framebuffer, compositor, ViFastKey.
+- Compositor, ViFastKey, focus/window nhiều client (net + GPU + input MVP
+  ĐÃ có từ vòng 66–180; chỉ thiếu phần compositor/ViFastKey).
 - Pager/mount tổng quát; page cache dùng chung; demand-load ELF theo nhu cầu.
 - CNode guard, nhiều cấp, zombie reaping.
 - Free/destroy object theo từng object ngoài đường revoke Untyped; allocator
-  vật lý trả trang; object table cố định 147.
-- Khóa mịn, x2APIC; mới test 2 hart (`MAX_HARTS=4` nhưng chưa chạy 4).
+  vật lý trả trang; object table 168 (TCB 24) nhưng chưa có free-page
+  allocator toàn cục (G2).
+- Khóa mịn (mới đo contention), x2APIC; mới test 2 hart (`MAX_HARTS=4`).
+- GDT/TSS x86 chưa per-hart ⇒ không bật được hart 2/3 (P1, audit92).
 - Barrier/atomicity của đĩa thật; driver QEMU-specific.
 - Userland đầy đủ: libc, shell hệ thống, dynamic linking, ứng dụng thật.
 - Formal verification; soak dài; CI hosted (đã bỏ theo yêu cầu).

@@ -1,6 +1,8 @@
 # Thiết kế framebuffer + input MVP (dự thảo cho vòng 25)
 
-Trạng thái: **draft**, chưa có code. Mục tiêu: đưa ViFastOs từ console text
+Trạng thái: **implemented-partial** (cập nhật r234). Đã có: virtio-gpu
+gradient + `--gpu-check` (160×120 pixel thật), splash, virtio-input,
+PS/2 x86, RAMFB. Chưa có: compositor, focus, cửa sổ nhiều client. Mục tiêu: đưa ViFastOs từ console text
 sang framebuffer + bàn phím, đủ để chạy shell và demo đồ hoạ đơn giản.
 
 ## 1. Phần cứng mục tiêu

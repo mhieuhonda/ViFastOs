@@ -1,6 +1,9 @@
 # Ngân sách bộ nhớ để mở pager v2 (đề xuất vòng 26)
 
-Trạng thái: **đề xuất**, chưa code. Mục tiêu: tìm đường hợp lệ cho data Untyped
+Trạng thái: **implemented-partial** (cập nhật r234). Đã làm: cspace task
+48→16 slot, object 147→168, TCB 18→24, thu hồi trang staging module
+(syscall 55), arena 96 trang cho aarch64/x86. Chưa làm: free-page
+allocator toàn cục (G2). Mục tiêu: tìm đường hợp lệ cho data Untyped
 368 KiB + `MAX_OBJECTS` đủ object cho pager mà vẫn giữ headroom RISC-V
 ≥ 196.608 byte.
 
