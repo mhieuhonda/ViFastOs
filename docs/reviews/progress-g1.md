@@ -535,3 +535,70 @@ là **sai ở thời điểm exit**. Bất biến đúng — và nay được ki
 - và `violations == 0` trên toàn bộ phép kiểm ở ranh giới.
 
 Đã đổi phép kiểm theo số đo thay vì giữ giả định.
+
+## T22 — bốn mục audit còn mở (K42, K45, K46, K60) — DONE (r260)
+
+Làm đúng D18: mỗi mục phải có test **đỏ trước**, và đã chứng minh đỏ bằng cách
+tạm bỏ bản vá rồi chạy lại (ghi lại kết quả bên dưới).
+
+### K60 — `harts_loaded` "ma"
+
+- **Lỗi**: `check_invariants` chỉ bác bit ≥ `MAX_HARTS`, không bác bit cho hart
+  **chưa từng chạy** — tức sổ sách flush có thể ghi một ASID cho hart không tồn
+  tại mà không ai biết.
+- **Vá**: kernel ghi `harts_seen` (ở `tick`, `pick_on`, `note_vspace_hart_loaded`);
+  `check_invariants` đòi `harts_loaded & !harts_seen == 0`.
+- **Test**: `check_invariants_detects_phantom_harts_loaded_bit`.
+  Bỏ bản vá ⇒ **FAILED** (đã chạy), có bản vá ⇒ ok.
+
+### K46 — `poll` không hạ `pending` của IRQ ⇒ mất ngắt
+
+- **Lỗi**: driver `poll` notification (tiêu thụ word) rồi re-arm thiết bị mà
+  không `IrqAck`; `irq_raise` thấy `pending == true` nên **coalesce và không
+  signal** ⇒ cạnh kế tiếp mất hẳn.
+- **Vá**: `poll` tiêu thụ word thì hạ `pending` của mọi IRQ trỏ tới notification
+  đó (quét `MAX_OBJECTS` chỉ khi `word != 0`).
+- **Test**: `poll_clears_irq_pending_so_the_next_edge_is_delivered`.
+  Tắt nhánh quét ⇒ **FAILED**, bật ⇒ ok.
+
+### K42 — `bound_ntfn` là trường chết
+
+- **Lỗi**: `bind_notification` ghi, `check_invariants` kiểm, nhưng **không chỗ
+  nào đọc** để hành động; TCB bind notification xong vẫn `recv` chặn bình thường.
+- **Vá**: `recv` poll `bound_ntfn` trước khi chặn — có bit chờ thì trả ngay
+  message `LABEL_NOTIFICATION` và tiêu thụ đúng một lần.
+- **Test**: `recv_polls_the_bound_notification_before_blocking`.
+  Vô hiệu nhánh poll ⇒ **FAILED**, bật ⇒ ok.
+
+### K45 — nghi ngờ "signal xoá word trước vòng lặp làm mất bit" ⇒ **không phải lỗi**
+
+Dựng đúng ca hỗn hợp: hàng đợi `[stale, live]`, `word = 0b0010`, `signal(0b0001)`.
+Đo được: waiter sống nhận **0b0011** (đủ bit cũ + mới), waiter treo không bị
+đánh thức, `poll` sau đó trả `0` (không sót bit). Test:
+`signal_mixed_stale_and_live_waiters_loses_no_bit`.
+
+Kết luận: `value` được tính **một lần** rồi phát cho mọi waiter sống, nên xoá
+word trước vòng lặp không làm mất bit nào; nhánh "không ai được phát" còn khôi
+phục word. Đóng K45 là **không phải lỗi**, kèm test làm bằng chứng.
+
+### Tổng kết T22
+
+- Audit: **39 CLOSED · 3 UNREACHABLE · 4 OPEN** → **43 CLOSED · 3 UNREACHABLE · 0 OPEN**.
+- Kernel host test: 232 → **234** (2 test mới: K60, K46, K42 = 3; K45 = 1; trừ
+  đi phần đã đếm — xem `docs/11-hien-tai/09-testing.md`).
+- QEMU 3 arch × 3 lần: **9/9 PASS** sau thay đổi IPC (`recv`/`poll`) — quan
+  trọng vì K42/K46 đụng đường IPC dùng chung.
+
+## T23 — thiết kế G2: cấp trang & cap cho exec (r260) — DONE (docs)
+
+Tạo `docs/design/g2-memory-and-exec-caps.md` (178 dòng, trần 300):
+
+- **Phần A** — bộ cấp trang tự do: hiện **chưa có** (chỉ Untyped + `retype`);
+  so sánh A-kernel vs A-server, đề xuất **đo trước** (3 câu: exec tiêu mấy
+  trang, tối đa mấy lần exec, A0 free-list trong root đủ chưa) rồi mới chọn.
+- **Phần B** — `df` phải ở lại shell vì exec **không có kênh uỷ quyền cap**;
+  đề xuất syscall `TcbGrantCap` với 5 ràng buộc (thu hẹp quyền, không move,
+  không ghi đè slot, destroy thu hồi, kiểm liveness) và cấp cho `df` endpoint
+  VFS quyền `READ` + badge shell.
+- **Phần C** — 5 bước triển khai, 5 rủi ro có dấu hiệu nhận biết, 5 câu hỏi
+  mở cần chốt trước khi viết mã.

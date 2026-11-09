@@ -236,13 +236,28 @@ impl Kernel {
         endpoint: ObjRef,
         recv_slot: u8,
     ) -> KResult<Option<Message>> {
-        if self
-            .tcb(receiver)
-            .ok_or(KError::InvalidCap)?
-            .caller
-            .is_some()
-        {
+        let bound = self.tcb(receiver).ok_or(KError::InvalidCap)?;
+        if bound.caller.is_some() {
             return Err(KError::WouldBlock);
+        }
+        // K42 (r260, red-first): `bound_ntfn` trước đây chỉ được GHI và KIỂM —
+        // `recv` không bao giờ hỏi tới, nên Notification bind vào TCB là một
+        // trường chết. Nay `recv` poll nó trước khi chặn: có bit chờ thì trả
+        // ngay event (kiểu bound notification của seL4), nhờ vậy task vừa
+        // chờ IPC vừa chờ ngắt không bị kẹt.
+        let wake_word = bound
+            .bound_ntfn
+            .and_then(|notification| {
+                self.notification_mut(notification).map(|ntfn| {
+                    let word = ntfn.word;
+                    ntfn.word = 0;
+                    word
+                })
+            })
+            .filter(|word| *word != 0);
+        if let Some(word) = wake_word {
+            let message = Message::new(LABEL_NOTIFICATION, &[word])?;
+            return Ok(Some(message));
         }
         let sender = {
             let ep = self.endpoint_mut(endpoint).ok_or(KError::InvalidCap)?;
@@ -556,6 +571,24 @@ impl Kernel {
             .ok_or(KError::InvalidCap)?;
         let word = ntfn.word;
         ntfn.word = 0;
+        // K46 (r260, red-first): tiêu thụ word cũng có nghĩa "đã nhận ngắt",
+        // nên phải hạ `pending` của mọi IRQ đang trỏ tới notification này.
+        // Trước đây `poll` chỉ xoá word: driver đọc sự kiện rồi re-arm thiết
+        // bị mà không `IrqAck`, cạnh kế tiếp bị coalesce (`irq_raise` thấy
+        // `pending == true` nên không signal) ⇒ MẤT NGẮT.
+        if word != 0 {
+            for index in 0..crate::MAX_OBJECTS {
+                let reference = ObjRef {
+                    index: index as u8,
+                    gen: self.objs[index].gen,
+                };
+                if let Some(irq) = self.irq_mut(reference) {
+                    if irq.notification == Some(notification) {
+                        irq.pending = false;
+                    }
+                }
+            }
+        }
         Ok(word)
     }
 

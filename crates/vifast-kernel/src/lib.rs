@@ -319,6 +319,11 @@ pub struct Kernel {
     /// (#3b) số TCB sống — `tcb_count()` O(1) thay vì quét 168 object.
     /// Tăng ở `create_tcb`/retype TCB thành công, giảm ở `destroy_object`.
     live_tcb_count: usize,
+    /// K60 (r260): mask các hart ĐÃ THẬT SỰ chạy (tick, được chọn làm
+    /// `current`, hoặc nạp ASID). `check_invariants` dùng nó để bắt
+    /// `harts_loaded` "ma" — bit cho hart chưa từng chạy thì không thể có
+    /// ASID nạp thật, tức là sổ sách flush đã hỏng.
+    harts_seen: u32,
     /// (#3b) bitmask slot context đang dùng — `free_context_slot` O(1) thay
     /// vì O(24×168). Bit i = slot i đã cấp. Đồng bộ ở mọi nơi gán/xoá
     /// `context_slot` (create/retype/destroy).
@@ -374,6 +379,7 @@ impl Kernel {
             irq_by_number: [None; 64],
             next_free_hint: 0,
             live_tcb_count: 0,
+            harts_seen: 0,
             context_slot_used: 0,
         }
     }
@@ -651,6 +657,7 @@ impl Kernel {
         let Some(space_ref) = self.tcb(tcb).and_then(|table| table.vspace) else {
             return;
         };
+        self.harts_seen |= 1 << hart;
         if let Some(space) = self.vspace_mut(space_ref) {
             space.harts_loaded |= 1 << hart;
         }
@@ -3292,6 +3299,13 @@ impl Kernel {
                     if space.harts_loaded & !((1u32 << MAX_HARTS) - 1) != 0 {
                         return Err(KError::IllegalOperation);
                     }
+                    // K60 (r260): bit cho hart CHƯA TỪNG chạy là mask ma —
+                    // không có đường nào nạp ASID trên hart đó, nên sổ sách
+                    // flush đang sai (shootdown gửi tới hart không tồn tại,
+                    // hoặc bit bị đặt tay). Bắt ngay thay vì im lặng.
+                    if space.harts_loaded & !self.harts_seen != 0 {
+                        return Err(KError::IllegalOperation);
+                    }
                     let page = space.page_size;
                     for (i, mapping) in space.mappings.iter().enumerate() {
                         let Some(mapping) = mapping else { continue };
@@ -5447,6 +5461,7 @@ impl Kernel {
         }
         self.current[hart] = Some(reference);
         self.stats.context_switches += 1;
+        self.harts_seen |= 1u32 << hart;
         Some(reference)
     }
 
@@ -5814,6 +5829,9 @@ impl Kernel {
     }
 
     pub fn tick(&mut self, hart: usize) -> usize {
+        if hart < MAX_HARTS {
+            self.harts_seen |= 1 << hart;
+        }
         if let Some(counter) = self.ticks.get_mut(hart) {
             *counter = counter.wrapping_add(1);
             self.stats.ticks = *counter;
@@ -13473,6 +13491,102 @@ mod tests {
         );
         assert_eq!(kernel.running_tcbs(), 2);
         assert_eq!(kernel.current_harts(), 1);
+    }
+
+    #[test]
+    fn recv_polls_the_bound_notification_before_blocking() {
+        // K42 (red-first, D18): `bound_ntfn` từng là trường chết — bind xong
+        // `recv` không bao giờ thấy bit. Nay `recv` phải trả event đã chờ thay
+        // vì chặn, và tiêu thụ đúng một lần.
+        let mut kernel = Kernel::new();
+        let task = kernel.create_tcb("driver", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.bind_notification(task, ntfn), Ok(()));
+        // Chưa có bit: recv chặn như thường (BlockedRecv).
+        assert_eq!(kernel.recv(task, endpoint, 0), Ok(None));
+        assert_eq!(kernel.tcb(task).unwrap().state, ThreadState::BlockedRecv);
+        // Có ngắt: signal đánh thức task, `recv` phải trả event đã chờ.
+        kernel.signal(ntfn, 0b100).unwrap();
+        let message = kernel
+            .recv(task, endpoint, 0)
+            .expect("recv không được lỗi")
+            .expect("phải trả event đã chờ thay vì chặn");
+        assert_eq!(message.label, LABEL_NOTIFICATION);
+        assert_eq!(message.words()[0], 0b100);
+        assert_eq!(kernel.poll(ntfn), Ok(0), "bit đã tiêu thụ đúng một lần");
+    }
+
+    #[test]
+    fn signal_mixed_stale_and_live_waiters_loses_no_bit() {
+        // K45 (r260, đóng bằng bằng chứng — D18): audit nghi `signal` xoá word
+        // TRƯỚC vòng lặp nên khi hàng có cả waiter chết lẫn waiter sống thì
+        // bit bị mất. Dựng đúng ca hỗn hợp và kiểm từng bit.
+        let mut kernel = Kernel::new();
+        let live = kernel.create_tcb("live", 5).unwrap();
+        let stale = kernel.create_tcb("stale", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(live, ntfn), Ok(None));
+        assert_eq!(kernel.wait_as(stale, ntfn), Ok(None));
+        // waiter "chết": còn trong hàng nhưng không còn BlockedNotification.
+        kernel.tcb_mut(stale).unwrap().state = ThreadState::Suspended;
+        // Bit cũ đang chờ trong word (ai đó signal trước khi có waiter).
+        kernel.notification_mut(ntfn).unwrap().word = 0b0010;
+        kernel.signal(ntfn, 0b0001).unwrap();
+        let resume = kernel
+            .tcb(live)
+            .unwrap()
+            .resume
+            .expect("waiter sống phải được đánh thức");
+        assert_eq!(resume.label, LABEL_NOTIFICATION);
+        assert_eq!(
+            resume.words()[0],
+            0b0011,
+            "bit cũ 0b0010 + bit mới 0b0001 phải cùng tới waiter sống"
+        );
+        assert_eq!(
+            kernel.tcb(stale).unwrap().state,
+            ThreadState::Suspended,
+            "waiter đã treo không được đánh thức"
+        );
+        assert_eq!(kernel.poll(ntfn), Ok(0), "không còn bit nào bị bỏ lại");
+    }
+
+    #[test]
+    fn poll_clears_irq_pending_so_the_next_edge_is_delivered() {
+        // K46 (red-first, D18): `poll` tiêu thụ word nghĩa là driver đã NHẬN
+        // ngắt, nên `pending` của IRQ phải được hạ; nếu không, cạnh kế tiếp bị
+        // coalesce và người nhận MẤT một wakeup (mất ngắt kinh điển).
+        let mut kernel = Kernel::new();
+        let ntfn = kernel.create_notification().unwrap();
+        let irq = kernel.create_irq(5).unwrap();
+        kernel.set_irq_notification(irq, ntfn).unwrap();
+        assert!(kernel.irq_raise(5), "cạnh đầu phải được ghi nhận");
+        assert_eq!(kernel.poll(ntfn), Ok(1u64 << 5));
+        // Trước r260: `pending` còn true ⇒ dòng dưới trả false (mất ngắt).
+        assert!(
+            kernel.irq_raise(5),
+            "sau poll, cạnh mới phải được ghi nhận chứ không bị coalesce"
+        );
+        assert_eq!(kernel.poll(ntfn), Ok(1u64 << 5));
+    }
+
+    #[test]
+    fn check_invariants_detects_phantom_harts_loaded_bit() {
+        // K60 (red-first, D18): `harts_loaded` có bit cho hart CHƯA TỪNG chạy
+        // là mask ma — trước r260 `check_invariants` im lặng, nên mọi test
+        // dựa vào nó đều không canh được sổ sách flush.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("owner", 5).unwrap();
+        let space = kernel.create_vspace(0x1000, 0x1000, 0x40_0000).unwrap();
+        kernel.tcb_mut(tcb).unwrap().vspace = Some(space);
+        // Hart 0 nạp ASID hợp lệ (đánh dấu hart đã chạy).
+        kernel.note_vspace_hart_loaded(tcb, 0);
+        assert_eq!(kernel.vspace_harts_loaded(space), 0b1);
+        assert_eq!(kernel.check_invariants(), Ok(()));
+        // Tiêm mask ma: hart 3 chưa từng tick/chạy.
+        kernel.vspace_mut(space).unwrap().harts_loaded = 0b1001;
+        assert_eq!(kernel.check_invariants(), Err(KError::IllegalOperation));
     }
 
     #[test]

@@ -22,11 +22,11 @@ Quy ước trạng thái:
 | K39 | CLOSED | r251: cùng kết luận K37 (ipc.rs đặt `Blocked*`; `current` được `pick_on` thay trong cùng một syscall). |
 | K40 | CLOSED | r251: **vá nửa sửa được** — `best_in_queue` + đường steal nay chỉ chọn TCB `Ready` (trước đây chọn cả `Suspended`/`Blocked` trong runqueue). Nửa còn lại ("ghi đè `current`") **chứng minh không thể thành bất biến**: `Running` mà không có `current` là trạng thái hợp lệ — thêm bất biến đó làm 3 test sẵn có đỏ. Test: `r251_pick_on_skips_non_ready_entries`, `r251_running_without_current_is_a_valid_state`. |
 | K41 | CLOSED | `lib.rs:4212` vùng — destroy VSpace gỡ hàng + current |
-| K42 | **OPEN** | `bound_ntfn` vẫn chỉ ghi/kiểm (`ipc.rs:518,531,540`), `recv` không poll bound |
+| K42 | CLOSED | r260 (T22, D18): `recv` nay poll `bound_ntfn` trước khi chặn — có bit chờ thì trả ngay event và tiêu thụ đúng một lần. Test đỏ-trước: `recv_polls_the_bound_notification_before_blocking` (bỏ nhánh poll ⇒ test đỏ). |
 | K43 | CLOSED | `ipc.rs:531` — cấm bind khi Notification đã bound nơi khác |
 | K44 | CLOSED | `ipc.rs:540` — bind kiểm object sống/đúng kiểu |
-| K45 | **OPEN** | `signal` vẫn snapshot + xoá word trước vòng lặp (case hỗn hợp stale+live) |
-| K46 | **OPEN** | `irq_raise` coalesce không signal; `poll` không clear `pending` |
+| K45 | CLOSED | r260 (T22, D18): **không phải lỗi**. Dựng đúng ca hỗn hợp (hàng `[stale, live]`, word có bit cũ): waiter sống nhận đủ bit cũ+bit mới, waiter treo không bị đánh thức, không bit nào sót lại. Test: `signal_mixed_stale_and_live_waiters_loses_no_bit`. |
+| K46 | CLOSED | r260 (T22, D18): `poll` tiêu thụ word nay hạ `pending` của mọi IRQ trỏ tới notification đó, nên cạnh kế tiếp không bị coalesce ⇒ hết mất ngắt. Test đỏ-trước: `poll_clears_irq_pending_so_the_next_edge_is_delivered` (bỏ bản vá ⇒ test đỏ). |
 | K47 | CLOSED | `lib.rs:808,825,861` — chặn IRQ ≥ 64 thay vì `& 63` |
 | K48 | CLOSED | `ipc.rs:107,197` — trả về đầu hàng khi grant fail |
 | K49 | CLOSED | `ipc.rs:88,155,202` — snapshot object thay vì chỉ số slot |
@@ -40,7 +40,7 @@ Quy ước trạng thái:
 | K57 | CLOSED | `lib.rs:5899,4709` — FrameWrite kiểm `mapped_x` |
 | K58 | CLOSED | `lib.rs:3565` vùng — unmap page-table kèm flush |
 | K59 | CLOSED | `lib.rs:660` vùng — chặn PA trùng khi tạo frame |
-| K60 | **OPEN** | `check_invariants` chưa quét mask `harts_loaded` ma |
+| K60 | CLOSED | r260 (T22, D18): kernel ghi `harts_seen` (tick, `pick_on`, nạp ASID) và `check_invariants` bác bit `harts_loaded` cho hart CHƯA TỪNG chạy. Test đỏ-trước: `check_invariants_detects_phantom_harts_loaded_bit`. |
 | K61 | CLOSED | `lib.rs:3769` vùng — orphan bảng con có flush span |
 | K62 | CLOSED | `lib.rs:1122` (v101) — **cấm bind CNode khi còn vé nhúng sống** |
 | K63 | UNREACHABLE | Hệ quả K62: không thể có vé nhúng ẩn ⇒ `delete_cap` không còn mù |
@@ -55,7 +55,7 @@ Quy ước trạng thái:
 | K74 | CLOSED | `lib.rs:5232` vùng — `IoUnmap` đòi vé Frame + khớp pa |
 | K75 | CLOSED | `lib.rs:5646,5655` vùng — `TcbConfigure` kiểm quyền/liveness |
 
-**Tổng K:** 39 CLOSED · 3 UNREACHABLE · **4 OPEN** (K42, K45, K46, K60).
+**Tổng K:** 43 CLOSED · 3 UNREACHABLE · **0 OPEN** (r260 đóng K42, K45, K46, K60).
 
 ## 2. round82 — mục "Còn mở"
 
@@ -90,11 +90,15 @@ Quy ước trạng thái:
 
 ## 5. Việc phải làm tiếp (đề xuất thứ tự)
 
-1. **K40 + P1-5 (`pick_on`/`enqueue`)** — cùng một gốc: task `Running`/`Ready` mồ côi. Cần đường tái hiện (test host) trước khi sửa.
-2. **K37/K38/K39** — gom về một helper `park_current(hart)` dọn `current` + gỡ hàng; sau đó K50 tự hết.
-3. **K42/K45/K46** — nhóm Notification/IRQ: quyết định ngữ nghĩa `bound_ntfn` (bỏ hẳn trường, hoặc cho `recv` poll) và làm `signal` xử lý hỗn hợp stale+live.
-4. **K60** — mở rộng `check_invariants` quét mask `harts_loaded`.
-5. **P1-7 / audit92 §1** — GDT/TSS per-hart (một vòng riêng, đụng trampoline).
+1. ~~**K40 + P1-5**~~ — **XONG**: K40 vá nửa sửa được ở r251, nửa còn lại chứng
+   minh không thể thành bất biến; r259 (T21/D19) thêm phép kiểm ở ranh giới user.
+2. ~~**K37/K38/K39**~~ — **XONG** (r251): không phải lỗi, `current` cố ý giữ TCB đã
+   park cho tới khi runtime lưu context.
+3. ~~**K42/K45/K46**~~ — **XONG** (r260/T22): `recv` poll `bound_ntfn`; `signal`
+   chứng minh không mất bit ở ca hỗn hợp; `poll` hạ `pending` của IRQ.
+4. ~~**K60**~~ — **XONG** (r260/T22): `check_invariants` bác `harts_loaded` "ma"
+   bằng mask `harts_seen`.
+5. **P1-7 / audit92 §1** — GDT/TSS per-hart (T24, đụng trampoline; đang làm).
 6. **P2** — đưa `AP_GDT` vào `kernel_data_ranges`.
 
 > Ghi chú: 5 audit core kernel đang chạy song song (theo `bao-cao-agent0-vong-224.md`) chưa trả kết quả; khi về thì hợp nhất vào bảng này, mỗi P0 một vòng kèm test hồi quy.
