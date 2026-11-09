@@ -775,3 +775,12 @@ soak: all iterations passed
 Tổng ba đợt soak cuối phiên: 30 (r265) + 30 (r269) + 100 (r262) — **chỉ 2 lỗi
 trên 480 lần boot**, cả hai thuộc hai lớp hiếm đã ghi ở T31/T32, không có lần
 nào hỏng `FS V2 OK`.
+
+## T32 (xong) — không còn `DESTROY DIAG stuck` (r271)
+
+Sửa đúng chỗ: `destroy_object`/`can_destroy` chấp nhận TCB `Exited` dù nó còn là
+`current` của hart idle, và **dọn luôn** tàn dư `current`; TCB `Running` vẫn bị
+từ chối. Hai host test đỏ-trước, trong đó test "đồng ý huỷ" đã được chứng minh
+ĐỎ khi tắt bản vá.
+
+Soak 30 tại r271: **90/90 (100%)** — không còn `DESTROY DIAG` nào.

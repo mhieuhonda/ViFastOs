@@ -519,6 +519,18 @@ mã**. Bản đầu của tài liệu G2 khẳng định "exec không có kênh 
 đó và đang được dùng thật cho client. Việc thật cần làm chỉ là **3 dòng nối
 dây + một quyết định chính sách**.
 
+### r271 — sửa lỗi hiếm thứ hai của soak 100 (T32)
+
+Lỗi vòng 62 (`DESTROY DIAG stuck=4` → `BIN EXEC FAIL`) đã sửa đúng chỗ:
+`destroy_object` nay chấp nhận TCB ở trạng thái `Exited` dù nó còn là `current`
+của một hart idle (dọn luôn tàn dư `current`), còn TCB đang `Running` vẫn bị từ
+chối. Hai host test đỏ-trước; test "đồng ý huỷ" đã được chứng minh **ĐỎ** khi
+tắt bản vá.
+
+Đây cũng là ví dụ cho quy tắc của phiên: hướng đầu (nhả `current` ở đường park)
+làm chết boot cả 3 kiến trúc và đã bị hoàn nguyên; hướng đúng là sửa **tại chỗ
+huỷ**, không phải ở đường park.
+
 ### Trạng thái cuối phiên
 
 | Chỉ số | Giá trị |
@@ -526,7 +538,8 @@ dây + một quyết định chính sách**.
 | `main` | gate full **PASS** (sau khi `cargo fmt`) |
 | Kernel host test | 242 |
 | Soak 100 × 3 arch (tại r262) | 298/300 = 99,3% (không còn lỗi `FS V2 OK`) |
-| Soak 30 × 3 arch (tại r269, HEAD cuối) | **90/90 = 100%** (576 s) |
+| Soak 30 × 3 arch (tại r269) | 90/90 = 100% (576 s) |
+| Soak 30 × 3 arch (tại r271, sau T32) | **90/90 = 100%** (568 s) |
 | Soak 30 × 3 arch (tại r265, sau T27) | 90/90 = 100% (657 s) |
 | Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
 | Audit P | P1-7 và P2 `AP_GDT` đóng |
@@ -538,7 +551,7 @@ dây + một quyết định chính sách**.
 ## SHA-256
 
 ```text
-d89cf04711588d9f02b72e7063a311a85012180b30421e53a0a6b305641be416  docs/reviews/ViFastOs-report-r262.md
+a6c2db7724d1c95378c48cafbe327f37bb7fb9392db6b938e397793a618c3d9b  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
