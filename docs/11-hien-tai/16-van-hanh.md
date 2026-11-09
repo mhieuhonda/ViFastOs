@@ -128,8 +128,6 @@ Sinh bằng `python3 scripts/gen-shell-table.py`; **đừng sửa tay** — sử
 | `sync` | vfs_fsync (Fsync) | vifast-client + vifast-server + vifast-fs (journal) | FS PERSIST OK (persist) |
 | `time` | get_time (GetTime) | vifast-client + vifast-user | - |
 | `truncate` | vfs_truncate (Truncate) | vifast-client | - |
-| `uname` | - | vifast-client | - |
-| `uptime` | get_time (GetTime) + timer_hz (TimerInfo) | vifast-client + vifast-kernel (TimerInfo) | - |
 <!-- SHELL-TABLE:END -->
 
 ## 3. Shell lệnh `run` (exec demo)
