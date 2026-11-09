@@ -2269,6 +2269,30 @@ mod tests {
     }
 
     #[test]
+    fn usage_tracks_allocation_and_unlink() {
+        // Vòng 213: `df` (STATFS) lấy số liệu từ `usage()`; nếu bitmap không
+        // nhả block khi xoá thì `df` báo thiếu chỗ dần dần — rất khó thấy.
+        let mut fs = fresh();
+        // Mốc so sánh lấy SAU khi đã có một file: block của thư mục gốc (nếu
+        // được cấp) không phải thứ ta muốn đo — thứ cần đo là block của FILE.
+        let keep = fs.create(b"/keep", 0, INODE_FILE).unwrap();
+        fs.write(keep, 0, b"x", 0).unwrap();
+        let (used0, total0) = fs.usage();
+        let ino = fs.create(b"/f", 0, INODE_FILE).unwrap();
+        fs.write(ino, 0, &[7u8; 3 * BLOCK_SIZE], 0).unwrap();
+        let (used1, total1) = fs.usage();
+        assert!(used1 > used0, "ghi 3 block phải làm used tăng");
+        assert_eq!(total1, total0);
+        fs.unlink(b"/f", 0).unwrap();
+        let (used2, total2) = fs.usage();
+        assert_eq!(
+            used2, used0,
+            "xoá file phải trả block về bitmap (nếu không, df báo thiếu chỗ dần)"
+        );
+        assert_eq!(total2, total0, "tổng dung lượng không đổi");
+    }
+
+    #[test]
     fn rename_moves_entry_and_rejects_missing_or_duplicate() {
         // Vòng 212: `rename` chưa có test nào — trong khi nó là lệnh dễ làm hỏng
         // FS nhất (đổi tên xong mà journal sai là mất cả cây).

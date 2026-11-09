@@ -3548,3 +3548,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `next_component` từ chối `..`) ⇒ đây là **xác nhận**, không phải sửa lỗi.
 - Tổng host test **298 → 300**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.210 — Vòng 213: test `usage()` (nguồn số của `df`) — và một lần tự sửa kết luận sai
+
+- Quét `pub fn` của `vifast-fs` đối chiếu test: phần lớn "chưa test" là dương
+  tính giả (được gọi trong test khác), nhưng `usage()` **thật sự chưa có test**
+  trực tiếp — mà `df` (STATFS) lấy số từ nó.
+- Thêm `usage_tracks_allocation_and_unlink` (FS **33 → 34**): ghi 3 block ⇒
+  `used` tăng; `unlink` ⇒ `used` **trở lại mốc cũ**; tổng không đổi.
+- **Tự sửa kết luận sai ngay trong vòng**: lần đầu tôi lấy mốc trên FS **rỗng**
+  rồi thấy `used` sau khi xoá = 1 ⇒ tưởng "rò rỉ 1 block". Thực ra đó là block
+  của **thư mục gốc** sau khi có entry. Đã đổi mốc sang sau khi đã có một file
+  khác ⇒ test đo đúng thứ cần đo và **pass**.
+- Tổng host test **300 → 301**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.

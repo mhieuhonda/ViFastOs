@@ -418,6 +418,18 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5y-2. `usage()` (nguồn số của `df`): block được TRẢ khi xoá (vòng 213)
+
+Test `usage_tracks_allocation_and_unlink`:
+- ghi **3 block** ⇒ `used` tăng;
+- `unlink` ⇒ `used` **trở về đúng mốc trước khi tạo file** (đo với mốc lấy sau khi
+  đã có một file khác, để **không lẫn block của thư mục gốc** — lần đầu tôi lấy
+  mốc trên FS rỗng và kết luận sai là "rò rỉ 1 block");
+- tổng dung lượng không đổi.
+
+Ý nghĩa: `df` lấy số từ `usage()`; nếu bitmap không nhả block thì `df` báo thiếu
+chỗ **dần dần** — loại lỗi rất khó thấy khi chạy ngắn.
+
 ### 5y-1. `rename`: chống chu trình và giữ dữ liệu (vòng 212)
 
 Hai test mới khoá hành vi nguy hiểm nhất của `rename`:
