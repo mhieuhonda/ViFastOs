@@ -946,3 +946,17 @@ Các hướng đã thử và bị dữ liệu bác bỏ: `--icf=all` (0 byte), t
 (đã làm, ăn 4 096 B nhưng bị 343 B của issue #10 lấn trở lại). Hướng còn lại
 đều phải cắt tính năng (help/time/echo thành applet) — để G2 quyết vì free-page
 allocator sẽ bỏ hẳn ràng buộc trang.
+
+## T26 — bài test hồi quy (r283)
+
+`scripts/fs-smp-regression.py` là dạng "test đỏ trước" khả thi cho lỗi `FS V2 OK`
+(chỉ lộ qua nhiều lần boot QEMU, không unit-test được trên host):
+
+```sh
+python3 scripts/fs-smp-regression.py --iterations 40            # phải xanh hết
+python3 scripts/fs-smp-regression.py --iterations 20 --expect red  # phải có đỏ
+```
+
+Đo trong phiên: `--expect green` 8/8 xanh ở `MAX_IO = 128`; đỏ đã đo ở
+`MAX_IO = 256` là 12/47 lần boot (Part 4 của báo cáo). Quy ước: **nâng `MAX_IO`
+phải kèm `--expect green` với N ≥ 40**.

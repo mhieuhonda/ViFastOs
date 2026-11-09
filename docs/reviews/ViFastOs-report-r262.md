@@ -577,7 +577,27 @@ Cơ chế retry có sẵn của harness che hai lỗi này ở đường `--repe
 **Bài học phương pháp (lần thứ tư)**: khi có retry, phải xác định **serial thuộc
 lần chạy nào**; `run.log` mới là nơi ghi rõ `rc` và thời lượng của từng lần.
 
-### Trạng thái cuối phiên (r254 → r277)
+### r283 — bài test hồi quy D18 cho BLOCKER `FS V2 OK` (T26)
+
+Lỗi gốc chỉ lộ ra qua nhiều lần boot QEMU nên không viết được unit test trên
+host. Đã thêm `scripts/fs-smp-regression.py` — dạng "test đỏ trước" khả thi cho
+lỗi này, với hai chế độ:
+
+| Chế độ | Ý nghĩa | Kết quả đo |
+|---|---|---|
+| `--expect green` (mặc định) | điều kiện ĐÓNG lỗi: N lần boot x86_64 phải xanh hết | **8/8 xanh** ở `MAX_IO = 128` (đo trong phiên) |
+| `--expect red` | chứng minh bài test CÓ RĂNG: phải thấy ít nhất 1 lần đỏ | đỏ đã đo được ở `MAX_IO = 256`: **12 hỏng / 47 lần boot** (Part 4) |
+
+Script tự đọc `MAX_IO` từ crate ABI và in ra để log biết đang đo ở giá trị nào;
+nó không tự rebuild (bài học r280). Từ nay, **nâng `MAX_IO` phải kèm chạy
+`--expect green` với N ≥ 40**; nếu đỏ thì đó đúng là điều kiện cấm nâng.
+
+Đồng thời dọn kho: xoá nhánh `r254` + worktree `/private/tmp/vf-r254` (nội dung
+duy nhất còn giá trị — phân tích T18 vì sao aarch64 dư 1 trang — đã chép vào
+`progress-g1.md`) và xoá bốn nhánh đã merge/hết giá trị (`g1`, `r261`, `r268`,
+`t13x`). Còn đúng một worktree: `main`.
+
+### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
 |---|---|
@@ -588,12 +608,13 @@ lần chạy nào**; `run.log` mới là nơi ghi rõ `rc` và thời lượng c
 | Soak 100 @ r274 (có T32) | 299/300 = 99,7% |
 | Soak 100 @ r276 (có T32) | 298/300 = 99,3% |
 | Soak x86-only 120 @ r277 | **120/120 = 100%** (1 216 s) |
-| Soak 100 @ r280 (HEAD cuối) | **299/300 = 99,7%** (riscv 99, arm 100, x86 100) — lỗi duy nhất là T33b |
+| Soak 100 @ r280 | **299/300 = 99,7%** (riscv 99, arm 100, x86 100) — lỗi duy nhất là T33b |
 | Lỗi còn lại | T33a (x86 treo ~1% trước `PREEMPT OK`), T33b (riscv thoát sớm ~1%), T31 (message lặp ~1%) |
 | Lỗi đã đóng trong phiên | `FS V2 OK` (giảm nhờ `MAX_IO` 128, gốc mở), `DESTROY DIAG` (T32), 3 lỗi harness (T17/T19/T33) |
 | Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
 | G2 Phần B | **XONG** — `df` là applet, con nhận cap VFS badge 1 |
-| Việc tiếp theo | T26 (gốc race FS), T28 (`-smp 4`), T29 (`!!`), T30 (aarch64), T31, T33a/T33b |
+| Việc tiếp theo | T26 (gốc race FS — có bài test hồi quy), T28 (`-smp 4`), T29 (`!!`), T30 (aarch64), T31, T33a/T33b |
+| Worktree/nhánh | còn đúng `main`; `r254`, `g1`, `r261`, `r268`, `t13x` đã xoá |
 
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
@@ -603,7 +624,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-a235ea8c4a857b6c703e2d8a2c9d126f848567015d36677405f5e420e51b5ebe  docs/reviews/ViFastOs-report-r262.md
+2dd290a726fffd66effb4dc796d5f6e113075ad05b61fe8fd8097fc433a1ee68  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
