@@ -266,25 +266,13 @@ cho demo chạy lại nếu bị bỏ lỡ (xem Part 6).
 3. **Bất biến `Running ⇒ current`**: có nên đổi mô hình (mỗi TCB `Running` phải
    do một hart sở hữu) để bất biến này thành đúng, hay giữ mô hình hiện tại?
 
-
----
-
-## SHA-256
-
-```text
-08783cfc926262e5d344ef2a255d9e19c1aae72c14ac6b3006185c4ee01c9878  (nội dung báo cáo, phần TRƯỚC khối này)
-```
-
-Cách kiểm: `python3 - <<'PY'` cắt file tại dòng `---` đầu tiên của khối này
-rồi băm phần còn lại, phải ra đúng chuỗi trên.
-
 <!-- SHA-256: phần dưới đây KHÔNG nằm trong hash -->
 
 ## SHA-256
 
 ```text
-87dd358670bdb6af9d4cd4345c0d638427ace99b5bbfe1a4933509bcb1c8ee2a  docs/reviews/ViFastOs-report-g1-r253.md
+08783cfc926262e5d344ef2a255d9e19c1aae72c14ac6b3006185c4ee01c9878  docs/reviews/ViFastOs-report-g1-r253.md
 ```
 
-Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm một `\n`),
-phải ra đúng chuỗi trên.
+Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm đúng
+một `\n`), phải ra đúng chuỗi trên.
