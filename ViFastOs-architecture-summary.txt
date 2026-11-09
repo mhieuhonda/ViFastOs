@@ -465,6 +465,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 1bfa3fc test (vong 219): TcbInfo (nguon so cua ps) co test
 - 579479d test (vong 220): GetTime don dieu, chi BSP day dong ho
 - 01296c4 sua loi (vong 221): diag.sh khong con bao dong sai (ngan sach + arena)
+- a4a0480 tai lieu (vong 222): thu cd/pwd — cham tran ngan sach, da revert
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
