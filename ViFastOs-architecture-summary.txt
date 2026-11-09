@@ -508,6 +508,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d4468c1 r248 docs: (T12) hợp đồng ABI argv + vá cổng interactive
 - 9dc1ba2 r249 feat: (T13) ps/jobs via TcbInfo + cd/pwd builtin cwd
 - 718416a r250 docs: (T13) bảng đo trang client + ba cách đã bị dữ liệu bác bỏ
+- ffaeada r251 fix: (T14/K40) pick_on chỉ chọn TCB Ready + đóng 5 mục audit bằng bằng chứng
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -2008,10 +2009,13 @@ thì giữ) và cập nhật sau G1.
 - **Driver vẫn ở kernel**: net (kèm `tcp_pump()` trong timer IRQ), gpu, input,
   rng, block. Chỉ FS/VFS ở user-space. Đây là nợ kiến trúc lớn nhất so với
   tinh thần microkernel; **cấm thêm tính năng driver mới trong kernel (D12)**.
-- **Trần trang client ELF**: RV 8/8, AArch64 8/8, x86 9/9 — mọi lệnh shell mới
+- **Trần trang client ELF** (r251): RV **6/8**, AArch64 **7/8**, x86_64 **7/9**
+  — dư 2/1/2 trang (trước T13 là 7/8, 8/8, 9/9, tức 1/0/0). Mọi lệnh shell mới
   phải đo trang ngay sau build (D10 quy định chuyển lệnh đọc thông tin ra
-  chương trình ngoài).
-- **Soak dài** (100 iter × 3 arch) chưa có.
+  chương trình ngoài). Cách đạt được ở T13: `linkers/module.ld` gộp `.rodata`
+  vào segment R-X nên ảnh không còn 4 khoảng đệm căn trang.
+- **Soak dài** (100 iter × 3 arch): có script `scripts/soak.py`; số liệu soak
+  chính thức của G1 nằm ở mục T16 của `docs/reviews/progress-g1.md`.
 
 17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
 ----------------------------------
@@ -2511,40 +2515,40 @@ Sau đó mới tới input/gpu. Sau G3: compositor và ViFastKey (mốc 11, 12).
     fail 2/20 harness oan) — soak-verify lại **20/20 cả 3 arch**. Gate full
     `--with-tcp --with-input` xanh (input/display end-to-end).
 
-47. **Hợp đồng cửa sổ copy (vòng 146–147, r224):** mọi đường copy user
+147. **Hợp đồng cửa sổ copy (vòng 146–147, r224):** mọi đường copy user
     (`Read`/`Write`/`DebugWrite`/`FrameWrite`) đi qua một cửa sổ VA có kích
     thước hằng số và một hàm `copy_window_ok` dùng chung cho cả 3 platform —
     nguồn sự thật duy nhất cho "cửa sổ hợp lệ". Bài học vòng 145: thiếu cửa sổ
     này làm `exec` không đọc được trang stack suốt 40 vòng.
-48. **Hợp đồng Reply mang cap:** `TcbReply` có thể chuyển một cap từ cspace của
+148. **Hợp đồng Reply mang cap:** `TcbReply` có thể chuyển một cap từ cspace của
     server sang client trong cùng message; lỗi ở bất kỳ bước nào sau khi lấy
     `caller` phải **khôi phục** `caller` (chỉ khi client còn `BlockedReply` và
     `reply_epoch` khớp) — nếu không client kẹt vĩnh viễn (fix P0 r225).
-49. **Syscall 51–55:** `TcbWait` (51, rendezvous), `TcbInfo` (52, nguồn số của
+149. **Syscall 51–55:** `TcbWait` (51, rendezvous), `TcbInfo` (52, nguồn số của
     `ps`), `MemInfo` (53, nguồn số của `free`), `TimerInfo` (54, uptime),
     `ModuleRelease` (55, thu hồi trang staging module). Tất cả đã implemented;
     KError vẫn 22 mã, BootInfo vẫn v3.
-50. **D7. Đánh số vòng:** commit `rNNN <type>: <nội dung>`, `type` ∈
+150. **D7. Đánh số vòng:** commit `rNNN <type>: <nội dung>`, `type` ∈
     feat|fix|test|perf|infra|docs|chore|revert; hậu tố `b`, `c` cho commit tiếp
     theo cùng vòng; **cấm** `vong N` trần và cấm dùng `moc N` thay số vòng.
-51. **D8 (đã bỏ tại commit 6073dca).** `deploy/` và web thuộc `main`, thống nhất
+151. **D8 (đã bỏ tại commit 6073dca).** `deploy/` và web thuộc `main`, thống nhất
     với ViFastKey/ViFastTts/ViFastSite; không tách nhánh, không chuyển repo
     riêng. Khi đo, agent vẫn cần tree không có tiến trình khác ghi vào; nếu phát
     hiện commit lạ xen giữa vòng thì dừng đo, ghi lại, đo lại.
-52. **D9. Đóng băng kích thước `Kernel`** cho tới khi khe AArch64 ≥ 4096 byte.
+152. **D9. Đóng băng kích thước `Kernel`** cho tới khi khe AArch64 ≥ 4096 byte.
     **Đã đỡ băng ở r229** (khe 4 104 + canary).
-53. **D10. Shell builtin chỉ cho lệnh cần trạng thái shell** (`cd`, `pwd`,
+153. **D10. Shell builtin chỉ cho lệnh cần trạng thái shell** (`cd`, `pwd`,
     `history`, `!!`, `jobs`, `kill`, `help`, `exit`, `run/runfs`). Lệnh chỉ đọc
     thông tin (`uname`, `uptime`, `free`, `df`, `ps`, ...) phải là chương trình
     ELF trong FS chạy qua exec-from-FS, chỉ nhận đúng cap cần thiết.
-54. **D11. Gate phải trung thực.** Mỗi check có tiền đề tường minh: thiếu tiền
+154. **D11. Gate phải trung thực.** Mỗi check có tiền đề tường minh: thiếu tiền
     đề ⇒ in `SKIP`, không FAIL/PASS giả. Mutation test phải chứng minh được nó
     phát hiện lỗi trên arch đó; nếu không thì gỡ khỏi arch đó và ghi lý do.
     Assert phải có thể sai (cấm assert đọc lại giá trị vừa ghi).
-55. **D12. Driver trong kernel là nợ đã thừa nhận.** Cấm thêm tính năng mới cho
+155. **D12. Driver trong kernel là nợ đã thừa nhận.** Cấm thêm tính năng mới cho
     net/gpu/input/rng trong kernel (ví dụ retransmit, nhiều kết nối TCP); chỉ
     nhận sửa lỗi. Tính năng net mới chờ net server user-space ở G3.
-56. **D13. Kết luận "không rò rỉ"/"ổn định" phải dựa trên đo lặp (≥ 3 chu kỳ
+156. **D13. Kết luận "không rò rỉ"/"ổn định" phải dựa trên đo lặp (≥ 3 chu kỳ
     hoặc soak) hoặc mutation test**, không dựa trên một lần đo (bài học r187
     kết luận sai, phải tới r192–r200 mới tìm ra 3 root cause rò rỉ).
 
@@ -2594,15 +2598,15 @@ journal trong user-space, exec-from-FS, TCP thật qua virtio-net, GPU/input/rng
 
 Điểm mạnh đã kiểm chứng bằng gate: lõi portable sạch (`forbid(unsafe_code)`,
 không `cfg(target_arch)` trong kernel/runtime), gate 3 arch × 3 lần lặp, persist
-7 phase, harness 605 case âm, fuzz 100k syscall, mutation test cho TLB và cho
+7 phase, harness 632 case âm, fuzz 100k syscall, mutation test cho TLB và cho
 `check_invariants`.
 
 Điểm yếu còn lại, xếp theo rủi ro: driver (net/gpu/input/rng/block) nằm trong
 kernel và `tcp_pump()` chạy trong timer IRQ — lệch nguyên tắc microkernel; chưa
 có free-page allocator toàn cục nên mọi tính năng bị ngân sách trang chi phối;
-GDT/TSS x86 chưa per-hart; một số đường park chưa dọn `current` (K37–K40);
-IOMMU mới ở mức mô hình phần mềm.
+GDT/TSS x86 chưa per-hart; IOMMU mới ở mức mô hình phần mềm.
 
-Trạng thái hiện tại (r233): gate xanh, 3 lỗi gate nhất quán của vòng 224 đã
-đóng, khe tĩnh AArch64 từ 8 byte lên 4 104 byte có canary bảo vệ. Giai đoạn G1
-"Nền vững" còn T5 (ngân sách client theo D10) và T8 (soak dài).
+Trạng thái hiện tại (r251): gate xanh 9/9 bước, 3 lỗi gate nhất quán của vòng
+224 đã đóng, khe tĩnh AArch64 từ 8 byte lên 4 104 byte có canary bảo vệ.
+Audit: 39 CLOSED · 3 UNREACHABLE · 4 OPEN (K42, K45, K46, K60). Giai đoạn G1
+"Nền vững" đã xong T0–T15; còn T16 (soak 100 × 3 arch).

@@ -18,7 +18,7 @@ Khi chương trình kết thúc, chuỗi này phải bị thu hồi **đủ**. T
 mỗi chu kỳ exec rò **6 object**: sau ~20 chu kỳ thì hết slot, `runfs` thứ N
 báo lỗi khó hiểu và demo sau chết.
 
-## 2. Ba nguyên nhân gốc (tìm ra ở vòng 192, 194, 199)
+## 2. Bốn nguyên nhân gốc (tìm ra ở vòng 192, 194, 199 và 200)
 
 | # | Nguyên nhân | Vòng | Sửa |
 |---|---|---|---|
