@@ -471,14 +471,29 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 5cd8df3 web: đăng nhập quản trị bằng form + thống kê truy cập
 - 5b9fa3a admin: dải «← Về trang chủ · Đăng xuất», chuẩn hoá cột ngôn ngữ
 - 5150d0c admin: khung giao diện chung + chuyển nhanh giữa 4 trang admin
+- f9ccd50 license: MIT OR Apache-2.0 (giấy phép kép)
 - 662ab75 r226 fix: check TCP echo chi khi co listener, feature-mode in SKIP
 - 75f8109 r227 fix: (T2) to 0xA5 boot stack trong boot_handoff.S + chan doan gate trung thuc
 - 394155c r228 fix: (T3) mutation TLB tren riscv64 gio phat hien duoc
 - 77f5123 r228b fix: tach hanh vi TLB theo arch — aarch64 giu nguyen, RV/x86 dung handshake
+- f0e2eb1 web: dải giấy phép trên landing + admin portal sang MIT hoặc Apache-2.0
 - 0a72abf r229 feat: (T4) khe tinh AArch64 8 -> 4104 byte + canary 3 arch
 - 4066f5e r230 docs: tien do G1 + dong bo docs sau T1..T4
 - 83986eb r231 docs: bao cao G1 (T1-T4 DONE, T0 BLOCKED, T5-T8 phan tich)
+- a5b09ec r225 docs: snapshot sau vong 224 (bundle review day du)
+- 5ae7aa7 r232 merge: G1 T1-T4 (TCP echo, boot-handoff, mutation TLB, khe tinh AArch64)
 - 658d358 r233 fix: (T6) bo 3 assert vacuous o ap_entry + bang open-items audit
+- 2e3c800 r234 docs: (T7) dong bo summary + design docs + D7..D13
+- a96c95c r235 docs: cap nhat bao cao G1 (T6/T7 DONE, T0 da go, T5 phan tich, T8 dang chay)
+- 098c585 r236 merge: G1 T6+T7 (open-items, summary/design docs, D7-D13)
+- 338a907 r237 feat: (T5 buoc 1) khung chuong trinh ngoai + do kich thuoc that
+- b5e907e r238 docs: (T5) phat hien anh root dung chung pool Untyped — phai dua chuong trinh ra dia
+- f320dca r239 merge: G1 T5 buoc 1 + phat hien anh root/Untyped
+- 8deeb02 r240 feat: (T5 buoc 2) chuong trinh ngoai nam tren ANH DIA
+- 656d887 r241 feat: (T5 buoc 3) client bo builtin uname/uptime + fallback exec tu FS
+- 4fd5ab7 r242 merge: G1 T5 buoc 2-3 (dja + client trim)
+- 3a2d09b r243 docs: bao cao G1 day du (6 phan + SHA) cho Agent 0
+- e60f1a4 r244 merge: bao cao G1 r241
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -537,9 +552,9 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 2279792 byte (`kernel_end=0x803d3690`)
+- RISC-V headroom: 2283888 byte (`kernel_end=0x803d2690`)
 - `Kernel = 551328`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
-- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
+- QEMU lần chạy gần nhất (`--repeat 3`): riscv64 2/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
 - root ELF stripped (đo lại r233): RISC-V 41.472 B, AArch64 49.504 B, x86 49.576 B
