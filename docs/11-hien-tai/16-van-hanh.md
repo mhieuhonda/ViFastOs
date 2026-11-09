@@ -418,6 +418,17 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5x-2. `NoRights` có HAI nghĩa — đừng chẩn đoán bằng mã lỗi một mình
+
+`FrameMap` trả **`NoRights` (3)** cho **cả hai** trường hợp:
+1. cap frame **không đủ quyền** xin (ví dụ cap chỉ `READ`, xin `WRITE`);
+2. yêu cầu **W^X** (`WRITE|EXEC`) — kernel từ chối vì lý do an toàn.
+
+Test `frame_map_distinguishes_norights_from_wx_rejection` khoá sự thật này (cả hai
+đều `NoRights`). Hệ quả thực tế: khi thấy `err=3` trên guest, phải **kiểm quyền
+cap trước**; nếu cap đủ quyền thì đó là W^X. Đừng kết luận "cap thiếu quyền" chỉ
+vì thấy `3` — đó đúng là kết luận sai tôi đã mắc ở vòng 210.
+
 ### 5x-1. Quyền hạn trên đường IPC: cấm rebadge (`IPC RIGHTS OK`)
 
 Client cố `cap_mint` từ cap endpoint **đã có badge** ⇒ kernel phải trả

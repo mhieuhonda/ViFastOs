@@ -453,6 +453,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 28445a8 tai lieu (vong 207): huong dan dung nhanh cho nguoi dung cuoi
 - 64e7927 sua loi (vong 208): revert hai probe bao mat lam client im lang sau SHELL READY
 - e7de6f1 test (vong 209): IPC RIGHTS OK — cam rebadge, kiem tren guest
+- ae63361 sua loi (vong 210): revert probe W^X tren guest (hai lan deu vo nghia)
+- 0e6cda7 test (vong 211): NoRights co HAI nghia (W^X va thieu quyen cap) — khoa bay chan doan
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -500,7 +502,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 206/206 PASS
+- `cargo test -p vifast-kernel`: 207/207 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS

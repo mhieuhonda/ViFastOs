@@ -3519,3 +3519,16 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   không có probe; giữ 8 để không tạo dư địa mờ).
 - Ghi cả hai mã lỗi vào `17-su-co.md`.
 - Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS.
+
+## 9.208 — Vòng 211: `NoRights` có HAI nghĩa (W^X và thiếu quyền cap) — bẫy được khoá
+
+- Điều tra vì sao vòng 210 thấy `err=3` khi thử W^X: đọc `map_frame` ⇒ kernel trả
+  **`NoRights`** cho cả hai trường hợp: (a) cap không đủ quyền, (b) yêu cầu
+  `WRITE|EXEC`. **Mã lỗi một mình không nói nguyên nhân.**
+- Thêm test `frame_map_distinguishes_norights_from_wx_rejection`: khẳng định
+  (1) cap chỉ `READ` + xin `WRITE` ⇒ `NoRights`; (2) cap `ALL` + xin `W|X` ⇒
+  **cũng `NoRights`**, kèm comment nêu rõ bẫy.
+- Ghi runbook **5x-2** + dòng `17-su-co.md`: khi thấy `err=3` phải **kiểm quyền
+  cap trước**, đủ quyền rồi thì đó là W^X — đúng kết luận tôi từng làm sai.
+- Kernel test **206 → 207**, tổng host test **298**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.

@@ -7257,6 +7257,76 @@ mod tests {
     }
 
     #[test]
+    fn frame_map_distinguishes_norights_from_wx_rejection() {
+        // Vòng 211: khoá bài học vòng 210 — khi phép thử W^X trên guest trả
+        // `NoRights` (3) thì nó **chưa hề kiểm W^X**; kernel chặn ở bước quyền
+        // cap trước. Test này khẳng định THỨ TỰ đó:
+        //   1. cap chỉ READ + xin WRITE ⇒ `NoRights`;
+        //   2. cap đủ WRITE + xin WRITE|EXEC ⇒ `InvalidArg` (W^X).
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let vspace = kernel.create_vspace(0x1000, 0x4000_a000, 4096).unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(vspace, ObjType::VSpace, Rights::WRITE))
+            .unwrap();
+        let frame = kernel.create_frame(0x9000, 4096).unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(frame, ObjType::Frame, Rights::READ))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameMap as u64,
+                2,
+                3,
+                0,
+                Rights::WRITE.0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::NoRights
+            },
+            "cap chỉ READ mà xin WRITE phải là NoRights (chưa tới W^X)"
+        );
+        // Nâng quyền cap: giờ xin W|X mới tới được bước kiểm W^X.
+        kernel.delete_cap(root, 3).unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(frame, ObjType::Frame, Rights::ALL))
+            .unwrap();
+        assert_eq!(
+            kernel
+                .lookup_cap(root, 3, Some(ObjType::Frame), Rights::NONE)
+                .unwrap()
+                .rights,
+            Rights::ALL,
+            "cap frame phải có ALL sau khi cài lại"
+        );
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::FrameMap as u64,
+                2,
+                3,
+                0,
+                (Rights::WRITE | Rights::EXEC).0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::NoRights
+            },
+            // QUAN TRỌNG: W^X cũng trả **NoRights**, GIỐNG hệt trường hợp thiếu
+            // quyền cap ở trên ⇒ KHÔNG thể phân biệt hai nguyên nhân bằng mã lỗi.
+            // Đây chính là cái bẫy gặp ở vòng 210 khi kiểm W^X trên guest.
+            "W|X cũng trả NoRights — cùng mã với thiếu quyền cap (bẫy chẩn đoán)"
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
     fn syscall_rejects_bad_capability_types_and_wx() {
         let mut kernel = Kernel::new();
         let root = kernel.root().unwrap();
