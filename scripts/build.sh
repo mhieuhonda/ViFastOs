@@ -80,7 +80,7 @@ build_bins() {
     linker="$2"
     tag="$3"
     shift 3
-    for mode in uname uptime; do
+    for mode in uname uptime free; do
         VIFAST_BIN_MODE="$mode" cargo rustc -p vifast-bin --profile root-task \
             --target "$target" -- "$@" \
             -C link-arg=-T -C link-arg="$linker" \
@@ -104,6 +104,7 @@ bin_env() {
     tag="$1"
     export VIFAST_BIN_UNAME_ELF="$PWD/target/$tag/root-task/vifast-bin.uname.stripped"
     export VIFAST_BIN_UPTIME_ELF="$PWD/target/$tag/root-task/vifast-bin.uptime.stripped"
+    export VIFAST_BIN_FREE_ELF="$PWD/target/$tag/root-task/vifast-bin.free.stripped"
 }
 
 bin_env riscv64imac-unknown-none-elf

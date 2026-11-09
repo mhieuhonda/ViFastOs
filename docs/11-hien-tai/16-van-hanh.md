@@ -109,7 +109,6 @@ Sinh bằng `python3 scripts/gen-shell-table.py`; **đừng sửa tay** — sử
 | `df` | vfs_statfs (StatFs) | vifast-client + vifast-server (STATFS) + vifast-fs (usage) | FS USAGE OK |
 | `echo` | - | vifast-client | - |
 | `exec` | send LABEL_RUN | vifast-client + vifast-root (spawn_elf_from_fs) | RUN OK / RUN FS OK |
-| `free` | mem_info (MemInfo) | vifast-client + vifast-kernel (MemInfo) | MEM FREE OK |
 | `fsck` | vfs_fsck (Fsck) | vifast-client + vifast-server + vifast-fs (fsck) | FS OPS FSCK OK |
 | `help` | - | vifast-client | - |
 | `history` | - | vifast-client | - |

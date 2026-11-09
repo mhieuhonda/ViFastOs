@@ -60,6 +60,21 @@ fn run_uname() {
     write(b" bootinfo-v3\n");
 }
 
+/// `free`: dung lượng Untyped còn trống (chardev `MemInfo`, không cần cap).
+fn run_free() {
+    let info = vifast_user::mem_info();
+    if info.error == vifast_abi::KError::Ok {
+        let used_kib = (info.value & 0xffff_ffff) / 1024;
+        let total_kib = (info.value >> 32) / 1024;
+        write_decimal(total_kib.saturating_sub(used_kib));
+        write(b"/");
+        write_decimal(total_kib);
+        write(b" KiB free\n");
+    } else {
+        write(b"free: error\n");
+    }
+}
+
 /// `uptime`: thời gian chạy tính từ `GetTime`, in dạng `NmSSs` như shell cũ.
 fn run_uptime() {
     let ticks = vifast_user::get_time().value;
@@ -87,6 +102,8 @@ pub extern "C" fn bin_main() -> ! {
         run_uname();
     } else if MODE == "uptime" {
         run_uptime();
+    } else if MODE == "free" {
+        run_free();
     }
     vifast_user::exit();
 }

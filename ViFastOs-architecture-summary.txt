@@ -499,6 +499,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - eb65baf r242c chore: (T9/D8) tach deploy/ khoi main — web di sang nhanh 'web'
 - af02295 r242d docs: regen summary sau gate (so test 310, bo deploy khoi danh sach)
 - 165c421 r243 docs: (T10) bang do client theo segment + giai thich 'trung byte'
+- f229b61 r244 perf: (T11 buoc 1) opt-level 'z' cho profile root-task
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

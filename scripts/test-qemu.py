@@ -85,7 +85,7 @@ def populate_disk(path: str, arch: str) -> None:
     if target is None or not os.path.exists(fsutil):
         return
     programs = []
-    for mode in ("uname", "uptime"):
+    for mode in ("uname", "uptime", "free"):
         host = os.path.join(ROOT, "target", target, "root-task",
                             f"vifast-bin.{mode}.stripped")
         if os.path.exists(host):
