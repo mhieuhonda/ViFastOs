@@ -79,3 +79,32 @@ x86 ≤ 28 672 B (**giảm ≥ 4 520 B**).
 3. Client: xóa 4 thân lệnh, thêm fallback `runfs /<line>`; đo lại trang.
 4. Nếu chưa đủ 2 trang: tiếp tục gộp hàm in số + chuyển `stat`/`ls` (nếu D10
    cho phép) trước khi nghĩ tới nới ngân sách.
+
+## T5 — phát hiện r238: ảnh root DÙNG CHUNG pool Untyped với hệ
+
+Đã thử hướng "nhúng chương trình ngoài vào ảnh root rồi root ghi ra FS" và
+**thất bại có bằng chứng**:
+
+- Thêm 2 ảnh (8 680 + 8 704 B ≈ 17 KiB) vào root ⇒ `DATA UNTYPED` từ **79/86**
+  xuống **84/86** page (đúng +5 frame ≈ 20 KiB), tức **mỗi page của ảnh root
+  được cấp từ chính pool Untyped của hệ**.
+- Hệ quả: 23 marker đỏ (`PAGER RECLAIM OK`, `RUN FS OK`, `HIARG`, `MEM OOM OK`,
+  `FS USAGE OK`, …) và `MEM OOM BAD` — vì hết frame cho các demo sau.
+- Đã **revert** trong cùng vòng; 3 arch xanh lại (QEMU 3/3 PASS).
+
+⇒ Kết luận: nhúng chương trình vào ảnh root **làm tăng** áp lực bộ nhớ, ngược
+mục tiêu T5. Chương trình ngoài phải nằm trên **ảnh đĩa**, không phải ảnh root.
+
+**Cơ chế đúng (đã xác minh là có sẵn):** `vifast-fsutil put-file <disk> <path>
+<host-file>` ghi thẳng file vào ảnh FS; `scripts/test-qemu.py::make_disk()` tạo
+đĩa 4 MiB mỗi lần chạy. Vậy đường ống T5 là:
+
+1. `build.sh` build 4 ảnh `vifast-bin` (đã có khung ở r237, mới 2 mode).
+2. `make_disk()` chạy `fsutil mkfs` rồi `put-file` từng ảnh vào `/uname`,
+   `/uptime`, `/free`, `/df` — **không tốn frame Untyped lúc boot**.
+3. Client: xoá 4 thân lệnh builtin, thêm fallback `runfs /<lệnh>`.
+4. Đo lại trang client; nếu chưa dư 2 trang thì gộp hàm in số + chuyển thêm lệnh.
+5. Harness: thêm self-test exec một lệnh ngoài lúc boot (marker `BIN OK <tên>`),
+   frame dùng xong phải trả lại (kiểm bằng `EXEC MEM STABLE`).
+
+Việc này còn ~2–3 vòng; khung build đã sẵn nên không phải làm lại từ đầu.

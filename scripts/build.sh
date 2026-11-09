@@ -72,6 +72,41 @@ for elf in "$SERVER_RV" "$CLIENT_RV" "$SERVER_ARM" "$CLIENT_ARM" "$SERVER_X86" "
     "$OBJCOPY" --strip-all "$elf" "$elf.stripped"
 done
 
+# r237 (T5/D10): chương trình ngoài chạy từ FS cho các lệnh chỉ đọc thông tin.
+# Mỗi mode là một ảnh riêng (exec hiện patch byte vào offset cố định của ảnh
+# demo nên không truyền được argv cho chương trình Rust thật).
+build_bins() {
+    target="$1"
+    linker="$2"
+    tag="$3"
+    shift 3
+    for mode in uname uptime; do
+        VIFAST_BIN_MODE="$mode" cargo rustc -p vifast-bin --profile root-task \
+            --target "$target" -- "$@" \
+            -C link-arg=-T -C link-arg="$linker" \
+            -C link-arg=--defsym=ROOT_ELF_BASE=0x1000010000 \
+            -C link-arg=-z -C link-arg=max-page-size=4096 \
+            -C link-arg=-z -C link-arg=separate-code
+        out="target/$target/root-task/vifast-bin"
+        "$OBJCOPY" --strip-all "$out" "$out.$mode.stripped"
+        echo "bin(${tag}.${mode}) $(wc -c < "$out.$mode.stripped" | tr -d ' ') B"
+    done
+}
+
+build_bins riscv64imac-unknown-none-elf crates/vifast-root/linkers/riscv64.ld rv \
+    -C code-model=medium -C relocation-model=static
+build_bins aarch64-unknown-none-softfloat crates/vifast-root/linkers/aarch64.ld arm \
+    -C relocation-model=static
+build_bins x86_64-unknown-none crates/vifast-root/linkers/x86_64.ld x86 \
+    -C relocation-model=pic -C link-arg=-no-pie
+
+bin_env() {
+    tag="$1"
+    export VIFAST_BIN_UNAME_ELF="$PWD/target/$tag/root-task/vifast-bin.uname.stripped"
+    export VIFAST_BIN_UPTIME_ELF="$PWD/target/$tag/root-task/vifast-bin.uptime.stripped"
+}
+
+bin_env riscv64imac-unknown-none-elf
 cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf -- \
     -C code-model=medium -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/riscv64.ld \
@@ -106,6 +141,7 @@ check_client_budget() {
 # luôn destroy trước khi spawn lần kế. Đo lại sau khi nâng; nếu chạm 76 thì hạ.
 check_client_budget riscv64 "${CLIENT_RV}.stripped" 8
 
+bin_env aarch64-unknown-none-softfloat
 cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
     -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/aarch64.ld \
@@ -116,6 +152,7 @@ cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-sof
 scripts/check-root-elf.sh "$ROOT_ARM.stripped" aarch64-unknown-none-softfloat 183
 check_client_budget aarch64 "${CLIENT_ARM}.stripped" 8
 
+bin_env x86_64-unknown-none
 cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
     -C relocation-model=pic \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/x86_64.ld \
@@ -136,6 +173,7 @@ cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none
     -C link-arg=-z -C link-arg=separate-code
 "$OBJCOPY" --strip-all "$ROOT_RV" "${ROOT_RV}.smp.stripped"
 scripts/check-root-elf.sh "${ROOT_RV}.smp.stripped" riscv64imac-unknown-none-elf 243
+bin_env riscv64imac-unknown-none-elf
 cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf -- \
     -C code-model=medium -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/riscv64.ld \
@@ -152,6 +190,7 @@ cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-sof
     -C link-arg=-z -C link-arg=separate-code
 "$OBJCOPY" --strip-all "$ROOT_ARM" "${ROOT_ARM}.smp.stripped"
 scripts/check-root-elf.sh "${ROOT_ARM}.smp.stripped" aarch64-unknown-none-softfloat 183
+bin_env aarch64-unknown-none-softfloat
 cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
     -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/aarch64.ld \
@@ -169,6 +208,7 @@ cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none --fe
     -C link-arg=-no-pie
 "$OBJCOPY" --strip-all "$ROOT_X86" "${ROOT_X86}.smp.stripped"
 scripts/check-root-elf.sh "${ROOT_X86}.smp.stripped" x86_64-unknown-none 62
+bin_env x86_64-unknown-none
 cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
     -C relocation-model=pic \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/x86_64.ld \

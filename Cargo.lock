@@ -39,6 +39,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vifast-bin"
+version = "0.1.0"
+dependencies = [
+ "vifast-abi",
+ "vifast-user",
+]
+
+[[package]]
 name = "vifast-client"
 version = "0.1.0"
 dependencies = [
