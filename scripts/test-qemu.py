@@ -357,6 +357,28 @@ def fault_addresses(output: str) -> list[int]:
     return [int(value, 16) for value in re.findall(r"USER FAULT.*?addr=(0x[0-9a-fA-F]+)", output)]
 
 
+def read_settled_serial(path: str, settle: float = 3.0) -> str:
+    """Đọc serial SAU khi QEMU đã chết, chờ tới khi file ngừng lớn.
+
+    T33 (r276): gặp lần soak báo "thiếu 50 marker" nhưng file serial — đọc lại
+    sau đó — lại CÓ ĐỦ mọi marker, kể cả `PREEMPT OK`. Nghĩa là QEMU còn flush
+    chardev sau khi bị kill, và harness kết luận quá sớm. Hàm này chờ (tối đa
+    `settle` giây) tới khi kích thước file ổn định rồi mới trả nội dung.
+    """
+    last = -1
+    data = ""
+    deadline = time.time() + settle
+    while time.time() < deadline:
+        if os.path.exists(path):
+            with open(path, "rb") as fh:
+                data = fh.read().decode("utf-8", errors="replace")
+        size = len(data)
+        if size == last:
+            break
+        last = size
+        time.sleep(0.2)
+    return data
+
 def run_qemu(
     name: str,
     cmd: list[str],
@@ -470,7 +492,12 @@ def run_qemu_once(
     elapsed = time.time() - started
     output = ""
     if os.path.exists(serial):
-        output = open(serial, "rb").read().decode("utf-8", errors="replace")
+        if timed_out:
+            # T33 (r276): timeout thì chờ serial ổn định rồi mới đọc — tránh
+            # kết luận "thiếu marker" trong khi QEMU còn đang flush.
+            output = read_settled_serial(serial)
+        else:
+            output = open(serial, "rb").read().decode("utf-8", errors="replace")
     if os.environ.get("VIFAST_KEEP_SERIAL") == "1" and os.path.exists(serial):
         # Giữ lại serial của từng lần chạy để điều tra flake (vòng 67).
         shutil.copyfile(
