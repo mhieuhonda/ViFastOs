@@ -519,28 +519,32 @@ pub extern "C" fn smp_worker_d() -> ! {
     let mut a_seen = 0u64;
     let mut seen_new = false;
     let mut stale_after = 0u64;
-    let done_at;
+    let mut done_at = 0u64;
     loop {
         let now = vifast_user::get_time().value;
-        // r228 (T3): chỉ kết luận SAU khi root báo "đã remap xong" qua trang cờ
-        // chia sẻ. Trước đây D chỉ cần thấy TLB_B một lần là OK, nên một lần
-        // flush toàn bộ muộn (hart 1 đổi root / chạy chương trình khác) xoá mất
-        // entry cũ và che mất đột biến skip-IPI — test trở nên vô nghĩa trên RV.
-        if unsafe { core::ptr::read_volatile((SUSPEND_FLAG_VA + 8) as *const u64) } != 0 {
-            let mut i = 0u64;
-            let mut stale = 0u64;
-            // Đọc ngay trong cửa sổ hẹp: nếu IPI bị bỏ, entry cũ phải còn.
-            while i < 8 {
-                let value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
-                if value == TLB_A {
-                    stale = stale.saturating_add(1);
+        // r228 (T3): RV/x86 chỉ kết luận SAU khi root báo "đã remap xong" qua
+        // trang cờ chia sẻ (word thứ hai — word 0 worker C dùng cho cửa sổ
+        // suspend). Trước đây D chỉ cần thấy TLB_B một lần là OK, nên một lần
+        // flush toàn bộ muộn (hart 1 đổi root) xoá mất entry cũ và che mất đột
+        // biến skip-IPI — test trở nên vô nghĩa trên RV.
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            if unsafe { core::ptr::read_volatile((SUSPEND_FLAG_VA + 8) as *const u64) } != 0 {
+                let mut i = 0u64;
+                let mut stale = 0u64;
+                // Đọc ngay trong cửa sổ hẹp: nếu IPI bị bỏ, entry cũ phải còn.
+                while i < 8 {
+                    let value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
+                    if value == TLB_A {
+                        stale = stale.saturating_add(1);
+                    }
+                    i += 1;
                 }
-                i += 1;
+                stale_after = stale;
+                seen_new = stale == 0;
+                done_at = now;
+                break;
             }
-            stale_after = stale;
-            seen_new = stale == 0;
-            done_at = now;
-            break;
         }
         let value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
         if value == TLB_A {
@@ -548,6 +552,18 @@ pub extern "C" fn smp_worker_d() -> ! {
             if now >= next_ready {
                 let _ = vifast_user::send(1, WORKER_LABEL_D_READY, 1, 0, 0);
                 next_ready = now.saturating_add(5);
+            }
+        }
+        // aarch64 giữ NGUYÊN hành vi trước r228: platform không dùng IPI cho
+        // flush (harness đòi `tlb_ipi == 0`) nên entry cũ được dọn theo cơ chế
+        // riêng, có thể trễ vài tick. Áp cửa sổ hẹp như RV sẽ báo stale GIẢ.
+        #[cfg(target_arch = "aarch64")]
+        {
+            if value == TLB_B {
+                seen_new = true;
+                stale_after = 0;
+                done_at = now;
+                break;
             }
         }
         if now >= start.saturating_add(50) {
