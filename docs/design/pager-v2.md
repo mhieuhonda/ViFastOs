@@ -1,6 +1,8 @@
 # Thiết kế pager protocol v2 (dự thảo cho vòng 24)
 
-Trạng thái: **draft**, chưa có code. Mục tiêu: thay demo pager hai client
+Trạng thái: **implemented** (cập nhật r234). `PAGER4`/`DEMAND LOAD OK`
+trên cả 3 arch, `DEMAND VFSLOAD OK` nạp trang từ FS, evict/refault có
+marker riêng, harness đã bỏ loại trừ x86. Mục tiêu: thay demo pager hai client
 bằng một pager service tổng quát, nạp trang từ file qua VFS, evict được, và
 dùng `ObjectDestroy` (syscall 50) làm đường thu hồi Frame.
 

@@ -476,6 +476,9 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 394155c r228 fix: (T3) mutation TLB tren riscv64 gio phat hien duoc
 - 77f5123 r228b fix: tach hanh vi TLB theo arch — aarch64 giu nguyen, RV/x86 dung handshake
 - 0a72abf r229 feat: (T4) khe tinh AArch64 8 -> 4104 byte + canary 3 arch
+- 4066f5e r230 docs: tien do G1 + dong bo docs sau T1..T4
+- 83986eb r231 docs: bao cao G1 (T1-T4 DONE, T0 BLOCKED, T5-T8 phan tich)
+- 658d358 r233 fix: (T6) bo 3 assert vacuous o ap_entry + bang open-items audit
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -539,7 +542,8 @@ Test hiện tại:
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
 - root ELF link: PASS (ET_EXEC, segment/window, soft-float check)
-- root ELF stripped (đo 2026-11-06): RISC-V 22.960 B, AArch64 26.784 B, x86 29.440 B
+- root ELF stripped (đo lại r233): RISC-V 41.472 B, AArch64 49.504 B, x86 49.576 B
+  (tăng so với vòng 100 vì gộp server+client vào ảnh root duy nhất)
 - vifast-runtime chỉ tạo root TCB; root task tự retype/cap-copy/configure/resume
   hai TCB server/client, bốn fault TCB và notification riêng cho root.
 - ./scripts/build.sh: PASS, không warning
@@ -885,15 +889,15 @@ Kind:
 - VSpace { root, aux_pa, page_size, base, next_va, end, mappings }
 - PageTable { root, mapped: Option<{vspace, va_base, level}> }
   // level chỉ nằm trong mapping do PageTableMap gán; mỗi bảng gắn một lần
-- CNode { slots: [Option<Cap>; 64] }\n  // bảng cap phẳng một cấp (chưa guard/nhiều cấp)
+- CNode { slots: [Option<Cap>; 16] }\n  // bảng cap phẳng một cấp (chưa guard/nhiều cấp)
 - SchedContext { budget, period, remaining, period_start, bound }
 - Irq { number, notification, pending }
 
 Tcb:
 - name, state, priority
 - entry, stack, vspace: Option<ObjRef>
-- cspace [Option<Cap>; MAX_CAPS_TASK=64]; `cnode: Option<ObjRef>` thay thế
-  bằng bảng CNode phẳng khi được CNodeInstall; root cspace riêng 96 slot
+- cspace [Option<Cap>; MAX_CAPS_TASK=16]; `cnode: Option<ObjRef>` thay thế
+  bằng bảng CNode phẳng khi được CNodeInstall; root cspace riêng 128 slot
 - caller: Option<(ObjRef, epoch)>
 - reply_epoch
 - recv_slot
@@ -924,7 +928,7 @@ Untyped/retype:
 - Endpoint: tiêu OBJ_ENDPOINT_BYTES = 256.
 - Notification: tiêu OBJ_NOTIFICATION_BYTES = 128.
 - Tcb: tiêu OBJ_TCB_BYTES = 4096 (quota accounting).
-- CNode: tiêu OBJ_CNODE_BYTES = 4096, 64 slot phẳng.
+- CNode: tiêu OBJ_CNODE_BYTES = 4096, 16 slot phẳng (r229 giữ nguyên kích thước `Kernel`).
 - SchedContext: tiêu OBJ_SCHED_CONTEXT_BYTES = 64.
 - Irq: object metadata, không cấp phát qua Retype (IrqGet root-only).
 - Hết Untyped trả OutOfMemory.
@@ -1498,7 +1502,7 @@ Host test hiện có: xem vùng `tests` sinh tự động. Danh sách nhóm ki�
 - self-revoke Untyped bị từ chối khi TCB hiện tại là con
 - retype Frame/PageTable gọi zero_page qua PageTableOps
 - generic page-table walk xoá leaf trên bảng giả lập host
-- TCB quota 18 đầy trả OutOfMemory
+- TCB quota 24 đầy trả OutOfMemory
 - walk safety: user range/missing table/high leaf/valid PTE/snapshot
 - PageTableMap gán level 1/2/3, FrameMap qua bảng mới
 - PageTableMap từ chối bảng vượt user range, snapshot không đổi
@@ -1912,135 +1916,87 @@ Ghi chú: `FS PERSIST OK` không được `test-qemu.py` bắt buộc vì disk m
   storage. Test harness cần stack 8 MiB (`.cargo/config.toml`).
 - Host test hiện có: xem vùng `tests` sinh tự động.
 
+  101. Vòng 101–105 (vá audit K32–K75): len `FrameWrite` kẹp theo
+    USER_COPY_MAX; cấm giấu vé nhúng sau CNode (K62) ⇒ K63/K64/K65 thành trạng
+    thái không tồn tại; destroy Notification gỡ `bound_ntfn` của TCB (K67);
+    spinlock console Tx chống dính ký tự SMP.
+  102. Giai đoạn G1 "Nền vững" (r225–r233) — gom theo chủ đề:
+    - **Gate trung thực:** check `NET TCP ECHO OK` chỉ đòi khi harness có
+      listener TCP; feature-mode in SKIP thay vì FAIL giả (r226).
+    - **Boot-handoff RV:** `boot_handoff.S` thiếu vòng tô 0xA5 nên `.bss`=0 bị
+      đo thành 100% stack; thêm vòng tô ⇒ 18 744/196 608 (r227).
+    - **Mutation TLB RV:** demo kết luận quá sớm nên một lần flush toàn bộ muộn
+      che mất đột biến; chuyển sang handshake cờ + burst 8 lần đọc (r228), và
+      tách `cfg(target_arch)` để aarch64 giữ nguyên hành vi (r228b).
+    - **Khe tĩnh AArch64:** 8 → 4 104 byte bằng cách nhúng 4 KiB guard vào cùng
+      struct `KernelStorage`; canary + marker `KSTORE CANARY OK/BAD`; build FAIL
+      khi khe < 4096 (r229).
+    - **Assert vacuous:** 3 assert trong `ap_entry` đọc lại giá trị vừa ghi;
+      thay bằng APIC ID đọc từ LAPIC + kiểm biên `GS_BASE` (r233).
+    Bài học chung: *số đo sai còn tệ hơn không đo*, và *một cửa sổ đo đúng cho
+    arch này có thể sai cho arch khác — phải chạy đủ 3 arch trước khi commit*.
+
 16. NHỮNG HẠN CHẾ / NỢ KỸ THUẬT
 --------------------------------
-- Cả ba kiến trúc có scheduler trên CPU phụ và năm worker; x86 AP dùng BKL +
-  `pick_on(1)`, timer LAPIC 100 Hz, D4 idle `sti; hlt; cli`.
-- BKL ticket + RAII bọc trap/syscall/IRQ + x86 fault/page-fault; owner theo
-  hart, assert nhả khóa trước user dùng `held_by(hart)`.
-- TLB shootdown per-VA: mỗi VSpace có mask `harts_loaded`; không xóa bit chỉ
-  vì hart switch sang VSpace khác. Unmap gửi maintenance `TLB_VA` (asid, VA,
-  trang) tới đúng hart, AArch64 broadcast phần cứng (ipi=0), fallback full
-  ASID khi dải >16 trang. `TLB STATS (va_flush=V, ipi=I, skipped=K)`; remote
-  I-cache RISC-V qua IPI.
-- x86 LINT0/LINT1 của AP bị mask; nếu AP vẫn nhận vector PIC thì panic
-  `AP PIC IRQ` thay vì ack hộ BSP.
-- Đã có first-fit range VA allocator; ASID/PCID đã tag theo VSpace (x86 PCID
-  chỉ bật khi CPUID hỗ trợ; QEMU TCG fallback CR3).
-- `ObjectDestroy` (50) destroy từng Frame/Endpoint/Notification/PageTable/
-  VSpace/CNode/SchedContext qua cap gốc; bộ nhớ trả về Untyped;
-  object table cố định 147.
-- IOMMU mới có mô hình phần mềm (domain + reverse map + IoMap/IoUnmap);
-  chưa có hardware IOMMU/VT-d/SMMU.
-- `CapDelete` (13) đã implemented: xóa cap lá, trả IllegalOperation nếu còn
-  object/cap con; từ chối xóa TCB/VSpace của chính caller; user demo CAP DELETE OK.
-- `TcbSetPriority` (19) chỉ hạ/giữ trong priority caller; `TcbSuspend` (17)
-  rút Running/Ready/Blocked khỏi runqueue/endpoint queue, resume bằng 16.
-- Ready queue per-hart + work stealing; host test kiểm home theo affinity,
-  local pick, steal từ hart khác và requeue khi `TcbSetAffinity` đổi mask.
-  Worker E dùng priority bằng C để bảo đảm timer preemption không flaky.
-- vifast-elf + vifast-root ELF đã build/validate; server/client cũng là Rust ELF
-  do runtime cấp qua BootInfo staging, root nạp vào VSpace riêng. IPC buffer
-  core + demo end-to-end đã có (8.1/8.1b); chưa có shared-memory mapping dùng
-  chung ngoài IPC buffer.
-- Chưa có Reply mang capability; ReplyRecv và fault endpoint tối giản đã có.
-- Kernel VFS fallback chỉ ramfs phẳng 8 file x 512 byte; fd vẫn nằm trong Tcb.
-  Server dùng `vifast-fs` VF04: journal 16 data block, 64 inode, 10 direct +
-  single + double indirect (file logic tới ~8 MiB, bị chặn bởi ảnh 4 MiB),
-  thư mục, hard link, symlink, `O_APPEND`/`O_EXCL`/`O_DIRECTORY`, `STAT_PATH`;
-  VFS read/write 128 byte qua IPC buffer; block cache write-back 8 slot cho
-  data, write-through journal/metadata; `fsync` → `BlockFlush`. Chưa có
-  barrier phần cứng thật cho đĩa ngoài QEMU.
-- `GetTime` có fast path không lấy BKL: đọc atomic BSP tick trong trap trước
-  khi lock; `BKL STATS` h1_acq giảm mạnh. Không thêm assertion tuyệt đối vì
-  h1_spin phụ thuộc scheduling. Double-fetch audit: mọi syscall đọc user đúng
-  một lần vào buffer kernel; không tìm thấy chỗ đọc hai lần để sửa.
-- RISC-V panic-halt dùng `sifive_test` mã `(1<<16)|0x3333`; QEMU thoát rc=1.
-  Thành công ghi `0x5555`; không còn nợ R2.
-- AArch64 có VirtIO-MMIO block, x86_64 có ATA PIO và RISC-V có VirtIO-MMIO
-  block; FS v2 persistence đã có trên cả 3 kiến trúc.
-- Task 9 (user IRQ AArch64) đã hoàn thành; per-hart runqueue đã xong.
-- Chưa có driver network/GPU; input UART IRQ đã có.
-- Chưa có compositor, ViFastKey.
-- Fuzz syscall seed cố định 100.000 bước x 3 PTE format (bản dài `--ignored`)
-  với invariant badge/VSpace mask/current; bản ngắn 10.000 bước mặc định.
-- TLB mutation: feature `test-skip-tlb-ipi` bỏ IPI target và cho kết quả
-  `TLB REMAP BAD (stale)` trên RISC-V/x86; test script PASS khi bản đột biến FAIL.
-- Chưa có formal verification; chưa có soak dài nhiều giờ.
-- RISC-V kernel accessible chỉ 4 MiB (0x8000_0000..0x8040_0000); runtime/assert
-  kiểm tra kernel image + metadata/data/boot Untyped nằm trọn trong dải này.
-- x86 identity map 0..1 GiB; nếu OVMF/RAM vượt mốc này phải lấy memory map.
-- Kernel x86 static data đã NX; text vẫn X. Chưa có NX cho toàn bộ rodata/UEFI
-  runtime pages.
-- Root/server/client mỗi task một VSpace; root VSpace không còn stack client.
-- Boot Untyped 128 KiB/32 object đã dùng cho root + server + BootInfo; log QEMU
-  còn trống 8/5/4 trang (RISC-V 24/32, AArch64 27/32, x86_64 28/32).
-- Server VSpace cap slot 12 do runtime cài; root đọc từ BootInfo, không còn
-  hard-code trong root task.
-- Shared-code builder root/server chỉ nhận một trang code; builder ELF đã hỗ trợ
-  nhiều PT_LOAD. Root ELF đã nạp ở 6.4.
-- Root TCB bị cấm destroy; nếu vi phạm sẽ làm mất root cap của Untyped.
-- Double-fetch nội dung user: BKL ngăn đổi mapping giữa validate/copy, nhưng
-  hart khác vẫn có thể đổi nội dung buffer giữa hai lần đọc; các syscall copy
-  một lần vào buffer kernel (hoặc cần pin/copy-once) khi rà soát SMP.
-- Fault endpoint tối giản đã có (8.3): log/queue/BlockedFault + handler Recv;
-  Reply để tiếp tục chưa được demo. Fault1/2/3 vẫn suspend.
-- Self-revoke Untyped hiện trả IllegalOperation; supervisor hủy nhóm gồm chính
-  nó sẽ cần destroy-xong-rồi-pick sau này.
-- Revoke đi qua PageTableOps; chưa có batch/Preempted cho revoke rất lớn.
-- Client nhận Untyped con riêng; root không còn CapCopy data Untyped cho client.
-- TCB/VSpace chưa tách pool riêng; TCB có quota 18 nhưng vẫn nằm trong object table.
-  Việc tách pool bị **cố ý hoãn** cho tới khi cần vượt 147 object hoặc trước SMP;
-  object table hiện là 147 slot và chưa cần tách pool.
-- `OBJ_TCB_BYTES=4096` chỉ là quota accounting, không phản ánh đúng `size_of::<Tcb>()`.
-- Server fault khi client BlockedReply sẽ làm client chờ vô hạn; fault endpoint sẽ xử lý.
+Viết lại theo bảng R8 của review r224 (CLOSED thì bỏ, CHANGED thì sửa số, OPEN
+thì giữ) và cập nhật sau G1.
 
+**Đã đóng (không còn là nợ):**
+- Driver network/GPU/input: **đã có** từ vòng 66–98 (virtio-net + TCP/DNS,
+  virtio-gpu, virtio-input, PS/2, virtio-rng). Ghi chú "chưa có driver
+  network/GPU" trong bản cũ là **sai**.
+- Object table / TCB quota: **168 object, 24 TCB** (không còn 147/18).
+- Cửa sổ kernel RISC-V: **6 MiB** (không còn 4 MiB); headroom ~2,28 MB.
+- x86: **NX toàn ảnh trừ text** (không còn "text vẫn X").
+- Reply mang cap: đã có.
+- Khe tĩnh AArch64: **4 104 byte** + canary, build FAIL khi < 4096 (r229).
 
+**Còn mở (ưu tiên giảm dần):**
+- **P1 — GDT/TSS per-hart trên x86**: trampoline, GDT (7 entry) và `CPU_STATES`
+  cố định cho hart 1; bật hart 2/3 sẽ dùng chung TSS ⇒ `hart_id()` sai và BKL
+  mất loại trừ tương hỗ. Cần một vòng riêng (đụng trampoline + `tss_sel(hart)`).
+- **P1 — `pick_on` không lọc `state == Ready`** và `enqueue` có thể bỏ rơi TCB
+  Ready ngoài runqueue (K40, audit82, audit88 P1-5). Cần đường tái hiện.
+- **P1 — nhóm park không dọn `current`** (K37/K38/K39) dẫn tới alias
+  current+queued; K50 là hệ quả.
+- **P2 — Notification bound**: `bound_ntfn` chỉ ghi, `recv` không poll (K42);
+  `signal` xử lý ca hỗn hợp stale+live chưa đúng (K45); `irq_raise` coalesce
+  làm mất cạnh (K46).
+- **P2 — `check_invariants` chưa quét mask `harts_loaded` ma** (K60).
+- **P2 — `AP_GDT` chưa nằm trong `kernel_data_ranges`** ⇒ executable dưới NX.
+- **P2 — `slot_arg(..).unwrap_or(0)` còn ~53 chỗ**; rủi ro thấp.
+- **Barrier phần cứng thật cho FS** (journal replay/ordering) chưa có.
+- **IOMMU phần cứng** (VT-d/SMMU) chưa có; mới có mô hình phần mềm.
+- **Multi-AP x86** (hart 2/3) chưa bật.
+- **Tách BKL thành khóa mịn** mới dừng ở bước đo contention.
+- **Driver vẫn ở kernel**: net (kèm `tcp_pump()` trong timer IRQ), gpu, input,
+  rng, block. Chỉ FS/VFS ở user-space. Đây là nợ kiến trúc lớn nhất so với
+  tinh thần microkernel; **cấm thêm tính năng driver mới trong kernel (D12)**.
+- **Trần trang client ELF**: RV 8/8, AArch64 8/8, x86 9/9 — mọi lệnh shell mới
+  phải đo trang ngay sau build (D10 quy định chuyển lệnh đọc thông tin ra
+  chương trình ngoài).
+- **Soak dài** (100 iter × 3 arch) chưa có.
 
 17. ĐỊNH HƯỚNG PHÁT TRIỂN ĐỀ XUẤT
 ----------------------------------
-Thứ tự ưu tiên:
+Ba giai đoạn, thay cho danh sách A/B/C rời rạc trước đây.
 
-A. Userland / ABI trước
-1. vifast-user wrappers + user layout (đã có bản đầu).
-2. vifast-elf parser ELF64 PT_LOAD + host test (đã có).
-3. Bước 6: root task Rust nạp từ ELF; stack 4 trang + guard — đã xong.
-4. Bước 7: BootInfo (7.3), Untyped con (7.2), VSpace client (7.4), chuyển client/fault4 (7.5) — 3b hoàn tất.
-5. Shared memory / IPC buffer (core + demo 8.1/8.1b đã có).
-6. Reply capability; ReplyRecv/fault endpoint tối giản đã có.
-7. Supervisor/pager tối giản.
+**G1 "Nền vững" (đang chạy, r225–r243).** Mục tiêu: không còn FAIL nhất quán
+nào trong gate; khe AArch64 ≥ 4096 + canary; client dư ≥ 2 trang và shell có
+cd/pwd/history; soak 100 iter × 3 arch ≥ 99%; không còn P0 mở.
+Việc đã xong: T1 (echo/SKIP), T2 (boot-handoff), T3 (mutation TLB), T4 (khe +
+canary), T6 (bảng open-items + assert vacuous).
+Việc còn lại: T5 (ngân sách client theo D10), T7 (tài liệu — chính văn bản
+này), T8 (soak dài).
 
-B. Bộ nhớ
-1. Physical frame allocator thật.
-2. Page-table page allocator.
-3. Range VA allocator.
-4. Free/unmap toàn VSpace, thu hồi frame/object.
-5. ASID/PCID — đã tag ASID/PCID theo VSpace (x86 conditional).
-6. IOMMU — mô hình phần mềm đã có; hardware IOMMU/VT-d/SMMU còn thiếu.
+**G2 "Bộ nhớ" (mốc 2).** Free-page allocator toàn cục + page-table page
+allocator, để nhiều chương trình chạy nhiều lần mà không phụ thuộc ngân sách
+cố định. Làm design doc trước khi code.
 
-C. SMP
-1. x86 AP bring-up bằng ACPI MADT + LAPIC/SIPI — đã xong scheduler/worker.
-2. Per-hart context/runqueue + work stealing — đã xong.
-3. BKL trước, lock mịn sau (bước tiếp theo).
-4. IPI wakeup/reschedule — RISC-V IPI và AArch64 SGI đã chạy; chỉ gửi khi
-   hart đích idle.
-5. TLB shootdown đa hart — per-VA + mask harts_loaded đã có; full fallback giữ.
-6. Timer per-hart — đã xong; BSP/AP rate độc lập, preempt 50/50 cả 3.
-
-D. VFS / driver
-1. VFS/FS v2 trong user-space server — đã xong (`vifast-fs`, journal,
-   permission, fsutil).
-2. Block driver VirtIO — đã có cho cả 3 kiến trúc.
-3. FS bền vững — đã có 7 phase persistence/replay/migrate/indirect + hard link.
-4. FS boundary: block cache/double indirect/barrier phần cứng.
-5. Network VirtIO + TCP/UDP tối giản.
-6. Console/input driver.
-
-E. Desktop / Space
-1. Compositor.
-2. ViFastKey.
-3. Name server, supervisor, pager.
-4. Security/verification.
+**G3 "Driver ra user-space".** Bắt đầu từ net vì lệch nguyên tắc nặng nhất
+(`tcp_pump()` chạy trong timer IRQ). Bước 1: design doc net server user-space
+dùng IRQ object + notification + IoMap đã có. Bước 2: đưa pump ra khỏi IRQ.
+Sau đó mới tới input/gpu. Sau G3: compositor và ViFastKey (mốc 11, 12).
 
 18. QUYẾT ĐỊNH ĐÃ CHỐT
 -----------------------
@@ -2519,6 +2475,42 @@ E. Desktop / Space
     fail 2/20 harness oan) — soak-verify lại **20/20 cả 3 arch**. Gate full
     `--with-tcp --with-input` xanh (input/display end-to-end).
 
+47. **Hợp đồng cửa sổ copy (vòng 146–147, r224):** mọi đường copy user
+    (`Read`/`Write`/`DebugWrite`/`FrameWrite`) đi qua một cửa sổ VA có kích
+    thước hằng số và một hàm `copy_window_ok` dùng chung cho cả 3 platform —
+    nguồn sự thật duy nhất cho "cửa sổ hợp lệ". Bài học vòng 145: thiếu cửa sổ
+    này làm `exec` không đọc được trang stack suốt 40 vòng.
+48. **Hợp đồng Reply mang cap:** `TcbReply` có thể chuyển một cap từ cspace của
+    server sang client trong cùng message; lỗi ở bất kỳ bước nào sau khi lấy
+    `caller` phải **khôi phục** `caller` (chỉ khi client còn `BlockedReply` và
+    `reply_epoch` khớp) — nếu không client kẹt vĩnh viễn (fix P0 r225).
+49. **Syscall 51–55:** `TcbWait` (51, rendezvous), `TcbInfo` (52, nguồn số của
+    `ps`), `MemInfo` (53, nguồn số của `free`), `TimerInfo` (54, uptime),
+    `ModuleRelease` (55, thu hồi trang staging module). Tất cả đã implemented;
+    KError vẫn 22 mã, BootInfo vẫn v3.
+50. **D7. Đánh số vòng:** commit `rNNN <type>: <nội dung>`, `type` ∈
+    feat|fix|test|perf|infra|docs|chore|revert; hậu tố `b`, `c` cho commit tiếp
+    theo cùng vòng; **cấm** `vong N` trần và cấm dùng `moc N` thay số vòng.
+51. **D8. `main` chỉ dành cho OS.** `deploy/` và web phải ở nhánh `web`/repo
+    riêng. Agent đo trên tree không có tiến trình nào khác ghi vào; nếu phát
+    hiện commit lạ xen giữa vòng thì dừng đo, ghi lại, đo lại.
+52. **D9. Đóng băng kích thước `Kernel`** cho tới khi khe AArch64 ≥ 4096 byte.
+    **Đã đỡ băng ở r229** (khe 4 104 + canary).
+53. **D10. Shell builtin chỉ cho lệnh cần trạng thái shell** (`cd`, `pwd`,
+    `history`, `!!`, `jobs`, `kill`, `help`, `exit`, `run/runfs`). Lệnh chỉ đọc
+    thông tin (`uname`, `uptime`, `free`, `df`, `ps`, ...) phải là chương trình
+    ELF trong FS chạy qua exec-from-FS, chỉ nhận đúng cap cần thiết.
+54. **D11. Gate phải trung thực.** Mỗi check có tiền đề tường minh: thiếu tiền
+    đề ⇒ in `SKIP`, không FAIL/PASS giả. Mutation test phải chứng minh được nó
+    phát hiện lỗi trên arch đó; nếu không thì gỡ khỏi arch đó và ghi lý do.
+    Assert phải có thể sai (cấm assert đọc lại giá trị vừa ghi).
+55. **D12. Driver trong kernel là nợ đã thừa nhận.** Cấm thêm tính năng mới cho
+    net/gpu/input/rng trong kernel (ví dụ retransmit, nhiều kết nối TCP); chỉ
+    nhận sửa lỗi. Tính năng net mới chờ net server user-space ở G3.
+56. **D13. Kết luận "không rò rỉ"/"ổn định" phải dựa trên đo lặp (≥ 3 chu kỳ
+    hoặc soak) hoặc mutation test**, không dựa trên một lần đo (bài học r187
+    kết luận sai, phải tới r192–r200 mới tìm ra 3 root cause rò rỉ).
+
 19. FILE / TÀI LIỆU LIÊN QUAN
 -----------------------------
 README.md
@@ -2559,17 +2551,21 @@ scripts/check-docs.py
 
 20. KẾT LUẬN NGẮN
 ------------------
-Đây là một microkernel bring-up đa kiến trúc có:
-- lõi portable sạch (không unsafe/asm/hardware);
-- platform layer riêng cho MMU/trap/timer/SMP;
-- binary kernel mỏng;
-- user mode, IPC, capability transfer, page mapping, user-space VFS và timer
-  preemption;
-- test QEMU 3 kiến trúc xanh.
+ViFastOs là microkernel bring-up đa kiến trúc (RISC-V64, AArch64, x86_64) viết
+bằng Rust, chạy được trên QEMU với scheduler SMP 2 hart, IPC/capability, FS
+journal trong user-space, exec-from-FS, TCP thật qua virtio-net, GPU/input/rng.
 
-Nó chưa phải OS hoàn chỉnh. Root và server/client đều chạy từ ELF Rust; mỗi
-task có VSpace riêng; client dùng Untyped con. Đã có FS v2 journal hóa trong
-user space, block cap, permission theo badge D6, persistence 7 phase cả 3 kiến
-trúc, BKL ticket per-hart, tick BSP/AP độc lập, ASID/PCID, IPI/TLB per-VA
-targeted + fallback full ASID, remote fence.i. Khoảng trống tiếp theo:
-hardware IOMMU, multi-AP x86, network/input, framebuffer/compositor/ViFastKey.
+Điểm mạnh đã kiểm chứng bằng gate: lõi portable sạch (`forbid(unsafe_code)`,
+không `cfg(target_arch)` trong kernel/runtime), gate 3 arch × 3 lần lặp, persist
+7 phase, harness 605 case âm, fuzz 100k syscall, mutation test cho TLB và cho
+`check_invariants`.
+
+Điểm yếu còn lại, xếp theo rủi ro: driver (net/gpu/input/rng/block) nằm trong
+kernel và `tcp_pump()` chạy trong timer IRQ — lệch nguyên tắc microkernel; chưa
+có free-page allocator toàn cục nên mọi tính năng bị ngân sách trang chi phối;
+GDT/TSS x86 chưa per-hart; một số đường park chưa dọn `current` (K37–K40);
+IOMMU mới ở mức mô hình phần mềm.
+
+Trạng thái hiện tại (r233): gate xanh, 3 lỗi gate nhất quán của vòng 224 đã
+đóng, khe tĩnh AArch64 từ 8 byte lên 4 104 byte có canary bảo vệ. Giai đoạn G1
+"Nền vững" còn T5 (ngân sách client theo D10) và T8 (soak dài).

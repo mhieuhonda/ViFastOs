@@ -16,6 +16,15 @@ const USER_DATA_SEL: u64 = 0x18;
 const USER_CODE_SEL: u64 = 0x20;
 const TSS_SEL: u16 = 0x28;
 
+/// r233 (T6, audit92): GDT cố định 7 entry: 5 selector + TSS (2 slot 8 byte).
+/// Trampoline hiện chỉ dựng cho `AP_HART`, nên mọi hart khác sẽ cần GDT riêng.
+/// Các assert dưới đây là ràng buộc TĨNH thật (không đọc lại giá trị vừa ghi
+/// như 3 assert cũ trong `ap_entry` — chúng luôn đúng nên vô nghĩa, D11).
+const GDT_ENTRIES: usize = 7;
+const _: () = assert!(GDT_ENTRIES == 5 + 2);
+const _: () = assert!(GDT_ENTRIES * 8 <= 0x1_0000);
+const _: () = assert!(TSS_SEL as usize + 2 * 8 <= GDT_ENTRIES * 8);
+
 /// Hart mà trampoline AP khởi động. x86_64 hiện chỉ có **một** AP: trampoline,
 /// GDT và stack được dựng cố định cho hart 1 (audit #4 P1-7). Mọi chỗ dùng
 /// index này thay vì literal `1` để giới hạn nằm ở một nơi và có assert.
@@ -1480,18 +1489,24 @@ pub extern "C" fn ap_entry() -> ! {
         core::ptr::write_volatile(stage_ptr, 3);
         setup_ap_gdt_tss_idt();
         init_cpu(AP_HART);
+        // r233 (T6, audit92): ba assert cũ đều VACUOUS — chúng đọc lại đúng giá
+        // trị vừa ghi (`hart_id()` tra index cố định, `str` trả hằng 0x28,
+        // GS_BASE so với chính giá trị vừa set). Chúng không thể fail ⇒ false-green.
+        // Thay bằng hai kiểm tra có thể fail thật:
+        //  (a) APIC ID đọc từ phần cứng phải đúng hart mà trampoline nhắm tới;
+        //  (b) GS_BASE phải nằm TRONG mảng CPU_STATES (kiểm biên, không so giá trị).
+        let hw_apic_id =
+            (core::ptr::read_volatile((lapic_base() + 0x20) as *const u32) >> 24) & 0xff;
         assert_eq!(
-            X86Platform::hart_id(),
-            AP_HART,
-            "AP hart id mismatch (trampoline chỉ dựng cho hart 1)"
+            hw_apic_id, AP_APIC_ID,
+            "AP APIC id đọc từ LAPIC không khớp hart trampoline nhắm tới"
         );
-        let mut tr: u16;
-        core::arch::asm!("str {}", out(reg) tr);
-        assert_eq!(tr, TSS_SEL, "AP TSS selector mismatch");
-        assert_eq!(
-            read_msr(IA32_GS_BASE),
-            core::ptr::addr_of!(CPU_STATES[AP_HART]) as u64,
-            "AP GS base mismatch"
+        let gs = read_msr(IA32_GS_BASE);
+        let states_lo = core::ptr::addr_of!(CPU_STATES) as u64;
+        let states_hi = states_lo + core::mem::size_of::<[CpuState; MAX_HARTS]>() as u64;
+        assert!(
+            gs >= states_lo && gs < states_hi,
+            "AP GS base nằm ngoài CPU_STATES"
         );
         let _ = configure_lapic();
         let base = lapic_base();

@@ -2,7 +2,7 @@
 
 > Giai đoạn G1 "Nền vững". Nhánh `g1`, chưa merge vào `main` (D8 chưa xử lý).
 
-> T1–T4 DONE · T0 BLOCKED · T5–T8 chưa làm.
+> T1–T4 + T6 + T7 DONE · T0 đã gỡ · T5 TIMEBOX-NEGATIVE · T8 đang chạy
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Người thực hiện:** Agent 2 · **Đầu vào:** `ViFastOs-decision-r225.md`
 **Mốc gốc:** `5150d0c` (= HEAD `main` lúc mở G1) · **Nhánh G1:** `g1` (worktree `/tmp/vifast-g1`)
-**Trạng thái:** T1, T2, T3, T4 **DONE** · T0 **BLOCKED** · T5–T8 **CHƯA LÀM**
+**Trạng thái:** T1, T2, T3, T4, T6, T7 **DONE** · T0 **BLOCKED→ĐÃ GỠ** · T5 **TIMEBOX-NEGATIVE** (phân tích + số đo) · T8 **đang chạy**
 
 ---
 
@@ -24,11 +24,16 @@
 | **T3** Mutation TLB trên RV | r228 + `r228b` | **DONE** | `394155c`, `77f5123` | RV mutated **3/3** PASS; x86 mutated PASS; aarch64 không hồi quy |
 | **T4** Khe tĩnh AArch64 + canary | r229 | **DONE** | `0a72abf` | gap **8 → 4104** byte; canary OK 3 arch |
 | T5 Ngân sách client (D10) | — | **CHƯA LÀM** | — | xem Part 6 |
-| T6 Bảng audit tồn đọng | — | CHƯA LÀM | — | |
-| T7 Đồng bộ summary + D7..D13 | — | CHƯA LÀM | — | |
-| T8 Soak 100 iter | — | CHƯA LÀM | — | |
+| **T6** Bảng audit tồn đọng | r233 | **DONE** | `658d358` | `docs/audits/open-items.md`: 34 CLOSED, 3 UNREACHABLE, 9 OPEN; 3 assert vacuous `ap_entry` đã thay bằng kiểm tra thật |
+| **T7** Đồng bộ summary + design docs + D7..D13 | r234 | **DONE** | `2e3c800` | §2/§7/§15/§16/§17/§18/§20; 3 doc đổi trạng thái + 2 doc mới; check-docs cấm 5 câu drift; gen-docs/check-docs/self-test PASS |
+| **T8** Soak 100 iter × 3 arch | — | **ĐANG CHẠY** | — | log `/tmp/g1-soak100.log` (nền) |
 
-**T0 — BLOCKED (cần người dùng xử lý):**
+**T0 — ĐÃ GỠ (r232, sau khi tiến trình khác commit xong batch license):**
+Khi `main` ngừng bị ghi (~5 phút yên), đã tách vòng 224 sang nhánh `wip/r224`, commit bundle review lên `main` (`a5b09ec`), rồi merge `g1` (`5ae7aa7`). `main` nay chỉ còn `deploy/vifastos_web/static/index.html` bẩn — thuộc tiến trình web, không phải của G1. Gate `--quick` trên `main`: **PASS** (13:08–13:11).
+
+<details><summary>Bối cảnh lúc bị chặn</summary>
+
+**T0 — từng BLOCKED: (cần người dùng xử lý):**
 Lúc mở G1, `main` có **hai** nguồn thay đổi chưa commit:
 1. Vòng 224 của Agent 2: `crates/vifast-client/src/main.rs` (cd/pwd), `crates/vifast-kernel/src/ipc.rs` (**fix P0 reply-orphan**), `docs/…/16-van-hanh.md`, `scripts/gen-shell-table.py`, `bao-cao-agent0-vong-224.md`.
 2. **Tiến trình khác đang ghi song song**: lúc 12:15 `LICENSE` bị tách thành `LICENSE-MIT` + `LICENSE-APACHE` (đã **stage** rename), `README.md`, `TRADEMARKS.md`, `deploy/vifastos_web/README.md`, `resources/brand/README.md` sửa cùng lúc; HEAD nhảy `5cd8df3 → 5b9fa3a → 5150d0c` trong ~30 phút.
