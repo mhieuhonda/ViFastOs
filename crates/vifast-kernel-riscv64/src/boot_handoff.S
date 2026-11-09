@@ -40,6 +40,19 @@ _start:
 
 normal_primary:
     la sp, __stack_top
+    /*
+     * r227 (T2): tô boot stack bằng 0xA5 giống boot.S. Bản handoff trước đây
+     * bỏ mất bước này, nên vùng .bss (toàn số 0) bị đo thành "đã dùng 100%"
+     * (used=196608/196608) và accept() từ chối vì HWM vượt 50%. Bài học: số đo
+     * sai còn tệ hơn không đo — nó chỉ sai lệch sang một kết luận khác.
+     */
+    la t0, __stack_bottom
+    la t1, __stack_top
+    li t2, 0xA5A5A5A5
+.Lhandoff_paint:
+    sw t2, 0(t0)
+    addi t0, t0, 4
+    bltu t0, t1, .Lhandoff_paint
     call rust_main
 
 promote_hart0:

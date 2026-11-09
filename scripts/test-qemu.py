@@ -534,14 +534,31 @@ def run_qemu_once(
                     " chạy ./scripts/diag.sh và pkill -f qemu-system rồi thử lại"
                 )
         else:
-            from harness_spec import EXACT_ONE, FORBIDDEN
+            from harness_spec import BOOT_STACK_RE, EXACT_ONE, FORBIDDEN
 
             dup = [t for t in EXACT_ONE if output.count(t) != 1]
             bad = [t for t in FORBIDDEN if t in output]
             if dup or bad:
                 print(f"FAIL: marker sai số lần/forbidden: dup={dup[:4]} bad={bad[:4]}")
             else:
-                print("FAIL: banner or SELFTEST PASS missing")
+                # r227 (T2, D11): TRƯỚC ĐÂY in "banner or SELFTEST PASS missing"
+                # cho mọi trường hợp còn lại. Khi boot-handoff đo sai HWM (100%)
+                # câu này đổ lỗi sang banner và làm điều tra sai hướng 3 vòng.
+                # Nay nêu đúng điều kiện số học đang trượt.
+                stack = BOOT_STACK_RE.search(output)
+                hint = "không khớp điều kiện nào trong accept() (xem log đầy đủ)"
+                if stack:
+                    used, size = int(stack.group(1)), int(stack.group(2))
+                    if size < 0x20000:
+                        hint = f"BOOT STACK size={size} < 0x20000"
+                    elif used < 1:
+                        hint = "BOOT STACK used=0 (số đo không có)"
+                    elif used * 2 > size:
+                        hint = (
+                            f"BOOT STACK HWM {used}/{size} vượt 50% "
+                            "(nghi tràn stack hoặc chưa tô 0xA5)"
+                        )
+                print(f"FAIL: {hint}")
         return False, timed_out
     print("PASS")
     return True, False
