@@ -248,6 +248,16 @@ pub trait Platform: Arch + Console {
         None
     }
 
+    /// T33 (r275): trạng thái hart phụ tại lúc chẩn đoán `SMP IDLE STALL`.
+    /// Chỉ dùng cho CHẨN ĐOÁN (không phải marker của gate); mặc định `None`
+    /// để các nền tảng khác không phải đổi gì.
+    ///
+    /// Thứ tự: online, idle_window, idle_generation, wake_last_generation,
+    /// ipi_sent, resched_sent.
+    fn stall_detail() -> Option<[usize; 6]> {
+        None
+    }
+
     fn post_idle_ready() -> bool {
         true
     }
@@ -1516,6 +1526,19 @@ pub mod timer {
                     idle_entries,
                     timer_counts
                 );
+                // T33: thêm trạng thái hart phụ để biết nó CHẾT hay chỉ NGỦ.
+                if let Some([online, window, gen, wake_gen, ipi, resched]) = A::stall_detail() {
+                    vifast_kernel::klog!(
+                        A,
+                        "SMP AP STATE (online={}, window={}, gen={}, wake_gen={}, ipi={}, resched={})",
+                        online,
+                        window,
+                        gen,
+                        wake_gen,
+                        ipi,
+                        resched
+                    );
+                }
             } else {
                 vifast_kernel::klog!(
                     A,

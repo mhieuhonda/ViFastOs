@@ -2715,6 +2715,18 @@ impl Platform for X86Platform {
         ))
     }
 
+    /// T33 (r275): chẩn đoán — hart phụ còn sống/đang ngủ/đã nhận IPI chưa.
+    fn stall_detail() -> Option<[usize; 6]> {
+        Some([
+            AP_ONLINE.load(Ordering::SeqCst) as usize,
+            AP_IDLE_WINDOW.load(Ordering::SeqCst) as usize,
+            AP_IDLE_GENERATION.load(Ordering::Relaxed),
+            WAKE_LAST_GENERATION.load(Ordering::Relaxed),
+            AP_IPI_SENT.load(Ordering::Relaxed),
+            RESCHED_SENT.load(Ordering::Relaxed),
+        ])
+    }
+
     fn post_idle_ready() -> bool {
         if !POST_STARTED.load(Ordering::SeqCst) {
             return false;

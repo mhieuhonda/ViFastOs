@@ -542,26 +542,41 @@ rồi mới sửa lại.
 Bài học giữ nguyên: **một bản vá "xanh gate + xanh soak 30" vẫn có thể là hồi
 quy** — soak 100 mới đủ để bắt.
 
-### r274 — áp lại T32, và một lỗi MỚI được phát hiện: treo `PREEMPT OK` (T33)
+### r274 — áp lại T32; r275 — T33 hoá ra là flake của HARNESS, không phải kernel
 
-Dữ kiện quyết định (tất cả x86_64, `-smp 2`):
+r273 hoàn nguyên T32 vì soak 100 hỏng ngay vòng 2 (x86_64, thiếu `PREEMPT OK`).
+Soak 40 trên bản đã hoàn nguyên lại hỏng đúng triệu chứng đó ⇒ **treo không do
+T32**, nên r274 áp lại bản vá.
 
-| Đợt | Có bản vá T32? | Lần boot | Treo `PREEMPT OK` |
-|---|---|---:|---:|
-| soak 100 @ r262 | không | 300 | 0 |
-| soak 30 @ r265, r269 | không | 180 | 0 |
-| soak 30 @ r271 | có | 90 | 0 |
-| soak 100 @ r272 | có | ~6 | 1 (vòng 2) ⇒ đã hoàn nguyên |
-| soak 40 @ r273 | **không** (sau hoàn nguyên) | 120 | **1 (vòng 10)** |
+Sau đó điều tra tiếp và **kết luận đảo chiều**: giữ serial của lần hỏng ra thì
+thấy nó **có đủ** mọi marker mà harness báo "thiếu", kể cả `PREEMPT OK`:
 
-⇒ treo **không do T32**: nó xuất hiện cả khi đã gỡ bản vá. Tỉ lệ ~0,3–1%, điểm
-treo ngay sau `shell>` và trước marker `PREEMPT OK` (hart không in được gì
-thêm). Đã áp lại T32 (r274) và mở **T33** với bảng dữ kiện + hướng điều tra.
+```text
+Cap OK         5
+Client         1
+PREEMPT OK     2      <- harness báo "thiếu PREEMPT OK"
+SHELL READY    1
+FS V2 OK       1
+```
 
-Bài học thứ hai của phiên, và là bài học về phương pháp: **một lần hỏng ngay
-sau khi vá không đủ để buộc tội bản vá** — phải chạy lại trên bản đã hoàn
-nguyên để có đối chứng. Chính đối chứng đó (soak 40 @ r273) mới là thứ chứng
-minh bản vá vô can.
+⇒ khách **không treo**; harness hết thời gian chờ trong khi khách còn đang
+boot, rồi báo thiếu marker, còn khách vẫn ghi tiếp ra serial. Đây là **lỗi lớp
+T19 (đọc/thu thập log)**, không phải lỗi kernel. Thêm một bằng chứng nữa: dòng
+chẩn đoán `SMP IDLE STALL` xuất hiện **cả trong những lần boot PASS** với đúng
+bộ số đó (`post_ticks=3, post_idle=4, post_wakes=3`), nên nó không phải dấu
+hiệu hỏng.
+
+Việc làm ở r275 (chỉ chẩn đoán, không đổi hành vi):
+- `SMP AP STATE (online, window, gen, wake_gen, ipi, resched)` — in kèm khi có
+  `SMP IDLE STALL`, để vòng sau phân biệt "hart phụ ngủ" với "hart phụ chết".
+- Ghi rõ T33 = **flake harness/thời gian**, và việc cần làm là: (a) đọc lại
+  serial SAU khi timeout rồi mới kết luận, (b) nâng timeout khi máy có tải,
+  (c) **không chạy build/QEMU khác trong lúc soak** (chính phiên này đã vi phạm
+  điều đó vài lần, và các lần "treo" đều rơi vào cửa sổ có build chạy song song).
+
+**Bài học phương pháp (lần thứ ba trong phiên)**: kết luận phải dựa trên bằng
+chứng còn lại sau cùng — ở đây là **serial đầy đủ**, không phải thông báo của
+harness. Nếu chỉ tin harness thì đã đi sửa một lỗi kernel không tồn tại.
 
 ### Trạng thái cuối phiên
 
@@ -583,7 +598,7 @@ minh bản vá vô can.
 ## SHA-256
 
 ```text
-64f9aef5ee23f8a4e2dfe8befeff1b2154dd51c789f214fc26281b7a2694912c  docs/reviews/ViFastOs-report-r262.md
+105037ab06cac3aa64ac18867ce26c7bce1a5d42761b61bab739ba4825ff0281  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

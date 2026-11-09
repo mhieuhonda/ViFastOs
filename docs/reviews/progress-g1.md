@@ -792,33 +792,26 @@ scheduler của hart đang chạy, nên phải hiểu ai còn đọc `current` s
 exit trước khi sửa lại. Bài học: xanh gate + xanh soak 30 **chưa đủ**; soak 100
 mới bắt được.
 
-## T33 — treo `PREEMPT OK` (x86_64, ~1%)
+## T33 (ĐÍNH CHÍNH r275) — treo `PREEMPT OK` là flake của HARNESS
 
-### Dữ kiện (đo trong đêm 09→10/11, tất cả trên x86_64, `-smp 2`)
+Bản ghi trước của mục này kết luận "hart phụ ngừng thức". **Sai.** Giữ serial
+của lần hỏng (soak 100 vòng 58, riscv64) ra thì nó có ĐỦ mọi marker mà harness
+báo thiếu, kể cả `PREEMPT OK` (2 lần):
 
-| Đợt soak | HEAD | Số lần boot | Số lần treo `PREEMPT OK` | Ghi chú |
-|---|---|---:|---:|---|
-| 100 vòng @ r262 | chưa có T32 | 300 | 0 | 2 lỗi khác (PAGER2 trùng, DESTROY DIAG) |
-| 30 vòng @ r265 | chưa có T32 | 90 | 0 | |
-| 30 vòng @ r269 | chưa có T32 | 90 | 0 | sau khi `df` thành applet |
-| 30 vòng @ r271 | CÓ T32 | 90 | 0 | |
-| 100 vòng @ r272 | CÓ T32 | ~6 | 1 (vòng 2) | dừng đợt soak để điều tra |
-| 40 vòng @ r273 | ĐÃ hoàn nguyên T32 | 120 | 1 (vòng 10) | ⇒ treo KHÔNG do T32 |
+```
+Cap OK         5
+Client         1
+PREEMPT OK     2
+SHELL READY    1
+FS V2 OK       1
+```
 
-### Kết luận tạm
+⇒ khách không treo; harness hết thời gian chờ trong khi khách còn boot. Đây là
+lỗi lớp T19 (thu thập log), không phải kernel. Dòng `SMP IDLE STALL` cũng xuất
+hiện trong những lần PASS với đúng bộ số đó ⇒ không phải dấu hiệu hỏng.
 
-Treo **có sẵn** (tỉ lệ ~0,3–1%), không phải do bản vá T32. Điểm treo: ngay sau
-`shell> `, trước `PREEMPT OK`; serial không có thêm dòng nào, tức hart không
-in được marker của bài preempt.
-
-### Hướng điều tra cho vòng sau
-
-1. `PREEMPT OK` nằm ở đâu (client/shell) và nó chờ gì (timer + yield trên hart
-   phụ?). Đọc `crates/vifast-client/src/main.rs` quanh marker đó.
-2. Nghi vấn: hart phụ ngủ trong `wait_for_work` mà IPI/wake không tới
-   (`make_ready` → không đánh thức), hoặc `switch_blocked` trả false rồi
-   `A::exit(1)` làm chết hart (đường `UserAction::Sleep`).
-3. Cách bắt nhanh: chạy `scripts/soak.py --iterations 50 --archs x86` (chỉ 1
-   arch) để tăng mật độ; giữ serial tại `artifacts/soak/iter-*/`.
-4. Có thể thêm một marker "sau khi ngủ dậy" để phân biệt "hart không thức" với
-   "hart thức nhưng không chạy tiếp".
+Việc cần làm (vòng sau):
+1. Sau timeout, **đọc lại serial** rồi mới kết luận thiếu marker.
+2. Nới timeout khi máy có tải; **không chạy build/gate song song với soak**
+   (phiên này đã vi phạm vài lần — các lần "treo" đều rơi vào cửa sổ đó).
+3. Giữ `SMP AP STATE` (r275) làm chẩn đoán nếu sau này thật sự có hart chết.
