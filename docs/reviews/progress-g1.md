@@ -761,3 +761,17 @@ danh tính shell, không phải badge root (`BADGE_SUPERUSER`).
 ```
 
 Đây là **applet đầu tiên cần capability**, tức G2 Phần B đã chạy end-to-end.
+
+### Soak 30 tại HEAD cuối (r269, sau khi `df` thành applet)
+
+```
+riscv64  30/30 PASS (100.0%)
+aarch64  30/30 PASS (100.0%)
+x86_64   30/30 PASS (100.0%)
+iterations: 30, elapsed: 576.0s
+soak: all iterations passed
+```
+
+Tổng ba đợt soak cuối phiên: 30 (r265) + 30 (r269) + 100 (r262) — **chỉ 2 lỗi
+trên 480 lần boot**, cả hai thuộc hai lớp hiếm đã ghi ở T31/T32, không có lần
+nào hỏng `FS V2 OK`.

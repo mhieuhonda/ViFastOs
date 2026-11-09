@@ -526,7 +526,8 @@ dây + một quyết định chính sách**.
 | `main` | gate full **PASS** (sau khi `cargo fmt`) |
 | Kernel host test | 242 |
 | Soak 100 × 3 arch (tại r262) | 298/300 = 99,3% (không còn lỗi `FS V2 OK`) |
-| Soak 30 × 3 arch (tại r265, sau T27) | **90/90 = 100%** (657 s) |
+| Soak 30 × 3 arch (tại r269, HEAD cuối) | **90/90 = 100%** (576 s) |
+| Soak 30 × 3 arch (tại r265, sau T27) | 90/90 = 100% (657 s) |
 | Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
 | Audit P | P1-7 và P2 `AP_GDT` đóng |
 | G2 Phần B | **XONG** (r268): `df` là applet, con nhận cap VFS badge 1 |
@@ -537,7 +538,7 @@ dây + một quyết định chính sách**.
 ## SHA-256
 
 ```text
-1ab85a631c58a2e50c04282a59ccd88057c72416ab8823fc2550e19a070b192e  docs/reviews/ViFastOs-report-r262.md
+d89cf04711588d9f02b72e7063a311a85012180b30421e53a0a6b305641be416  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

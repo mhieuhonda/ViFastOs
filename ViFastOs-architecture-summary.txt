@@ -528,6 +528,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 2087586 r267 docs: đính chính — CapMint đã là kênh uỷ quyền cap cho exec
 - 171d524 r268 feat: (T27/G2 Phần B) `df` thành applet — con nhận cap VFS từ root
 - 56ff0ac r268 docs: cập nhật bảng tổng hợp kiến trúc sau gen-docs
+- 5d781ce r269 docs: phụ lục r268 (df thành applet) + ký lại báo cáo
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
