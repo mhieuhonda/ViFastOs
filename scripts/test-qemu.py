@@ -50,13 +50,53 @@ ARTIFACT_ROOT = os.path.join(ROOT, "artifacts")
 
 
 def make_disk(name: str) -> str:
-    """Create a fresh disk in a unique per-run directory."""
+    """Create a fresh disk in a unique per-run directory.
+
+    r240 (T5/D10): nếu có chương trình ngoài đã build, dựng ảnh FS ngay trên
+    host bằng `vifast-fsutil` rồi chèn vào `/{uname,uptime,free,df}`. Chương
+    trình nằm trên ĐĨA nên không tốn frame Untyped lúc boot (bài học r238:
+    nhúng vào ảnh root làm pool Untyped cạn 79→84/86 page).
+    """
     directory = tempfile.mkdtemp(prefix=f"vifast-{name}-disk-")
-    DISK_DIRS.append(directory)
+    if os.environ.get("VIFAST_KEEP_DISK") != "1":
+        DISK_DIRS.append(directory)
     path = os.path.join(directory, "disk.img")
     with open(path, "wb") as disk:
         disk.truncate(4 * 1024 * 1024)
+    populate_disk(path, name)
     return path
+
+
+TARGETS = {
+    "riscv64": "riscv64imac-unknown-none-elf",
+    "aarch64": "aarch64-unknown-none-softfloat",
+    "x86_64": "x86_64-unknown-none",
+}
+
+
+def populate_disk(path: str, arch: str) -> None:
+    """Chèn chương trình ngoài vào ảnh đĩa (r240). Bỏ qua êm nếu chưa build.
+
+    Chương trình nằm trên ĐĨA nên không tốn frame Untyped lúc boot; xem bài
+    học r238 trong docs/reviews/progress-g1.md.
+    """
+    fsutil = os.path.join(ROOT, "target", "debug", "vifast-fsutil")
+    target = TARGETS.get(arch)
+    if target is None or not os.path.exists(fsutil):
+        return
+    programs = []
+    for mode in ("uname", "uptime"):
+        host = os.path.join(ROOT, "target", target, "root-task",
+                            f"vifast-bin.{mode}.stripped")
+        if os.path.exists(host):
+            programs.append((mode, host))
+    if not programs:
+        return
+    subprocess.run([fsutil, "mkfs", path], stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+    for mode, host in programs:
+        subprocess.run([fsutil, "put-file", path, f"/{mode}", host],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def run_qemu_interactive(

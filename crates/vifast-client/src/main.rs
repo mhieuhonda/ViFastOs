@@ -421,17 +421,6 @@ fn shell_command(line: &[u8]) {
         write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
         write(b"truncate <path> <size> df fsck run [path]\n");
         write(b"runfs <path> [args...]\n");
-    } else if line == b"uname" {
-        // Vòng 141: định danh hệ thống — arch + phiên bản BootInfo.
-        write(b"ViFastOs ");
-        write(if cfg!(target_arch = "riscv64") {
-            b"riscv64"
-        } else if cfg!(target_arch = "aarch64") {
-            b"aarch64"
-        } else {
-            b"x86_64"
-        });
-        write(b" bootinfo-v3\n");
     } else if line == b"free" {
         // Vòng 154: dung lượng Untyped còn trống (KiB).
         let info = vifast_user::mem_info();
@@ -504,23 +493,6 @@ fn shell_command(line: &[u8]) {
             if index > 64 {
                 break;
             }
-        }
-    } else if line == b"uptime" {
-        // Vòng 204: dạng `1m23s` (gọn; bỏ phần tick/Hz để giữ ngân sách trang).
-        let ticks = vifast_user::get_time().value;
-        let secs = ticks / vifast_user::timer_hz().value.max(1);
-        if secs >= 60 {
-            write_u64(secs / 60);
-            write(b"m");
-            let r = secs % 60;
-            if r < 10 {
-                write(b"0");
-            }
-            write_u64(r);
-            write(b"s\n");
-        } else {
-            write_u64(secs);
-            write(b"s\n");
         }
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
@@ -770,7 +742,32 @@ fn shell_command(line: &[u8]) {
             b"fsck failed\n"
         });
     } else {
-        write(b"unknown cmd\n");
+        // r241 (T5/D10): không phải builtin ⇒ chạy chương trình ngoài trong FS
+        // qua exec-from-FS. Chỉ nhận tên đơn giản (a-z, 0-9, '-') để không mở
+        // đường biến chuỗi người dùng thành path tuỳ ý.
+        let mut path = [0u8; 16];
+        let mut ok = !line.is_empty() && line.len() < 15;
+        let mut k = 0;
+        if ok {
+            path[0] = b'/';
+            while k < line.len() {
+                let c = line[k];
+                if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') {
+                    ok = false;
+                    break;
+                }
+                path[1 + k] = c;
+                k += 1;
+            }
+        }
+        if ok {
+            copy_path_args(&path[..1 + line.len()], b"");
+            if vifast_user::send(CLIENT_CMD_SLOT, LABEL_RUN, 0, 0, 0).error != KError::Ok {
+                write(b"bin failed\n");
+            }
+        } else {
+            write(b"unknown cmd\n");
+        }
     }
 }
 
