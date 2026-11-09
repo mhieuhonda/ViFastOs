@@ -7,3 +7,6 @@ __pycache__/
 *.serial
 artifacts/
 /content/
+
+# D8: deploy/ (web) chuyển sang nhánh 'web' — main chỉ dành cho OS.
+deploy/
