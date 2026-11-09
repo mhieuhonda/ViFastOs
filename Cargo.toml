@@ -38,6 +38,7 @@ members = [
     "crates/vifast-root",
     "crates/vifast-server",
     "crates/vifast-client",
+    "crates/vifast-bin",
 ]
 
 [workspace.package]

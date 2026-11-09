@@ -1,0 +1,10 @@
+[package]
+name = "vifast-bin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vifast-abi = { path = "../vifast-abi" }
+vifast-user = { path = "../vifast-user" }
