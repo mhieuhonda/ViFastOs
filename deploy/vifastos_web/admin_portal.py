@@ -135,6 +135,12 @@ def _referer_host(value: str, site: str) -> str:
     return host[:80]
 
 
+def _lang_tag(value: str) -> str:
+    """'vi-VN,vi;q=0.9' -> 'vi-VN' (chỉ giữ thẻ ngôn ngữ đầu tiên)."""
+    primary = (value or "").split(",")[0].split(";")[0].strip()
+    return primary[:10]
+
+
 def _device(ua: str) -> str:
     low = ua.lower()
     if any(token in low for token in ("ipad", "tablet", "playbook", "silk/")):
@@ -392,7 +398,7 @@ class Portal:
                     _referer_host(referer, self.site),
                     _device(ua),
                     _browser(ua),
-                    (lang or "")[:5],
+                    _lang_tag(lang),
                     source,
                 ),
             )
@@ -1024,6 +1030,8 @@ h3 {{ font-size: .95rem; margin-top: 22px; color: var(--vf-muted); text-transfor
                     return denied
                 body = portal._page_body(
                     "<h1>" + _esc(portal.title) + " · quản trị</h1>"
+                    "<p class=\"vf-muted\"><a href=\"/\">← Về trang chủ</a> · "
+                    "<a href=\"/logout\">Đăng xuất</a></p>"
                     + (dashboard or "")
                     + portal.panel_html()
                 )

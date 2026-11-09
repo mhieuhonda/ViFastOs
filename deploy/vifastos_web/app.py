@@ -373,6 +373,7 @@ def _render_admin(rows: List[sqlite3.Row], total: int, limit: int, panel: str = 
 <body class="admin-body">
 <main class="admin">
   <h1>Đăng ký sớm · ViFastOs</h1>
+  <p class="muted"><a href="/">← Về trang chủ</a> · <a href="/logout">Đăng xuất</a></p>
   {panel}
   <p class="muted">Tổng: <strong>{total}</strong> · hiển thị {min(total, limit)} bản ghi mới nhất. IP chỉ được lưu dưới dạng hash, không lưu địa chỉ thô.</p>
   <p><a class="btn btn-secondary" href="/admin/export.csv">Tải CSV</a></p>
