@@ -418,6 +418,15 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5y-3. `truncate`: zero-fill khi mở rộng, trả block khi cắt (vòng 214)
+
+Test `truncate_shrinks_and_grows_with_zero_fill` (bổ sung cho test
+`large_file_uses_single_indirect_and_frees_it_on_truncate` đã có):
+- cắt 3 block → 1 block: `size` đúng, **`used` giảm**, đọc chỉ trả phần còn lại;
+- mở rộng lại: **phần mới toàn số 0**, không phải rác của block cũ (nếu sai, đọc
+  ra **dữ liệu của file trước** trên cùng block);
+- cắt về 0: trả **hết** block của file.
+
 ### 5y-2. `usage()` (nguồn số của `df`): block được TRẢ khi xoá (vòng 213)
 
 Test `usage_tracks_allocation_and_unlink`:

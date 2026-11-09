@@ -2269,6 +2269,42 @@ mod tests {
     }
 
     #[test]
+    fn truncate_shrinks_and_grows_with_zero_fill() {
+        // Vòng 214: `truncate` chưa có test — nếu không trả block khi cắt thì
+        // `df` giảm dần; nếu không zero phần đuôi thì đọc ra dữ liệu cũ (rò rỉ
+        // nội dung giữa hai file trên cùng block).
+        let mut fs = fresh();
+        let ino = fs.create(b"/t", 0, INODE_FILE).unwrap();
+        fs.write(ino, 0, &[0xAAu8; 3 * BLOCK_SIZE], 0).unwrap();
+        let (used_full, _) = fs.usage();
+        // Cắt còn 1 block: block phải được trả và size đúng.
+        fs.truncate(ino, BLOCK_SIZE, 0).unwrap();
+        assert_eq!(fs.info(ino).unwrap().size as usize, BLOCK_SIZE);
+        let (used_one, _) = fs.usage();
+        assert!(used_one < used_full, "cắt bớt block phải làm used giảm");
+        let mut buf = [0u8; BLOCK_SIZE * 2];
+        let n = fs.read(ino, 0, &mut buf, 0).unwrap();
+        assert_eq!(n, BLOCK_SIZE, "đọc sau khi cắt chỉ trả phần còn lại");
+        assert!(buf[..n].iter().all(|&b| b == 0xAA));
+        // Mở rộng lại: phần mới phải là 0, không phải rác cũ.
+        fs.truncate(ino, 2 * BLOCK_SIZE, 0).unwrap();
+        assert_eq!(fs.info(ino).unwrap().size as usize, 2 * BLOCK_SIZE);
+        let mut grown = [0xFFu8; BLOCK_SIZE * 2];
+        let n = fs.read(ino, 0, &mut grown, 0).unwrap();
+        assert_eq!(n, 2 * BLOCK_SIZE);
+        assert!(grown[..BLOCK_SIZE].iter().all(|&b| b == 0xAA));
+        assert!(
+            grown[BLOCK_SIZE..].iter().all(|&b| b == 0),
+            "phần mở rộng phải bằng 0, không phải dữ liệu cũ"
+        );
+        // Cắt về 0 phải trả hết block của file.
+        fs.truncate(ino, 0, 0).unwrap();
+        assert_eq!(fs.info(ino).unwrap().size, 0);
+        let (used_zero, _) = fs.usage();
+        assert!(used_zero < used_one);
+    }
+
+    #[test]
     fn usage_tracks_allocation_and_unlink() {
         // Vòng 213: `df` (STATFS) lấy số liệu từ `usage()`; nếu bitmap không
         // nhả block khi xoá thì `df` báo thiếu chỗ dần dần — rất khó thấy.

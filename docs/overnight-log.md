@@ -3562,3 +3562,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   khác ⇒ test đo đúng thứ cần đo và **pass**.
 - Tổng host test **300 → 301**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.211 — Vòng 214: bổ sung test `truncate` (zero-fill khi mở rộng)
+
+- Kiểm lại: `truncate` **đã có** test gián tiếp
+  (`large_file_uses_single_indirect_and_frees_it_on_truncate`) — heuristic quét
+  `pub fn` của tôi tiếp tục cho dương tính giả; ghi nhận để không lặp lại việc
+  "tưởng chưa có test".
+- Test mới `truncate_shrinks_and_grows_with_zero_fill` (FS **34 → 35**) bổ sung
+  góc chưa ai kiểm: **mở rộng file phải zero-fill**. Nếu không, đọc phần mới sẽ
+  ra **dữ liệu cũ của file khác** trên cùng block — rò rỉ nội dung.
+- Kiểm chứng: cắt 3→1 block (`used` giảm, đọc đúng), mở rộng 1→2 block (phần mới
+  toàn 0, phần cũ giữ `0xAA`), cắt về 0 (trả hết block) — tất cả **pass**.
+- Tổng host test **301 → 302**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
