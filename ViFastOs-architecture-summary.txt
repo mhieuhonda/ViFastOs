@@ -496,6 +496,9 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - e60f1a4 r244 merge: bao cao G1 r241
 - bf91904 r242 fix: (T9) dua fix P0 reply-orphan vao main + host test hoi quy
 - bd3306f r242b docs: dong bo bang so test host sau khi them test hoi quy ipc
+- eb65baf r242c chore: (T9/D8) tach deploy/ khoi main — web di sang nhanh 'web'
+- af02295 r242d docs: regen summary sau gate (so test 310, bo deploy khoi danh sach)
+- 165c421 r243 docs: (T10) bang do client theo segment + giai thich 'trung byte'
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

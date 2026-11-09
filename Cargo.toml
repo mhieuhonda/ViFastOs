@@ -56,7 +56,7 @@ debug = true
 
 [profile.root-task]
 inherits = "release"
-opt-level = "s"
+opt-level = "z"
 debug = 0
 panic = "abort"
 lto = true
