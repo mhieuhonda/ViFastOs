@@ -3626,3 +3626,15 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
     đặt (128) và **ổn định giữa hai lần gọi**.
 - Tổng host test **305 → 307**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.216 — Vòng 219: `TcbInfo` (nguồn số của `ps`) có test
+
+- Trước vòng này **không có test** cho `TcbInfo`, dù `ps` phụ thuộc hoàn toàn vào
+  nó — báo sai `state` sẽ làm người dùng tưởng hệ thống **treo**.
+- Test `tcb_info_reports_slot_state_priority_and_name` (kernel **209 → 210**):
+  slot/prio/aff/4-ký-tự-tên khớp; chuyển sang `BlockedNotification` ⇒ **state
+  đổi**; index vượt quá ⇒ **`NotFound`**.
+- **Học được**: `index 0` là TCB của **root** (`Kernel::new` tạo trước), worker là
+  `index 1` — bản nháp dùng 0 và thất bại đúng vì lý do đó (đã ghi vào runbook).
+- Tổng host test **307 → 308**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.

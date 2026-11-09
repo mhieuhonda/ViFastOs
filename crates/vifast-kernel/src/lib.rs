@@ -7257,6 +7257,52 @@ mod tests {
     }
 
     #[test]
+    fn tcb_info_reports_slot_state_priority_and_name() {
+        // Vòng 219: `ps` in `slot/prio/state/aff/name` từ TcbInfo. Nếu syscall
+        // báo sai state, người dùng sẽ tưởng hệ thống treo khi nó chỉ đang chờ.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let worker = kernel.create_tcb("wrkr", 7).unwrap();
+        kernel.tcb_mut(worker).unwrap().affinity = 2;
+        // Index 0 là TCB của CHÍNH root (Kernel::new tạo nó trước) ⇒ worker là 1.
+        let UserAction::Return { value, error } =
+            kernel.user_syscall(root, SyscallId::TcbInfo as u64, 1, 0, 0, 0, 0, 0)
+        else {
+            panic!("TcbInfo phải trả về ngay");
+        };
+        assert_eq!(error, KError::Ok);
+        let index = (value & 0xff) as u8;
+        assert_eq!(index, worker.index, "slot phải đúng TCB đầu tiên");
+        assert_eq!(((value >> 8) & 0xff) as u8, 7, "priority");
+        let state_ready = ((value >> 16) & 0xff) as u8;
+        let tag = ((value >> 24) & 0xffff_ffff) as u32;
+        assert_eq!(tag, u32::from_le_bytes(*b"wrkr"), "4 ký tự tên phải khớp");
+        assert_eq!(((value >> 56) & 0xff) as u8, 2, "affinity");
+
+        // Chuyển sang BlockedNotification ⇒ state phải đổi theo.
+        let notification = kernel.create_notification().unwrap();
+        kernel.wait_as(worker, notification).unwrap();
+        let UserAction::Return { value: blocked, .. } =
+            kernel.user_syscall(root, SyscallId::TcbInfo as u64, 1, 0, 0, 0, 0, 0)
+        else {
+            panic!("TcbInfo phải trả về ngay");
+        };
+        let state_blocked = ((blocked >> 16) & 0xff) as u8;
+        assert_ne!(
+            state_ready, state_blocked,
+            "state trong TcbInfo phải thay đổi khi TCB bị block"
+        );
+        // Index vượt quá số TCB ⇒ NotFound (ps dừng vòng lặp đúng cách).
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::TcbInfo as u64, 99, 0, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::NotFound
+            }
+        );
+    }
+
+    #[test]
     fn mem_info_reflects_arena_usage_and_grows_with_allocation() {
         // Vòng 218: `free` / `df` của shell đọc MemInfo ⇒ nếu syscall báo sai thì
         // người dùng bị "nói dối" về bộ nhớ. Chưa có test nào cho syscall này.

@@ -418,6 +418,17 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5x-4. `TcbInfo`: `ps` báo đúng slot/state/prio/tên (vòng 219)
+
+`ps` lấy mọi thứ từ `TcbInfo`; nếu syscall báo sai `state` thì người dùng tưởng
+hệ thống **treo** khi nó chỉ đang chờ. Test `tcb_info_reports_slot_state_priority
+_and_name`:
+- **index 0 là TCB của root** (`Kernel::new` tạo trước) ⇒ worker là index **1** —
+  bản nháp đầu của tôi dùng index 0 và thất bại chính vì điều này;
+- `slot`, `priority=7`, `affinity=2`, 4 ký tự tên `wrkr` khớp;
+- chuyển TCB sang `BlockedNotification` ⇒ **`state` đổi theo**;
+- index vượt quá ⇒ **`NotFound`** (để `ps` dừng vòng lặp đúng cách).
+
 ### 5x-3. `MemInfo`/`TimerInfo`: con số của `free`/`uptime` có test (vòng 218)
 
 Trước vòng này **không có test nào** cho hai syscall mà shell dùng để nói về bộ
