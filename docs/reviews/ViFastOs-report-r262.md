@@ -568,6 +568,11 @@ Rồi tới một chuỗi sai–sửa đáng ghi lại nguyên văn:
   cho thấy bộ đếm post-idle của hart phụ kẹt ở 3–4 (cần ≥5) ⇒ hart phụ ngừng
   thức. Đã thêm `SMP AP STATE (online, window, gen, wake_gen, ipi, resched)`
   (r275) để vòng sau đọc được trạng thái AP lúc treo.
+  **Bằng chứng mới (r284)**: lỗi này đã bắt được cả **gate** — lần chạy gate đầu
+  ở r284 đỏ đúng `qemu` với `x86_64 2/3` và `timeout (thiếu 1 marker: PREEMPT
+  OK)`; chạy lại thì xanh 10/10. Tức với tỉ lệ ~1% mỗi lần boot thì mỗi lượt
+  gate (9 lần boot) có ~3% khả năng đỏ oan vì lỗi này — cần sửa trước khi coi
+  "gate đỏ" là tín hiệu tuyệt đối.
 - **T33b (riscv64, ~1%)**: guest thoát mã 0 sau 2,6 s với 48 marker thiếu; lần
   chạy lại xanh ⇒ thoát sớm, không phải treo.
 
@@ -624,7 +629,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-2dd290a726fffd66effb4dc796d5f6e113075ad05b61fe8fd8097fc433a1ee68  docs/reviews/ViFastOs-report-r262.md
+00bb4cd63ba2a8fd4f7d91295c911da770d223a45cfd65306e8820371d1c5d65  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
