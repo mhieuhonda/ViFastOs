@@ -3649,3 +3649,14 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   vì nó phụ thuộc lịch chạy giữa các hart.
 - Tổng host test **308 → 309**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.218 — Vòng 221: sửa hai báo động SAI trong `diag.sh`
+
+- (1) Ngân sách client **ghi cứng 6** trong `diag.sh` trong khi `build.sh` cho
+  **8** ⇒ mỗi lần chạy diag đều in *"client 8 trang > ngân sách 6"*. Đây là
+  **drift trong chính công cụ chẩn đoán** — nguy hiểm vì nó dạy người đọc bỏ qua
+  cảnh báo. Giờ đọc từ `build.sh`.
+- (2) Cảnh báo arena ban đầu tôi đặt theo **%** ⇒ kêu ngay ở 79/86 (91%, bình
+  thường sau khi client nạp). Đổi sang **số trang trống ≤ 5** (một exec cần ~5),
+  nên chỉ kêu khi thật nguy hiểm.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.

@@ -418,6 +418,19 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5z-1. `diag.sh` không còn báo động sai (vòng 221)
+
+Hai lỗi thật trong chính công cụ chẩn đoán:
+1. **Ngân sách client ghi cứng `6`** trong khi `build.sh` đã cho **8** ⇒ `diag.sh`
+   in *"CẢNH BÁO: client 8 trang > ngân sách 6"* **mỗi lần chạy** — báo động sai
+   làm người đọc mất tin. Giờ đọc thẳng từ `build.sh` (nguồn duy nhất).
+2. **Cảnh báo arena theo %** sẽ kêu ở trạng thái bình thường (79/86 = 91% là
+   chuyện thường sau khi client nạp). Giờ cảnh báo theo **số trang trống ≤ 5**
+   (một lần exec cần ~5 trang), nên chỉ kêu khi thật sự nguy hiểm.
+
+Bài học: **công cụ chẩn đoán cũng phải có nguồn số duy nhất** — nếu không, nó
+tự tạo "drift" đúng như tài liệu viết tay từng làm.
+
 ### 5x-5. `GetTime`: đơn điệu, chỉ BSP đẩy đồng hồ (vòng 220)
 
 `uptime`/`time` đọc `GetTime`. Test `get_time_is_monotonic_and_driven_by_bsp_ticks`:

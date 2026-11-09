@@ -29,12 +29,17 @@ for spec in \
         printf '  %-42s CHƯA BUILD\n' "$path ($target)"
     fi
 done
-budget=6
+# Vòng 221: lấy ngân sách từ build.sh (nguồn duy nhất). Bản cũ ghi cứng 6 trong
+# khi build.sh đã nâng 8 ⇒ diag báo động sai ("8 > 6") và người đọc mất tin.
+budget=$(grep -oE 'check_client_budget riscv64 "[^"]+" [0-9]+' scripts/build.sh | awk '{print $NF}' | head -1)
+budget=${budget:-8}
 client="target/riscv64imac-unknown-none-elf/root-task/vifast-client.stripped"
 if [ -f "$client" ]; then
     n=$(( ($(wc -c < "$client") + 4095) / 4096 ))
     if [ "$n" -gt "$budget" ]; then
-        echo "  CẢNH BÁO: client $n trang > ngân sách $budget (PREEMPT OK sẽ timeout)"
+        echo "  CẢNH BÁO: client $n trang > ngân sách $budget (build.sh sẽ chặn)"
+    else
+        echo "  client riscv: $n/$budget trang"
     fi
 fi
 
@@ -68,6 +73,19 @@ for arch in riscv64 aarch64 x86_64; do
     if [ -n "${f:-}" ] && [ -f "$f" ]; then
         line=$(tr -d '\0' < "$f" 2>/dev/null | grep -a "DATA UNTYPED" | tail -1)
         printf '  %-8s %s\n' "$arch" "${line:-<không thấy DATA UNTYPED>}"
+        # Vòng 221: cảnh báo khi arena gần cạn — exec/spawn sẽ thất bại mà
+        # không nói rõ lý do, rất khó đoán nếu không thấy con số này.
+        pair=$(printf '%s' "$line" | awk -F'pages=' 'NF>1 {split($2, a, " "); print a[1]}')
+        if [ -n "$pair" ]; then
+            used=${pair%%/*}
+            total=${pair##*/}
+            # Ngưỡng theo SỐ TRANG TRỐNG, không theo %: một lần exec cần ~5
+            # trang, nên chỉ cảnh báo khi còn ≤5. Dùng % sẽ kêu ở trạng thái
+            # bình thường (79/86 = 91% là chuyện thường sau khi client nạp).
+            if [ "$total" -gt 0 ] && [ $(( total - used )) -le 5 ]; then
+                echo "           CẢNH BÁO: chỉ còn $(( total - used )) trang arena (exec cần ~5)"
+            fi
+        fi
     else
         printf '  %-8s <chưa có serial>\n' "$arch"
     fi
