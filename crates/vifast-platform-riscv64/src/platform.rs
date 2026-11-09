@@ -255,13 +255,18 @@ fn maintenance_target_online(target: usize) -> bool {
     target < MAX_HARTS && SECONDARY_ONLINE.load(Ordering::SeqCst) >= target
 }
 
-fn send_maintenance(target: usize, kind: u32) -> bool {
+/// Publish an IPI maintenance request and return its sequence number without
+/// waiting.  Only the publish runs under BKL; the caller collects the
+/// per-target sequence numbers and waits for them with [`wait_maintenance`]
+/// afterwards, so a slow target does not serialize every other hart behind
+/// the lock (issue #4).  Returns 0 when the target cannot receive maintenance.
+fn publish_maintenance(target: usize, kind: u32) -> usize {
     if target >= MAX_HARTS || !maintenance_target_online(target) {
-        return false;
+        return 0;
     }
     let state = cpu_state();
     if state.is_null() || unsafe { (*state).hart_id } == target {
-        return false;
+        return 0;
     }
     assert!(
         BKL.held_by(current_hart()),
@@ -270,6 +275,17 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
     let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
     MAINT_KIND[target].fetch_or(kind, Ordering::AcqRel);
     <Riscv64 as Arch>::send_ipi(target);
+    seq
+}
+
+/// Wait (with local maintenance polling) until `target` acknowledges `seq`.
+/// Safe to call without the BKL: the publication above is already ordered
+/// by `fetch_add(Release)` + `send_ipi`, and polling only consumes our own
+/// mailbox.
+fn wait_maintenance(target: usize, seq: usize) -> bool {
+    if seq == 0 || target >= MAX_HARTS {
+        return false;
+    }
     let mut spins = 0usize;
     while MAINT_ACK[target].load(Ordering::Acquire) < seq && spins < 5_000_000 {
         poll_maintenance();
@@ -277,6 +293,14 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
         spins += 1;
     }
     MAINT_ACK[target].load(Ordering::Acquire) >= seq
+}
+
+fn send_maintenance(target: usize, kind: u32) -> bool {
+    let seq = publish_maintenance(target, kind);
+    if seq == 0 {
+        return false;
+    }
+    wait_maintenance(target, seq)
 }
 
 #[cfg_attr(feature = "test-skip-tlb-ipi", allow(dead_code))]
@@ -721,6 +745,72 @@ impl vifast_kernel::console::Console for RiscvPlatform {
 
 struct PageOps;
 
+/// Publish-first TLB-shootdown helpers (issue #4, module-level so both the
+/// `PageTableOps` impl below and any future caller share them): queue every
+/// target's mailbox + IPI while the BKL guard is held, then wait all ACKs.
+/// Hold time drops from the sum to the max of target latencies.
+fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
+    if !BKL.is_held() {
+        return;
+    }
+    let me = current_hart();
+    let mut pending: [(usize, usize); MAX_HARTS] = [(usize::MAX, 0); MAX_HARTS];
+    let mut count = 0usize;
+    #[cfg(not(feature = "test-skip-tlb-ipi"))]
+    for target in 0..MAX_HARTS {
+        if target == me || !maintenance_target_online(target) {
+            continue;
+        }
+        if targets & (1 << target) == 0 {
+            TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+        // Mailbox first (needs BKL), IPI via publish_maintenance.
+        MAINT_TLB_ADDR[target].store(va as usize, Ordering::Release);
+        MAINT_TLB_PAGES[target].store(pages, Ordering::Release);
+        MAINT_TLB_ASID[target].store(asid as u32, Ordering::Release);
+        let seq = publish_maintenance(target, MAINT_TLB_VA);
+        if seq != 0 {
+            pending[count] = (target, seq);
+            count += 1;
+            TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    #[cfg(feature = "test-skip-tlb-ipi")]
+    let _ = (me, targets);
+    for i in 0..count {
+        let _ = wait_maintenance(pending[i].0, pending[i].1);
+    }
+}
+
+/// Same publish-first pattern for full-ASID flushes (MAINT_TLB).
+fn shootdown_all(targets: u32) {
+    if !BKL.is_held() {
+        return;
+    }
+    let me = current_hart();
+    let mut pending: [(usize, usize); MAX_HARTS] = [(usize::MAX, 0); MAX_HARTS];
+    let mut count = 0usize;
+    for target in 0..MAX_HARTS {
+        if target == me || !maintenance_target_online(target) {
+            continue;
+        }
+        if targets & (1 << target) == 0 {
+            TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        } else {
+            let seq = publish_maintenance(target, MAINT_TLB);
+            if seq != 0 {
+                pending[count] = (target, seq);
+                count += 1;
+                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    for i in 0..count {
+        let _ = wait_maintenance(pending[i].0, pending[i].1);
+    }
+}
+
 impl vifast_kernel::PageTableOps for PageOps {
     fn levels(&self) -> usize {
         vifast_pte::riscv::LEVELS
@@ -735,9 +825,12 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn write_pte(&self, table_pa: u64, idx: usize, pte: u64) {
+        // Store only: visibility is ordered by `flush_va_asid` /
+        // `flush_all_asid` (per-VA sfence.vma + remote IPI), which already run
+        // after every table update.  A full `sfence.vma` here re-flushed the
+        // whole TLB on every PTE of a bring-up map (hundreds of pages).
         unsafe {
             *((table_pa as *mut u64).add(idx)) = pte;
-            core::arch::asm!("sfence.vma");
         }
     }
 
@@ -812,25 +905,7 @@ impl vifast_kernel::PageTableOps for PageOps {
             }
             page += 1;
         }
-        if !BKL.is_held() {
-            return;
-        }
-        let me = current_hart();
-        #[cfg(not(feature = "test-skip-tlb-ipi"))]
-        for target in 0..MAX_HARTS {
-            if target == me || !maintenance_target_online(target) {
-                continue;
-            }
-            if targets & (1 << target) == 0 {
-                TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-            if send_tlb_va(target, asid, va, pages) {
-                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        #[cfg(feature = "test-skip-tlb-ipi")]
-        let _ = (me, targets);
+        shootdown_va(asid, va, pages, targets);
     }
 
     fn flush_all_asid(&self, asid: u16, targets: u32) {
@@ -839,20 +914,7 @@ impl vifast_kernel::PageTableOps for PageOps {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
         }
-        if !BKL.is_held() {
-            return;
-        }
-        let me = current_hart();
-        for target in 0..MAX_HARTS {
-            if target == me || !maintenance_target_online(target) {
-                continue;
-            }
-            if targets & (1 << target) == 0 {
-                TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
-            } else if send_maintenance(target, MAINT_TLB) {
-                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        shootdown_all(targets);
     }
 
     fn sync_icache(&self, _pa: u64, _size: usize) {

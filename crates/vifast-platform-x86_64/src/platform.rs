@@ -1174,9 +1174,13 @@ unsafe fn process_maintenance() {
 }
 
 #[cfg_attr(feature = "test-skip-tlb-ipi", allow(dead_code))]
-unsafe fn send_tlb_va_ap(asid: u16, va: u64, pages: usize) -> bool {
+/// Publish an AP TLB-VA shootdown and return its sequence number without
+/// waiting (issue #4 — same publish/wait split as RISC-V/AArch64).  On x86
+/// there is a single AP, so the split mainly documents the contract and
+/// keeps the wait-polling (`pause` loop) reusable; returns 0 when no AP.
+unsafe fn publish_tlb_va_ap(asid: u16, va: u64, pages: usize) -> usize {
     if !unsafe { AP_STARTED } || AP_APIC_ID == 0 {
-        return false;
+        return 0;
     }
     let base = lapic_base();
     AP_MAINT_TLB_ASID.store(asid as u32, Ordering::Release);
@@ -1187,6 +1191,15 @@ unsafe fn send_tlb_va_ap(asid: u16, va: u64, pages: usize) -> bool {
     AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, APIC_MAINT_VECTOR);
+    seq
+}
+
+/// Wait until the AP acknowledges `seq`.  Safe without the BKL: publication
+/// is ordered by Release stores + LAPIC ICR.
+unsafe fn wait_ap(seq: usize) -> bool {
+    if seq == 0 {
+        return false;
+    }
     for _ in 0..100_000 {
         if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
             return true;
@@ -1196,9 +1209,19 @@ unsafe fn send_tlb_va_ap(asid: u16, va: u64, pages: usize) -> bool {
     false
 }
 
-unsafe fn send_full_tlb_ap() -> bool {
-    if !unsafe { AP_STARTED } || AP_APIC_ID == 0 {
+unsafe fn send_tlb_va_ap(asid: u16, va: u64, pages: usize) -> bool {
+    let seq = unsafe { publish_tlb_va_ap(asid, va, pages) };
+    if seq == 0 {
         return false;
+    }
+    unsafe { wait_ap(seq) }
+}
+
+/// Publish a full-AP TLB flush without waiting (issue #4 — pairs with
+/// [`wait_ap`]).
+unsafe fn publish_full_tlb_ap() -> usize {
+    if !unsafe { AP_STARTED } || AP_APIC_ID == 0 {
+        return 0;
     }
     let base = lapic_base();
     let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
@@ -1206,13 +1229,15 @@ unsafe fn send_full_tlb_ap() -> bool {
     AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, APIC_MAINT_VECTOR);
-    for _ in 0..100_000 {
-        if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
-            return true;
-        }
-        core::arch::asm!("pause");
+    seq
+}
+
+unsafe fn send_full_tlb_ap() -> bool {
+    let seq = unsafe { publish_full_tlb_ap() };
+    if seq == 0 {
+        return false;
     }
-    false
+    unsafe { wait_ap(seq) }
 }
 
 unsafe fn rdtsc() -> u64 {

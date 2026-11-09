@@ -38,6 +38,15 @@ impl Kernel {
         if !wakeable {
             return;
         }
+        // (#2) Keep the sleep/budget active-counters in sync when IPC wakes
+        // a sleeper/budgeter through this path instead of tick/suspend.
+        // `tick()` self-heals a drifted counter, but an exact count keeps
+        // the idle fast-path (`tick` early-return) correct immediately.
+        if matches!(state, ThreadState::BlockedSleep) {
+            self.leave_sleep(tcb);
+        } else if matches!(state, ThreadState::BlockedBudget) {
+            self.leave_budget(tcb);
+        }
         if let Some(table) = self.tcb_mut(tcb) {
             table.state = ThreadState::Ready;
         }

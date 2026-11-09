@@ -525,10 +525,11 @@ def accept(
     tlb_skipped = int(tlb.group(3))
     if va_flush < 1:
         return False
-    if name == "aarch64":
-        if tlb_ipi != 0:
-            return False
-    elif tlb_ipi < 1 or tlb_skipped < 1:
+    # (#5) AArch64 now sends real SGI shootdowns (mailbox + MAINT_TLB_VA),
+    # like RISC-V/x86_64, so it must report ipi >= 1 instead of the old
+    # always-zero counters.  The old `ipi == 0` rule encoded "no remote
+    # shootdown", which was the bug itself (stale remote TLB + wrong ASID).
+    if tlb_ipi < 1 or tlb_skipped < 1:
         return False
     match = ROOT_SWITCH_RE.search(output)
     if not match or int(match.group(1)) <= 1:

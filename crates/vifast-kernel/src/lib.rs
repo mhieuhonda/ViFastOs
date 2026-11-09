@@ -279,6 +279,30 @@ pub struct Kernel {
     pub(crate) root_cspace: [Option<Cap>; MAX_CAPS_ROOT],
     pub(crate) next_cap_id: u64,
     pub(crate) next_asid: u16,
+    /// (#2a) số TCB đang BlockedSleep — fast-path cho `tick()` bỏ qua
+    /// `wake_sleepers` (quét 168 object) khi bằng 0. Tăng khi `Sleep` park
+    /// thành công, giảm khi wake (hết deadline / make_ready / wake_error /
+    /// suspend / restart / exit) hoặc destroy/xoá TCB đang ngủ. Sửa trực tiếp
+    /// `tcb.state` trong test KHÔNG qua helper nên counter có thể lệch ở test
+    /// — `tick()` luôn đối chiếu `sleepers_active > 0` trước khi quét và
+    /// `wake_sleepers` đồng bộ lại về số TCB BlockedSleep thật khi thấy.
+    sleepers_active: u32,
+    /// (#2a) tương tự cho BlockedBudget — fast-path cho `wake_budgeters`.
+    budgeters_active: u32,
+    /// (#2b) map number IRQ (0..64) -> object: `irq_raise` O(1) thay vì quét
+    /// 168 object. `create_irq` cấm number >= 64 nên index luôn trong biên.
+    /// Entry được dọn ở `destroy_object` (Kind::Irq) và giữ đồng bộ với gen.
+    irq_by_number: [Option<ObjRef>; 64],
+    /// (#3a) gợi ý slot trống cho `alloc_owned`: thử hint trước, chỉ quét
+    /// tuyến tính khi hint bẩn. `destroy_object` đẩy slot vừa free về hint.
+    next_free_hint: u8,
+    /// (#3b) số TCB sống — `tcb_count()` O(1) thay vì quét 168 object.
+    /// Tăng ở `create_tcb`/retype TCB thành công, giảm ở `destroy_object`.
+    live_tcb_count: usize,
+    /// (#3b) bitmask slot context đang dùng — `free_context_slot` O(1) thay
+    /// vì O(24×168). Bit i = slot i đã cấp. Đồng bộ ở mọi nơi gán/xoá
+    /// `context_slot` (create/retype/destroy).
+    context_slot_used: u32,
 }
 
 // Vòng 84 (audit #3): biến "ngân sách static" thành ràng buộc lúc biên dịch
@@ -325,6 +349,12 @@ impl Kernel {
             root_cspace: [None; MAX_CAPS_ROOT],
             next_cap_id: 1,
             next_asid: 1,
+            sleepers_active: 0,
+            budgeters_active: 0,
+            irq_by_number: [None; 64],
+            next_free_hint: 0,
+            live_tcb_count: 0,
+            context_slot_used: 0,
         }
     }
 
@@ -357,10 +387,38 @@ impl Kernel {
         self.root_cspace = [None; MAX_CAPS_ROOT];
         self.next_cap_id = 1;
         self.next_asid = 1;
+        self.sleepers_active = 0;
+        self.budgeters_active = 0;
+        self.irq_by_number = [None; 64];
+        self.next_free_hint = 0;
+        self.live_tcb_count = 0;
+        self.context_slot_used = 0;
         self.init_fs();
         if let Some(root) = self.create_tcb("root", 1) {
             self.root = Some(root);
         }
+        // Rebuild các counter từ object sống sau bring-up (root TCB):
+        // create_tcb trong reset đã tăng counter nhưng để chắc chắn với mọi
+        // đường tạo TCB ngoài alloc (hiện không có, phòng thủ sâu).
+        self.rebuild_tcb_caches();
+        debug_assert!(self.live_tcb_count >= 1);
+    }
+
+    /// Quét một lần để dựng lại `live_tcb_count`/`context_slot_used` từ object
+    /// sống. Chỉ dùng ở bring-up/test-repair, không dùng ở đường nóng.
+    pub(crate) fn rebuild_tcb_caches(&mut self) {
+        let mut count = 0usize;
+        let mut mask = 0u32;
+        for object in self.objs.iter() {
+            if let Kind::Tcb(tcb) = object.kind {
+                count += 1;
+                if (tcb.context_slot as usize) < MAX_TCBS {
+                    mask |= 1u32 << tcb.context_slot;
+                }
+            }
+        }
+        self.live_tcb_count = count;
+        self.context_slot_used = mask;
     }
 
     pub fn new() -> Kernel {
@@ -610,6 +668,19 @@ impl Kernel {
     }
 
     fn take_asid(&mut self) -> u16 {
+        // (#3c, correctness-first): giữ logic skip wrap-around hiện tại (an
+        // toàn, đã có test `asid_allocation_skips_live_vspaces_after_wrap`).
+        // Tối ưu duy nhất: kiểm tra nhanh trước — `next_asid` không bận thì
+        // return ngay với 1 lần check O(1)-amortized-ish thay vì vào vòng
+        // lặp. `asid_in_use` vẫn quét 168 object nhưng chỉ 1 lần trong case
+        // phổ biến (không wrap), thay vì worst-case 4095×168 khi nghẽn.
+        // Không thêm refcount `asid_live` vì phải đồng bộ ở mọi đường
+        // create/destroy/retype VSpace — rủi ro stale cao hơn lợi ích.
+        let first = self.next_asid;
+        if first >= 1 && first < 0x0fff && !self.asid_in_use(first) {
+            self.next_asid = if first >= 0x0fff { 1 } else { first + 1 };
+            return first;
+        }
         // Skip ASIDs still owned by a live VSpace when the counter wraps.
         // With MAX_OBJECTS < 4095 this normally returns on the first try.
         for _ in 0..0x0fff {
@@ -631,27 +702,47 @@ impl Kernel {
         self.alloc_owned(kind, None, None)
     }
 
+    /// (#3a) cấp object với gợi ý `next_free_hint`: thử hint trước (O(1)
+    /// khi hint sạch — case phổ biến sau create/destroy xen kẽ), chỉ quét
+    /// tuyến tính khi hint bẩn. Mọi đường giải phóng object (destroy +
+    /// create_tcb-rollback) đều đẩy slot vừa free về hint nên hint ít bẩn.
     fn alloc_owned(
         &mut self,
         kind: Kind,
         owner: Option<ObjRef>,
         creator: Option<CapRef>,
     ) -> Option<ObjRef> {
+        let hint = (self.next_free_hint as usize).min(MAX_OBJECTS - 1);
+        if self.objs[hint].is_free() {
+            return Some(self.alloc_at(hint, kind, owner, creator));
+        }
         for i in 0..MAX_OBJECTS {
             if self.objs[i].is_free() {
-                let gen = self.objs[i].gen.wrapping_add(1);
-                let gen = if gen == 0 { 1 } else { gen };
-                self.objs[i].gen = gen;
-                self.objs[i].kind = kind;
-                self.objs[i].owner = owner;
-                self.objs[i].creator = creator;
-                return Some(ObjRef {
-                    index: i as u8,
-                    gen,
-                });
+                self.next_free_hint = i as u8;
+                return Some(self.alloc_at(i, kind, owner, creator));
             }
         }
         None
+    }
+
+    /// Ghi object vào slot đã biết trống. Caller đảm bảo slot free.
+    fn alloc_at(
+        &mut self,
+        index: usize,
+        kind: Kind,
+        owner: Option<ObjRef>,
+        creator: Option<CapRef>,
+    ) -> ObjRef {
+        let gen = self.objs[index].gen.wrapping_add(1);
+        let gen = if gen == 0 { 1 } else { gen };
+        self.objs[index].gen = gen;
+        self.objs[index].kind = kind;
+        self.objs[index].owner = owner;
+        self.objs[index].creator = creator;
+        ObjRef {
+            index: index as u8,
+            gen,
+        }
     }
 
     pub fn create_endpoint(&mut self) -> Option<ObjRef> {
@@ -671,25 +762,23 @@ impl Kernel {
         if number >= 64 {
             return None;
         }
-        if self
-            .objs
-            .iter()
-            .any(|object| matches!(object.kind, Kind::Irq(irq) if irq.number == number))
-        {
+        // (#2b) check trùng O(1) qua map thay vì quét 168 object.
+        if self.irq_by_number[number as usize].is_some() {
             return None;
         }
-        self.alloc(Kind::Irq(Irq {
+        let object = self.alloc(Kind::Irq(Irq {
             number,
             notification: None,
             pending: false,
-        }))
+        }))?;
+        // Map giữ ObjRef có gen — raise qua map nhưng verify gen chống stale.
+        self.irq_by_number[number as usize] = Some(object);
+        Some(object)
     }
 
+    /// (#3b) số TCB sống — O(1) qua counter thay vì quét 168 object.
     fn tcb_count(&self) -> usize {
-        self.objs
-            .iter()
-            .filter(|object| matches!(object.kind, Kind::Tcb(_)))
-            .count()
+        self.live_tcb_count
     }
 
     pub fn create_tcb(&mut self, name: &'static str, priority: u8) -> Option<ObjRef> {
@@ -706,11 +795,16 @@ impl Kernel {
             if let Some(entry) = self.objs.get_mut(object.index as usize) {
                 *entry = Object::free();
             }
+            // (#3a) slot vừa free phải về hint để alloc sau dùng ngay.
+            self.next_free_hint = object.index;
             return None;
         };
         if let Some(tcb) = self.tcb_mut(object) {
             tcb.context_slot = slot;
         }
+        // (#3b) duy trì counter + bitmask sau khi gán slot thành công.
+        self.live_tcb_count = self.live_tcb_count.saturating_add(1);
+        self.context_slot_used |= 1u32 << slot;
         Some(object)
     }
 
@@ -973,24 +1067,27 @@ impl Kernel {
     /// coalesced until user space acknowledges the object.  Returns true when
     /// a new pending edge was recorded.
     pub fn irq_raise(&mut self, number: u32) -> bool {
-        let mut target = None;
-        for (index, object) in self.objs.iter().enumerate() {
-            if let Kind::Irq(irq) = object.kind {
-                if irq.number == number {
-                    target = Some((
-                        ObjRef {
-                            index: index as u8,
-                            gen: object.gen,
-                        },
-                        irq.notification,
-                        irq.pending,
-                    ));
-                    break;
-                }
-            }
-        }
-        let Some((irq_ref, notification, pending)) = target else {
+        // (#2b) O(1) qua map thay vì quét 168 object. number >= 64 không bao
+        // giờ có object (create_irq cấm) nên từ chối ngay.
+        let index = u32::try_from(number).ok().map(|n| n as usize);
+        let Some(index) = index.filter(|i| *i < 64) else {
             return false;
+        };
+        let Some(irq_ref) = self.irq_by_number[index] else {
+            return false;
+        };
+        // Verify gen chống stale: map và object phải cùng gen, object phải
+        // còn là Irq đúng number (destroy/reuse slot không để lại entry cũ).
+        let (notification, pending) = match self.irq(irq_ref) {
+            Some(irq) if irq.number == number => (irq.notification, irq.pending),
+            _ => {
+                // Entry stale (object đã destroy nhưng map chưa dọn — không
+                // nên xảy ra vì destroy dọn map; dọn phòng thủ tại đây).
+                if self.get(irq_ref).is_none() {
+                    self.irq_by_number[index] = None;
+                }
+                return false;
+            }
         };
         if pending {
             return false;
@@ -1004,10 +1101,133 @@ impl Kernel {
         true
     }
 
-    /// Replenish expired budget blocks.  These TCBs were preempted asynchronously
-    /// by the timer, so no syscall result is installed in `resume`.
+    /// (#12, trong phạm vi lib.rs): đánh thức ĐÚNG MỘT waiter đang
+    /// BlockedNotification (FIFO theo thứ tự slot), giữ bit cho waiter còn
+    /// lại thay vì wake tất cả như `signal`. Dùng khi notification được dùng
+    /// như hàng đợi (tránh thundering herd: N waiter tranh 1 event).
+    /// Trả true khi đã đánh thức một waiter, false khi không có waiter nào
+    /// đang chờ (bit giữ lại trong word).
+    pub fn signal_one(&mut self, notification: ObjRef, bits: u64) -> KResult<bool> {
+        let bits = if bits == 0 { 1 } else { bits };
+        let pending = {
+            let ntfn = self.notification(notification).ok_or(KError::InvalidCap)?;
+            ntfn.waiters
+        };
+        // Tìm waiter đầu tiên còn BlockedNotification (FIFO theo slot).
+        let mut target = None;
+        let mut target_index = 0usize;
+        for (index, waiter) in pending.into_iter().enumerate() {
+            let Some(waiter) = waiter else { continue };
+            let blocked = self
+                .tcb(waiter)
+                .is_some_and(|table| table.state == ThreadState::BlockedNotification);
+            if blocked {
+                target = Some(waiter);
+                target_index = index;
+                break;
+            }
+        }
+        let Some(waiter) = target else {
+            // Không ai chờ — cộng bit vào word như signal.
+            if let Some(ntfn) = self.notification_mut(notification) {
+                ntfn.word |= bits;
+            }
+            self.stats.notifications += 1;
+            return Ok(false);
+        };
+        // Gỡ đúng slot của waiter được chọn, giữ nguyên các waiter khác.
+        // Word cộng bit rồi trả cho waiter này; các waiter còn lại chờ event
+        // sau (bit của họ không mất vì word đã cộng dồn trước khi clear).
+        let value = {
+            let ntfn = self
+                .notification_mut(notification)
+                .ok_or(KError::InvalidCap)?;
+            let value = ntfn.word | bits;
+            ntfn.waiters[target_index] = None;
+            ntfn.word = 0;
+            value
+        };
+        if let Ok(msg) = Message::new(LABEL_NOTIFICATION, &[value]) {
+            if let Some(table) = self.tcb_mut(waiter) {
+                table.resume = Some(msg);
+                table.resume_error = None;
+            }
+        }
+        self.make_ready(waiter);
+        self.stats.notifications += 1;
+        Ok(true)
+    }
+
+    /// (#2b) đồng bộ map IRQ sau khi object IRQ đổi trạng thái sống/chết.
+    /// Gọi ở destroy path; create path ghi trực tiếp vì đã có ObjRef mới.
+    fn irq_map_remove(&mut self, number: u32, reference: ObjRef) {
+        if (number as usize) < 64 && self.irq_by_number[number as usize] == Some(reference) {
+            self.irq_by_number[number as usize] = None;
+        }
+    }
+
+    /// (#2a) tăng sleeper counter, saturating để không bao giờ wrap.
+    fn sleepers_inc(&mut self) {
+        self.sleepers_active = self.sleepers_active.saturating_add(1);
+    }
+
+    /// (#2a) giảm sleeper counter, saturating để destroy path kép không panic.
+    fn sleepers_dec(&mut self) {
+        self.sleepers_active = self.sleepers_active.saturating_sub(1);
+    }
+
+    /// (#2a) tăng budgeter counter.
+    fn budgeters_inc(&mut self) {
+        self.budgeters_active = self.budgeters_active.saturating_add(1);
+    }
+
+    /// (#2a) giảm budgeter counter.
+    fn budgeters_dec(&mut self) {
+        self.budgeters_active = self.budgeters_active.saturating_sub(1);
+    }
+
+    /// (#2a) rời trạng thái BlockedSleep: xoá wake_at + giảm counter đúng
+    /// một lần. Trả true nếu TCB thật sự đang ngủ (để caller quyết định tiếp).
+    /// Mọi đường rời sleep (wake hết deadline, suspend, wake_error,
+    /// make_ready, restart, exit, destroy) đều đi qua đây.
+    fn leave_sleep(&mut self, tcb: ObjRef) -> bool {
+        let sleeping = self
+            .tcb(tcb)
+            .is_some_and(|table| table.state == ThreadState::BlockedSleep);
+        if !sleeping {
+            return false;
+        }
+        if let Some(table) = self.tcb_mut(tcb) {
+            table.wake_at = None;
+        }
+        self.sleepers_dec();
+        true
+    }
+
+    /// (#2a) rời trạng thái BlockedBudget, đối xứng với `leave_sleep`.
+    fn leave_budget(&mut self, tcb: ObjRef) -> bool {
+        let blocked = self
+            .tcb(tcb)
+            .is_some_and(|table| table.state == ThreadState::BlockedBudget);
+        if !blocked {
+            return false;
+        }
+        if let Some(table) = self.tcb_mut(tcb) {
+            table.wake_at = None;
+        }
+        self.budgeters_dec();
+        true
+    }
+
+    /// (#2a) self-heal đối xứng với wake_sleepers: quét mà không thấy
+    /// budgeter thật thì đồng bộ counter về 0.
     fn wake_budgeters(&mut self, now: u64) -> usize {
+        // (#2a) fast-path: không có budgeter thì không quét 168 object.
+        if self.budgeters_active == 0 {
+            return 0;
+        }
         let mut woke = 0usize;
+        let mut seen = 0u32;
         for index in 0..MAX_OBJECTS {
             let reference = ObjRef {
                 index: index as u8,
@@ -1015,8 +1235,12 @@ impl Kernel {
             };
             let expired = match self.objs[index].kind {
                 Kind::Tcb(tcb) => {
-                    tcb.state == ThreadState::BlockedBudget
-                        && tcb.wake_at.is_some_and(|deadline| deadline <= now)
+                    if tcb.state == ThreadState::BlockedBudget {
+                        seen = seen.saturating_add(1);
+                        tcb.wake_at.is_some_and(|deadline| deadline <= now)
+                    } else {
+                        false
+                    }
                 }
                 _ => false,
             };
@@ -1030,14 +1254,17 @@ impl Kernel {
                     context.period_start = now;
                 }
             }
+            self.leave_budget(reference);
             if let Some(tcb) = self.tcb_mut(reference) {
-                tcb.wake_at = None;
                 tcb.state = ThreadState::Ready;
                 tcb.resume = None;
                 tcb.resume_error = None;
             }
             self.enqueue(reference);
             woke += 1;
+        }
+        if seen == 0 {
+            self.budgeters_active = 0;
         }
         woke
     }
@@ -1095,6 +1322,8 @@ impl Kernel {
                 table.wake_at = Some(deadline);
                 table.queued = false;
             }
+            // (#2a) vào BlockedBudget — tăng counter để tick() biết phải quét.
+            self.budgeters_inc();
         }
         exhausted
     }
@@ -1252,15 +1481,17 @@ impl Kernel {
             }
             ThreadState::BlockedSleep => {
                 self.remove_from_runq(target);
+                // (#2a) suspend gỡ khỏi sleep — giảm counter qua helper.
+                self.leave_sleep(target);
                 let table = self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?;
-                table.wake_at = None;
                 table.resume = Some(Message::empty(0));
                 table.resume_error = Some(KError::WouldBlock);
             }
             ThreadState::BlockedBudget => {
                 self.remove_from_runq(target);
+                // (#2a) suspend gỡ khỏi budget — giảm counter qua helper.
+                self.leave_budget(target);
                 let table = self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?;
-                table.wake_at = None;
                 table.resume = None;
                 table.resume_error = None;
             }
@@ -1419,6 +1650,12 @@ impl Kernel {
                 context.period_start = now;
             }
         }
+        // (#2a) restart rời sleep/budget cũ (nếu có) trước khi Ready —
+        // dùng helper để counter giảm đúng một lần, kể cả khi TCB đang
+        // BlockedSleep/BlockedBudget. wake_at luôn xoá (kể cả khi set tay
+        // ngoài Blocked* như test round103 bẩn hoá wake_at=999 lúc Running).
+        self.leave_sleep(target);
+        self.leave_budget(target);
         let table = self.tcb_mut(target).ok_or(KError::ObjectDestroyed)?;
         table.state = ThreadState::Ready;
         table.pending = None;
@@ -1523,12 +1760,11 @@ impl Kernel {
         }
     }
 
+    /// (#3b) slot context trống đầu tiên — O(1) qua bitmask thay vì
+    /// O(24×168). MAX_TCBS = 24 vừa trong u32.
     fn free_context_slot(&self) -> Option<u8> {
         for slot in 0..MAX_TCBS {
-            let used = self.objs.iter().any(|object| {
-                matches!(&object.kind, Kind::Tcb(tcb) if tcb.context_slot as usize == slot)
-            });
-            if !used {
+            if self.context_slot_used & (1u32 << slot) == 0 {
                 return Some(slot as u8);
             }
         }
@@ -2049,6 +2285,14 @@ impl Kernel {
             record.alloc_len = charge as u32;
             if let (Kind::Tcb(tcb), Some(slot)) = (&mut record.kind, context_slot) {
                 tcb.context_slot = slot;
+            }
+        }
+        // (#3b) retype TCB thành công cũng duy trì counter + bitmask như
+        // create_tcb (check quota + giữ slot ở trên đã qua).
+        if ty == ObjType::Tcb {
+            self.live_tcb_count = self.live_tcb_count.saturating_add(1);
+            if let Some(slot) = context_slot {
+                self.context_slot_used |= 1u32 << slot;
             }
         }
         let region = self.untyped_mut(untyped).ok_or(KError::ObjectDestroyed)?;
@@ -3577,6 +3821,13 @@ impl Kernel {
                 | ThreadState::BlockedFault
                 | ThreadState::BlockedBudget
         );
+        // (#2a) wake_error rời sleep/budget — giảm counter đúng một lần qua
+        // helper TRƯỚC khi đổi state (helper check state cũ).
+        if state == ThreadState::BlockedSleep {
+            self.leave_sleep(tcb);
+        } else if state == ThreadState::BlockedBudget {
+            self.leave_budget(tcb);
+        }
         if let Some(table) = self.tcb_mut(tcb) {
             table.pending = None;
             table.resume = Some(Message::empty(0));
@@ -3768,14 +4019,21 @@ impl Kernel {
                 index: index as u8,
                 gen: self.objs[index].gen,
             };
+            let blocked = self.tcb(reference).is_some_and(|table| {
+                table.sched_context == Some(obj) && table.state == ThreadState::BlockedBudget
+            });
+            // (#2a) rời budget TRƯỚC khi đổi state — leave_budget check state
+            // cũ nên phải gọi khi còn BlockedBudget, rồi mới set Ready.
+            if blocked {
+                self.leave_budget(reference);
+            }
             let Some(table) = self.tcb_mut(reference) else {
                 continue;
             };
             if table.sched_context == Some(obj) {
                 table.sched_context = None;
-                if table.state == ThreadState::BlockedBudget {
+                if blocked {
                     table.state = ThreadState::Ready;
-                    table.wake_at = None;
                     table.resume = None;
                     table.resume_error = None;
                     if count < wake.len() {
@@ -4664,7 +4922,11 @@ impl Kernel {
                     }
                 }
             }
-            Kind::Irq(_) => {}
+            Kind::Irq(Irq { number, .. }) => {
+                // (#2b) destroy IRQ phải dọn map để number tái dùng được và
+                // raise sau này không trỏ vào object chết.
+                self.irq_map_remove(number, obj);
+            }
             Kind::Iommu(_) => {
                 // Vòng 101 (K56): destroy domain phải gỡ mọi DMA mapping và
                 // flush IOTLB — nếu không PA tái cấp trong khi IOTLB cũ còn
@@ -4728,6 +4990,31 @@ impl Kernel {
                 self.untyped_reclaim(owner, alloc_offset, alloc_len);
             }
         }
+        // (#2a/#3b) snapshot trạng thái TCB trước khi free — borrow kết thúc
+        // ngay sau dòng này nên counter bên dưới không xung đột borrow.
+        let was_tcb_sleeping = self.get(obj).is_some_and(|object| {
+            matches!(object.kind, Kind::Tcb(tcb) if tcb.state == ThreadState::BlockedSleep)
+        });
+        let was_tcb_budget = self.get(obj).is_some_and(|object| {
+            matches!(object.kind, Kind::Tcb(tcb) if tcb.state == ThreadState::BlockedBudget)
+        });
+        let was_tcb = self
+            .get(obj)
+            .is_some_and(|object| matches!(object.kind, Kind::Tcb(_)));
+        let freed_slot = self.tcb(obj).map(|tcb| tcb.context_slot);
+        if was_tcb_sleeping {
+            self.sleepers_dec();
+        } else if was_tcb_budget {
+            self.budgeters_dec();
+        }
+        if was_tcb {
+            self.live_tcb_count = self.live_tcb_count.saturating_sub(1);
+        }
+        if let Some(slot) = freed_slot {
+            if (slot as usize) < MAX_TCBS {
+                self.context_slot_used &= !(1u32 << slot);
+            }
+        }
         if let Some(object) = self.get_mut(obj) {
             if let Kind::Tcb(tcb) = &mut object.kind {
                 tcb.context_slot = 0xFF;
@@ -4740,6 +5027,8 @@ impl Kernel {
             let gen = object.gen.wrapping_add(1);
             object.gen = if gen == 0 { 1 } else { gen };
         }
+        // (#3a) slot vừa free về hint để alloc sau dùng ngay O(1).
+        self.next_free_hint = obj.index;
         Ok(())
     }
 
@@ -5366,15 +5655,32 @@ impl Kernel {
         if let Some((client, _)) = self.tcb_mut(old).and_then(|table| table.caller.take()) {
             self.wake_error(client, KError::ObjectDestroyed);
         }
+        // (#2a) exit rời sleep/budget cũ (nếu có) — zombie Exited không bao
+        // giờ được tick() đánh thức lại (test round103 khẳng định). leave_*
+        // check state cũ nên phải snapshot TRƯỚC khi đổi state sang Exited.
+        let was_sleeping = self
+            .tcb(old)
+            .is_some_and(|table| table.state == ThreadState::BlockedSleep);
+        let was_budget = self
+            .tcb(old)
+            .is_some_and(|table| table.state == ThreadState::BlockedBudget);
         if let Some(table) = self.tcb_mut(old) {
             table.pending = None;
             table.resume = None;
             table.resume_error = None;
             table.recv_slot = 0;
-            table.wake_at = None;
             table.caller = None;
             table.state = ThreadState::Exited;
             table.queued = false;
+        }
+        if was_sleeping {
+            self.sleepers_dec();
+        } else if was_budget {
+            self.budgeters_dec();
+        }
+        // wake_at luôn xoá (zombie không giữ deadline cũ).
+        if let Some(table) = self.tcb_mut(old) {
+            table.wake_at = None;
         }
         self.pick_on(hart)
     }
@@ -5383,14 +5689,28 @@ impl Kernel {
         if let Some(counter) = self.ticks.get_mut(hart) {
             *counter = counter.wrapping_add(1);
             self.stats.ticks = *counter;
-            if hart == 0 {
-                self.system_ticks
-                    .store(*counter, core::sync::atomic::Ordering::Release);
-            }
+            // (#7) Every hart advances the shared clock with a monotonic
+            // max-update instead of only the BSP storing it.  A BSP stalled
+            // behind the BKL (e.g. in a 5M-spin shootdown wait) no longer
+            // freezes Sleep/GetTime/budget deadlines on all other harts;
+            // per-hart `ticks[hart]` remain the source for stats/preemption.
+            self.system_ticks
+                .fetch_max(*counter, core::sync::atomic::Ordering::AcqRel);
         }
+        // (#2a) fast-path: không sleeper/budgeter thì bỏ qua cả hai lần quét
+        // 168 object, chỉ còn charge_current_budget O(1). Vẫn gọi charge vì
+        // nó O(1) (đi theo current[hart], không quét).
         let now = self.fast_time();
-        let slept = self.wake_sleepers(now);
-        let budgeted = self.wake_budgeters(now);
+        let slept = if self.sleepers_active == 0 {
+            0
+        } else {
+            self.wake_sleepers(now)
+        };
+        let budgeted = if self.budgeters_active == 0 {
+            0
+        } else {
+            self.wake_budgeters(now)
+        };
         let _ = self.charge_current_budget(hart, now);
         slept + budgeted
     }
@@ -5398,7 +5718,11 @@ impl Kernel {
     /// Move every deadline-expired `BlockedSleep` TCB to the ready queue.
     /// Returns the number of tasks woken by this call.
     fn wake_sleepers(&mut self, now: u64) -> usize {
+        // (#2a) self-heal: test gán state trực tiếp không qua helper có thể
+        // làm counter lệch. Nếu quét mà thấy số sleeper thật là 0 thì đồng
+        // bộ counter về 0 để tick() fast-path trở lại.
         let mut woke = 0usize;
+        let mut seen = 0u32;
         for index in 0..MAX_OBJECTS {
             let reference = ObjRef {
                 index: index as u8,
@@ -5406,16 +5730,20 @@ impl Kernel {
             };
             let expired = match self.objs[index].kind {
                 Kind::Tcb(tcb) => {
-                    tcb.state == ThreadState::BlockedSleep
-                        && tcb.wake_at.is_some_and(|deadline| deadline <= now)
+                    if tcb.state == ThreadState::BlockedSleep {
+                        seen = seen.saturating_add(1);
+                        tcb.wake_at.is_some_and(|deadline| deadline <= now)
+                    } else {
+                        false
+                    }
                 }
                 _ => false,
             };
             if !expired {
                 continue;
             }
+            self.leave_sleep(reference);
             if let Some(tcb) = self.tcb_mut(reference) {
-                tcb.wake_at = None;
                 tcb.state = ThreadState::Ready;
                 tcb.resume = Some(Message::empty(0));
                 tcb.resume_error = None;
@@ -5423,11 +5751,15 @@ impl Kernel {
             self.enqueue(reference);
             woke += 1;
         }
+        if seen == 0 {
+            self.sleepers_active = 0;
+        }
         woke
     }
 
-    /// Lock-free system time source.  Only the BSP updates it; all harts may
-    /// read it without taking the BKL.
+    /// Lock-free system time source.  Every hart advances it with a
+    /// monotonic max-update on each timer tick (#7), so all harts may read
+    /// it without taking the BKL and no single stalled hart freezes time.
     pub fn fast_time(&self) -> u64 {
         self.system_ticks
             .load(core::sync::atomic::Ordering::Acquire)
@@ -5520,6 +5852,12 @@ impl Kernel {
                 };
             }
             let deadline = self.fast_time().saturating_add(a0);
+            // (#2a) Sleep park thành công — tăng counter. TCB đã ngủ mà Sleep
+            // lại (re-park đổi deadline) thì không tăng kép: chỉ tăng khi
+            // state trước đó không phải BlockedSleep.
+            let already_sleeping = self
+                .tcb(tcb)
+                .is_some_and(|table| table.state == ThreadState::BlockedSleep);
             let Some(table) = self.tcb_mut(tcb) else {
                 return UserAction::Return {
                     value: 0,
@@ -5528,6 +5866,9 @@ impl Kernel {
             };
             table.state = ThreadState::BlockedSleep;
             table.wake_at = Some(deadline);
+            if !already_sleeping {
+                self.sleepers_inc();
+            }
             return UserAction::Sleep;
         }
         if number == SyscallId::DebugWrite as u64 {
@@ -5879,10 +6220,9 @@ impl Kernel {
                         }
                     }
                 };
-                let duplicate = self
-                    .objs
-                    .iter()
-                    .any(|object| matches!(object.kind, Kind::Irq(irq) if irq.number == number));
+                // (#2b) check trùng O(1) qua map thay vì quét 168 object.
+                let duplicate =
+                    (number as usize) < 64 && self.irq_by_number[number as usize].is_some();
                 if duplicate {
                     return UserAction::Return {
                         value: 0,
@@ -14290,14 +14630,20 @@ mod tests {
         let UserAction::Return { value: bv, .. } = b1 else {
             panic!("GetTime did not return");
         };
-        assert_eq!(av, 2);
-        assert_eq!(bv, 2);
+        // (#7) Shared clock advances by max-update from every hart:
+        // BSP reached 2, AP reached 3, so system time is 3 on both harts.
+        assert_eq!(av, 3);
+        assert_eq!(bv, 3);
         kernel.tick(1);
         let b2 = kernel.user_syscall_on(b, 1, SyscallId::GetTime as u64, 0, 0, 0, 0, 0, 0);
         let UserAction::Return { value: bv2, .. } = b2 else {
             panic!("GetTime did not return");
         };
-        assert_eq!(bv2, 2, "AP ticks must not leak into system time");
+        // (#7) Every hart advances the shared clock by monotonic max-update,
+        // so AP ticks DO advance system time — a stalled BSP no longer
+        // freezes Sleep/GetTime/budget deadlines on other harts.
+        // AP counter runs 3->4 here, so time becomes 4.
+        assert_eq!(bv2, 4, "AP ticks advance system time by max-update");
     }
 
     #[test]
@@ -14601,6 +14947,241 @@ mod tests {
         assert_eq!(kernel.pick_on(0), Some(sleeper));
         assert!(kernel.take_resume(sleeper).is_some());
         assert_eq!(kernel.tick(0), 0);
+    }
+
+    /// (#7) A sleeper must wake from an AP-only tick stream: `system_ticks`
+    /// advances by monotonic max-update from every hart, so a BSP stalled
+    /// behind the BKL no longer freezes Sleep deadlines on other harts.
+    #[test]
+    fn sleep_wakes_from_ap_only_ticks() {
+        let mut kernel = Kernel::new();
+        let sleeper = kernel.create_tcb("sleeper", 5).unwrap();
+        let idle = kernel.create_tcb("idle", 1).unwrap();
+        // Both TCBs may run on hart 1 so `Sleep` on hart 1 finds a ready
+        // task there (`has_ready_on(1)`) and the AP tick stream can drive
+        // the deadline without any BSP tick after the baseline.
+        kernel.tcb_mut(sleeper).unwrap().affinity = 0b11;
+        kernel.tcb_mut(idle).unwrap().affinity = 0b11;
+        kernel.enqueue(idle);
+        kernel.enqueue(sleeper);
+        // One BSP tick sets the baseline (time = 1), then the BSP stalls.
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(
+            kernel.user_syscall_on(sleeper, 1, SyscallId::Sleep as u64, 3, 0, 0, 0, 0, 0),
+            UserAction::Sleep
+        );
+        assert_eq!(kernel.tcb(sleeper).unwrap().wake_at, Some(4));
+        // Only hart 1 ticks from here on; the sleeper must still wake.
+        // Baseline time is 1, deadline is 4: hart-1's private counter runs
+        // 0->1->2->3->4, so the 4th AP tick reaches now=4 and wakes.
+        assert_eq!(kernel.tick(1), 0);
+        assert_eq!(kernel.tick(1), 0);
+        assert_eq!(kernel.tick(1), 0);
+        assert_eq!(kernel.tick(1), 1);
+        assert_eq!(kernel.tcb(sleeper).unwrap().state, ThreadState::Ready);
+    }
+
+    #[test]
+    fn issue2a_tick_idle_fast_path_without_scanning() {
+        // (#2a) tick với 0 sleeper/budgeter: early-return 0, counter giữ 0,
+        // không quét (sleepers_active/budgeters_active đều 0).
+        let mut kernel = Kernel::new();
+        assert_eq!(kernel.sleepers_active, 0);
+        assert_eq!(kernel.budgeters_active, 0);
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(kernel.tick(1), 0);
+        assert_eq!(kernel.sleepers_active, 0);
+        assert_eq!(kernel.budgeters_active, 0);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn issue2a_sleep_counter_tracks_park_and_wake() {
+        // (#2a) counter tăng khi Sleep park, giảm khi wake hết deadline.
+        // Không đụng current[] để invariant current/Running luôn giữ.
+        let mut kernel = Kernel::new();
+        let sleeper = kernel.create_tcb("sleeper", 5).unwrap();
+        let idle = kernel.create_tcb("idle", 1).unwrap();
+        kernel.enqueue(idle);
+        kernel.enqueue(sleeper);
+        assert_eq!(kernel.tick(0), 0); // time = 1
+        assert_eq!(kernel.sleepers_active, 0);
+        assert_eq!(
+            kernel.user_syscall_on(sleeper, 0, SyscallId::Sleep as u64, 2, 0, 0, 0, 0, 0),
+            UserAction::Sleep
+        );
+        assert_eq!(kernel.sleepers_active, 1);
+        assert_eq!(kernel.tick(0), 0); // time = 2, chưa tới deadline 3
+        assert_eq!(kernel.sleepers_active, 1);
+        assert_eq!(kernel.tick(0), 1); // time = 3, wake
+        assert_eq!(kernel.sleepers_active, 0);
+        assert_eq!(kernel.tcb(sleeper).unwrap().state, ThreadState::Ready);
+        // tick sau khi wake vẫn fast-path.
+        assert_eq!(kernel.tick(0), 0);
+        assert_eq!(kernel.sleepers_active, 0);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn issue2a_budget_counter_tracks_exhaust_and_replenish() {
+        // (#2a) counter tăng khi cạn budget, giảm khi wake đúng kỳ.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("budgeted", 5).unwrap();
+        let untyped = kernel
+            .create_untyped_with_limit(0x1000_0000, 4096, 4096, 8)
+            .unwrap();
+        let context = kernel.retype(untyped, ObjType::SchedContext).unwrap();
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(context, ObjType::SchedContext, Rights::ALL),
+            )
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(target, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        kernel.configure_sched_context(context, 1, 3).unwrap();
+        kernel.bind_sched_context(target, context).unwrap();
+        assert_eq!(kernel.budgeters_active, 0);
+        kernel.current[0] = Some(target);
+        kernel.tcb_mut(target).unwrap().state = ThreadState::Running;
+        assert_eq!(kernel.tick(0), 0); // cạn budget ngay (budget 1)
+        assert_eq!(
+            kernel.tcb(target).unwrap().state,
+            ThreadState::BlockedBudget
+        );
+        assert_eq!(kernel.budgeters_active, 1);
+        // Quay qua deadline period (period 3, deadline = period_start+3):
+        // tick trả 1 khi wake, counter về 0.
+        let mut woke = 0;
+        for _ in 0..10 {
+            woke += kernel.tick(0);
+            if woke > 0 {
+                break;
+            }
+        }
+        assert_eq!(woke, 1);
+        assert_eq!(kernel.budgeters_active, 0);
+        assert_eq!(kernel.tcb(target).unwrap().state, ThreadState::Ready);
+        kernel.current[0] = None;
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn issue2b_irq_map_roundtrip_create_raise_destroy() {
+        // (#2b) create -> raise (qua map) -> destroy (dọn map) -> raise rớt.
+        let mut kernel = Kernel::new();
+        let number = 7u32;
+        assert!(!kernel.irq_raise(number)); // chưa có object
+        let irq = kernel.create_irq(number).unwrap();
+        assert_eq!(kernel.irq_by_number[number as usize], Some(irq));
+        assert!(kernel.irq_raise(number)); // edge mới qua map
+        assert!(!kernel.irq_raise(number)); // coalesce: đang pending
+        kernel.irq_ack(irq).unwrap();
+        assert!(kernel.irq_raise(number)); // ack xong raise lại được
+        kernel.destroy_object(irq).unwrap();
+        assert_eq!(kernel.irq_by_number[number as usize], None);
+        assert!(!kernel.irq_raise(number)); // object chết, raise rớt
+                                            // number tái dùng được sau destroy.
+        let irq2 = kernel.create_irq(number).unwrap();
+        assert_eq!(kernel.irq_by_number[number as usize], Some(irq2));
+        assert!(kernel.irq_raise(number));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn issue2b_irq_map_rejects_duplicate_and_big_number() {
+        // (#2b) trùng number và number >= 64 đều từ chối, map không bẩn.
+        let mut kernel = Kernel::new();
+        let irq = kernel.create_irq(9).unwrap();
+        assert!(kernel.create_irq(9).is_none());
+        assert!(kernel.create_irq(64).is_none());
+        assert!(kernel.create_irq(u32::MAX).is_none());
+        assert_eq!(kernel.irq_by_number[9], Some(irq));
+        assert!(!kernel.irq_raise(64));
+        assert!(!kernel.irq_raise(71));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn issue3b_tcb_count_and_slots_are_o1_cached() {
+        // (#3b) counter/mask đồng bộ với create/destroy, slot tái dùng.
+        let mut kernel = Kernel::new();
+        let base = kernel.live_tcb_count; // root đã có từ reset
+        assert!(base >= 1);
+        let a = kernel.create_tcb("a", 1).unwrap();
+        let b = kernel.create_tcb("b", 1).unwrap();
+        assert_eq!(kernel.live_tcb_count, base + 2);
+        assert_eq!(kernel.tcb_count(), base + 2);
+        let slot_a = kernel.context_slot(a).unwrap();
+        let _slot_b = kernel.context_slot(b).unwrap();
+        assert_ne!(kernel.context_slot(a), kernel.context_slot(b));
+        kernel.destroy_object(a).unwrap();
+        assert_eq!(kernel.live_tcb_count, base + 1);
+        let c = kernel.create_tcb("c", 1).unwrap();
+        // slot của a được tái dùng (mask O(1) tìm đúng slot trống).
+        assert_eq!(kernel.context_slot(c), Some(slot_a));
+        assert_eq!(kernel.live_tcb_count, base + 2);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn issue12a_queue_remove_keeps_fifo_and_reports() {
+        // (#12a) remove trả bool, giữ FIFO survivors, xoá mọi occurrence.
+        let mut kernel = Kernel::new();
+        let a = kernel.create_tcb("qa", 1).unwrap();
+        let b = kernel.create_tcb("qb", 1).unwrap();
+        let c = kernel.create_tcb("qc", 1).unwrap();
+        let ep = kernel.create_endpoint().unwrap();
+        // Dựng hàng send [a, b, c] qua endpoint (dùng push trực tiếp).
+        {
+            let endpoint = kernel.endpoint_mut(ep).unwrap();
+            assert!(endpoint.send.push(a));
+            assert!(endpoint.send.push(b));
+            assert!(endpoint.send.push(c));
+        }
+        // Xoá giữa: còn [a, c], FIFO giữ nguyên.
+        {
+            let endpoint = kernel.endpoint_mut(ep).unwrap();
+            assert!(endpoint.send.remove(b));
+            assert_eq!(endpoint.send.pop(), Some(a));
+            assert_eq!(endpoint.send.pop(), Some(c));
+            assert_eq!(endpoint.send.pop(), None);
+        }
+        // Xoá phần tử không có: trả false, hàng nguyên vẹn.
+        {
+            let endpoint = kernel.endpoint_mut(ep).unwrap();
+            assert!(endpoint.send.push(a));
+            assert!(!endpoint.send.remove(b));
+            assert_eq!(endpoint.send.pop(), Some(a));
+        }
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn issue12_signal_one_wakes_exactly_one_waiter() {
+        // (#12, lib.rs): signal_one chỉ đánh thức 1 waiter (FIFO), không herd.
+        let mut kernel = Kernel::new();
+        let a = kernel.create_tcb("wa", 5).unwrap();
+        let b = kernel.create_tcb("wb", 5).unwrap();
+        let ntfn = kernel.create_notification().unwrap();
+        assert_eq!(kernel.wait_as(a, ntfn), Ok(None));
+        assert_eq!(kernel.wait_as(b, ntfn), Ok(None));
+        assert_eq!(kernel.signal_one(ntfn, 0b1), Ok(true));
+        // a (slot đầu) được wake, b vẫn chờ.
+        assert_eq!(kernel.tcb(a).unwrap().state, ThreadState::Ready);
+        assert_eq!(
+            kernel.tcb(b).unwrap().state,
+            ThreadState::BlockedNotification
+        );
+        assert_eq!(kernel.signal_one(ntfn, 0b10), Ok(true));
+        assert_eq!(kernel.tcb(b).unwrap().state, ThreadState::Ready);
+        // Không ai chờ: bit giữ lại, trả false.
+        assert_eq!(kernel.signal_one(ntfn, 0b100), Ok(false));
+        assert_eq!(kernel.notification(ntfn).unwrap().word, 0b100);
+        assert!(kernel.check_invariants().is_ok());
     }
 
     #[test]

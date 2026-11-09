@@ -216,6 +216,33 @@ fn vfs_fsync(fd: u64) -> Option<()> {
     vfs_reply(reply).ok().map(|_| ())
 }
 
+/// (#10) Bulk readdir: one IPC returns up to 8 `(ino, kind, len, name)`
+/// records packed as 32B each.  Returns `(entries, next_index)`; an empty
+/// page ends the listing.  Falls back to per-entry READDIR when the server
+/// predates READDIR_BULK (reply ERR).
+fn vfs_readdir_bulk(fd: u64, index: u64) -> Result<(usize, u64), u64> {
+    let max = (vfs::MAX_IO / vfs::READDIR_REC) as u64;
+    let reply = unsafe { vifast_user::call_message(1, vfs::READDIR_BULK, fd, index, max) };
+    let reply = vfs_reply(reply)?;
+    if reply.label != vfs::OK {
+        return Err(vfs::EINVAL);
+    }
+    Ok((reply.data[0] as usize, reply.data[1]))
+}
+
+fn vfs_readdir_bulk_entry(slot: usize) -> (u64, u8, [u8; 28], usize) {
+    let base = IPC_BUF_CLIENT_VA as *const u8;
+    unsafe {
+        let rec = base.add(slot * vfs::READDIR_REC);
+        let ino = (*rec.add(0) as u64) | ((*rec.add(1) as u64) << 8);
+        let kind = *rec.add(2);
+        let len = core::cmp::min(*rec.add(3) as usize, 28);
+        let mut name = [0u8; 28];
+        core::ptr::copy_nonoverlapping(rec.add(4), name.as_mut_ptr(), len);
+        (ino, kind, name, len)
+    }
+}
+
 fn vfs_mkdir_via(slot: u8, path: &[u8]) -> Result<u64, u64> {
     let len = copy_path(path);
     let reply = unsafe { vifast_user::call_message(slot, vfs::MKDIR, len as u64, 0, 0) };
@@ -486,34 +513,66 @@ fn shell_command(line: &[u8]) {
         let path = if line.len() > 3 { &line[3..] } else { b"/" };
         if let Some((fd, _)) = vfs_open(path, 0) {
             let mut index = 0u64;
-            // Mốc 8 (vòng 25): hậu tố loại — `/` cho dir, `@` cho symlink
-            // (qua STAT_PATH từng entry; INODE_DIR=2, INODE_SYMLINK=3).
-            let mut full = [0u8; 256];
-            while let Ok(Some((_, name, len))) = vfs_readdir(fd, index) {
-                let mut flen = 0usize;
-                if path != b"/" {
-                    flen = path.len().min(200);
-                    full[..flen].copy_from_slice(&path[..flen]);
-                    if flen < full.len() {
+            // (#10) Bulk path first: kind arrives inline, no STAT_PATH per
+            // entry.  Falls back to per-entry READDIR + STAT_PATH on ERR.
+            let bulk_ok = vfs_readdir_bulk(fd, 0).is_ok();
+            if bulk_ok {
+                let mut idx = 0u64;
+                loop {
+                    let (packed, next) = match vfs_readdir_bulk(fd, idx) {
+                        Ok(v) => v,
+                        Err(_) => break,
+                    };
+                    if packed == 0 {
+                        break;
+                    }
+                    for slot in 0..packed {
+                        let (_, kind, name, len) = vfs_readdir_bulk_entry(slot);
+                        let suffix: &[u8] = match kind {
+                            2 => b"/",
+                            3 => b"@",
+                            _ => b"",
+                        };
+                        write(&name[..len]);
+                        write(suffix);
+                        write(b"\n");
+                    }
+                    if next <= idx {
+                        break;
+                    }
+                    idx = next;
+                }
+                let _ = index;
+            } else {
+                // Mốc 8 (vòng 25): hậu tố loại — `/` cho dir, `@` cho symlink
+                // (qua STAT_PATH từng entry; INODE_DIR=2, INODE_SYMLINK=3).
+                let mut full = [0u8; 256];
+                while let Ok(Some((_, name, len))) = vfs_readdir(fd, index) {
+                    let mut flen = 0usize;
+                    if path != b"/" {
+                        flen = path.len().min(200);
+                        full[..flen].copy_from_slice(&path[..flen]);
+                        if flen < full.len() {
+                            full[flen] = b'/';
+                            flen += 1;
+                        }
+                    } else if flen < full.len() {
                         full[flen] = b'/';
                         flen += 1;
                     }
-                } else if flen < full.len() {
-                    full[flen] = b'/';
-                    flen += 1;
+                    let take = len.min(full.len() - flen);
+                    full[flen..flen + take].copy_from_slice(&name[..take]);
+                    flen += take;
+                    let suffix: &[u8] = match vfs_stat_path(&full[..flen]) {
+                        Some((_, _, 2)) => b"/",
+                        Some((_, _, 3)) => b"@",
+                        _ => b"",
+                    };
+                    write(&name[..len]);
+                    write(suffix);
+                    write(b"\n");
+                    index += 1;
                 }
-                let take = len.min(full.len() - flen);
-                full[flen..flen + take].copy_from_slice(&name[..take]);
-                flen += take;
-                let suffix: &[u8] = match vfs_stat_path(&full[..flen]) {
-                    Some((_, _, 2)) => b"/",
-                    Some((_, _, 3)) => b"@",
-                    _ => b"",
-                };
-                write(&name[..len]);
-                write(suffix);
-                write(b"\n");
-                index += 1;
             }
             let _ = vfs_close(fd);
         } else {

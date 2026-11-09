@@ -98,7 +98,29 @@ static POST_TIMER_WAKES: AtomicUsize = AtomicUsize::new(0);
 static POST_IDLE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
 const MAINT_TLB: u32 = 1;
 const MAINT_ICACHE: u32 = 2;
+// (#5) Per-VA remote shootdown mailbox, mirroring the RISC-V port.
+const MAINT_TLB_VA: u32 = 8;
 static TLB_VA_FLUSH: AtomicUsize = AtomicUsize::new(0);
+static TLB_IPI_SENT: AtomicUsize = AtomicUsize::new(0);
+static TLB_IPI_SKIPPED: AtomicUsize = AtomicUsize::new(0);
+static MAINT_TLB_ADDR: [AtomicUsize; MAX_HARTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+static MAINT_TLB_PAGES: [AtomicUsize; MAX_HARTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+static MAINT_TLB_ASID: [AtomicU32; MAX_HARTS] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
 static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
@@ -227,8 +249,31 @@ fn poll_maintenance() {
     }
     let kind = MAINT_KIND[hart].swap(0, Ordering::AcqRel);
     if kind & MAINT_TLB != 0 {
+        // Full stage-1 invalidate for EL1 (remote side of flush_all_asid /
+        // request_ipi); previously only `dsb ish`, so the handler was dead.
+        unsafe {
+            core::arch::asm!("tlbi vmalle1is");
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+    }
+    if kind & MAINT_TLB_VA != 0 {
+        // Remote side of flush_va_asid: per-page VAE1IS with the sender's
+        // tagged operand (Xt[63:48]=ASID, Xt[43:12]=VA).
+        let va = MAINT_TLB_ADDR[hart].load(Ordering::Acquire) as u64;
+        let pages = MAINT_TLB_PAGES[hart].load(Ordering::Acquire);
+        let asid = MAINT_TLB_ASID[hart].load(Ordering::Acquire);
+        let asid_tag = (asid as u64) << 48;
+        let mut page = 0;
+        while page < pages {
+            unsafe {
+                core::arch::asm!("tlbi vae1is, {}", in(reg) (va + (page as u64) * 4096) | asid_tag);
+            }
+            page += 1;
+        }
         unsafe {
             core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
         }
     }
     if kind & MAINT_ICACHE != 0 {
@@ -249,13 +294,17 @@ fn maintenance_target_online(target: usize) -> bool {
     target < MAX_HARTS && SECONDARY_ONLINE.load(Ordering::SeqCst) >= target
 }
 
-fn send_maintenance(target: usize, kind: u32) -> bool {
+/// Publish an IPI maintenance request and return its sequence number without
+/// waiting (issue #4 — same split as the RISC-V port: only the publish runs
+/// under BKL so a slow target does not serialize the whole machine behind
+/// the lock).  Returns 0 when the target cannot receive maintenance.
+fn publish_maintenance(target: usize, kind: u32) -> usize {
     if target >= MAX_HARTS || !maintenance_target_online(target) {
-        return false;
+        return 0;
     }
     let state = cpu_state();
     if state.is_null() || unsafe { (*state).hart_id } == target {
-        return false;
+        return 0;
     }
     assert!(
         BKL.held_by(current_hart()),
@@ -265,6 +314,16 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
     MAINT_KIND[target].fetch_or(kind, Ordering::AcqRel);
     // GICv2 SGIR SGI 0, target list bit for the destination CPU.
     write32(GICD + 0xF00, 1 << (16 + target));
+    seq
+}
+
+/// Wait (with local maintenance polling) until `target` acknowledges `seq`.
+/// Safe to call without the BKL: the publication above is already ordered
+/// by `fetch_add(Release)` + SGI, and polling only consumes our own mailbox.
+fn wait_maintenance(target: usize, seq: usize) -> bool {
+    if seq == 0 || target >= MAX_HARTS {
+        return false;
+    }
     let mut spins = 0usize;
     while MAINT_ACK[target].load(Ordering::Acquire) < seq && spins < 5_000_000 {
         poll_maintenance();
@@ -272,6 +331,74 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
         spins += 1;
     }
     MAINT_ACK[target].load(Ordering::Acquire) >= seq
+}
+
+fn send_maintenance(target: usize, kind: u32) -> bool {
+    let seq = publish_maintenance(target, kind);
+    if seq == 0 {
+        return false;
+    }
+    wait_maintenance(target, seq)
+}
+
+/// Publish-first TLB-shootdown helpers (issue #4, module-level): queue every
+/// target's mailbox + SGI while the BKL guard is held, then wait all ACKs.
+fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
+    if !BKL.is_held() {
+        return;
+    }
+    let me = current_hart();
+    let mut pending: [(usize, usize); MAX_HARTS] = [(usize::MAX, 0); MAX_HARTS];
+    let mut count = 0usize;
+    for target in 0..MAX_HARTS {
+        if target == me || !maintenance_target_online(target) {
+            continue;
+        }
+        if targets & (1 << target) == 0 {
+            TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+        MAINT_TLB_ADDR[target].store(va as usize, Ordering::Release);
+        MAINT_TLB_PAGES[target].store(pages, Ordering::Release);
+        MAINT_TLB_ASID[target].store(asid as u32, Ordering::Release);
+        let seq = publish_maintenance(target, MAINT_TLB_VA);
+        if seq != 0 {
+            pending[count] = (target, seq);
+            count += 1;
+            TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    for i in 0..count {
+        let _ = wait_maintenance(pending[i].0, pending[i].1);
+    }
+}
+
+/// Same publish-first pattern for full-ASID flushes (MAINT_TLB).
+fn shootdown_all(targets: u32) {
+    if !BKL.is_held() {
+        return;
+    }
+    let me = current_hart();
+    let mut pending: [(usize, usize); MAX_HARTS] = [(usize::MAX, 0); MAX_HARTS];
+    let mut count = 0usize;
+    for target in 0..MAX_HARTS {
+        if target == me || !maintenance_target_online(target) {
+            continue;
+        }
+        if targets & (1 << target) == 0 {
+            TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        } else {
+            let seq = publish_maintenance(target, MAINT_TLB);
+            if seq != 0 {
+                pending[count] = (target, seq);
+                count += 1;
+                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    for i in 0..count {
+        let _ = wait_maintenance(pending[i].0, pending[i].1);
+    }
 }
 
 fn request_ipi() -> bool {
@@ -788,12 +915,21 @@ impl vifast_kernel::PageTableOps for PageOps {
         }
     }
 
-    fn flush_va_asid(&self, _asid: u16, va: u64, pages: usize, _targets: u32) {
+    // Stage-1 per-VA invalidate.  `vae1is` is VAE1IS: the operand must be
+    // tagged as Xt[63:48]=ASID, Xt[43:12]=VA.  Every user VSpace runs with a
+    // nonzero ASID, so passing an untagged VA invalidated nothing even
+    // locally; tag with the caller's `asid`.  The `is` suffix broadcasts to
+    // the Inner Shareable domain, so remotes that share that domain drop the
+    // entry in hardware, and `dsb ish` + `isb` complete the shootdown before
+    // return.  An explicit per-hart SGI loop (mailbox + MAINT_TLB_VA) covers
+    // remotes outside the broadcast domain.
+    fn flush_va_asid(&self, asid: u16, va: u64, pages: usize, targets: u32) {
         TLB_VA_FLUSH.fetch_add(1, Ordering::Relaxed);
+        let asid_tag = (asid as u64) << 48;
         let mut page = 0;
         while page < pages {
             unsafe {
-                core::arch::asm!("tlbi vae1is, {}", in(reg) va + (page as u64) * 4096);
+                core::arch::asm!("tlbi vae1is, {}", in(reg) (va + (page as u64) * 4096) | asid_tag);
             }
             page += 1;
         }
@@ -801,15 +937,19 @@ impl vifast_kernel::PageTableOps for PageOps {
             core::arch::asm!("dsb ish");
             core::arch::asm!("isb");
         }
+        shootdown_va(asid, va, pages, targets);
     }
 
-    fn flush_all_asid(&self, asid: u16, _targets: u32) {
+    // Stage-1 per-ASID invalidate (`aside1is`, kept correct): local plus the
+    // same per-hart SGI loop used by flush_va_asid, addressed by MAINT_TLB.
+    fn flush_all_asid(&self, asid: u16, targets: u32) {
         TLB_VA_FLUSH.fetch_add(1, Ordering::Relaxed);
         unsafe {
             core::arch::asm!("tlbi aside1is, {}", in(reg) asid as u64);
             core::arch::asm!("dsb ish");
             core::arch::asm!("isb");
         }
+        shootdown_all(targets);
     }
 
     fn sync_icache(&self, pa: u64, size: usize) {
@@ -1400,7 +1540,11 @@ impl Platform for Aarch64Platform {
     }
 
     fn tlb_stats() -> Option<(usize, usize, usize)> {
-        Some((TLB_VA_FLUSH.load(Ordering::Relaxed), 0, 0))
+        Some((
+            TLB_VA_FLUSH.load(Ordering::Relaxed),
+            TLB_IPI_SENT.load(Ordering::Relaxed),
+            TLB_IPI_SKIPPED.load(Ordering::Relaxed),
+        ))
     }
 
     fn kernel_storage_canary() -> Option<bool> {

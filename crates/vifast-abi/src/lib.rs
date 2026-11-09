@@ -480,10 +480,13 @@ pub mod user_layout {
     const _: () = assert!(ROOT_BOOTINFO_VA >= ROOT_ELF_STACK_TOP);
     const _: () = assert!(ROOT_BOOTINFO_VA >= ROOT_ELF_STACK_GUARD);
     /// Read-only staging window where the runtime maps boot-module ELF bytes
-    /// for the root loader.  The two modules are separated by 64 KiB.
+    /// for the root loader.  Each module gets 128 KiB of VA (32 pages):
+    /// the VFS server is ~18 pages after the #10 bulk-READDIR work and keeps
+    /// growing, so the old 64 KiB spacing let the server's tail overlap the
+    /// client's first page (`BOOT MODULE MAP FAILED ... AlreadyMapped`).
     pub const ROOT_MODULE_SERVER_VA: usize = ROOT_BOOTINFO_VA + 0x1000;
-    pub const ROOT_MODULE_CLIENT_VA: usize = ROOT_MODULE_SERVER_VA + 0x1_0000;
-    pub const ROOT_MODULE_END: usize = ROOT_MODULE_CLIENT_VA + 0x1_0000;
+    pub const ROOT_MODULE_CLIENT_VA: usize = ROOT_MODULE_SERVER_VA + 0x2_0000;
+    pub const ROOT_MODULE_END: usize = ROOT_MODULE_CLIENT_VA + 0x2_0000;
     const _: () = assert!(ROOT_MODULE_SERVER_VA >= ROOT_BOOTINFO_VA);
     const _: () = assert!(ROOT_MODULE_CLIENT_VA >= ROOT_MODULE_SERVER_VA);
 
@@ -637,6 +640,15 @@ pub mod vfs {
     pub const READLINK: u64 = 0x2010;
     /// Stat by path: data[0] = path length in the IPC buffer.
     pub const STAT_PATH: u64 = 0x2011;
+    /// (#10) Bulk readdir (getdents-style): data[0] = fd, data[1] = start
+    /// index, data[2] = max entries.  The server packs entries into the IPC
+    /// buffer as `(ino:u16, kind:u8, len:u8, name[28])` records (32B each,
+    /// 8 per 256B buffer) and returns the packed count in data[0] and the
+    /// next index in data[1].  One IPC per directory page instead of one
+    /// per entry — `ls` drops from O(N^2) IPC-adjacent scans to O(N).
+    pub const READDIR_BULK: u64 = 0x2013;
+    /// Packed bulk-readdir record size: ino u16 + kind u8 + len u8 + name[28].
+    pub const READDIR_REC: usize = 32;
 
     pub const ENOENT: u64 = 1;
     pub const EEXIST: u64 = 2;
@@ -657,7 +669,13 @@ pub mod vfs {
     pub const ERR: u64 = u64::MAX;
     pub const MAX_NAME: usize = 8;
     pub const MAX_COMPONENT: usize = 28;
-    pub const MAX_IO: usize = 128;
+    /// (#10) Max bytes per READ/WRITE round-trip.  Raised 128 -> 256 to match
+    /// `USER_COPY_MAX` and the kernel IPC copy width
+    /// (`IPC_BUFFER_WORDS * 8 = 256B`), so one VFS READ/WRITE carries a full
+    /// 256B instead of needing 4 round-trips per 512B FS block paired with
+    /// 4 journal commits.  Both IPC buffer pages are 4 KiB; 256B payloads
+    /// stay well inside them on both client and server stacks.
+    pub const MAX_IO: usize = 256;
     pub const MAX_FILES: usize = 16;
     pub const MAX_PATH: usize = 128;
     pub const MAX_FD: usize = 8;

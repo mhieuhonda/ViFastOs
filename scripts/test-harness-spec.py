@@ -48,7 +48,7 @@ def fixture(arch: str) -> str:
             "SMP SCHED OK (hart0=100, hart1=200, resched_sent=1, resched_wake=1, idle_entries=2)",
             "SMP WORKERS OK (a=50, b=50, c=1)",
             "SMP POST IDLE OK (ticks=6, idle_entries=6, wake_timer=5)",
-            "TLB STATS (va_flush=2, ipi=0, skipped=0)",
+            "TLB STATS (va_flush=2, ipi=1, skipped=1)",
             "EL0 FP TRAP",
             "VIRTIO NET READY base=0xa003c00 accepted=0x10020",
             "VIRTIO NET PING REPLY from 10.0.2.2",
@@ -163,7 +163,7 @@ def main() -> int:
             expect_fail(
                 "aarch64: tlb-ipi",
                 arch,
-                base.replace("TLB STATS (va_flush=2, ipi=0", "TLB STATS (va_flush=2, ipi=1"),
+                base.replace("TLB STATS (va_flush=2, ipi=1", "TLB STATS (va_flush=2, ipi=0"),
                 rc,
             )
             expect_fail(

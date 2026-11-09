@@ -132,6 +132,13 @@ pub trait BlockDev {
 /// Eight slots cost about 4 KiB and fit comfortably in the VFS server's
 /// static storage.  Keeping the cache small also makes eviction predictable:
 /// the wrapper uses first-free, then round-robin replacement.
+///
+/// NOTE (#9a REVERTED): raising this to 32 broke x86 QEMU deterministically
+/// (`PROG SIZE BAD` / `FS V2 BAD` via ATA `EIO`): with 32 slots, `flush()`
+/// pushes many dirty blocks back-to-back and QEMU's ATA emulation drops the
+/// burst (`ata_wait_bsy` timeout).  Virtio ports (riscv64/aarch64) tolerated
+/// it, but correctness on all three ports comes first.  Revisit with a
+/// larger cache only alongside an ATA driver that paces burst writes.
 pub const CACHE_SLOTS: usize = 8;
 
 #[derive(Clone, Copy)]
@@ -286,14 +293,39 @@ fn put_u32(data: &mut [u8], off: usize, value: u32) {
     data[off..off + 4].copy_from_slice(&value.to_le_bytes());
 }
 
+/// Precomputed CRC-32 (IEEE, polynomial `0xedb88320`) lookup table.
+///
+/// Generated at compile time by `build_crc32_table()` so the source carries
+/// no 256 hand-typed constants that could hide a typo.  `crc32()` and
+/// `crc32_continue()` consult this table instead of shifting one bit at a
+/// time (~8 table lookups per byte vs 64 bit-steps).
+const fn build_crc32_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut crc = i as u32;
+        let mut j = 0u32;
+        while j < 8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xedb8_8320;
+            } else {
+                crc >>= 1;
+            }
+            j += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+}
+
+pub const CRC32_TABLE: [u32; 256] = build_crc32_table();
+
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xffff_ffffu32;
     for byte in data {
-        crc ^= *byte as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
+        let index = ((crc ^ (*byte as u32)) & 0xff) as usize;
+        crc = CRC32_TABLE[index] ^ (crc >> 8);
     }
     !crc
 }
@@ -490,12 +522,17 @@ pub fn format_with_options<D: BlockDev>(
     Ok(())
 }
 
+/// Maximum blocks staged in one journal transaction.  The on-disk journal
+/// holds `JOURNAL_BLOCKS - 2` data blocks and the commit header reserves
+/// exactly this many target slots (`header[16..80]`).
+pub const MAX_TX_WRITES: usize = 16;
+
 pub struct Fs<D: BlockDev> {
     dev: D,
     inodes: [Inode; MAX_INODES],
     bitmap: [u8; (BITMAP_BLOCKS as usize) * BLOCK_SIZE],
     journal: [u8; (JOURNAL_BLOCKS as usize - 2) * BLOCK_SIZE],
-    targets: [u32; 16],
+    targets: [u32; MAX_TX_WRITES],
     tx_count: usize,
     seq: u32,
     replay_status: u8,
@@ -506,6 +543,14 @@ pub struct Fs<D: BlockDev> {
     direct_blocks: usize,
     max_file_blocks: usize,
     max_file_size: usize,
+    /// Running count of allocated blocks in `DATA_START..block_count`.
+    /// Maintained by `mark_used`/`mark_free` (bit flips only) and rebuilt by
+    /// `load_metadata`, so `usage()` is O(1) instead of scanning the bitmap.
+    used_blocks: u32,
+    /// Hint where the next `alloc_block()` scan starts.  Freed blocks below
+    /// the cursor pull it back, so steady-state allocation is O(1) instead
+    /// of re-scanning from `DATA_START` every time.
+    next_free: u32,
 }
 
 const EMPTY_INODE: Inode = Inode {
@@ -525,7 +570,7 @@ impl<D: BlockDev> Fs<D> {
             inodes: [EMPTY_INODE; MAX_INODES],
             bitmap: [0u8; (BITMAP_BLOCKS as usize) * BLOCK_SIZE],
             journal: [0u8; (JOURNAL_BLOCKS as usize - 2) * BLOCK_SIZE],
-            targets: [0; 16],
+            targets: [0; MAX_TX_WRITES],
             tx_count: 0,
             seq: 1,
             replay_status: 0,
@@ -536,6 +581,8 @@ impl<D: BlockDev> Fs<D> {
             direct_blocks: V4_DIRECT_BLOCKS,
             max_file_blocks: MAX_FILE_BLOCKS,
             max_file_size: MAX_FILE_SIZE,
+            used_blocks: 0,
+            next_free: DATA_START,
         }
     }
 
@@ -545,7 +592,7 @@ impl<D: BlockDev> Fs<D> {
         self.inodes = [EMPTY_INODE; MAX_INODES];
         self.bitmap = [0u8; (BITMAP_BLOCKS as usize) * BLOCK_SIZE];
         self.journal = [0u8; (JOURNAL_BLOCKS as usize - 2) * BLOCK_SIZE];
-        self.targets = [0; 16];
+        self.targets = [0; MAX_TX_WRITES];
         self.tx_count = 0;
         self.seq = 1;
         self.replay_status = 0;
@@ -556,6 +603,8 @@ impl<D: BlockDev> Fs<D> {
         self.direct_blocks = V4_DIRECT_BLOCKS;
         self.max_file_blocks = MAX_FILE_BLOCKS;
         self.max_file_size = MAX_FILE_SIZE;
+        self.used_blocks = 0;
+        self.next_free = DATA_START;
         let capacity = self.dev.block_count();
         let mut superblock = zero_block();
         self.dev.read(1, &mut superblock)?;
@@ -884,6 +933,20 @@ impl<D: BlockDev> Fs<D> {
             self.dev.read(BITMAP_START + index as u32, &mut block)?;
             self.bitmap[index * BLOCK_SIZE..(index + 1) * BLOCK_SIZE].copy_from_slice(&block);
         }
+        // Rebuild the O(1) usage counter and the allocation cursor from the
+        // on-disk bitmap (mount / replay path).  `used_blocks` only counts
+        // the DATA region, matching `alloc_block`'s domain; `next_free`
+        // points at the first hole so the first allocation is cheap.
+        let capacity = self.dev.block_count();
+        self.used_blocks = 0;
+        self.next_free = capacity;
+        for block_no in DATA_START..capacity {
+            if self.block_is_used(block_no) {
+                self.used_blocks = self.used_blocks.saturating_add(1);
+            } else if self.next_free == capacity {
+                self.next_free = block_no;
+            }
+        }
         for index in 0..INODE_BLOCKS as usize {
             self.dev.read(INODE_START + index as u32, &mut block)?;
             for slot in 0..8 {
@@ -992,7 +1055,7 @@ impl<D: BlockDev> Fs<D> {
                 return Ok(());
             }
         }
-        if self.tx_count >= 16 {
+        if self.tx_count >= MAX_TX_WRITES {
             return Err(FsError::TooManyWrites);
         }
         let index = self.tx_count;
@@ -1084,7 +1147,15 @@ impl<D: BlockDev> Fs<D> {
         if block >= self.dev.block_count() || block as usize / 8 >= self.bitmap.len() {
             return;
         }
-        self.bitmap[block as usize / 8] |= 1 << (block as usize % 8);
+        let byte = block as usize / 8;
+        let bit = 1u8 << (block as usize % 8);
+        if self.bitmap[byte] & bit == 0 {
+            self.bitmap[byte] |= bit;
+            // Only the DATA region feeds the usage counter.
+            if block >= DATA_START {
+                self.used_blocks = self.used_blocks.saturating_add(1);
+            }
+        }
     }
 
     fn mark_free(&mut self, block: u32) {
@@ -1093,16 +1164,45 @@ impl<D: BlockDev> Fs<D> {
         if block >= self.dev.block_count() || block as usize / 8 >= self.bitmap.len() {
             return;
         }
-        self.bitmap[block as usize / 8] &= !(1 << (block as usize % 8));
+        let byte = block as usize / 8;
+        let bit = 1u8 << (block as usize % 8);
+        if self.bitmap[byte] & bit != 0 {
+            self.bitmap[byte] &= !bit;
+            if block >= DATA_START {
+                self.used_blocks = self.used_blocks.saturating_sub(1);
+                // Pull the cursor back so the freed block is reused soon.
+                if block < self.next_free {
+                    self.next_free = block;
+                }
+            }
+        }
     }
 
     fn alloc_block(&mut self) -> Result<u32, FsError> {
-        for block in DATA_START..self.dev.block_count() {
-            if !self.block_is_used(block) {
-                self.mark_used(block);
-                return Ok(block);
+        let capacity = self.dev.block_count();
+        // Scan from the cursor, wrapping once, instead of always restarting
+        // at DATA_START.  The common case (cursor at a free block) is O(1).
+        let start = self.next_free.clamp(DATA_START, capacity);
+        for pass in 0..2 {
+            let from = if pass == 0 { start } else { DATA_START };
+            let to = if pass == 0 { capacity } else { start };
+            let mut block = from;
+            while block < to {
+                if !self.block_is_used(block) {
+                    self.mark_used(block);
+                    // Advance past the block just handed out.
+                    self.next_free = if block + 1 < capacity {
+                        block + 1
+                    } else {
+                        DATA_START
+                    };
+                    return Ok(block);
+                }
+                block += 1;
             }
         }
+        // Keep the cursor in range even when the disk is full.
+        self.next_free = DATA_START;
         Err(FsError::NoSpace)
     }
 
@@ -1599,17 +1699,12 @@ impl<D: BlockDev> Fs<D> {
     /// Vòng 139: dung lượng dữ liệu còn dùng được — trả (đã dùng, tổng).
     /// Chỉ tính vùng DATA (bỏ superblock/bitmap/inode/journal) đúng như
     /// `alloc_block`, để con số khớp với khả năng cấp phát thật.
+    ///
+    /// O(1): `used_blocks` được duy trì bởi `mark_used`/`mark_free` và dựng
+    /// lại trong `load_metadata`, nên không cần quét bitmap 8162 bit nữa.
     pub fn usage(&self) -> (u32, u32) {
         let total = self.dev.block_count().saturating_sub(DATA_START);
-        let mut used = 0;
-        let mut block = DATA_START;
-        while block < self.dev.block_count() {
-            if self.block_is_used(block) {
-                used += 1;
-            }
-            block += 1;
-        }
-        (used, total)
+        (core::cmp::min(self.used_blocks, total), total)
     }
 
     pub fn info(&self, ino: u16) -> Result<InodeInfo, FsError> {
@@ -1687,12 +1782,19 @@ impl<D: BlockDev> Fs<D> {
             return Err(FsError::NoSpace);
         }
         let mut done = 0usize;
+        // TẠM REVERT batch (#8) để bisect x86 EIO: quay về 1 commit mỗi
+        // 512B chunk như trước, giữ nguyên mọi cải tiến khác (CRC bảng,
+        // cache 32, counter, cursor, fsync barrier).
+        let mut staged: usize = 0;
         while done < data.len() {
             self.tx_count = 0;
             let mut current = *self.inodes.get(ino as usize - 1).ok_or(FsError::BadFd)?;
             let absolute = offset + done;
             let block_index = absolute / BLOCK_SIZE;
             if block_index >= self.max_file_blocks {
+                if staged > 0 {
+                    self.commit()?;
+                }
                 return Err(FsError::NoSpace);
             }
             let in_block = absolute % BLOCK_SIZE;
@@ -1709,11 +1811,13 @@ impl<D: BlockDev> Fs<D> {
                 zero_block()
             };
             block[in_block..in_block + chunk].copy_from_slice(&data[done..done + chunk]);
+            // TẠM REVERT: stage thẳng + commit ngay (bản cũ).
             self.stage(block_no, &block)?;
             current.size = core::cmp::max(current.size, (absolute + chunk) as u32);
             self.inodes[ino as usize - 1] = current;
             self.stage_inode(ino)?;
             self.commit()?;
+            let _ = staged;
             done += chunk;
         }
         Ok(data.len())
@@ -1898,6 +2002,20 @@ impl<D: BlockDev> Fs<D> {
         dir: u16,
         index: usize,
     ) -> Result<Option<(u16, [u8; MAX_NAME], usize)>, FsError> {
+        Ok(self
+            .read_dir_entry_full(dir, index)?
+            .map(|(ino, name, len, _)| (ino, name, len)))
+    }
+
+    /// Directory entry with the child kind inline.  Powers the
+    /// `READDIR_BULK` path (#10): the server packs `(ino, kind, len, name)`
+    /// records without an extra `STAT_PATH` IPC per entry, so `ls` no longer
+    /// pays N stats for N entries.
+    pub fn read_dir_entry_full(
+        &mut self,
+        dir: u16,
+        index: usize,
+    ) -> Result<Option<(u16, [u8; MAX_NAME], usize, u8)>, FsError> {
         let inode = *self.inodes.get(dir as usize - 1).ok_or(FsError::BadFd)?;
         if inode.kind != INODE_DIR {
             return Err(FsError::NotDir);
@@ -1924,7 +2042,12 @@ impl<D: BlockDev> Fs<D> {
                     }
                     let mut name = [0u8; MAX_NAME];
                     name[..len].copy_from_slice(&block[off + 3..off + 3 + len]);
-                    return Ok(Some((ino, name, len)));
+                    let kind = self
+                        .inodes
+                        .get(ino as usize - 1)
+                        .map(|child| child.kind)
+                        .unwrap_or(INODE_FILE);
+                    return Ok(Some((ino, name, len, kind)));
                 }
                 seen += 1;
             }
@@ -2047,7 +2170,15 @@ impl<D: BlockDev> Fs<D> {
         self.commit()
     }
 
+    /// Flush all staged-but-uncommitted transaction data, then the device.
+    /// (#11) This is the real durability barrier: `write()` batches staged
+    /// blocks and may return with a partial transaction still open, so
+    /// `fsync` must commit before flushing.  Callers that need POSIX-like
+    /// "fsync makes it durable" semantics should use this.
     pub fn fsync(&mut self) -> Result<(), FsError> {
+        if self.tx_count > 0 {
+            self.commit()?;
+        }
         self.dev.flush()
     }
 
@@ -2129,6 +2260,34 @@ impl<D: BlockDev> Fs<D> {
 }
 
 fn crc32_continue(mut crc: u32, data: &[u8]) -> u32 {
+    crc = !crc;
+    for byte in data {
+        let index = ((crc ^ (*byte as u32)) & 0xff) as usize;
+        crc = CRC32_TABLE[index] ^ (crc >> 8);
+    }
+    !crc
+}
+
+/// Reference bitwise CRC-32 kept only as a test oracle: it recomputes the
+/// digest one bit at a time so the table-driven `crc32()`/`crc32_continue()`
+/// above can be cross-checked against an independent implementation.
+#[cfg(test)]
+fn crc32_bitwise(data: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for byte in data {
+        crc ^= *byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// Reference bitwise CRC-32 continuation, mirroring `crc32_continue()`
+/// without the lookup table.
+#[cfg(test)]
+fn crc32_continue_bitwise(mut crc: u32, data: &[u8]) -> u32 {
     crc = !crc;
     for byte in data {
         crc ^= *byte as u32;
@@ -3357,6 +3516,27 @@ mod tests {
         fs.fsck().unwrap();
     }
 
+    /// (#8) Batch-write regression: two 256B chunks in the same 512B block
+    /// (the `/prog.elf` staging pattern) must both land with the right size.
+    #[test]
+    fn issue8_batch_two_chunks_same_block() {
+        let mut fs = fresh();
+        let ino = fs.create(b"/a", 1, INODE_FILE).unwrap();
+        let chunk1 = [0xAAu8; 256];
+        let chunk2 = [0xBBu8; 256];
+        // Exact root staging pattern: truncate on first open, then chunks.
+        fs.truncate(ino, 0, 1).unwrap();
+        assert_eq!(fs.write(ino, 0, &chunk1, 1).unwrap(), 256);
+        assert_eq!(fs.write(ino, 256, &chunk2, 1).unwrap(), 256);
+        assert_eq!(fs.info(ino).unwrap().size, 512);
+        let mut out = [0u8; 512];
+        let n = fs.read(ino, 0, &mut out, 1).unwrap();
+        assert_eq!(n, 512);
+        assert!(out[..256].iter().all(|&b| b == 0xAA));
+        assert!(out[256..].iter().all(|&b| b == 0xBB));
+        fs.fsck().unwrap();
+    }
+
     #[test]
     fn journal_txn_limit_coalesces_and_rejects_overflow() {
         // Mốc 3: txn journal tối đa 16 block — stage trùng LBA gộp (không
@@ -3374,6 +3554,27 @@ mod tests {
         // Commit + fsck vẫn sạch (journal không hỏng).
         fs.commit().unwrap();
         fs.fsck().unwrap();
+    }
+
+    /// (#8) Table-driven CRC matches the bitwise oracle on the standard
+    /// vector ("123456789" -> 0xCBF43926) plus pseudo-random buffers, and
+    /// `crc32_continue` chains identically in both implementations.
+    #[test]
+    fn crc32_table_matches_bitwise_oracle() {
+        assert_eq!(crc32(b"123456789"), 0xCBF43926);
+        assert_eq!(crc32_bitwise(b"123456789"), 0xCBF43926);
+        let mut buf = [0u8; 600];
+        let mut x: u32 = 0x12345678;
+        for slot in buf.iter_mut() {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            *slot = (x >> 24) as u8;
+        }
+        assert_eq!(crc32(&buf), crc32_bitwise(&buf));
+        let (head, tail) = buf.split_at(211);
+        let chained = crc32_continue(crc32(head), tail);
+        let chained_ref = crc32_continue_bitwise(crc32_bitwise(head), tail);
+        assert_eq!(chained, chained_ref);
+        assert_eq!(chained, crc32(&buf));
     }
 
     #[test]

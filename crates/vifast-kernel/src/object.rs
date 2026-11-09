@@ -173,14 +173,45 @@ impl Queue {
         value
     }
 
-    pub fn remove(&mut self, value: ObjRef) {
-        let mut out = Queue::default();
-        while let Some(item) = self.pop() {
-            if item != value {
-                let _ = out.push(item);
+    /// Remove every occurrence of `value`, preserving FIFO order of the
+    /// survivors.  Returns true when at least one entry was removed.
+    ///
+    /// (#12a): lọc tại chỗ thay vì rebuild pop/push. Bản cũ nuốt lỗi bằng
+    /// `let _ = out.push(...)` — hiện không fail được vì cả hai phía đều bị
+    /// chặn bởi MAX_QUEUE, nhưng push rớt (len hỏng > MAX_QUEUE) sẽ làm mất
+    /// entry không phải mục tiêu. Lọc tại chỗ không có đường fail, survivors
+    /// giữ nguyên thứ tự FIFO.
+    pub fn remove(&mut self, value: ObjRef) -> bool {
+        if self.len == 0 {
+            return false;
+        }
+        // Defensive: len hỏng (> MAX_QUEUE) thì chỉ quét trong capacity để
+        // số học head không vượt biên, rồi chuẩn hoá len về sau.
+        let len = (self.len as usize).min(MAX_QUEUE);
+        let mut removed = false;
+        let mut write = 0usize;
+        for read in 0..len {
+            let index = (self.head as usize + read) % MAX_QUEUE;
+            let item = self.entries[index];
+            if item == Some(value) {
+                removed = true;
+            } else {
+                // write <= read < MAX_QUEUE nên dest không alias index trừ
+                // khi bằng nhau (copy tự thân, an toàn).
+                let dest = (self.head as usize + write) % MAX_QUEUE;
+                self.entries[dest] = item;
+                write += 1;
             }
         }
-        *self = out;
+        if !removed {
+            return false;
+        }
+        for i in write..len {
+            let index = (self.head as usize + i) % MAX_QUEUE;
+            self.entries[index] = None;
+        }
+        self.len = write as u8;
+        true
     }
 
     pub fn is_empty(&self) -> bool {

@@ -607,6 +607,56 @@ fn readdir_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
     }
 }
 
+/// (#10) Bulk readdir: pack up to `MAX_IO / READDIR_REC` (8) entries into
+/// one IPC buffer as `(ino:u16 LE, kind:u8, len:u8, name[28])` records.
+/// Returns `(OK, packed_count, next_index, 0)`; when the directory is
+/// exhausted mid-page the count is short (possibly 0 with next == start).
+/// One IPC per page instead of one per entry, and no per-entry STAT_PATH.
+fn readdir_bulk_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
+    let fd = match get_fd(data[0], uid) {
+        Some(fd) => fd,
+        None => return (vfs::ERR, vfs::EBADF, 0, 0),
+    };
+    if !fd.dir {
+        return (vfs::ERR, vfs::ENOTDIR, 0, 0);
+    }
+    let mut index = data[1] as usize;
+    let max = core::cmp::min(data[2] as usize, vfs::MAX_IO / vfs::READDIR_REC).max(1);
+    let mut packed = 0usize;
+    let mut cursor = IPC_BUF_SERVER_VA as *mut u8;
+    for _ in 0..max {
+        match fs().read_dir_entry_full(fd.ino, index) {
+            Ok(Some((ino, name, len, kind))) => {
+                unsafe {
+                    let dst = cursor;
+                    core::ptr::write_bytes(dst, 0, vfs::READDIR_REC);
+                    *dst.add(0) = (ino & 0xff) as u8;
+                    *dst.add(1) = ((ino >> 8) & 0xff) as u8;
+                    *dst.add(2) = kind;
+                    *dst.add(3) = (len & 0xff) as u8;
+                    core::ptr::copy_nonoverlapping(
+                        name.as_ptr(),
+                        dst.add(4),
+                        core::cmp::min(len, 28),
+                    );
+                    cursor = dst.add(vfs::READDIR_REC);
+                }
+                packed += 1;
+                index += 1;
+            }
+            Ok(None) => break,
+            Err(error) => {
+                if packed == 0 {
+                    return err(error);
+                }
+                break;
+            }
+        }
+    }
+    let _ = uid;
+    (vfs::OK, packed as u64, index as u64, 0)
+}
+
 fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
     if request.error != KError::Ok {
         return (vfs::ERR, vfs::EIO, 0, 0);
@@ -646,16 +696,26 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
         vfs::STAT_PATH => stat_path_request(request.data, uid),
         vfs::MKDIR => mkdir_request(request.data, uid),
         vfs::READDIR => readdir_request(request.data, uid),
+        vfs::READDIR_BULK => readdir_bulk_request(request.data, uid),
         vfs::UNLINK => unlink_request(request.data, uid),
         vfs::RENAME => rename_request(request.data, uid),
         vfs::LINK => link_request(request.data, uid),
         vfs::SYMLINK => symlink_request(request.data, uid),
         vfs::READLINK => readlink_request(request.data, uid),
         vfs::TRUNCATE => truncate_request(request.data, uid),
-        vfs::FSYNC => match fs().fsync() {
-            Ok(()) => (vfs::OK, 0, 0, 0),
-            Err(error) => err(error),
-        },
+        vfs::FSYNC => {
+            // (#11) Validate the fd like READ/WRITE/STAT: a bad fd is EBADF,
+            // not a silent global flush.  The flush itself is still a global
+            // journal-commit + device barrier (documented in `Fs::fsync`).
+            if get_fd(request.data[0], uid).is_none() {
+                (vfs::ERR, vfs::EBADF, 0, 0)
+            } else {
+                match fs().fsync() {
+                    Ok(()) => (vfs::OK, 0, 0, 0),
+                    Err(error) => err(error),
+                }
+            }
+        }
         vfs::STATFS => {
             let (used, total) = fs().usage();
             (

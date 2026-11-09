@@ -15,6 +15,13 @@ pub struct BigKernelLock {
     next: AtomicUsize,
     serving: AtomicUsize,
     owner: AtomicUsize,
+    /// Live-guard count: incremented when a ticket is taken, decremented when
+    /// the guard is dropped (after `serving` advances).  `is_held()` is a
+    /// single load of this counter, so — unlike the old `next != serving`
+    /// two-load comparison — one observation cannot straddle a lock/unlock
+    /// transition and report "free" while another hart is entering (issue
+    /// #13: that race silently skipped a TLB-shootdown IPI).
+    holders: AtomicUsize,
     acquisitions: [AtomicUsize; MAX_HARTS],
     spins: [AtomicUsize; MAX_HARTS],
 }
@@ -32,6 +39,7 @@ impl BigKernelLock {
             next: AtomicUsize::new(0),
             serving: AtomicUsize::new(0),
             owner: AtomicUsize::new(NO_OWNER),
+            holders: AtomicUsize::new(0),
             acquisitions: [const { AtomicUsize::new(0) }; MAX_HARTS],
             spins: [const { AtomicUsize::new(0) }; MAX_HARTS],
         }
@@ -41,6 +49,12 @@ impl BigKernelLock {
     ///
     /// This is a best-effort helper for single-hart/assert use.  Real kernel
     /// entries use [`BigKernelLock::lock_with`].
+    ///
+    /// NOTE (issue #13): the returned guard carries `NO_OWNER`, so `held_by`
+    /// stays false while the lock is held.  Never use this in production
+    /// paths that assert on `held_by`/`assert_bkl_released` — those would be
+    /// fooled into thinking the lock is free.
+    #[cfg(test)]
     pub fn try_lock(&'static self) -> Option<BigKernelGuard> {
         let ticket = self.next.load(Ordering::Acquire);
         if self.serving.load(Ordering::Acquire) != ticket {
@@ -56,6 +70,9 @@ impl BigKernelLock {
             )
             .is_ok()
         {
+            // Same live-holder accounting as `acquire` (no wait here: we
+            // only succeeded because no ticket was outstanding).
+            self.holders.fetch_add(1, Ordering::AcqRel);
             Some(BigKernelGuard {
                 lock: self,
                 owner: NO_OWNER,
@@ -84,6 +101,10 @@ impl BigKernelLock {
 
     fn acquire<F: FnMut()>(&'static self, owner: usize, mut poll: F) -> BigKernelGuard {
         let ticket = self.next.fetch_add(1, Ordering::AcqRel);
+        // Count as a live holder from ticket-take (not from ticket-serve):
+        // any `is_held()` after this point sees the lock held, closing the
+        // #13 race where `next != serving` straddled a lock/unlock pair.
+        self.holders.fetch_add(1, Ordering::AcqRel);
         while self.serving.load(Ordering::Acquire) != ticket {
             if owner < MAX_HARTS {
                 self.spins[owner].fetch_add(1, Ordering::Relaxed);
@@ -125,8 +146,11 @@ impl BigKernelLock {
     }
 
     /// Whether a ticket is outstanding.
+    ///
+    /// Single atomic load of the live-guard count — no two-counter race
+    /// (issue #13).
     pub fn is_held(&self) -> bool {
-        self.next.load(Ordering::Acquire) != self.serving.load(Ordering::Acquire)
+        self.holders.load(Ordering::Acquire) != 0
     }
 }
 
@@ -147,6 +171,10 @@ impl Drop for BigKernelGuard {
             );
         }
         self.lock.serving.fetch_add(1, Ordering::Release);
+        // Release after `serving` advances so a spinner that just observed
+        // its ticket as served still sees the lock held until the critical
+        // section is fully exited.
+        self.lock.holders.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
