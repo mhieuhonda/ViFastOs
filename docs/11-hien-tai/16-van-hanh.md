@@ -424,10 +424,16 @@ Thử thêm `cd`/`pwd` + ghép cwd cho `ls` ⇒ client riscv **29184 → 33352 B
 (8 → 9 trang)**, vượt ngân sách 8 và `build.sh` chặn. Dù đã bỏ phần ghép cwd
 cho `ls`, vẫn không về 8 trang.
 
-**Kết luận**: `cd`/`pwd` **không đáng một trang** khi arena riscv chỉ còn ~7
-trang cho `exec` (một lần exec cần ~5). Muốn có `cd`/`pwd` phải **giải phóng chỗ
-trước** — hai hướng đã xác định:
-1. bỏ một tính năng nặng trong client (ví dụ `history`/`!!`), hoặc
+**Đo đánh đổi (vòng 223)** — đã thử thật thay vì đoán:
+- Bỏ `history` nhiều mục (mảng 4 mục + mũi tên ↑/↓) ⇒ riscv **29184 → 25088 B
+  (−4096, đúng 1 trang)**.
+- Thêm `cd`/`pwd` lên bản đó ⇒ riscv **29256 B = 8 trang (vừa)**, nhưng
+  **aarch64 33192 B = 9 trang (vượt 424 B)** ⇒ `build.sh` chặn.
+- Kết luận: đổi `history` ↔ `cd`/`pwd` **chưa đủ** cho aarch64; cần cắt thêm
+  **≥0.5 KB** nữa mới đủ cả ba arch.
+
+Hai hướng còn lại:
+1. bỏ `history` **và** bớt ~0.5 KB text (help/`!!`) rồi thêm `cd`/`pwd`, hoặc
 2. tăng arena/ngân sách trang ở tầng kernel (việc lớn hơn, cần đo lại toàn bộ).
 
 Trong lúc chưa làm, mọi lệnh vẫn dùng **đường dẫn tuyệt đối** — hành vi đã được

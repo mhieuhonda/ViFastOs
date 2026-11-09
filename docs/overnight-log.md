@@ -3672,3 +3672,14 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   client (`history`/`!!`), (2) tăng arena ở tầng kernel (việc lớn, phải đo lại).
 - Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs
   PASS, fmt sạch.
+
+## 9.220 — Vòng 223: ĐO đánh đổi `history` ↔ `cd`/`pwd` (chưa đủ chỗ cho aarch64)
+
+- Thay vì đoán "cd/pwd có đáng 1 trang không", tôi **đo thật**:
+  - bỏ `history` (mảng 4 mục + mũi tên ↑/↓) ⇒ riscv **29184 → 25088 B (−4096 = 1
+    trang)**;
+  - thêm `cd`/`pwd` lên bản đó ⇒ riscv **29256 B = 8 trang (vừa)**, nhưng
+    **aarch64 33192 B = 9 trang (vượt 424 B)** ⇒ `build.sh` chặn.
+- Kết luận: đổi 1-1 **chưa đủ** cho cả ba arch; cần bớt thêm **≥0.5 KB** (hoặc nới
+  arena). Đã revert, ghi số đo vào runbook **5z-2**.
+- Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS.
