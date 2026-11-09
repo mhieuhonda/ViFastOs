@@ -776,11 +776,18 @@ Tổng ba đợt soak cuối phiên: 30 (r265) + 30 (r269) + 100 (r262) — **ch
 trên 480 lần boot**, cả hai thuộc hai lớp hiếm đã ghi ở T31/T32, không có lần
 nào hỏng `FS V2 OK`.
 
-## T32 (xong) — không còn `DESTROY DIAG stuck` (r271)
+## T32 (r271 sửa → r273 HOÀN NGUYÊN) — vẫn mở
 
-Sửa đúng chỗ: `destroy_object`/`can_destroy` chấp nhận TCB `Exited` dù nó còn là
-`current` của hart idle, và **dọn luôn** tàn dư `current`; TCB `Running` vẫn bị
-từ chối. Hai host test đỏ-trước, trong đó test "đồng ý huỷ" đã được chứng minh
-ĐỎ khi tắt bản vá.
+r271: `destroy_object`/`can_destroy` nhận TCB `Exited` dù còn là `current`,
+dọn luôn tàn dư `current`; TCB `Running` vẫn bị từ chối. Hai host test
+đỏ-trước (test "đồng ý huỷ" đã chứng minh ĐỎ khi tắt bản vá). Gate 10/10, soak
+30 tại r271 = 90/90.
 
-Soak 30 tại r271: **90/90 (100%)** — không còn `DESTROY DIAG` nào.
+**Nhưng soak 100 ngay sau đó hỏng vòng 2**: x86_64 treo sau `shell> `, thiếu
+`PREEMPT OK`. Trước bản vá hai đợt soak 30 liên tiếp đều 90/90 và không có lần
+treo nào ⇒ coi là hồi quy, **r273 hoàn nguyên** phần kernel.
+
+Trạng thái: **mở**. Dữ kiện mới: dọn `current` khi destroy chạm vào đường
+scheduler của hart đang chạy, nên phải hiểu ai còn đọc `current` sau khi task
+exit trước khi sửa lại. Bài học: xanh gate + xanh soak 30 **chưa đủ**; soak 100
+mới bắt được.

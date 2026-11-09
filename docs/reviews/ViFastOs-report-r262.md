@@ -519,17 +519,28 @@ mã**. Bản đầu của tài liệu G2 khẳng định "exec không có kênh 
 đó và đang được dùng thật cho client. Việc thật cần làm chỉ là **3 dòng nối
 dây + một quyết định chính sách**.
 
-### r271 — sửa lỗi hiếm thứ hai của soak 100 (T32)
+### r271 → r273 — T32: đã sửa, rồi phải HOÀN NGUYÊN (ghi trung thực)
 
-Lỗi vòng 62 (`DESTROY DIAG stuck=4` → `BIN EXEC FAIL`) đã sửa đúng chỗ:
-`destroy_object` nay chấp nhận TCB ở trạng thái `Exited` dù nó còn là `current`
-của một hart idle (dọn luôn tàn dư `current`), còn TCB đang `Running` vẫn bị từ
-chối. Hai host test đỏ-trước; test "đồng ý huỷ" đã được chứng minh **ĐỎ** khi
-tắt bản vá.
+r271 sửa lỗi soak 100 vòng 62: `destroy_object` chấp nhận TCB `Exited` dù nó
+còn là `current` của hart idle (dọn luôn tàn dư `current`). Hai host test
+đỏ-trước, gate 10/10, soak 30 tại r271 = **90/90**.
 
-Đây cũng là ví dụ cho quy tắc của phiên: hướng đầu (nhả `current` ở đường park)
-làm chết boot cả 3 kiến trúc và đã bị hoàn nguyên; hướng đúng là sửa **tại chỗ
-huỷ**, không phải ở đường park.
+**Nhưng soak 100 trên HEAD ngay sau đó hỏng ở vòng 2**: x86_64 **treo** ngay
+sau `shell> `, thiếu đúng một marker `PREEMPT OK`. Trước bản vá, hai đợt soak
+30 liên tiếp là 90/90 và không có lần treo nào; một lần treo ở 2 vòng đầu là
+tín hiệu hồi quy, và treo thì nặng hơn hẳn triệu chứng cũ (`DESTROY DIAG`,
+vẫn boot xong). ⇒ **r273 hoàn nguyên r271** (`git checkout` phần kernel), đưa
+`current`/`destroy` về hành vi cũ.
+
+Trạng thái T32: **vẫn mở**, nhưng nay có thêm dữ kiện quan trọng — hướng "dọn
+`current` khi destroy" **chạm vào đường scheduler của hart đang chạy**, không
+phải thay đổi cục bộ. Vòng sau cần: (a) tái hiện được cảnh treo này (chạy
+soak 100 nhiều lần trên bản vá), (b) hiểu ai còn đọc `current` sau khi task
+exit (`exit_current_on`, `note_current_tcb`, đường `Sleep` → `wait_for_work`),
+rồi mới sửa lại.
+
+Bài học giữ nguyên: **một bản vá "xanh gate + xanh soak 30" vẫn có thể là hồi
+quy** — soak 100 mới đủ để bắt.
 
 ### Trạng thái cuối phiên
 
@@ -539,7 +550,7 @@ huỷ**, không phải ở đường park.
 | Kernel host test | 242 |
 | Soak 100 × 3 arch (tại r262) | 298/300 = 99,3% (không còn lỗi `FS V2 OK`) |
 | Soak 30 × 3 arch (tại r269) | 90/90 = 100% (576 s) |
-| Soak 30 × 3 arch (tại r271, sau T32) | **90/90 = 100%** (568 s) |
+| Soak 30 × 3 arch (tại r271, sau T32) | 90/90 = 100% (568 s) — nhưng sau đó soak 100 hỏng vòng 2 ⇒ r273 hoàn nguyên T32 |
 | Soak 30 × 3 arch (tại r265, sau T27) | 90/90 = 100% (657 s) |
 | Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
 | Audit P | P1-7 và P2 `AP_GDT` đóng |
@@ -551,7 +562,7 @@ huỷ**, không phải ở đường park.
 ## SHA-256
 
 ```text
-a6c2db7724d1c95378c48cafbe327f37bb7fb9392db6b938e397793a618c3d9b  docs/reviews/ViFastOs-report-r262.md
+bc557e456f53d66a252547aba9fc64d7d23f39d4e7b194ac37d07cffdfafd276  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
