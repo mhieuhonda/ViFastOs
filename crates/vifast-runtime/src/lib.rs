@@ -16,7 +16,9 @@ use vifast_kernel::console::Console;
 use vifast_kernel::fs::MAX_PATH;
 use vifast_kernel::{Cap, Kernel, StackSpec, TaskLayout, UserAction};
 
-#[cfg(feature = "test-exit")]
+#[cfg(all(feature = "test-exit", feature = "test-shell-linger"))]
+pub const TIMER_TICKS: u64 = 2000;
+#[cfg(all(feature = "test-exit", not(feature = "test-shell-linger")))]
 pub const TIMER_TICKS: u64 = 20;
 #[cfg(feature = "test-exit")]
 static TEST_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);

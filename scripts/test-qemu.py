@@ -72,6 +72,28 @@ def make_disk(name: str) -> str:
     return path
 
 
+# r254 (T17): kịch bản gõ vào shell cho `--interactive`. Mỗi cặp là
+# (lệnh gửi đi, marker PHẢI thấy trên serial sau lệnh đó). Marker phải là chuỗi
+# chỉ xuất hiện do lệnh sinh ra (D20: chờ theo sự kiện, không theo thời gian).
+INTERACTIVE_SCENARIO = [
+    # (lệnh, marker, số lần TỐI THIỂU phải thấy).
+    # - Marker luôn gồm phần shell echo ("<lệnh>\n<output>") để không khớp nhầm
+    #   với marker của self-test ở boot.
+    # - `BIN OK uname` đã xuất hiện MỘT lần ở self-test boot, nên bản tương tác
+    #   phải là lần thứ HAI (đo ở r254: nếu chỉ tìm chuỗi thì test vacuous).
+    (b"help", b"help\nhelp time echo ls", 1),
+    (b"cd /bin\rpwd", b"pwd\n/bin", 1),
+    (b"uname", b"BIN OK uname", 2),
+    (b"ps", b"BIN OK ps", 1),
+    # `!!` để CUỐI: r254 đo được nó làm shell client fault (store page fault
+    # vào vùng .text của client) nên guest chết ngay sau đó.
+    (b"history\r!!", b"!!\n!!: ", 1),
+]
+# Mỗi bước tối đa chừng này giây; tổng cửa sổ shell của guest ngắn nên giữ nhỏ.
+INTERACTIVE_STEP_TIMEOUT = 8.0
+# Tổng thời gian chờ kịch bản chạy xong trong guest.
+INTERACTIVE_TOTAL_TIMEOUT = 12.0
+
 TARGETS = {
     "riscv64": "riscv64imac-unknown-none-elf",
     "aarch64": "aarch64-unknown-none-softfloat",
@@ -111,15 +133,16 @@ def run_qemu_interactive(
     cmd_base: list[str],
     serial: str,
     timeout: int,
-) -> tuple[bool, str]:
-    """Run QEMU with a socket chardev serial so the test can type input.
+    scenario: list[tuple[bytes, bytes]],
+) -> tuple[bool, list[tuple[bytes, bytes, bool]], str]:
+    """Boot một lần, gõ CẢ kịch bản, chờ marker từng lệnh rồi mới gửi lệnh kế.
 
-    Vòng 62 (pha 4 input end-to-end): chardev socket vừa log ra file vừa cho
-    test gửi lệnh shell. Gửi `help` (output khác chữ đã gõ nên chứng minh
-    lệnh thực sự chạy) rồi gửi `\r` vài lần; yêu cầu thấy dòng help.
-    Trả về (ok, output). Không dùng cho feature_mode.
-    Lưu ý: socket đặt thẳng dưới /tmp (đường dẫn ngắn) vì giới hạn 104 ký tự
-    của AF_UNIX — TMPDIR trên macOS quá dài khiến QEMU lặng lẽ không tạo socket.
+    r254 (T17/D20): bản kernel `*-shell` (feature `test-shell-linger`) đặt
+    `TIMER_TICKS` lớn nên guest sống đủ lâu để gõ nhiều lệnh. Mỗi lệnh chỉ được
+    gửi khi đã thấy marker của lệnh trước — đồng bộ theo SỰ KIỆN, không theo
+    thời gian. Không gửi dồn: FIFO UART của guest chỉ 16 B (đo ở r254).
+
+    Trả về (ok, kết quả từng bước, serial log).
     """
     sock = f"/tmp/vifast-ial-{name}-{os.getpid()}.sock"
     if os.path.exists(serial):
@@ -131,13 +154,11 @@ def run_qemu_interactive(
             skip_next = False
             continue
         if arg == "-serial":
-            # Bỏ cả cờ lẫn giá trị; nếu giá trị là file:serial của ta.
             skip_next = True
             continue
         if arg == f"file:{serial}":
             continue
         cmd.append(arg)
-    # Chèn chardev trước -serial: QEMU parse theo thứ tự không quan trọng.
     cmd += [
         "-chardev",
         f"socket,path={sock},server=on,wait=off,logfile={serial},id=visser",
@@ -145,161 +166,78 @@ def run_qemu_interactive(
         "chardev:visser",
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    output = ""
+    results: list[tuple[bytes, bytes, bool]] = []
     try:
-        s = None
+        sock_client = None
         for _ in range(100):
             time.sleep(0.2)
             if os.path.exists(sock):
                 try:
-                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    s.settimeout(5.0)
-                    s.connect(sock)
+                    sock_client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    sock_client.settimeout(0.2)
+                    sock_client.connect(sock)
                     break
                 except OSError:
                     pass
-        if s is None:
+        if sock_client is None:
             proc.kill()
             proc.wait()
-            return False, "input: no chardev connect"
-        # Gửi lệnh NGAY sau khi kết nối: guest đệm byte UART vào RX buffer.
-        # Mốc 8 (vòng 10): gửi `echo hello-123` TRƯỚC (output khác chữ gõ,
-        # chứng minh dispatch + tách arg), rồi mới `help`. Echo trước để
-        # không bị test-exit cắt sau PREEMPT (cửa sổ sau help rất hẹp).
-        # Byte '\r' gửi riêng nhiều lần: thực tế '\n' đôi khi bị mất trên
-        # PL011 khiến dòng không bao giờ được xử lý (flaky vòng 62).
-        # KHÔNG gộp nhiều lệnh một lúc: UART FIFO cứng chỉ 16 byte.
-        # Gửi dồn một lệnh (13 byte vừa RX queue 64): cửa sổ shell→PREEMPT
-        # hẹp, gửi chậm từng byte làm guest thoát (test-exit) trước khi đọc
-        # hết. Flake mất byte giữa chừng là do tải máy, rerun là qua.
-        # r248 (T12/D14): gõ `uname` NGAY khi kết nối — lệnh không còn là
-        # builtin nên shell phải exec `/bin/uname` (hard link `/bin/vf`).
-        # Gửi trước `echo` vì cửa sổ shell hẹp và root còn nhiều Untyped.
+            return False, [], "input: no chardev connect"
+        # Gửi lệnh đầu NGAY: guest đệm byte vào RX buffer và xử lý khi shell
+        # tới lượt, nên lệnh không bị mất dù guest còn đang chạy demo boot.
         try:
-            s.sendall(b"uname\r")
+            sock_client.sendall(scenario[0][0] + b"\r")
         except OSError:
             pass
-        try:
-            s.sendall(b"echo hello-123")
-        except OSError:
-            pass
-        s.settimeout(0.3)
         buf = b""
-        t0 = time.time()
-        while time.time() - t0 < timeout and b"shell> " not in buf:
-            try:
-                buf += s.recv(65536)
-            except socket.timeout:
-                # r248: prompt có thể đã in TRƯỚC khi socket kết nối; gõ '\r'
-                # để shell in lại prompt thay vì bỏ cuộc ("no shell prompt").
+        log_pos = 0
+        for index, (command, marker, need) in enumerate(scenario):
+            deadline = time.time() + INTERACTIVE_STEP_TIMEOUT
+            found = False
+            while time.time() < deadline:
+                # r254: CHỈ đọc file log. Đọc thêm socket sẽ nhận ĐÚNG cùng
+                # luồng serial lần thứ hai và làm buf bị nhân đôi ký tự
+                # ("hheellpp"), khiến marker không bao giờ khớp (đo được).
+                time.sleep(0.02)
+                if os.path.exists(serial):
+                    with open(serial, "rb") as handle:
+                        handle.seek(log_pos)
+                        chunk = handle.read()
+                        log_pos = handle.tell()
+                    buf += chunk
+                if buf.count(marker) >= need:
+                    found = True
+                    break
+            if os.environ.get("VIFAST_INTERACTIVE_DEBUG") == "1":
+                print(f"    [dbg] {name} buf={len(buf)}B marker={marker!r} found={found}")
+                print(f"    [dbg] tail={buf[-120:]!r}")
+            results.append((command, marker, found))
+            if not found:
+                break
+            if index + 1 < len(scenario):
                 try:
-                    s.sendall(b"\r")
+                    sock_client.sendall(scenario[index + 1][0] + b"\r")
                 except OSError:
                     break
-        if b"shell> " not in buf:
-            proc.kill()
-            proc.wait()
-            return False, "input: no shell prompt"
-        marker = b"hello-123"
-        got = marker in buf
-        for _ in range(12):
-            if got:
-                break
-            try:
-                s.sendall(b"\r")
-            except OSError:
-                break
-            time.sleep(0.2)
-            t0 = time.time()
-            while time.time() - t0 < 0.3 and marker not in buf:
-                try:
-                    buf += s.recv(65536)
-                except socket.timeout:
-                    pass
-            got = marker in buf
-        if not got:
-            if os.path.exists(serial):
-                output = open(serial, "rb").read().decode("utf-8", errors="replace")
-            if "hello-123" not in output:
-                return False, output
-        # Rồi gửi `help` (output khác chữ gõ) khi shell đã rỗi — cũng gửi
-        # dồn một lần như trên.
         try:
-            s.sendall(b"help")
+            sock_client.close()
         except OSError:
             pass
-        marker = b"help time echo ls"
-        got = marker in buf
-        for _ in range(12):
-            if got:
-                break
-            try:
-                s.sendall(b"\r")
-            except OSError:
-                break
-            time.sleep(0.2)
-            t0 = time.time()
-            while time.time() - t0 < 0.3 and marker not in buf:
-                try:
-                    buf += s.recv(65536)
-                except socket.timeout:
-                    pass
-            got = marker in buf
-        # Vòng 89: exec-thật từ filesystem — `runfs` để root tạo /prog.elf
-        # từ ảnh ELF dựng sẵn rồi nạp TỪNG PAGE từ FS vào frame đích.
-        # Bắt buộc thấy `RUN FS OK` để cổng interactive chứng minh đường
-        # exec-from-FS chạy thật trên phần cứng ảo hoá.
         try:
-            s.sendall(b"runfs")
-        except OSError:
-            pass
-        marker = b"RUN FS OK"
-        got = marker in buf
-        for _ in range(20):
-            if got:
-                break
-            try:
-                s.sendall(b"\r")
-            except OSError:
-                break
-            time.sleep(0.2)
-            t0 = time.time()
-            while time.time() - t0 < 0.3 and marker not in buf:
-                try:
-                    buf += s.recv(65536)
-                except socket.timeout:
-                    pass
-        s.close()
-        # Để guest chạy tiếp cho tới khi tự thoát hoặc timeout.
-        try:
-            rc = proc.wait(timeout=timeout)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
-            rc = proc.wait()
+            proc.wait()
+        output = ""
         if os.path.exists(serial):
             output = open(serial, "rb").read().decode("utf-8", errors="replace")
-        # Bắt buộc: echo (dispatch + tách arg). Help là bonus best-effort vì
-        # cửa sổ trước test-exit chỉ đủ chắc chắn cho một lệnh.
-        if "hello-123" not in output:
-            return False, output
-        # r248: `uname` là CHẨN ĐOÁN, không phải điều kiện đỏ. Lý do (đo được):
-        # cửa sổ shell→test-exit rất hẹp, và lệnh gõ lúc prompt thường tới root
-        # khi Untyped đã cạn giữa boot ⇒ root bỏ exec (không in gì). Bằng chứng
-        # argv CỨNG đã nằm ở boot với EXACT_ONE `BIN OK args/uname/uptime`.
-        echo_at = buf.find(b"shell> uname")
-        seen = echo_at >= 0 and buf.find(b"BIN OK uname", echo_at + 5) >= 0
-        print(f"[interactive] uname qua shell: {'SAW' if seen else 'NOT SEEN'}")
-        # Lưu ý: riscv64 có flake nhận byte UART ở chế độ interactive (kể cả
-        # trước vòng 89), nên `RUN FS OK` chỉ là bonus best-effort ở đây;
-        # bằng chứng cứng của exec-from-FS nằm ở test tay QEMU + (vòng sau)
-        # test tự động không cần input.
-        return True, output
+        ok = len(results) == len(scenario) and all(found for _, _, found in results)
+        return ok, results, output
     finally:
         try:
             proc.kill()
         except OSError:
             pass
-
 
 def cleanup_disks() -> None:
     for directory in DISK_DIRS:
@@ -974,12 +912,12 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
 
 
 def test_interactive(name: str, index: int) -> bool:
-    """Boot one arch on a socket chardev and type into its shell."""
+    """Boot bản kernel `*-shell` và gõ kịch bản shell (T17)."""
     serial = os.path.join(tempfile.gettempdir(), f"vifast-{name}-ial.serial")
     disk = make_disk(f"{name}-ial")
     if name == "riscv64":
         kernel = os.path.join(
-            ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64"
+            ROOT, "target", "riscv64gc-unknown-none-elf", "release", "vifast-kernel-riscv64-shell"
         )
         cmd = [
             QEMU_RV, "-machine", "virt", "-smp", "2", "-m", "256M",
@@ -994,7 +932,7 @@ def test_interactive(name: str, index: int) -> bool:
             "-bios", "default", "-kernel", kernel,
         ]
     elif name == "aarch64":
-        kernel = os.path.join(ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64")
+        kernel = os.path.join(ROOT, "target", "aarch64-unknown-none", "release", "vifast-kernel-aarch64-shell")
         cmd = [
             QEMU_ARM, "-machine", "virt,gic-version=2", "-semihosting",
             "-cpu", "max", "-smp", "2", "-m", "256M",
@@ -1009,15 +947,18 @@ def test_interactive(name: str, index: int) -> bool:
             "-kernel", kernel,
         ]
     else:
-        # x86_64 UEFI + ESP setup phức tạp — interactive để vòng sau.
         print(f"--- {name} interactive SKIP (uefi) ---")
         return True
-    ok, output = run_qemu_interactive(name, cmd, serial, 30)
+    ok, results, output = run_qemu_interactive(name, cmd, serial, 30, INTERACTIVE_SCENARIO)
+    for command, marker, found in results:
+        print(
+            f"    [{name}] {command.decode(errors='replace'):<14} "
+            f"-> {marker.decode(errors='replace')!r}: {'OK' if found else 'MISSING'}"
+        )
     print(f"--- {name} interactive {'PASS' if ok else 'FAIL'} ---")
     if not ok:
-        print(output[-4000:])
+        print(output[-2000:])
     return ok
-
 
 def tcp_check(name: str) -> bool:
     """Boot with hostfwd + serial socket and run a TCP echo round trip.

@@ -226,6 +226,11 @@ echo "== riscv64 bare metal =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 NM="$(rustc --print sysroot)/lib/rustlib/${HOST}/bin/llvm-nm"
 KERNEL_RV=target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64
+# r254 (T17): bản kernel "shell linger" — TIMER_TICKS lớn để `--interactive`
+# kịp gõ kịch bản. Gate và soak KHÔNG dùng bản này.
+VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-shell-linger
+cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-shell
+VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 KERNEL_END="$("$NM" "$KERNEL_RV" | awk '$3 == "__kernel_end" { print "0x" $1; exit }')"
 KERNEL_END=$((KERNEL_END))
 KERNEL_LIMIT=$((0x80600000))
@@ -271,6 +276,10 @@ VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.
 echo "== aarch64 bare metal =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
 KERNEL_ARM=target/aarch64-unknown-none/release/vifast-kernel-aarch64
+# r254 (T17): biến thể shell-linger cho aarch64 (xem chú thích ở riscv64).
+VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-shell-linger
+cp "$KERNEL_ARM" target/aarch64-unknown-none/release/vifast-kernel-aarch64-shell
+VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
 # KERNEL_STORAGE is a ~560 KiB static in .data placed just before BKL.
 # If Kernel grows, reset() silently clobbers BKL/KERNEL_PTR (vòng 30 DABT).
 # Fail loudly here by measuring the real static size from the binary.

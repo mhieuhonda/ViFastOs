@@ -357,3 +357,57 @@ x86_64    99/100
 Đây là **flake đã ghi nhận từ r224**, không phải hồi quy: cùng HEAD đó gate
 3×3 PASS 9/9 ngay trước soak. Đề xuất G2: nới cửa sổ `PREEMPT OK` theo thời
 gian thực, hoặc cho demo tự chạy lại khi bị bỏ lỡ.
+
+## T17 — xác nhận shell và trang client (r254)
+
+### Builtin của client (đọc từ mã)
+
+`history`, `!!`, `pwd`, `cd <path>`, `help`, `kill`, `time`, `echo <text>`,
+`ls`, `cat`, `mkdir`, `rm`, `mv`, `ln`, `stat`, `sync`, `truncate`, `loop`,
+`runfs`, `run`, `df`, `fsck`. Mọi tên khác rơi về exec `/bin/<tên>` (multicall
+`/bin/vf`): `uname`, `uptime`, `free`, `ps`, `jobs`, `args`.
+
+### Cổng tương tác phải làm lại mới đo được gì
+
+Ba lỗi của chính harness, phát hiện lần lượt bằng số đo:
+
+1. **Đọc hai luồng serial cùng lúc** (socket + logfile của chardev) ⇒ buffer bị
+   nhân đôi ký tự (`hheellpp`), marker không bao giờ khớp. Sửa: chỉ đọc logfile,
+   socket chỉ để gửi.
+2. **Gửi dồn cả kịch bản** ⇒ tràn FIFO UART 16 B của guest, mất byte. Sửa: mỗi
+   lần một lệnh, gửi lệnh kế khi đã thấy marker của lệnh trước (D20).
+3. **Cửa sổ shell quá hẹp**: guest thoát khi hết việc, `TIMER_TICKS = 20`
+   (≈0,2 s). Một lệnh lọt, lệnh sau mất. Sửa: thêm biến thể kernel
+   `test-shell-linger` (`TIMER_TICKS = 2000`) dùng **riêng** cho `--interactive`;
+   gate và soak vẫn dùng bản chuẩn `TIMER_TICKS = 20`.
+
+### Kịch bản và kết quả (r254)
+
+| Lệnh gửi | Marker | riscv64 | aarch64 |
+|---|---|---|---|
+| `help` | `help\nhelp time echo ls` | OK | OK |
+| `cd /bin` + `pwd` | `pwd\n/bin` | OK | OK |
+| `uname` | `BIN OK uname` (lần thứ 2) | OK | OK |
+| `ps` | `BIN OK ps` | OK | OK |
+| `history` + `!!` | `!!\n!!: ` | OK | OK |
+
+- `uname`/`ps` là **hard link** tới `/bin/vf` nên bảng trên cũng chứng minh
+  argv[0] chọn đúng mode khi exec từ shell.
+- Marker của `uname` đếm **lần xuất hiện thứ hai** vì `BIN OK uname` đã in một
+  lần ở self-test boot; nếu chỉ tìm chuỗi thì test vacuous (đã đo, đã sửa).
+
+### Trang client (D17, đo lại sau thay đổi)
+
+| Arch | ELF | Trang / ngân sách | Dư | SHA-256 (16 ký tự đầu) |
+|---|---|---|---|---|
+| riscv64 | 21 008 B | 6/8 | **2** | `8974691598237990` |
+| aarch64 | 24 944 B | 7/8 | **1** | `53bb172243edb546` |
+| x86_64 | 24 968 B | 7/9 | **2** | `e26b29d13aff8f27` |
+
+### Lỗi thật phát hiện thêm (ghi lại, chưa sửa)
+
+`!!` chạy lại lệnh trước: sau khi `!!: <lệnh>` in ra, serial có
+`USER FAULT tcb=Some(ObjRef{index:57}) cause=0xf addr=0x1000007ec8` — địa chỉ
+nằm trong vùng `.text/.rodata` của **client**, không phải stack. Nghi vấn: đệ quy
+`shell_command(&owned[..len])` trong `!!` làm tràn stack client (store page
+fault). Cần dựng lại bằng test riêng trước khi sửa (D18).

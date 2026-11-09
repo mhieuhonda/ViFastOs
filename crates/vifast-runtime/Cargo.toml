@@ -11,6 +11,9 @@ license.workspace = true
 test-exit = []
 test-panic-hart1 = []
 test-skip-tlb-ipi = []
+# r254 (T17): giữ guest sống lâu hơn để `--interactive` kịp gõ kịch bản shell.
+# CHỈ dùng cho bản kernel biến thể của test tương tác; gate/soak không dùng.
+test-shell-linger = []
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }

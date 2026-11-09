@@ -10,6 +10,7 @@ test-destroy-smp = []
 default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
 test-panic-hart1 = ["vifast-runtime/test-panic-hart1"]
+test-shell-linger = ["vifast-runtime/test-shell-linger"]
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
