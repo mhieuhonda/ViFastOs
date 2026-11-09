@@ -533,6 +533,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a4727b3 r271 fix: (T32) huỷ được TCB đã Exited dù nó còn là `current` của hart idle
 - 043b478 r272 docs: ghi T32 đã sửa (r271) + ký lại báo cáo
 - 07fa3e3 r273 revert: hoàn nguyên T32 (r271) — soak 100 phát hiện hồi quy TREO
+- d741800 r273 docs: ký lại báo cáo + bảng tổng hợp sau khi hoàn nguyên T32
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -580,7 +581,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 240/240 PASS
+- `cargo test -p vifast-kernel`: 242/242 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
