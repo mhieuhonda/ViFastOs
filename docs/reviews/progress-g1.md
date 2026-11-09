@@ -281,3 +281,59 @@ không xoá một dòng mã nào. Chương trình ngoài: 8 9xx → 6 6xx B.
 trong fingerprint của nó). Lần đầu tôi đo nhầm vì artifact cũ: số đo không đổi
 dù đã sửa script. Cách đúng: `touch` một file `.rs` của crate đích (hoặc xoá
 artifact) rồi build lại.
+
+## T14 — scheduler P1 (K37–K40, K50) — DONE, nhưng khác giả định ban đầu
+
+### Cách làm
+
+Đỏ-trước: viết test host tái hiện đúng trạng thái mà audit mô tả, chạy cho đỏ,
+rồi mới sửa. Kết quả đo lại chia các mục thành **hai nhóm**, và nhóm lớn hơn
+hoá ra **không phải lỗi**.
+
+### Nhóm 1 — sửa được, có test đỏ-trước: `pick_on` không lọc trạng thái
+
+`best_in_queue` và đường "steal" chọn TCB theo `priority` + `queue_seq` mà
+**không xét `state`**. Một entry rác mang trạng thái `Suspended`/`Blocked*`
+trong runqueue vẫn được cấp CPU. Nay cả hai đường chỉ chọn `ThreadState::Ready`.
+
+- Test: `r251_pick_on_skips_non_ready_entries`.
+- Đã kiểm **mutation**: bỏ lại bộ lọc ⇒ test đỏ (`FAILED`), khôi phục ⇒ xanh.
+- Đây là phần K40 thật sự sửa được.
+
+### Nhóm 2 — chứng minh KHÔNG phải lỗi (K37, K38, K39, K50)
+
+Audit giả định "park xong mà `current` chưa được dọn" là lỗi. Đọc mã + đo cho
+thấy ngược lại: `switch_blocked` **đọc `current[hart]` để lưu context user**
+trước khi `pick_on` thay nó. Dọn `current` ngay lúc park sẽ **mất thanh ghi
+người dùng** của task vừa bị chặn.
+
+Bất biến đúng đã tồn tại sẵn trong `check_invariants`: `current[hart]` chỉ được
+là `Running` hoặc `Suspended`, và không `queued`. Cửa sổ park→switch nằm trọn
+trong một syscall nên không quan sát được từ ngoài.
+
+- Test: `r251_parked_task_leaves_current_after_switch` (sau cú switch: task đã
+  park không còn là `current`, không `queued`, giữ `wake_at`).
+
+### Phần K40 "ghi đè `current`" — bị dữ liệu bác bỏ
+
+Đã thử thêm bất biến mạnh: *TCB `Running` phải là `current` của một hart*. Kết
+quả: **3 test sẵn có đỏ ngay** — `selftest_passes`,
+`per_hart_runqueue_serves_hart2_and_hart3`,
+`round69_steal_respects_affinity_and_counts_stats`. Tức kernel hợp lệ **có**
+TCB `Running` mà không hart nào giữ `current`.
+
+Đã thử cả cách "sửa" bằng tự chữa: `pick_on` hạ TCB `Running` mồ côi xuống
+`Ready` rồi `enqueue`. Kết quả: **treo vô hạn** — nhiều test duyệt runqueue
+bằng vòng `while pick_on() …`; tự enqueue lại làm hàng đợi không bao giờ cạn.
+Đã bỏ hướng này.
+
+⇒ Ghi nhận bằng test `r251_running_without_current_is_a_valid_state` để lần sau
+không ai thêm lại bất biến đó, và để lại đúng lý do trong bảng audit.
+
+### Ảnh hưởng
+
+- `docs/audits/open-items.md`: **39 CLOSED · 3 UNREACHABLE · 4 OPEN**
+  (còn K42, K45, K46, K60) — trước vòng này là 34/3/9.
+- `check_invariants` **không** thêm ràng buộc mới (đã chứng minh ràng buộc
+  tưởng đúng là sai). Giá trị của vòng này nằm ở chỗ **đóng được 5 mục audit
+  bằng bằng chứng**, không phải bằng cách nới lỏng.

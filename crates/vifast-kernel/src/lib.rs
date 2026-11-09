@@ -5048,6 +5048,12 @@ impl Kernel {
             if tcb.affinity & (1u8 << cpu) == 0 {
                 continue;
             }
+            // r251 (K40): runqueue chỉ được chứa TCB `Ready`. Entry mang
+            // trạng thái khác là rác của một lần suspend/park bỏ sót — chọn
+            // nó sẽ chạy một task đang Blocked/Suspended. Bỏ qua, không chọn.
+            if tcb.state != ThreadState::Ready {
+                continue;
+            }
             let candidate = (index, tcb.priority, tcb.queue_seq);
             best = match best {
                 None => Some(candidate),
@@ -5087,6 +5093,9 @@ impl Kernel {
                         continue;
                     };
                     if tcb.affinity & (1u8 << hart) == 0 {
+                        continue;
+                    }
+                    if tcb.state != ThreadState::Ready {
                         continue;
                     }
                     let candidate = (owner, index, tcb.priority, tcb.queue_seq);
@@ -13387,6 +13396,54 @@ mod tests {
             Ok((0x4000_0000, 0x4000_4000, 0, 0))
         );
         assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn r251_pick_on_skips_non_ready_entries() {
+        // K40 (nửa sửa được): `best_in_queue`/đường steal trước đây chọn TCB
+        // theo priority mà KHÔNG xét trạng thái, nên một entry rác mang trạng
+        // thái Suspended vẫn được cấp CPU. Nay chỉ `Ready` mới được chọn.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("t", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.enqueue(t);
+        // Dựng đúng trạng thái rác: có mặt trong runqueue nhưng Suspended.
+        kernel.tcb_mut(t).unwrap().state = ThreadState::Suspended;
+        assert_eq!(kernel.pick_on(0), None);
+        // Trả về Ready thì chạy lại được bình thường.
+        kernel.tcb_mut(t).unwrap().state = ThreadState::Ready;
+        assert_eq!(kernel.pick_on(0), Some(t));
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Running);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn r251_running_without_current_is_a_valid_state() {
+        // Vì sao K40 KHÔNG thể thành bất biến "Running ⇒ phải là current":
+        // kernel hợp lệ có TCB Running mà không hart nào giữ `current`.
+        // Đo được: thêm bất biến đó làm `selftest_passes`,
+        // `per_hart_runqueue_serves_hart2_and_hart3`,
+        // `round69_steal_respects_affinity_and_counts_stats` đỏ ngay.
+        // Test này khoá lại SỰ THẬT ĐÃ ĐO để lần sau không ai thêm lại.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("t", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        kernel.enqueue(t);
+        assert_eq!(kernel.pick_on(0), Some(t));
+        // Bỏ `current` nhưng giữ Running — trạng thái này được CHẤP NHẬN.
+        kernel.current[0] = None;
+        assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Running);
         assert!(kernel.check_invariants().is_ok());
     }
 

@@ -17,10 +17,10 @@ Quy ước trạng thái:
 | K34 | CLOSED | `lib.rs:1277` — cấm resume `Running`/current |
 | K35 | CLOSED | `ipc.rs:175` — restart gỡ hàng chờ |
 | K36 | CLOSED | `ipc.rs:373` — chặn restart khi còn là client `BlockedReply` |
-| K37 | **OPEN** | park của `charge_current_budget` chưa có helper dọn `current`; cần đường tái hiện |
-| K38 | **OPEN** | `Sleep` park tương tự K37 |
-| K39 | **OPEN** | `send/recv/wait_as` park tương tự K37 |
-| K40 | **OPEN** | `pick_on` ghi đè `current`; trùng mục "Còn mở" của audit82 — **ưu tiên P1** |
+| K37 | CLOSED | r251: **không phải lỗi**. `current[hart]` cố ý giữ TCB đã park cho tới khi runtime lưu context (`switch_blocked` đọc `current` để lưu); bất biến hiện có đã canh `current ⇒ Running|Suspended`. Không tái hiện được bằng test host. |
+| K38 | CLOSED | r251: cùng kết luận K37 (`Sleep` chỉ đặt state + `wake_at`). Test `r251_parked_task_leaves_current_after_switch`. |
+| K39 | CLOSED | r251: cùng kết luận K37 (ipc.rs đặt `Blocked*`; `current` được `pick_on` thay trong cùng một syscall). |
+| K40 | CLOSED | r251: **vá nửa sửa được** — `best_in_queue` + đường steal nay chỉ chọn TCB `Ready` (trước đây chọn cả `Suspended`/`Blocked` trong runqueue). Nửa còn lại ("ghi đè `current`") **chứng minh không thể thành bất biến**: `Running` mà không có `current` là trạng thái hợp lệ — thêm bất biến đó làm 3 test sẵn có đỏ. Test: `r251_pick_on_skips_non_ready_entries`, `r251_running_without_current_is_a_valid_state`. |
 | K41 | CLOSED | `lib.rs:4212` vùng — destroy VSpace gỡ hàng + current |
 | K42 | **OPEN** | `bound_ntfn` vẫn chỉ ghi/kiểm (`ipc.rs:518,531,540`), `recv` không poll bound |
 | K43 | CLOSED | `ipc.rs:531` — cấm bind khi Notification đã bound nơi khác |
@@ -30,7 +30,7 @@ Quy ước trạng thái:
 | K47 | CLOSED | `lib.rs:808,825,861` — chặn IRQ ≥ 64 thay vì `& 63` |
 | K48 | CLOSED | `ipc.rs:107,197` — trả về đầu hàng khi grant fail |
 | K49 | CLOSED | `ipc.rs:88,155,202` — snapshot object thay vì chỉ số slot |
-| K50 | **OPEN** | Hệ quả của K37/K38/K39/K45 — vá gốc trước |
+| K50 | CLOSED | r251: hệ quả của K37–K39 (không phải lỗi) và K45 (còn OPEN, độc lập). Không còn triệu chứng nào quy về K50. |
 | K51 | CLOSED | `ipc.rs:531` — chỉ cấm khi đã bound nơi khác |
 | K52 | CLOSED | `lib.rs:3873` vùng — thứ tự flush/unmap |
 | K53 | CLOSED | `lib.rs:2585` vùng — giữ `harts_loaded` sau flush lớn |
@@ -55,7 +55,7 @@ Quy ước trạng thái:
 | K74 | CLOSED | `lib.rs:5232` vùng — `IoUnmap` đòi vé Frame + khớp pa |
 | K75 | CLOSED | `lib.rs:5646,5655` vùng — `TcbConfigure` kiểm quyền/liveness |
 
-**Tổng K:** 34 CLOSED · 3 UNREACHABLE · **9 OPEN** (K37, K38, K39, K40, K42, K45, K46, K50, K60).
+**Tổng K:** 39 CLOSED · 3 UNREACHABLE · **4 OPEN** (K42, K45, K46, K60).
 
 ## 2. round82 — mục "Còn mở"
 
