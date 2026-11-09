@@ -235,10 +235,19 @@ BKL_ADDR="$("$NM" "$KERNEL_ARM" | awk '$3 ~ /platform3BKL$/ { print "0x" $1; exi
 KS_ADDR=$(( ${KS_INFO%% *} ))
 KS_SIZE=$(( ${KS_INFO##* } ))
 BKL_ADDR=$((BKL_ADDR))
-GAP=$((BKL_ADDR - (KS_ADDR + KS_SIZE)))
-echo "AArch64 static check storage=${KS_ADDR}+${KS_SIZE} end=$((KS_ADDR + KS_SIZE)) bkl=${BKL_ADDR} gap=${GAP}"
+# r229 (T4): `KERNEL_STORAGE` là struct gồm Kernel + vùng đệm 4 KiB, nên khe
+# thật giữa Kernel và static kế tiếp = BKL - (storage + size - guard).
+KS_GUARD=4096
+GAP=$((BKL_ADDR - (KS_ADDR + KS_SIZE - KS_GUARD)))
+echo "AArch64 static check storage=${KS_ADDR}+${KS_SIZE} (Kernel=$((KS_SIZE - KS_GUARD)) + guard=${KS_GUARD}) bkl=${BKL_ADDR} gap=${GAP}"
+if (( KS_SIZE < KS_GUARD + 1024 )); then
+    echo "AArch64 KERNEL STORAGE THIẾU GUARD: size=${KS_SIZE} < guard+1K" >&2
+    exit 1
+fi
 if (( GAP < 4096 )); then
-    echo "AArch64 KERNEL STATIC GAP WARNING: only ${GAP} bytes before BKL" >&2
+    echo "AArch64 KERNEL STATIC GAP FAIL: chỉ ${GAP} byte trước BKL (yêu cầu >= 4096)." >&2
+    echo "Bảo vệ: vùng đệm .data.kernel_storage_guard phải nằm ngay sau KERNEL_STORAGE." >&2
+    exit 1
 fi
 if (( KS_ADDR + KS_SIZE >= BKL_ADDR )); then
     echo "AArch64 KERNEL STATIC OVERFLOW: storage end past BKL" >&2

@@ -221,6 +221,12 @@ pub trait Platform: Arch + Console {
         None
     }
     /// Boot-stack high-water mark from the 0xA5 paint, `(used, size)`.
+    /// r229 (T4): canary vùng đệm sau `KERNEL_STORAGE`.
+    /// `Some(true)` = còn nguyên, `Some(false)` = đã bị ghi đè.
+    fn kernel_storage_canary() -> Option<bool> {
+        None
+    }
+
     fn boot_stack_usage() -> Option<(usize, usize)> {
         None
     }
@@ -1537,6 +1543,14 @@ pub mod timer {
                 }
                 if let Some((used, size)) = A::boot_stack_usage() {
                     vifast_kernel::klog!(A, "BOOT STACK used={} size={}", used, size);
+                }
+                // r229 (T4): canary vùng đệm sau KERNEL_STORAGE. Marker bắt buộc
+                // exact-one khi còn nguyên; "KSTORE CANARY BAD" nằm trong
+                // FORBIDDEN nên chỉ cần xuất hiện là gate đỏ.
+                match A::kernel_storage_canary() {
+                    Some(true) => vifast_kernel::klog!(A, "KSTORE CANARY OK"),
+                    Some(false) => vifast_kernel::klog!(A, "KSTORE CANARY BAD"),
+                    None => {}
                 }
             }
             A::exit(0);

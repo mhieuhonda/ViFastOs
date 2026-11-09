@@ -309,6 +309,25 @@ def main() -> int:
         if spec.accept(arch, destroy_base, rc):
             failures.append(f"{arch}: normal run accepted destroy-smp marker")
 
+    # r226 (T1/D11): marker `NET TCP ECHO OK` có điều kiện tiên quyết là harness
+    # PHẢI có TcpProbeListener. Bốn tổ hợp dưới đây khóa đúng hành vi: thiếu
+    # listener thì SKIP (không FAIL giả), có listener mà thiếu marker thì FAIL.
+    echo_cases = [
+        (False, "", True, "skip", "feature-mode không listener, không marker"),
+        (False, "NET TCP ECHO OK\n", True, "skip", "feature-mode không listener, có marker"),
+        (True, "", False, "fail", "có listener nhưng thiếu marker"),
+        (True, "NET TCP ECHO OK\n", True, "ok", "có listener và có marker"),
+    ]
+    for listener, output, want_ok, label, desc in echo_cases:
+        cases += 1
+        ok, message = spec.tcp_echo_verdict(listener, output)
+        if ok != want_ok:
+            failures.append(f"tcp-echo: {desc} -> ok={ok}, cần {want_ok}")
+        if label == "skip" and "SKIP" not in message:
+            failures.append(f"tcp-echo: {desc} -> thông điệp thiếu SKIP: {message}")
+        if label == "fail" and not message.startswith("FAIL"):
+            failures.append(f"tcp-echo: {desc} -> thông điệp không phải FAIL: {message}")
+
     if failures:
         print("harness negative tests FAILED:")
         for failure in failures:

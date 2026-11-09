@@ -920,12 +920,43 @@ unsafe fn build_kernel_page_tables() {
 
 static PAGE_OPS: PageOps = PageOps;
 
-struct KernelStorage(core::cell::UnsafeCell<Kernel>);
+struct KernelStorage(
+    core::cell::UnsafeCell<Kernel>,
+    core::cell::UnsafeCell<[u8; KSTORE_GUARD_SIZE]>,
+);
+/// r229 (T4): vùng đệm 4 KiB nằm NGAY SAU `Kernel` trong cùng một struct,
+/// nên không phụ thuộc thứ tự sắp xếp section của linker (lld xếp theo
+/// input order, đã thử đổi tên section/static đều không điều khiển được).
+/// Nếu `Kernel` phình ra ghi đè vùng này thì canary phát hiện được thay vì
+/// âm thầm phá `BKL` (trước đây chỉ còn 8 byte trước BKL).
+const KSTORE_GUARD_SIZE: usize = 4096;
 // Safety: the single boot hart initializes it before any secondary hart starts;
 // all later access is serialized by the BKL.
 unsafe impl Sync for KernelStorage {}
-static KERNEL_STORAGE: KernelStorage =
-    KernelStorage(core::cell::UnsafeCell::new(Kernel::new_const()));
+static KERNEL_STORAGE: KernelStorage = KernelStorage(
+    core::cell::UnsafeCell::new(Kernel::new_const()),
+    core::cell::UnsafeCell::new([0x5A; KSTORE_GUARD_SIZE]),
+);
+
+// r229 (T4, D11): canary cho vùng đệm ngay sau `KERNEL_STORAGE`.
+// Nếu Kernel phình ra ghi đè vùng này thì phát hiện được thay vì âm thầm phá
+// static kế tiếp (AArch64 từng chỉ còn 8 byte trước BKL).
+const KSTORE_CANARY: u64 = 0x4B53_544F_5245_4F4B;
+
+fn kstore_canary_write() {
+    unsafe {
+        let p = KERNEL_STORAGE.1.get() as *mut u8;
+        core::ptr::write_volatile(p as *mut u64, KSTORE_CANARY);
+    }
+}
+
+fn kstore_canary_ok() -> bool {
+    unsafe {
+        let p = KERNEL_STORAGE.1.get() as *const u8;
+        core::ptr::read_volatile(p as *const u64) == KSTORE_CANARY
+            && core::ptr::read_volatile(p.add(KSTORE_GUARD_SIZE - 1)) == 0x5A
+    }
+}
 
 /// TCP echo server thường trú (vòng 79): trạng thái nằm trong static, được
 /// bơm từ IRQ timer nên phục vụ bất kỳ lúc nào guest còn sống, không cần cửa
@@ -1064,6 +1095,7 @@ impl Platform for Aarch64Platform {
     const ELF_MACHINE: u16 = vifast_pte::aarch64::ELF_MACHINE;
 
     fn init_platform(info: PlatformInfo) {
+        kstore_canary_write();
         unsafe {
             build_kernel_page_tables();
             init_cpu(info.hartid);
@@ -1365,6 +1397,10 @@ impl Platform for Aarch64Platform {
 
     fn tlb_stats() -> Option<(usize, usize, usize)> {
         Some((TLB_VA_FLUSH.load(Ordering::Relaxed), 0, 0))
+    }
+
+    fn kernel_storage_canary() -> Option<bool> {
+        Some(kstore_canary_ok())
     }
 
     fn boot_stack_usage() -> Option<(usize, usize)> {

@@ -467,6 +467,15 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 01296c4 sua loi (vong 221): diag.sh khong con bao dong sai (ngan sach + arena)
 - a4a0480 tai lieu (vong 222): thu cd/pwd — cham tran ngan sach, da revert
 - b263450 tai lieu: cap nhat tom tat kien truc sau vong 222
+- ecebbc6 tai lieu (vong 223): do danh doi history <-> cd/pwd (chua du cho aarch64)
+- 5cd8df3 web: đăng nhập quản trị bằng form + thống kê truy cập
+- 5b9fa3a admin: dải «← Về trang chủ · Đăng xuất», chuẩn hoá cột ngôn ngữ
+- 5150d0c admin: khung giao diện chung + chuyển nhanh giữa 4 trang admin
+- 662ab75 r226 fix: check TCP echo chi khi co listener, feature-mode in SKIP
+- 75f8109 r227 fix: (T2) to 0xA5 boot stack trong boot_handoff.S + chan doan gate trung thuc
+- 394155c r228 fix: (T3) mutation TLB tren riscv64 gio phat hien duoc
+- 77f5123 r228b fix: tach hanh vi TLB theo arch — aarch64 giu nguyen, RV/x86 dung handshake
+- 0a72abf r229 feat: (T4) khe tinh AArch64 8 -> 4104 byte + canary 3 arch
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -525,7 +534,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 2283888 byte (`kernel_end=0x803d2690`)
+- RISC-V headroom: 2279792 byte (`kernel_end=0x803d3690`)
 - `Kernel = 551328`, `Object = 3192`, `Tcb = 1632`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
@@ -1615,6 +1624,7 @@ QEMU test:
 - `PAGER SRV 0/0/0` — pager server was reclaimed (tcb, stack frame, ipc frame destroyed)
 
 Mỗi dòng sau đúng một lần:
+- `KSTORE CANARY OK` — exactly once
 - `VFS SERVER OK` — exactly once
 - `VFS OK` — exactly once
 - `VFS STAT OK` — exactly once
@@ -1642,6 +1652,7 @@ Mỗi dòng sau đúng một lần:
 - `DESTROY OK` — exactly once
 
 Cấm xuất hiện:
+- `KSTORE CANARY BAD` — forbidden
 - `PERCPU CLOBBER BAD` — forbidden
 - `VFS BAD` — forbidden
 - `ROOT PANIC` — forbidden

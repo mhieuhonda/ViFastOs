@@ -518,11 +518,34 @@ pub extern "C" fn smp_worker_d() -> ! {
     let mut next_ready = start;
     let mut a_seen = 0u64;
     let mut seen_new = false;
-    let done_at;
+    let mut stale_after = 0u64;
+    let mut done_at = 0u64;
     loop {
         let now = vifast_user::get_time().value;
-        // Continuous polling while root performs the unmap/remap.  Do not
-        // block or switch root: the stale TLB entry must be observable.
+        // r228 (T3): RV/x86 chỉ kết luận SAU khi root báo "đã remap xong" qua
+        // trang cờ chia sẻ (word thứ hai — word 0 worker C dùng cho cửa sổ
+        // suspend). Trước đây D chỉ cần thấy TLB_B một lần là OK, nên một lần
+        // flush toàn bộ muộn (hart 1 đổi root) xoá mất entry cũ và che mất đột
+        // biến skip-IPI — test trở nên vô nghĩa trên RV.
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            if unsafe { core::ptr::read_volatile((SUSPEND_FLAG_VA + 8) as *const u64) } != 0 {
+                let mut i = 0u64;
+                let mut stale = 0u64;
+                // Đọc ngay trong cửa sổ hẹp: nếu IPI bị bỏ, entry cũ phải còn.
+                while i < 8 {
+                    let value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
+                    if value == TLB_A {
+                        stale = stale.saturating_add(1);
+                    }
+                    i += 1;
+                }
+                stale_after = stale;
+                seen_new = stale == 0;
+                done_at = now;
+                break;
+            }
+        }
         let value = unsafe { core::ptr::read_volatile(TLB_TEST_VA as *const u64) };
         if value == TLB_A {
             a_seen = a_seen.saturating_add(1);
@@ -531,10 +554,17 @@ pub extern "C" fn smp_worker_d() -> ! {
                 next_ready = now.saturating_add(5);
             }
         }
-        if value == TLB_B {
-            seen_new = true;
-            done_at = now;
-            break;
+        // aarch64 giữ NGUYÊN hành vi trước r228: platform không dùng IPI cho
+        // flush (harness đòi `tlb_ipi == 0`) nên entry cũ được dọn theo cơ chế
+        // riêng, có thể trễ vài tick. Áp cửa sổ hẹp như RV sẽ báo stale GIẢ.
+        #[cfg(target_arch = "aarch64")]
+        {
+            if value == TLB_B {
+                seen_new = true;
+                stale_after = 0;
+                done_at = now;
+                break;
+            }
         }
         if now >= start.saturating_add(50) {
             done_at = now;
@@ -545,7 +575,7 @@ pub extern "C" fn smp_worker_d() -> ! {
         1,
         WORKER_LABEL_D_DONE,
         seen_new as u64,
-        a_seen,
+        stale_after,
         done_at.saturating_sub(start),
     );
     let _ = vifast_user::wait(2);
@@ -3639,6 +3669,18 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         Rights::READ.0,
                     ));
                     tlb_remapped = true;
+                    // r228 (T3): báo "remap xong" để D kết luận đúng thời điểm.
+                    // Không có cờ này, D thấy TLB_B muộn (sau khi hart 1 đổi
+                    // root và bị flush toàn bộ) cũng báo OK — che mất đột biến.
+                    // Word thứ hai của trang cờ: word 0 worker C dùng cho cửa sổ
+                    // suspend, ghi đè lên đó sẽ đánh thức C sai thời điểm (r228).
+                    let one = 1u64;
+                    check(vifast_user::frame_write(
+                        suspend_flag_frame,
+                        8,
+                        &one as *const u64 as u64,
+                        8,
+                    ));
                 }
             } else if message.label == WORKER_LABEL_D_DONE {
                 if !tlb_done {
@@ -3656,7 +3698,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                                 break;
                             }
                         }
-                        let _ = vifast_user::debug_write(b"TLB A SEEN (count=".as_ptr() as u64, 18);
+                        let _ = vifast_user::debug_write(
+                            b"TLB STALE AFTER (n=".as_ptr() as u64,
+                            b"TLB STALE AFTER (n=".len() as u64,
+                        );
                         let _ = vifast_user::debug_write(
                             digits[at..].as_ptr() as u64,
                             (digits.len() - at) as u64,

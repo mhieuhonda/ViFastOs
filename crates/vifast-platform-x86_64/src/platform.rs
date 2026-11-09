@@ -2243,6 +2243,28 @@ static PAGE_OPS: PageOps = PageOps;
 
 static mut KERNEL_STORAGE: Kernel = Kernel::new_const();
 
+// r229 (T4, D11): canary cho vùng đệm ngay sau `KERNEL_STORAGE`.
+// Nếu Kernel phình ra ghi đè vùng này thì phát hiện được thay vì âm thầm phá
+// static kế tiếp (AArch64 từng chỉ còn 8 byte trước BKL).
+#[link_section = ".data.kernel_storage_guard"]
+static mut KSTORE_GUARD: [u8; 4096] = [0x5A; 4096];
+const KSTORE_CANARY: u64 = 0x4B53_544F_5245_4F4B;
+
+fn kstore_canary_write() {
+    unsafe {
+        let p = core::ptr::addr_of_mut!(KSTORE_GUARD) as *mut u8;
+        core::ptr::write_volatile(p as *mut u64, KSTORE_CANARY);
+    }
+}
+
+fn kstore_canary_ok() -> bool {
+    unsafe {
+        let p = core::ptr::addr_of!(KSTORE_GUARD) as *const u8;
+        core::ptr::read_volatile(p as *const u64) == KSTORE_CANARY
+            && core::ptr::read_volatile(p.add(4095)) == 0x5A
+    }
+}
+
 impl Platform for X86Platform {
     /// Vòng 161: bật thu hồi trang staging. Lần thử trước in `SYS REJECT BAD`
     /// nhưng nguyên nhân thật là phép thử dùng slot 63 (đã dùng hợp lệ) — sửa
@@ -2258,6 +2280,7 @@ impl Platform for X86Platform {
     const ELF_MACHINE: u16 = vifast_pte::x86_64::ELF_MACHINE;
 
     fn init_platform(info: PlatformInfo) {
+        kstore_canary_write();
         unsafe {
             init_acpi(info.acpi_rsdp);
             AP_TRAMPOLINE = info.ap_trampoline;
@@ -2776,6 +2799,10 @@ impl Platform for X86Platform {
             TLB_IPI_SENT.load(Ordering::Relaxed),
             TLB_IPI_SKIPPED.load(Ordering::Relaxed),
         ))
+    }
+
+    fn kernel_storage_canary() -> Option<bool> {
+        Some(kstore_canary_ok())
     }
 
     fn boot_stack_usage() -> Option<(usize, usize)> {
