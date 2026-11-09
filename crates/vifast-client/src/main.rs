@@ -1496,3 +1496,61 @@ fn panic(_info: &PanicInfo) -> ! {
         vifast_user::yield_now();
     }
 }
+
+// r255 (T18): aarch64 kéo `memmove` (576 B) + `memset` (284 B) từ
+// compiler_builtins — đúng bằng phần chênh so với riscv64 (861 B), và chính
+// phần đó đẩy client aarch64 sang trang thứ 7. Cung cấp bản byte-loop tại chỗ
+// để linker khỏi kéo builtin tổng quát; shell chỉ cần ngữ nghĩa cơ bản.
+use core::ffi::c_void;
+
+#[no_mangle]
+pub unsafe extern "C" fn memset(dest: *mut c_void, value: i32, count: usize) -> *mut c_void {
+    let byte = value as u8;
+    let base = dest.cast::<u8>();
+    let mut i = 0usize;
+    while i < count {
+        core::ptr::write_volatile(base.add(i), byte);
+        i += 1;
+    }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memcpy(
+    dest: *mut c_void,
+    src: *const c_void,
+    count: usize,
+) -> *mut c_void {
+    let out = dest.cast::<u8>();
+    let input = src.cast::<u8>();
+    let mut i = 0usize;
+    while i < count {
+        core::ptr::write_volatile(out.add(i), core::ptr::read_volatile(input.add(i)));
+        i += 1;
+    }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memmove(
+    dest: *mut c_void,
+    src: *const c_void,
+    count: usize,
+) -> *mut c_void {
+    let out = dest.cast::<u8>();
+    let input = src.cast::<u8>();
+    if (dest as usize) <= (src as usize) {
+        let mut i = 0usize;
+        while i < count {
+            core::ptr::write_volatile(out.add(i), core::ptr::read_volatile(input.add(i)));
+            i += 1;
+        }
+    } else {
+        let mut i = count;
+        while i > 0 {
+            i -= 1;
+            core::ptr::write_volatile(out.add(i), core::ptr::read_volatile(input.add(i)));
+        }
+    }
+    dest
+}

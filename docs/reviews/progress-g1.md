@@ -411,3 +411,44 @@ Ba lỗi của chính harness, phát hiện lần lượt bằng số đo:
 nằm trong vùng `.text/.rodata` của **client**, không phải stack. Nghi vấn: đệ quy
 `shell_command(&owned[..len])` trong `!!` làm tràn stack client (store page
 fault). Cần dựng lại bằng test riêng trước khi sửa (D18).
+
+## T18 — aarch64 lên dư 2 trang (r255) — DONE
+
+### Chẩn đoán bằng số đo (D17)
+
+`nm --size-sort -S` trên client aarch64 so với riscv64:
+
+| Symbol | aarch64 | riscv64 |
+|---|---|---|
+| `memmove` (compiler_builtins) | 0x240 = **576 B** | 0x38e (khác nguồn) |
+| `memset` | 0x11c = **284 B** | 0x72 |
+| `memcpy` | 0x110 = 272 B | 0x1b0 |
+| `client_main` | 0x17cc | 0x160e |
+
+`.text` aarch64 = 0x4383 (17 283 B), riscv64 = 0x4026 (16 422 B) — chênh
+**861 B**, và `memmove + memset` = 860 B. Tức toàn bộ phần chênh đúng bằng hai
+hàm builtin mà aarch64 kéo vào.
+
+Vì sao 861 B lại thành 1 trang: file aarch64 = header + segment R-X (0x4383,
+kết thúc 0x5383) + segment RW đặt ở 0x6000 ⇒ 24 944 B = 7 trang. Muốn còn 6
+trang thì R-X phải kết thúc ≤ 0x5000, tức cắt ≥ 900 B.
+
+### Cách làm
+
+Cung cấp `memset`/`memcpy`/`memmove` bản byte-loop ngay trong client
+(`#[no_mangle] extern "C"` với đúng chữ ký `*mut c_void`) để linker không kéo
+bản tổng quát của compiler_builtins. Shell chỉ dùng các phép copy nhỏ trong
+buffer 32–256 B nên bản byte-loop là đủ và nhỏ hơn nhiều.
+
+Đã thử trước đó và **không** có tác dụng: `--icf=all` (0 byte).
+
+### Kết quả (D17, tái lập được)
+
+| Arch | Trước T18 | Sau T18 | Dư trang |
+|---|---|---|---|
+| riscv64 | 21 008 = 6/8 | 21 008 = 6/8 | **2** |
+| aarch64 | 24 944 = **7/8** | **20 848 = 6/8** | **2** |
+| x86_64 | 24 968 = 7/9 | 24 968 = 7/9 | **2** |
+
+⇒ Tiêu chí G1 "client dư ≥ 2 / ≥ 1 / ≥ 2" nay đạt **2 / 2 / 2**.
+Gate full PASS 9/9 (log `/tmp/gate-r255.log`).

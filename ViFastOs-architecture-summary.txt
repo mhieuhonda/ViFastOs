@@ -513,6 +513,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - af5b087 r253 docs: (T16) báo cáo G1 phần còn lại r246..r253 + soak 100×3
 - f1e88f7 r253 docs: SHA của báo cáo G1 tái lập được (băm tới dấu <!-- SHA-256 -->)
 - e3b2399 r253 docs: báo cáo G1 chỉ còn MỘT khối SHA-256 và hash kiểm lại được
+- 2ee9c8b r254 feat: (T17) cổng interactive thật + xác nhận shell và trang client
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
