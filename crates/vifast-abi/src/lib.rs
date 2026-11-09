@@ -1058,6 +1058,14 @@ pub enum SyscallId {
     /// D15 (r246): đặt argc/argv cho TCB đã configure nhưng chưa resume.
     /// a0 = slot TCB, a1 = argc (≤ 8), a2 = con trỏ mảng argv.
     TcbSetArgs = 56,
+    /// r264 (T27, G2 Phần B): uỷ quyền một capability sang cspace của TCB
+    /// khác — đường mà `exec` đang thiếu, khiến mọi lệnh cần VFS (`df`) phải
+    /// nằm lại trong shell.
+    ///
+    /// a0 = slot cap tới TCB đích (caller phải có WRITE), a1 = slot nguồn
+    /// trong cspace của caller, a2 = slot đích trong cspace của TCB đích,
+    /// a3 = mask quyền mong muốn (0 = giữ nguyên trừ GRANT).
+    TcbGrantCap = 57,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -1121,6 +1129,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::TimerInfo, true),
     (SyscallId::ModuleRelease, true),
     (SyscallId::TcbSetArgs, true),
+    (SyscallId::TcbGrantCap, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode

@@ -687,3 +687,42 @@ iterations: 100, elapsed: 1923.6s
 
 Tiêu chí G1: mỗi arch ≥99% **đạt** (99,0 / 100 / 99,0) nhưng riscv64 và x86_64
 sát sàn; không có timeout nào trong 300 lần boot.
+
+## T27 (một phần) — `TcbGrantCap`: uỷ quyền cap cho exec (r264)
+
+Đây là **đường mà exec đang thiếu** (G2 Phần B): `spawn_elf_copy` không cài cap
+nào vào cspace của chương trình con, nên mọi lệnh cần VFS (`df`) phải ở lại
+trong shell.
+
+Đã thêm `SyscallId::TcbGrantCap = 57` + `Kernel::grant_cap_to_tcb` + wrapper
+`vifast_user::tcb_grant_cap`, với 6 host test khoá từng ràng buộc:
+
+| Ràng buộc | Test |
+|---|---|
+| caller phải có WRITE trên TCB đích | `grant_cap_syscall_requires_write_on_the_target_tcb` |
+| slot đích phải trống | `grant_cap_rejects_occupied_destination` |
+| quyền bị thu hẹp, không bao giờ GRANT | `grant_cap_strips_grant_right` (đã chứng minh **đỏ** khi bỏ clamp) |
+| badge giữ nguyên từ cap nguồn | `grant_cap_keeps_the_source_badge` |
+| không chuyển Untyped gốc | `grant_cap_cannot_hand_out_the_root_untyped` |
+| derive: caller không mất cap | `grant_cap_installs_a_derived_cap_in_the_target_cspace` |
+
+Kernel host test: 236 → **242** (240 chạy + 2 fuzz `#[ignore]`).
+
+**Chưa làm**: nối vào `exec` rồi chuyển `df` ra applet — cần chốt chính sách
+badge (con thừa hưởng badge của shell hay của root) trước, vì badge là `uid`
+mà FS server dùng để kiểm quyền file.
+
+## Thí nghiệm T32 (thất bại, đã hoàn nguyên) — ghi để vòng sau khỏi lặp
+
+Định sửa `DESTROY DIAG stuck` (soak 100 vòng 62) bằng cách nhả `current[hart]`
+khi hart park (`Kernel::clear_current` + gọi trong `switch_blocked`/
+`resume_blocked` khi `pick_on` trả None). **Kết quả: boot chết cả 3 arch**
+(timeout, thiếu 37 marker) ⇒ đã `git checkout` hoàn nguyên toàn bộ, build lại,
+boot 3/3 PASS.
+
+Suy đoán vì sao sai (để vòng sau đỡ mất thời gian): `current` không chỉ là
+"đang chạy" mà còn là **chỗ duy nhất** giữ danh tính task để lưu/khôi phục
+context và để `Exit` dọn dẹp; nhả nó ở nhánh park làm mất liên kết đó. Hướng
+đúng nhiều khả năng là: cho `destroy_object` chấp nhận TCB `Exited` và tự gỡ
+`current` **của chính nó** trong cùng một giao dịch, thay vì dọn `current` ở
+đường park.

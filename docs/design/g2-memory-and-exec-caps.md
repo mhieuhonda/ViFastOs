@@ -95,7 +95,7 @@ quyền cap thì mọi lệnh cần VFS đều phải ở lại trong shell.
 |---|---|---|
 | 1 | `TcbConfigure` | như hiện tại |
 | 2 | `TcbSetArgs` (D15) | `argc/argv` như hiện tại |
-| 3 | **`TcbGrantCap`** (mới) | `(tcb, dst_slot, cap_slot)` — chuyển cap từ root sang cspace của con |
+| 3 | **`TcbGrantCap`** (đã có từ r264) | `(tcb_slot, src_slot, dst_slot, rights)` — chuyển cap từ caller sang cspace của con |
 | 4 | `TcbStart` | chạy |
 
 Ràng buộc bắt buộc của `TcbGrantCap` (mỗi cái là một test):
@@ -121,6 +121,25 @@ chỉ là đường truyền cap lúc exec.
 Hệ quả cần nói rõ: `df` chạy bằng badge của shell nên **thấy đúng phần nó
 được thấy**. Nếu sau này muốn `df` thấy toàn bộ FS, đó là quyết định riêng
 (badge mới hoặc quyền `STATFS` toàn cục) — không được làm ngầm.
+
+### B.3bis Trạng thái triển khai (r264)
+
+`SyscallId::TcbGrantCap = 57` đã có trong kernel với 5 ràng buộc ở B.2, mỗi
+ràng buộc một host test:
+
+| Ràng buộc | Test |
+|---|---|
+| caller phải có WRITE trên TCB đích | `grant_cap_syscall_requires_write_on_the_target_tcb` |
+| slot đích phải trống | `grant_cap_rejects_occupied_destination` |
+| quyền bị thu hẹp (không bao giờ GRANT) | `grant_cap_strips_grant_right` (đỏ khi bỏ clamp) |
+| badge giữ nguyên từ cap nguồn | `grant_cap_keeps_the_source_badge` |
+| không chuyển Untyped gốc | `grant_cap_cannot_hand_out_the_root_untyped` |
+| derive, caller không mất cap | `grant_cap_installs_a_derived_cap_in_the_target_cspace` |
+
+**Còn lại của Phần B**: nối nó vào đường `exec` (root cấp endpoint VFS + badge
+cho chương trình con) rồi chuyển `df` ra applet. Việc này cần chốt **chính sách
+badge** (badge nào để con thừa hưởng — của shell hay của root), đúng câu hỏi 4
+ở C.3, nên chưa làm trong đêm nay.
 
 ### B.4 Điều kiện "xong" của Phần B
 

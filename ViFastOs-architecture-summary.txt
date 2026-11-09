@@ -520,6 +520,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - b5d4743 r260 fix: (T22) đóng 4 mục audit cuối (K42, K45, K46, K60) + (T23) thiết kế G2
 - 78e1752 r261 refactor: (T24) GDT/TSS theo TỪNG hart trên x86_64 (bỏ hart gắn cứng)
 - 6c65091 r262 fix: (T25) hạ MAX_IO 256→128 vì gây hỏng boot x86_64 24% + công cụ tái hiện
+- b912632 r263 docs: (T25) báo cáo G1 hoàn tất r254…r262 (6 phần + SHA-256 tự kiểm)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -567,7 +568,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 234/234 PASS
+- `cargo test -p vifast-kernel`: 240/240 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
@@ -1259,6 +1260,7 @@ Số syscall chính:
 54 TimerInfo — implemented
 55 ModuleRelease — implemented
 56 TcbSetArgs — implemented
+57 TcbGrantCap — implemented
 ### END GENERATED syscalls
 
 - `BlockRead`/`BlockWrite` (43/44): `a0` = cap slot `BlockDevice`,

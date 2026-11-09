@@ -3799,6 +3799,42 @@ impl Kernel {
         self.install_cap(dst_tcb, dst_slot, derived)
     }
 
+    /// T27 (r264, G2 Phần B): uỷ quyền một cap sang cspace của TCB khác.
+    ///
+    /// Hợp đồng (mỗi điều là một test đỏ-trước):
+    /// 1. Caller phải có cap WRITE tới TCB đích — không ai nhét cap vào cspace
+    ///    của task khác mà không có quyền cấu hình nó.
+    /// 2. Chỉ chuyển được cap caller THẬT SỰ giữ, và `dst_slot` phải trống.
+    /// 3. Quyền bị THU HẸP: kết quả = `mask & cap.rights & !GRANT`. Không bao
+    ///    giờ chuyển được GRANT (đúng nguyên tắc của IPC grant — tránh rửa
+    ///    quyền qua nhiều bước).
+    /// 4. Badge GIỮ NGUYÊN từ cap nguồn: người nhận không tự đặt danh tính
+    ///    khác (badge là uid của FS server).
+    /// 5. Không chuyển cap Untyped gốc (`root`) — cap đó là nguồn của mọi
+    ///    object; chuyển nó là trao cả không gian bộ nhớ.
+    ///
+    /// Caller KHÔNG mất cap nguồn (đây là derive, không phải move).
+    pub fn grant_cap_to_tcb(
+        &mut self,
+        caller: ObjRef,
+        target: ObjRef,
+        src_slot: u8,
+        dst_slot: u8,
+        mask: Rights,
+    ) -> KResult<()> {
+        let source = self.lookup_cap(caller, src_slot, None, Rights::NONE)?;
+        if source.root && source.ty == ObjType::Untyped {
+            return Err(KError::InvalidArg);
+        }
+        // a3 == 0 nghĩa là "giữ nguyên, trừ GRANT" (đúng như syscall mô tả);
+        // nhờ vậy bên gọi không phải liệt kê lại quyền của cap nguồn.
+        let mask = if mask.0 == 0 { Rights::ALL } else { mask };
+        let rights = Rights(mask.0 & source.rights.0 & !Rights::GRANT.0);
+        // badge = 0 nghĩa "giữ nguyên badge của cap nguồn" (xem `Cap::derive`);
+        // truyền một badge khác sẽ bị từ chối khi cap nguồn đã có badge.
+        self.copy_cap(caller, src_slot, target, dst_slot, rights, 0)
+    }
+
     fn cap_ref_is_descendant(&self, creator: CapRef, target: CapRef) -> bool {
         if creator == target {
             return true;
@@ -6936,6 +6972,31 @@ impl Kernel {
                         tcb: cap.obj,
                         argc: a1,
                         argv: a2,
+                    },
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            // T27 (r264): uỷ quyền cap sang TCB khác (đường exec cần để con
+            // chương trình thừa hưởng endpoint VFS). Caller phải có WRITE trên
+            // TCB đích; quyền chuyển bị thu hẹp (không bao giờ có GRANT).
+            n if n == SyscallId::TcbGrantCap as u64 => {
+                let target_slot = slot_or_invalid!(a0);
+                let src_slot = slot_or_invalid!(a1);
+                let dst_slot = slot_or_invalid!(a2);
+                let target = match self.lookup_cap(
+                    tcb,
+                    target_slot,
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                let mask = Rights((a3 as u8) & Rights::ALL.0);
+                match self.grant_cap_to_tcb(tcb, target.obj, src_slot, dst_slot, mask) {
+                    Ok(()) => UserAction::Return {
+                        value: 0,
+                        error: KError::Ok,
                     },
                     Err(error) => UserAction::Return { value: 0, error },
                 }
@@ -13398,6 +13459,155 @@ mod tests {
         assert!(kernel
             .lookup_cap(root, 1, Some(ObjType::BlockDevice), Rights::WRITE)
             .is_ok());
+    }
+
+    #[test]
+    fn grant_cap_installs_a_derived_cap_in_the_target_cspace() {
+        // T27 (r264, G2 Phần B): uỷ quyền cap — đường mà exec còn thiếu.
+        // Caller giữ endpoint ở slot 1; chuyển sang TCB đích ở slot 3.
+        let mut kernel = Kernel::new();
+        let caller = kernel.create_tcb("caller", 5).unwrap();
+        let target = kernel.create_tcb("child", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(
+                caller,
+                1,
+                Cap::new(endpoint, ObjType::Endpoint, Rights::RW),
+            )
+            .unwrap();
+        assert_eq!(
+            kernel.grant_cap_to_tcb(caller, target, 1, 3, Rights::ALL),
+            Ok(())
+        );
+        let granted = kernel.lookup_cap(target, 3, Some(ObjType::Endpoint), Rights::READ);
+        assert!(granted.is_ok(), "cap phải xuất hiện trong cspace của đích");
+        // Caller KHÔNG mất cap nguồn (derive, không move).
+        assert!(kernel
+            .lookup_cap(caller, 1, Some(ObjType::Endpoint), Rights::RW)
+            .is_ok());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn grant_cap_strips_grant_right() {
+        // Ràng buộc 3: không bao giờ chuyển được GRANT, kể cả khi đòi ALL —
+        // nếu không thì quyền có thể bị rửa qua nhiều bước uỷ quyền.
+        let mut kernel = Kernel::new();
+        let caller = kernel.create_tcb("caller", 5).unwrap();
+        let target = kernel.create_tcb("child", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(
+                caller,
+                1,
+                Cap::new(endpoint, ObjType::Endpoint, Rights::ALL),
+            )
+            .unwrap();
+        assert_eq!(
+            kernel.grant_cap_to_tcb(caller, target, 1, 3, Rights::ALL),
+            Ok(())
+        );
+        let granted = kernel.lookup_cap(target, 3, None, Rights::NONE).unwrap();
+        assert!(
+            !granted.rights.contains(Rights::GRANT),
+            "cap được uỷ quyền không được mang GRANT"
+        );
+        assert_eq!(granted.rights, Rights(0b0111));
+    }
+
+    #[test]
+    fn grant_cap_rejects_occupied_destination() {
+        // Ràng buộc 2: slot đích đã có cap thì trả SlotOccupied, không ghi đè.
+        let mut kernel = Kernel::new();
+        let caller = kernel.create_tcb("caller", 5).unwrap();
+        let target = kernel.create_tcb("child", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let other = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(caller, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::RW))
+            .unwrap();
+        kernel
+            .install_cap(target, 3, Cap::new(other, ObjType::Endpoint, Rights::RW))
+            .unwrap();
+        assert_eq!(
+            kernel.grant_cap_to_tcb(caller, target, 1, 3, Rights::NONE),
+            Err(KError::SlotOccupied)
+        );
+        // Cap cũ còn nguyên.
+        assert!(kernel
+            .lookup_cap(target, 3, Some(ObjType::Endpoint), Rights::RW)
+            .is_ok());
+    }
+
+    #[test]
+    fn grant_cap_cannot_hand_out_the_root_untyped() {
+        // Ràng buộc 5: cap Untyped gốc là nguồn của mọi object — chuyển nó là
+        // trao cả không gian bộ nhớ.
+        let mut kernel = Kernel::new();
+        let caller = kernel.create_tcb("caller", 5).unwrap();
+        let target = kernel.create_tcb("child", 5).unwrap();
+        let untyped = kernel.create_untyped(0x1000_0000, 0x1000).unwrap();
+        let mut cap = Cap::new(untyped, ObjType::Untyped, Rights::RW);
+        cap.root = true;
+        cap.parent = None;
+        kernel.install_cap(caller, 1, cap).unwrap();
+        assert_eq!(
+            kernel.grant_cap_to_tcb(caller, target, 1, 3, Rights::NONE),
+            Err(KError::InvalidArg)
+        );
+    }
+
+    #[test]
+    fn grant_cap_keeps_the_source_badge() {
+        // Ràng buộc 4: badge là uid của FS server — người nhận không được tự
+        // đặt danh tính khác, nên badge phải giữ nguyên từ cap nguồn.
+        let mut kernel = Kernel::new();
+        let caller = kernel.create_tcb("caller", 5).unwrap();
+        let target = kernel.create_tcb("child", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let mut cap = Cap::new(endpoint, ObjType::Endpoint, Rights::RW);
+        cap.badge = 0x51de;
+        kernel.install_cap(caller, 1, cap).unwrap();
+        assert_eq!(
+            kernel.grant_cap_to_tcb(caller, target, 1, 3, Rights::NONE),
+            Ok(())
+        );
+        let granted = kernel.lookup_cap(target, 3, None, Rights::NONE).unwrap();
+        assert_eq!(granted.badge, 0x51de);
+    }
+
+    #[test]
+    fn grant_cap_syscall_requires_write_on_the_target_tcb() {
+        // Ràng buộc 1: không ai nhét cap vào cspace của task khác mà không có
+        // quyền cấu hình TCB đó. Caller chỉ có cap READ trên TCB đích ⇒
+        // syscall trả NoRights.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let target = kernel.create_tcb("child", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel
+            .install_cap(root, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::RW))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(target, ObjType::Tcb, Rights::READ))
+            .unwrap();
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::TcbGrantCap as u64,
+                2,
+                1,
+                3,
+                0,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::NoRights,
+            }
+        );
     }
 
     #[test]

@@ -623,6 +623,33 @@ pub fn tcb_configure(
     result(e, v)
 }
 
+/// T27 (r264, G2 Phần B): uỷ quyền một cap từ cspace của mình sang cspace
+/// của TCB khác. Đây là đường mà `exec` còn thiếu — không có nó, chương trình
+/// con không nhận được endpoint VFS nên mọi lệnh cần VFS (`df`) phải nằm lại
+/// trong shell.
+///
+/// - `tcb_slot`: cap tới TCB đích (caller phải có quyền WRITE).
+/// - `src_slot`: slot nguồn trong cspace của caller.
+/// - `dst_slot`: slot đích trong cspace của TCB đích (phải trống).
+/// - `rights`: mask quyền; `0` = giữ nguyên quyền của cap nguồn, **luôn** bị
+///   cắt `GRANT` (không rửa quyền qua nhiều bước), badge giữ nguyên.
+pub fn tcb_grant_cap(tcb_slot: u8, src_slot: u8, dst_slot: u8, rights: u8) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::TcbGrantCap as u64,
+            [
+                tcb_slot as u64,
+                src_slot as u64,
+                dst_slot as u64,
+                rights as u64,
+                0,
+                0,
+            ],
+        )
+    };
+    result(e, v)
+}
+
 /// D15 (r246): đặt `argc`/`argv` khởi động cho TCB đã `tcb_configure`
 /// nhưng chưa resume. Kernel từ chối `argc > 8`, `argv` lệch 8 B, hoặc
 /// `argc != 0` mà `argv == 0`.
