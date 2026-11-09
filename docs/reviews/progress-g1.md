@@ -584,8 +584,8 @@ phục word. Đóng K45 là **không phải lỗi**, kèm test làm bằng chứ
 ### Tổng kết T22
 
 - Audit: **39 CLOSED · 3 UNREACHABLE · 4 OPEN** → **43 CLOSED · 3 UNREACHABLE · 0 OPEN**.
-- Kernel host test: 232 → **234** (2 test mới: K60, K46, K42 = 3; K45 = 1; trừ
-  đi phần đã đếm — xem `docs/11-hien-tai/09-testing.md`).
+- Kernel host test: **232 → 236** (4 test mới cho K60/K46/K42/K45; trong đó
+  2 `#[ignore]` là fuzz nên số chạy được là 234).
 - QEMU 3 arch × 3 lần: **9/9 PASS** sau thay đổi IPC (`recv`/`poll`) — quan
   trọng vì K42/K46 đụng đường IPC dùng chung.
 
@@ -636,3 +636,54 @@ IPI trước. GDT/TSS đã sẵn sàng theo hart nên đây là việc của vò
 ## T25 — soak 100 × 3 arch + đóng G1 (r262)
 
 SOAK100_PROGRESS
+
+### Kết quả gate (r262, sau khi hạ MAX_IO)
+
+```
+[gate] build: PASS          [gate] persist: PASS
+[gate] kernel-test: PASS    [gate] docs: PASS
+[gate] tests-present: PASS  [gate] harness: PASS
+[gate] fuzz: PASS           [gate] fmt: PASS
+[gate] qemu: PASS           [gate] boundary: PASS
+all steps passed
+```
+
+Lần đầu gate xanh **hoàn toàn** sau nhiều vòng (trước đó x86_64 hỏng ~25%).
+`boundary` là bước mới của r259: chạy cả bản `check-boundary` (phải `BOUNDARY
+OK`) và bản `check-boundary-mutation` (phải đúng một `BOUNDARY BAD`).
+
+## Việc tiếp theo (bàn giao, r262)
+
+| Vòng | Việc | Vì sao | Điều kiện xong |
+|---|---|---|---|
+| T26 | Sửa GỐC race FS khi ≥2 hart (hồi quy `FS V2 OK`) | `main` chỉ xanh nhờ hạ `MAX_IO`; race vẫn còn | có test đỏ trước (D18); nâng lại `MAX_IO=256` mà 40/40 lần boot x86_64 xanh |
+| T27 | `TcbGrantCap` + đưa `df` ra `/bin/vf` | chứng minh uỷ quyền cap end-to-end; là Phần B của thiết kế G2 | 5 ràng buộc B.2 có test đỏ-trước; `df` chạy từ applet; client không tăng trang |
+| T28 | Khởi động hart 2–3 trên x86_64 (`-smp 4`) | `AP_MAINT_*` đang giả định một AP | boot `-smp 4` in `SMP OK (harts=4)`; soak 20 xanh |
+| T29 | `!!` làm client fault vào vùng `.text` | lỗi thật đo được ở T17 | có test tái hiện + sửa; `--interactive` vẫn 5/5 |
+| T30 | Tìm 3 936 B chênh lệch aarch64 | aarch64 đang dư 1 trang thay vì 2 | aarch64 client ≤ 24 576 B (6 trang) hoặc giải thích được bằng số đo |
+| T31 | `PAGER2_LABEL` bị xử lý HAI lần (soak 100, vòng 53, x86_64) | marker `PAGER EVICT OK` in 2 lần ⇒ message giao lặp; nghi cùng gốc IPC với T26 | có test tái hiện; soak 100 không còn vòng nào trùng marker |
+| T32 | Không destroy được TCB đã exit khi nó còn là `current` của hart idle (soak 100, vòng 62, riscv64) | `DESTROY DIAG stuck=4` ⇒ `BIN EXEC FAIL`; `object_in_use` coi `current` là đang dùng | chốt ngữ nghĩa (dọn `current` khi idle, hay cho destroy TCB `Exited`) + test |
+
+Công cụ đã có sẵn cho T26: `scripts/x86-smp-probe.py` (tái hiện, `-smp 1|2`,
+giữ serial/đĩa), `scripts/dump-root-dir.py` (soi block thư mục gốc), và
+`python3 scripts/test-qemu.py` (harness chuẩn, giờ in cả marker bị cấm).
+
+### Kết quả soak 100 × 3 arch (r262, HEAD cuối)
+
+```
+riscv64  99/100 PASS (99.0%)
+aarch64 100/100 PASS (100.0%)
+x86_64   99/100 PASS (99.0%)
+iterations: 100, elapsed: 1923.6s
+```
+
+**Không còn lần nào hỏng `FS V2 OK`** trong 100 vòng (trước khi hạ `MAX_IO` là
+~25%). Hai lỗi còn lại là hai lớp khác, hiếm và đã phân loại:
+
+| Vòng | Arch | Marker | Nguyên nhân |
+|---|---|---|---|
+| 53 | x86_64 | `PAGER EVICT OK` trùng | root in marker khi nhận `PAGER2_LABEL` lần 2; lần 3 ⇒ in lại ⇒ message bị xử lý hai lần. Nghi cùng gốc IPC với hồi quy FS ⇒ T31 |
+| 62 | riscv64 | `DESTROY DIAG stuck=4` + `BIN EXEC FAIL` | 4 TCB đã exit vẫn còn là `current` của hart idle ⇒ `object_in_use` ⇒ `Busy`, không destroy được ⇒ vòng exec sau hết slot ⇒ T32 |
+
+Tiêu chí G1: mỗi arch ≥99% **đạt** (99,0 / 100 / 99,0) nhưng riscv64 và x86_64
+sát sàn; không có timeout nào trong 300 lần boot.

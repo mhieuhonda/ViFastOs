@@ -43,7 +43,7 @@ Thứ tự:
 2. `cargo test -p vifast-kernel layout_sizes_for_status -- --nocapture`
    (in kích thước `Kernel`/`Object`/`Tcb`/`Cap`).
 3. `cargo build -p vifast-fsutil` (công cụ host cho persistence).
-4. `python3 scripts/test-harness-spec.py` (462 case âm).
+4. `python3 scripts/test-harness-spec.py` (632 case âm).
 5. Build root/server/client ELF cho 3 target, `llvm-objcopy --strip-all`,
    kiểm tra bằng `scripts/check-root-elf.sh` (ET_EXEC, segment/window,
    soft-float).
@@ -192,7 +192,7 @@ Script không có `--help`; gọi không tham số là chạy toàn bộ.
 
 ## 6. Harness âm — `scripts/test-harness-spec.py`
 
-462 case: mỗi điều kiện trong `harness_spec.py` bị xoá khỏi output tổng hợp và
+632 case: mỗi điều kiện trong `harness_spec.py` bị xoá khỏi output tổng hợp và
 kiểm tra rằng `accept()` trả `False`. Case đặc biệt: fault count/address,
 SMP counter, thứ tự marker, exit code, feature mode.
 
