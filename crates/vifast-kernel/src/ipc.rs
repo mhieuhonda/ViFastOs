@@ -343,9 +343,43 @@ impl Kernel {
         // verify TOCTOU K49). Trước đây msg.cap trên reply bị bỏ qua thầm lặng.
         let mut msg = msg;
         if msg.cap_slot().is_some() {
-            let raw_slot = msg.cap_slot().ok_or(KError::InvalidCap)?;
-            let slot = u8::try_from(raw_slot).map_err(|_| KError::InvalidCap)?;
-            let source = self.lookup_cap(server, slot, None, Rights::GRANT)?;
+            // Vòng 225 (P0 reply-orphan, hoàn thiện): MỌI lỗi sau take()
+            // mà client vẫn còn chờ (BlockedReply + epoch khớp) đều phải
+            // trả caller về chỗ cũ — kể cả lỗi lookup_cap/convert ở dưới.
+            // Chỉ stale caller (client đã hết chờ) mới được drop.
+            let restore = |kernel: &mut Self| {
+                let still_waiting = kernel.tcb(client).is_some_and(|table| {
+                    table.state == ThreadState::BlockedReply && table.reply_epoch == epoch
+                });
+                if still_waiting {
+                    if let Some(table) = kernel.tcb_mut(server) {
+                        if table.caller.is_none() {
+                            table.caller = Some((client, epoch));
+                        }
+                    }
+                }
+            };
+            let raw_slot = match msg.cap_slot().ok_or(KError::InvalidCap) {
+                Ok(v) => v,
+                Err(e) => {
+                    restore(&mut *self);
+                    return Err(e);
+                }
+            };
+            let slot = match u8::try_from(raw_slot).map_err(|_| KError::InvalidCap) {
+                Ok(v) => v,
+                Err(e) => {
+                    restore(&mut *self);
+                    return Err(e);
+                }
+            };
+            let source = match self.lookup_cap(server, slot, None, Rights::GRANT) {
+                Ok(v) => v,
+                Err(e) => {
+                    restore(&mut *self);
+                    return Err(e);
+                }
+            };
             let hint = self.tcb(client).map(|table| table.recv_slot).unwrap_or(0);
             let probe = PendingSend {
                 badge: 0,
@@ -355,6 +389,12 @@ impl Kernel {
                 grant_key: PendingSend::grant_key_for(slot, source.id, source.obj),
             };
             if let Err(error) = self.grant_message_cap(server, client, hint, &mut msg, &probe) {
+                // Vòng 225 (P0 reply-orphan): grant lỗi phải trả caller về chỗ
+                // cũ — trước đây caller.take() ở trên đã xóa mà lỗi grant trả
+                // về ngay khiến client kẹt BlockedReply vĩnh viễn không ai
+                // reply được nữa. Khôi phục để server retry sau khi client
+                // dọn recv_slot.
+                restore(&mut *self);
                 return Err(error);
             }
         }

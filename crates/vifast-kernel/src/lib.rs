@@ -14940,4 +14940,31 @@ mod tests {
         assert_eq!(kernel.pick_on(99), None);
         assert!(kernel.check_invariants().is_ok());
     }
+    #[test]
+    fn reply_with_bad_cap_slot_restores_caller() {
+        // r242 (T9): hồi quy cho fix P0 "reply-orphan". Trước fix, `reply` gọi
+        // `caller.take()` TRƯỚC khi tra cap nguồn; nếu bước tra cap lỗi thì
+        // hàm return sớm và `caller` đã mất — client kẹt `BlockedReply` vĩnh
+        // viễn, mọi lần reply sau đều `NoCaller`. Test này đỏ trên code cũ.
+        let mut kernel = Kernel::new();
+        let client = kernel.create_tcb("client", 0b01).unwrap();
+        let server = kernel.create_tcb("server", 0b01).unwrap();
+        let epoch = kernel.tcb(client).unwrap().reply_epoch;
+        kernel.tcb_mut(server).unwrap().caller = Some((client, epoch));
+        kernel.tcb_mut(client).unwrap().state = ThreadState::BlockedReply;
+
+        let mut bad = Message::default();
+        bad.cap = 99; // slot không tồn tại trong cspace của server
+        assert_eq!(kernel.reply(server, bad), Err(KError::InvalidCap));
+        assert_eq!(
+            kernel.tcb(server).unwrap().caller.map(|(c, _)| c),
+            Some(client),
+            "caller phải được khôi phục sau lỗi tra cap"
+        );
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::BlockedReply);
+
+        // Reply lại không kèm cap phải thành công và đánh thức client.
+        assert_eq!(kernel.reply(server, Message::default()), Ok(()));
+        assert_ne!(kernel.tcb(client).unwrap().state, ThreadState::BlockedReply);
+    }
 }
