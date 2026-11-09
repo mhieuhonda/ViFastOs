@@ -180,7 +180,9 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Đăng nhập quản trị bằng form + thống kê truy cập (dùng chung admin_portal.py).
 portal = Portal(site="os.vifast.org", title="ViFastOs", db_path=DB_PATH,
-                accent="#C0392B", log=log)
+                accent="#C0392B", log=log,
+                favicon="/static/brand/vifastos-icon-32.png",
+                admin_key="os")
 portal.install(app)
 
 
@@ -355,40 +357,24 @@ def _render_admin(rows: List[sqlite3.Row], total: int, limit: int, panel: str = 
         f"<td>{html.escape(row['email'])}</td>"
         f"<td>{html.escape(row['note'] or '')}</td>"
         f"<td>{html.escape(row['source'] or '')}</td>"
-        f"<td>{html.escape(row['created_at'])}</td>"
+        f"<td class=\"vf-mono\">{html.escape(row['created_at'])}</td>"
         "</tr>"
         for row in rows
-    ) or '<tr><td colspan="5" class="admin-empty">Chưa có đăng ký nào.</td></tr>'
+    ) or '<tr><td colspan="5" class="vf-muted">Chưa có đăng ký nào.</td></tr>'
 
-    return f"""<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>ViFastOs · signups</title>
-<link rel="stylesheet" href="/static/styles.css">
-<link rel="stylesheet" href="/admin/portal.css">
-</head>
-<body class="admin-body">
-<main class="admin">
-  <h1>Đăng ký sớm · ViFastOs</h1>
-  <p class="muted"><a href="/">← Về trang chủ</a> · <a href="/logout">Đăng xuất</a></p>
-  {panel}
-  <p class="muted">Tổng: <strong>{total}</strong> · hiển thị {min(total, limit)} bản ghi mới nhất. IP chỉ được lưu dưới dạng hash, không lưu địa chỉ thô.</p>
-  <p><a class="btn btn-secondary" href="/admin/export.csv">Tải CSV</a></p>
-  <div class="admin-table-wrap">
-    <table>
-      <thead>
-        <tr><th>#</th><th>Email</th><th>Ghi chú</th><th>Nguồn</th><th>Thời điểm (UTC)</th></tr>
-      </thead>
-      <tbody>{body}</tbody>
-    </table>
-  </div>
-</main>
-</body>
-</html>"""
-
+    return f"""
+{panel}
+<h2 class="vf-h2">Đăng ký sớm</h2>
+<p class="vf-muted">Tổng <strong>{total}</strong> bản ghi · hiển thị {min(total, limit)} mục mới nhất.
+IP chỉ được lưu dưới dạng hash, không lưu địa chỉ thô.</p>
+<p><a class="vf-link" href="/admin/export.csv">Tải CSV toàn bộ đăng ký</a></p>
+<div class="vf-scroll">
+  <table class="vf-table">
+    <thead><tr><th>#</th><th>Email</th><th>Ghi chú</th><th>Nguồn</th><th>Thời điểm (UTC)</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+</div>
+"""
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin(request: Request) -> Response:
@@ -405,7 +391,7 @@ def admin(request: Request) -> Response:
         total = conn.execute("SELECT COUNT(*) AS n FROM signups").fetchone()["n"]
     finally:
         conn.close()
-    return HTMLResponse(_render_admin(rows, total, limit, portal.panel_html()))
+    return HTMLResponse(portal.shell(_render_admin(rows, total, limit, portal.panel_html())))
 
 
 @app.get("/admin/export.csv")

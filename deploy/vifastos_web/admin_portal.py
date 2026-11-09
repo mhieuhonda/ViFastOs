@@ -98,6 +98,14 @@ BOT_RE = re.compile(
 
 SPARK = "▁▂▃▄▅▆▇█"
 
+# Bốn trang quản trị của ViFast; dùng cho dải chuyển nhanh ở đầu mỗi trang.
+SITES: Tuple[Tuple[str, str, str], ...] = (
+    ("vifast.org", "site", "https://vifast.org/admin"),
+    ("ViFastOs", "os", "https://os.vifast.org/admin"),
+    ("ViFastKey", "key", "https://key.vifast.org/admin"),
+    ("ViFastTts", "tts", "https://tts.vifast.org/admin"),
+)
+
 
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name, "").strip()
@@ -236,6 +244,8 @@ class Portal:
         password: Optional[str] = None,
         log: Any = None,
         cookie_secure: Optional[bool] = None,
+        favicon: str = "",
+        admin_key: str = "",
     ) -> None:
         self.site = site
         self.title = title
@@ -247,6 +257,8 @@ class Portal:
         self.tz = timezone(timedelta(hours=_env_float("ADMIN_TZ_OFFSET", 7.0)))
         self.log = log
         self._cookie_secure = cookie_secure
+        self.favicon = favicon
+        self.admin_key = admin_key
         self._local = threading.local()
         self._schema_lock = threading.Lock()
         self._schema_ready = False
@@ -511,7 +523,7 @@ class Portal:
         """None nếu đã đăng nhập; ngược lại là response chuyển tới /login."""
         if self.disabled:
             return self._html(self._page_body(
-                "<h1>Quản trị chưa bật</h1>"
+                "<h1>Admin chưa bật</h1>"
                 "<p class=\"vf-muted\">Chưa đặt biến môi trường <code>ADMIN_PASSWORD</code> "
                 "cho dịch vụ này.</p>"), status=503)
         if self.auth_ok(request):
@@ -521,13 +533,63 @@ class Portal:
             target = f"{target}?{request.url.query}"
         return self._redirect(f"/login?next={quote(target[:MAX_RETURN_LEN], safe='/')}")
 
+    def site_nav(self) -> str:
+        """Dải chuyển nhanh giữa bốn trang quản trị; trang hiện tại được đánh dấu."""
+        items = []
+        for label, key, url in SITES:
+            if key == self.admin_key:
+                items.append(
+                    f'<span class="vf-nav-item is-current" aria-current="page">{_esc(label)}</span>'
+                )
+            else:
+                items.append(f'<a class="vf-nav-item" href="{_esc(url)}">{_esc(label)}</a>')
+        return '<nav class="vf-site-nav" aria-label="Chuyển trang quản trị">' + "".join(items) + "</nav>"
+
+    def shell(self, content: str, *, page_title: str = "") -> str:
+        """Khung trang quản trị dùng chung cho cả bốn site."""
+        title = page_title or f"{self.title} · Admin"
+        mark = (
+            f'<img class="vf-shell-mark" src="{_esc(self.favicon)}" alt="" width="26" height="26">'
+            if self.favicon
+            else ""
+        )
+        return (
+            '<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<meta name="robots" content="noindex, nofollow">'
+            f"<title>{_esc(title)}</title>"
+            + (f'<link rel="icon" href="{_esc(self.favicon)}">' if self.favicon else "")
+            + '<link rel="stylesheet" href="/admin/portal.css">'
+            "</head><body class=\"vf-admin-body\">"
+            '<header class="vf-shell-head">'
+            f'<a class="vf-shell-brand" href="/">{mark}<span>{_esc(self.title)} · Admin</span></a>'
+            '<div class="vf-shell-tools">'
+            + self.site_nav()
+            + '<a class="vf-shell-out" href="/logout">Đăng xuất</a>'
+            "</div></header>"
+            f'<main class="vf-admin">{content}</main>'
+            '<p class="vf-shell-foot">ViFast · mã nguồn MIT · '
+            '<a href="/">← Về trang chủ</a></p>'
+            "</body></html>"
+        )
+
+    def topbar(self, home: str = "/", label: str = "← Trang chủ") -> str:
+        """Dải điều hướng đầu trang quản trị: về trang chủ + đăng xuất."""
+        return (
+            '<nav class="vf-topbar" aria-label="Điều hướng Admin">'
+            f'<a class="vf-topbar-home" href="{_esc(home)}">{_esc(label)}</a>'
+            '<a class="vf-topbar-out" href="/logout">Đăng xuất</a>'
+            "</nav>"
+        )
+
     def _page_body(self, inner: str, *, login: bool = False) -> str:
         return (
             "<!DOCTYPE html><html lang=\"vi\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             "<meta name=\"robots\" content=\"noindex, nofollow\">"
-            f"<title>{_esc(self.title)} · quản trị</title>"
-            "<link rel=\"stylesheet\" href=\"/admin/portal.css\">"
+            f"<title>{_esc(self.title)} · Admin</title>"
+            + (f"<link rel=\"icon\" href=\"{_esc(self.favicon)}\">" if self.favicon else "")
+            + "<link rel=\"stylesheet\" href=\"/admin/portal.css\">"
             "</head><body class=\"vf-admin-body\">"
             f"<main class=\"vf-admin\">{inner}</main></body></html>"
         )
@@ -539,8 +601,8 @@ class Portal:
         return self._page_body(
             "<section class=\"vf-login-card\">"
             f"<p class=\"vf-eyebrow\">{_esc(self.title)}</p>"
-            "<h1>Đăng nhập quản trị</h1>"
-            "<p class=\"vf-muted\">Nhập mật khẩu quản trị để xem thống kê truy cập.</p>"
+            "<h1>Đăng nhập Admin</h1>"
+            "<p class=\"vf-muted\">Nhập mật khẩu Admin để xem thống kê truy cập.</p>"
             f"{notice}"
             "<form method=\"post\" action=\"/login\" class=\"vf-form\">"
             f"<input type=\"hidden\" name=\"next\" value=\"{_esc(next_url)}\">"
@@ -836,7 +898,7 @@ class Portal:
         return f"""
 :root {{
   --vf-accent: {accent};
-  --vf-accent-soft: color-mix(in srgb, {accent} 12%, #FFF8EC);
+  --vf-accent-soft: #FBEDE9;
   --vf-bg: #FFF8EC;
   --vf-card: #FFFCF7;
   --vf-ink: #2E2119;
@@ -888,6 +950,65 @@ h3 {{ font-size: .95rem; margin-top: 22px; color: var(--vf-muted); text-transfor
 .vf-foot {{ margin: 18px 0 0; font-size: .88rem; }}
 
 /* --- panel thống kê --- */
+.vf-shell-head {{
+  display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center;
+  justify-content: space-between; max-width: 1040px; margin: 0 auto; padding: 18px 18px 0;
+}}
+.vf-shell-brand {{
+  display: inline-flex; align-items: center; gap: 9px; text-decoration: none;
+  color: var(--vf-ink); font-weight: 800; font-size: 1.05rem;
+}}
+.vf-shell-mark {{ border-radius: 7px; display: block; }}
+.vf-shell-tools {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
+.vf-site-nav {{ display: flex; flex-wrap: wrap; gap: 4px; }}
+.vf-nav-item {{
+  padding: 5px 11px; border-radius: 999px; font-size: .8rem; font-weight: 600;
+  text-decoration: none; color: var(--vf-muted); border: 1px solid transparent;
+}}
+a.vf-nav-item:hover {{ color: var(--vf-accent); border-color: var(--vf-line); }}
+.vf-nav-item.is-current {{ background: var(--vf-accent-soft); color: var(--vf-accent); }}
+.vf-shell-out {{
+  padding: 5px 12px; border-radius: 999px; font-size: .8rem; font-weight: 600;
+  text-decoration: none; color: var(--vf-muted); border: 1px solid var(--vf-line);
+}}
+.vf-shell-out:hover {{ color: var(--vf-accent); border-color: var(--vf-accent); }}
+.vf-shell-foot {{
+  max-width: 1040px; margin: 30px auto 0; padding: 0 18px 44px;
+  font-size: .8rem; color: var(--vf-muted);
+}}
+.vf-h2 {{
+  margin: 30px 0 6px; font-size: .95rem; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--vf-muted); font-weight: 700;
+}}
+.vf-note {{
+  margin: 24px 0 0; padding: 10px 12px; border-radius: 10px; font-size: .84rem;
+  background: #FFF7E6; border: 1px solid #F0D49A; color: #7A4B00;
+}}
+.vf-tiny {{
+  padding: 4px 9px; font-size: .78rem; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--vf-line); background: var(--vf-card); color: var(--vf-ink);
+}}
+.vf-tiny-ok {{ background: #E5F5EC; border-color: #B8E2C8; color: #166534; }}
+.vf-pill {{
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: .76rem; background: var(--vf-accent-soft); color: var(--vf-accent); white-space: nowrap;
+}}
+.vf-pill-ok {{ background: #E5F5EC; color: #166534; }}
+.vf-pill-new {{ background: #FFF4D6; color: #7A4B00; }}
+.vf-msg {{ max-width: 380px; white-space: normal; line-height: 1.45; overflow-wrap: anywhere; }}
+.vf-form-inline {{ display: inline; }}
+.vf-topbar {{
+  display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: center;
+  margin: 0 0 18px;
+}}
+.vf-topbar a {{
+  display: inline-flex; align-items: center; padding: 7px 14px; border-radius: 999px;
+  font-size: .85rem; font-weight: 600; text-decoration: none; color: var(--vf-ink);
+  background: var(--vf-card); border: 1px solid var(--vf-line);
+}}
+.vf-topbar a:hover {{ border-color: var(--vf-accent); color: var(--vf-accent); }}
+.vf-topbar a.vf-topbar-home {{ background: var(--vf-accent); border-color: var(--vf-accent); color: #fff; }}
+.vf-topbar a.vf-topbar-home:hover {{ filter: brightness(1.06); color: #fff; }}
 .vf-panel {{ margin: 6px 0 30px; padding-bottom: 8px; border-bottom: 1px solid var(--vf-line); }}
 .vf-panel-head {{
   display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline;
@@ -1028,13 +1149,10 @@ h3 {{ font-size: .95rem; margin-top: 22px; color: var(--vf-muted); text-transfor
                 denied = portal.guard(request)
                 if denied is not None:
                     return denied
-                body = portal._page_body(
-                    "<h1>" + _esc(portal.title) + " · quản trị</h1>"
-                    "<p class=\"vf-muted\"><a href=\"/\">← Về trang chủ</a> · "
-                    "<a href=\"/logout\">Đăng xuất</a></p>"
-                    + (dashboard or "")
+                content = (
+                    f'<p class="vf-muted">{dashboard or ""}</p>'
                     + portal.panel_html()
                 )
-                return portal._html(body)
+                return portal._html(portal.shell(content))
 
         return self
