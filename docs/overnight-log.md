@@ -3660,3 +3660,15 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   thường sau khi client nạp). Đổi sang **số trang trống ≤ 5** (một exec cần ~5),
   nên chỉ kêu khi thật nguy hiểm.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.219 — Vòng 222: thử `cd`/`pwd` — CHẠM TRẦN NGÂN SÁCH, đã revert
+
+- Thêm `cd`/`pwd` + ghép cwd cho `ls`: client riscv **29184 → 33352 B
+  (8 → 9 trang)** ⇒ vượt ngân sách, `build.sh` chặn đúng.
+- Đã thử bỏ phần ghép cwd cho `ls` (chỉ giữ `cd`/`pwd`) ⇒ **vẫn 9 trang**.
+- **Quyết định**: revert toàn bộ. `cd`/`pwd` **không đáng một trang** khi arena
+  riscv chỉ còn ~7 trang cho exec (~5 trang/lần).
+- Ghi vào runbook **5z-2** hai hướng nếu muốn có: (1) bỏ tính năng nặng trong
+  client (`history`/`!!`), (2) tăng arena ở tầng kernel (việc lớn, phải đo lại).
+- Gate sau revert: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs
+  PASS, fmt sạch.

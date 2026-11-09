@@ -418,6 +418,21 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5z-2. TRẦN CỨNG: chưa thể thêm `cd`/`pwd` vào client (vòng 222)
+
+Thử thêm `cd`/`pwd` + ghép cwd cho `ls` ⇒ client riscv **29184 → 33352 B
+(8 → 9 trang)**, vượt ngân sách 8 và `build.sh` chặn. Dù đã bỏ phần ghép cwd
+cho `ls`, vẫn không về 8 trang.
+
+**Kết luận**: `cd`/`pwd` **không đáng một trang** khi arena riscv chỉ còn ~7
+trang cho `exec` (một lần exec cần ~5). Muốn có `cd`/`pwd` phải **giải phóng chỗ
+trước** — hai hướng đã xác định:
+1. bỏ một tính năng nặng trong client (ví dụ `history`/`!!`), hoặc
+2. tăng arena/ngân sách trang ở tầng kernel (việc lớn hơn, cần đo lại toàn bộ).
+
+Trong lúc chưa làm, mọi lệnh vẫn dùng **đường dẫn tuyệt đối** — hành vi đã được
+ghi trong `18-dung-nhanh.md`.
+
 ### 5z-1. `diag.sh` không còn báo động sai (vòng 221)
 
 Hai lỗi thật trong chính công cụ chẩn đoán:
