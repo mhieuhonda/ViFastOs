@@ -418,6 +418,15 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5x-3. `MemInfo`/`TimerInfo`: con số của `free`/`uptime` có test (vòng 218)
+
+Trước vòng này **không có test nào** cho hai syscall mà shell dùng để nói về bộ
+nhớ và thời gian:
+- `MemInfo`: `used <= size`, `size > 0`; **cấp thêm frame ⇒ `used` TĂNG**, còn
+  `size` **không đổi** (đúng nghĩa "used | size<<32" của arena lớn nhất);
+- `TimerInfo`: trả đúng `timer_hz` đã đặt (128) và **ổn định giữa hai lần gọi**
+  (nếu đổi, `uptime` sẽ nhảy sai).
+
 ### 5y-6. `fsck()` đã được chứng minh BẮT ĐƯỢC hỏng (vòng 217)
 
 `fsck()` được gọi ~42 lần trong test nhưng **chưa bao giờ** được chứng minh là

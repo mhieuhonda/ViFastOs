@@ -460,6 +460,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - c4c0fbd test (vong 214): bo sung test truncate — zero-fill khi mo rong file
 - 76436da test (vong 215): test duong THAT BAI cua quyen han FS
 - cbcfd2a test (vong 216): dia DAY phai bao NoSpace gon va khong lam hong du lieu cu
+- 2f4fe36 test (vong 217): fsck() chua tung duoc chung minh BAT DUOC hong — gio co
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -507,7 +508,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 207/207 PASS
+- `cargo test -p vifast-kernel`: 209/209 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS

@@ -7257,6 +7257,60 @@ mod tests {
     }
 
     #[test]
+    fn mem_info_reflects_arena_usage_and_grows_with_allocation() {
+        // Vòng 218: `free` / `df` của shell đọc MemInfo ⇒ nếu syscall báo sai thì
+        // người dùng bị "nói dối" về bộ nhớ. Chưa có test nào cho syscall này.
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x7c0_0000, 16);
+        let first = kernel.user_syscall(root, SyscallId::MemInfo as u64, 0, 0, 0, 0, 0, 0);
+        let UserAction::Return {
+            value: before,
+            error,
+        } = first
+        else {
+            panic!("MemInfo phải trả về ngay");
+        };
+        assert_eq!(error, KError::Ok);
+        let used_before = (before & 0xffff_ffff) as usize;
+        let size = (before >> 32) as usize;
+        assert!(size > 0, "arena phải có dung lượng");
+        assert!(used_before <= size, "used không được vượt size");
+
+        // Cấp thêm object từ untyped ⇒ `used` phải TĂNG.
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        assert!(kernel.frame(frame).is_some());
+        let UserAction::Return { value: after, .. } =
+            kernel.user_syscall(root, SyscallId::MemInfo as u64, 0, 0, 0, 0, 0, 0)
+        else {
+            panic!("MemInfo phải trả về ngay");
+        };
+        assert!(
+            ((after & 0xffff_ffff) as usize) > used_before,
+            "cấp frame phải làm used tăng"
+        );
+        assert_eq!((after >> 32) as usize, size, "tổng dung lượng không đổi");
+    }
+
+    #[test]
+    fn timer_info_reports_configured_rate_and_is_stable() {
+        // Vòng 218: `uptime` chia cho TimerInfo ⇒ nếu trả 0 hoặc đổi giữa hai
+        // lần gọi thì thời gian hiển thị sẽ sai/nhảy.
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        kernel.set_timer_hz(128);
+        let first = kernel.user_syscall(root, SyscallId::TimerInfo as u64, 0, 0, 0, 0, 0, 0);
+        let second = kernel.user_syscall(root, SyscallId::TimerInfo as u64, 0, 0, 0, 0, 0, 0);
+        assert_eq!(
+            first,
+            UserAction::Return {
+                value: 128,
+                error: KError::Ok
+            }
+        );
+        assert_eq!(first, second, "timer_hz phải ổn định giữa hai lần gọi");
+    }
+
+    #[test]
     fn frame_map_distinguishes_norights_from_wx_rejection() {
         // Vòng 211: khoá bài học vòng 210 — khi phép thử W^X trên guest trả
         // `NoRights` (3) thì nó **chưa hề kiểm W^X**; kernel chặn ở bước quyền

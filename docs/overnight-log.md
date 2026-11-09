@@ -3614,3 +3614,15 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   mutation đúng chỗ ⇒ bắt được ngay.
 - Tổng host test **304 → 305**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.215 — Vòng 218: `MemInfo`/`TimerInfo` (con số của `free`/`uptime`) có test
+
+- Phát hiện: **không có test nào** cho hai syscall mà shell dùng để báo bộ nhớ và
+  thời gian ⇒ nếu chúng sai, `free`/`uptime` sẽ "nói dối" người dùng.
+- Thêm 2 test (kernel **207 → 209**):
+  - `mem_info_reflects_arena_usage_and_grows_with_allocation`: `used <= size`,
+    `size > 0`; **cấp thêm frame ⇒ `used` tăng**, `size` không đổi;
+  - `timer_info_reports_configured_rate_and_is_stable`: trả đúng `timer_hz` đã
+    đặt (128) và **ổn định giữa hai lần gọi**.
+- Tổng host test **305 → 307**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
