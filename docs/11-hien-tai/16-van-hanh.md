@@ -418,6 +418,14 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5y-4. Quyền hạn FS: uid khác chỉ ĐỌC, và bị chặn ở đúng chỗ (vòng 215)
+
+Test `other_uid_is_read_only_and_cannot_unlink` đi **đường thất bại**:
+- tạo file bằng **uid 0** (thư mục gốc thuộc uid 0) — bản nháp đầu của test tạo
+  bằng uid 5 và **thất bại ngay ở `create`**, đó là **hành vi đúng** của FS;
+- uid khác **ghi** file ⇒ `NoAccess`, nhưng **đọc vẫn được** (`mode 0b0111`);
+- uid khác **xoá entry** trong thư mục gốc ⇒ `NoAccess`, file **còn nguyên**.
+
 ### 5y-3. `truncate`: zero-fill khi mở rộng, trả block khi cắt (vòng 214)
 
 Test `truncate_shrinks_and_grows_with_zero_fill` (bổ sung cho test

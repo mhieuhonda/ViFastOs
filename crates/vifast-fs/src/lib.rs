@@ -2269,6 +2269,31 @@ mod tests {
     }
 
     #[test]
+    fn other_uid_is_read_only_and_cannot_unlink() {
+        // Vòng 215: kiểm ĐƯỜNG THẤT BẠI của quyền hạn (phần lớn test trước đây
+        // chỉ đi đường thành công). Mode mặc định `0b0111` = owner rwx, other
+        // chỉ đọc ⇒ uid khác ghi phải bị từ chối nhưng đọc vẫn được.
+        let mut fs = fresh();
+        // Tạo bằng uid 0: thư mục gốc thuộc uid 0, mode `0b0111` ⇒ uid khác
+        // KHÔNG được tạo entry trong đó (chính điều này làm bản nháp của test
+        // thất bại ở `create` — đó là hành vi ĐÚNG của FS, không phải lỗi).
+        let ino = fs.create(b"/p", 0, INODE_FILE).unwrap();
+        fs.write(ino, 0, b"secret", 0).unwrap();
+        assert_eq!(fs.write(ino, 0, b"x", 7), Err(FsError::NoAccess));
+        let mut buf = [0u8; 8];
+        let n = fs.read(ino, 0, &mut buf, 7).unwrap();
+        assert_eq!(&buf[..n], b"secret", "other vẫn phải ĐỌC được");
+        // Xoá entry đòi quyền ghi trên thư mục cha (thuộc uid 0).
+        assert_eq!(fs.unlink(b"/p", 7), Err(FsError::NoAccess));
+        assert!(
+            fs.lookup(b"/p", 5).is_ok(),
+            "file còn nguyên sau khi bị từ chối"
+        );
+        // uid 0 (root) làm được mọi thứ — dùng để dọn.
+        fs.unlink(b"/p", 0).unwrap();
+    }
+
+    #[test]
     fn truncate_shrinks_and_grows_with_zero_fill() {
         // Vòng 214: `truncate` chưa có test — nếu không trả block khi cắt thì
         // `df` giảm dần; nếu không zero phần đuôi thì đọc ra dữ liệu cũ (rò rỉ

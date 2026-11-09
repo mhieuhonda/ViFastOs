@@ -3576,3 +3576,17 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   toàn 0, phần cũ giữ `0xAA`), cắt về 0 (trả hết block) — tất cả **pass**.
 - Tổng host test **301 → 302**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.212 — Vòng 215: test ĐƯỜNG THẤT BẠI của quyền hạn FS
+
+- Đổi cách tìm việc: thay vì quét tên hàm (hay dương tính giả), đi vào **nhánh
+  lỗi** của `vifast-fs`. Trước đây gần như mọi test chỉ đi đường thành công.
+- Thêm `other_uid_is_read_only_and_cannot_unlink` (FS **35 → 36**):
+  - uid khác **ghi** file ⇒ `NoAccess`; **đọc vẫn được** (`mode 0b0111`);
+  - uid khác **xoá entry** trong thư mục gốc ⇒ `NoAccess`, file còn nguyên.
+- **Học được từ chính test**: bản nháp tạo file bằng uid 5 và **thất bại ngay ở
+  `create`** — vì thư mục gốc thuộc uid 0 và `mode 0b0111` không cho `other`
+  ghi (bit 8 = 0). Đó là **hành vi đúng**, không phải lỗi; đã sửa test và ghi
+  lại lý do.
+- Tổng host test **302 → 303**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
