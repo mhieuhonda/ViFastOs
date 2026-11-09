@@ -1272,6 +1272,7 @@ const MAX_EXEC_SLOTS: usize = 20;
 /// "đã exit".
 fn boot_exec_once(
     root_vfs_slot: u8,
+    grant_from: u8,
     path: &[u8],
     args: &[&[u8]],
     meta_untyped: u8,
@@ -1283,6 +1284,7 @@ fn boot_exec_once(
     *used = [0u8; MAX_EXEC_SLOTS];
     let spawned = spawn_elf_from_fs(
         root_vfs_slot,
+        grant_from,
         path,
         args,
         meta_untyped,
@@ -2169,6 +2171,7 @@ fn root_vfs_copy_to_frame(
 /// — không staging, không tốn frame ngoài image. Trả TCB khi spawn xong.
 fn spawn_elf_from_fs(
     endpoint_slot: u8,
+    grant_from: u8,
     path: &[u8],
     args: &[&[u8]],
     meta_untyped: u8,
@@ -2294,6 +2297,14 @@ fn spawn_elf_from_fs(
         return None;
     }
     if vifast_user::tcb_set_args(tcb, argc, argv).error != KError::Ok {
+        return None;
+    }
+    // r268 (T27/G2 Phần B): chương trình con chạy từ FS nhận endpoint VFS ở
+    // slot 1 với badge 1 — CÙNG danh tính với shell (`client_tcb` được cấp y
+    // hệt lúc boot), nhờ vậy `df` chạy được như applet thay vì phải là builtin.
+    // Mint từ cap endpoint GỐC (badge 0) vì `CapMint` chỉ đặt được badge mới
+    // khi cap nguồn chưa có badge.
+    if vifast_user::cap_mint(grant_from, tcb, 1, Rights::WRITE.0, 1).error != KError::Ok {
         return None;
     }
     if vifast_user::tcb_set_affinity(tcb, affinity).error != KError::Ok {
@@ -3396,6 +3407,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     // ghi thành /prog.elf rồi nạp TỪNG PAGE từ file).
                     match spawn_elf_from_fs(
                         root_vfs_slot,
+                        endpoint_slot,
                         b"/prog.elf",
                         &[b"/prog.elf"],
                         meta_untyped,
@@ -3422,6 +3434,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     //     basename(argv[0]).
                     boot_exec_once(
                         root_vfs_slot,
+                        endpoint_slot,
                         b"/bin/args",
                         &[b"/bin/args", b"HIARG"],
                         meta_untyped,
@@ -3431,6 +3444,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     );
                     boot_exec_once(
                         root_vfs_slot,
+                        endpoint_slot,
                         b"/bin/uname",
                         &[b"/bin/uname"],
                         meta_untyped,
@@ -3440,6 +3454,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     );
                     boot_exec_once(
                         root_vfs_slot,
+                        endpoint_slot,
                         b"/bin/uptime",
                         &[b"/bin/uptime"],
                         meta_untyped,
@@ -3668,6 +3683,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             // dữ liệu file (vòng 89 — bug OPEN EINVAL).
                             tcb_opt = spawn_elf_from_fs(
                                 root_vfs_slot,
+                                endpoint_slot,
                                 &path[..plen],
                                 args,
                                 meta_untyped,
@@ -3767,6 +3783,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
                         if let Some(tcb) = spawn_elf_from_fs(
                             root_vfs_slot,
+                            endpoint_slot,
                             &pbuf[..plen],
                             exec_args,
                             meta_untyped,

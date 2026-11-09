@@ -85,6 +85,10 @@ INTERACTIVE_SCENARIO = [
     (b"cd /bin\rpwd", b"pwd\n/bin", 1),
     (b"uname", b"BIN OK uname", 2),
     (b"ps", b"BIN OK ps", 1),
+    # r268 (T27/G2 Phần B): `df` nay là APPLET `/bin/df`, không còn builtin —
+    # bước này chứng minh chương trình con exec từ FS thật sự nhận được cap
+    # VFS (slot 1, badge 1) do root uỷ quyền, nếu không nó in "df: error".
+    (b"df", b"blocks", 1),
     # `!!` để CUỐI: r254 đo được nó làm shell client fault (store page fault
     # vào vùng .text của client) nên guest chết ngay sau đó.
     (b"history\r!!", b"!!\n!!: ", 1),
@@ -116,7 +120,9 @@ def populate_disk(path: str, arch: str) -> None:
     if not os.path.exists(host):
         return
     # D14 (r247): một ảnh multicall + hard link, không còn 3 ảnh riêng.
-    links = ("uname", "uptime", "free", "ps", "jobs", "args")
+    # r268 (T27/G2): `df` là applet ĐẦU TIÊN cần cap VFS — chương trình con
+    # nhận endpoint ở slot 1 (badge 1) từ root lúc exec.
+    links = ("uname", "uptime", "free", "ps", "jobs", "args", "df")
     subprocess.run([fsutil, "mkfs", path], stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL)
     subprocess.run([fsutil, "mkdir", path, "/bin"], stdout=subprocess.DEVNULL,

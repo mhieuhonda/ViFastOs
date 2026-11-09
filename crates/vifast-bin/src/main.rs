@@ -80,6 +80,25 @@ fn run_uname() {
     write(b" bootinfo-v3\n");
 }
 
+/// `df`: dung lượng FS qua VFS endpoint ở slot 1 — applet ĐẦU TIÊN cần cap,
+/// và là lý do tồn tại của việc uỷ quyền cap cho chương trình con (T27/G2).
+/// Chương trình con exec từ FS nhận đúng cap đó (badge 1) từ root.
+fn run_df() {
+    // STATFS không mang dữ liệu qua IPC buffer (mọi tham số nằm trong message
+    // words) nên applet chỉ cần cap, không cần `TcbSetIpcBuffer`.
+    let reply = unsafe { vifast_user::call_message(1, vifast_abi::vfs::STATFS, 0, 0, 0) };
+    if reply.error == vifast_abi::KError::Ok && reply.label == vifast_abi::vfs::OK {
+        let used = reply.data[0];
+        let total = reply.data[1].max(1);
+        write_decimal(used);
+        write(b"/");
+        write_decimal(total);
+        write(b" blocks\n");
+    } else {
+        write(b"df: error\n");
+    }
+}
+
 /// `free`: dung lượng Untyped còn trống (chardev `MemInfo`, không cần cap).
 fn run_free() {
     let info = vifast_user::mem_info();
@@ -208,12 +227,15 @@ pub extern "C" fn bin_main(argc: usize, argv: *const *const u8) -> ! {
     } else if base == b"args" {
         write(b"BIN OK args\n");
         run_args(argc, argv);
+    } else if base == b"df" {
+        write(b"BIN OK df\n");
+        run_df();
     } else {
         // Không nhánh nào in "BIN BAD": marker đó bị cổng cấm tuyệt đối.
         write(b"vf: unknown applet '");
         write(base);
         write(b"'\n");
-        write(b"vf: usage: uname | uptime | free | ps | jobs | args\n");
+        write(b"vf: usage: uname | uptime | free | ps | jobs | args | df\n");
         if argc > 1 {
             write(b"vf argv:");
             let mut i = 1usize;

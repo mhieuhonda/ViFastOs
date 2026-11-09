@@ -739,3 +739,25 @@ soak: all iterations passed
 
 90/90 lần boot xanh — cả hai lỗi hiếm gặp ở soak 100 (vòng 53, 62) không tái
 hiện. Gate full tại r264 cũng PASS 10/10.
+
+## T27 (hoàn tất) — `df` ra applet, chương trình con nhận cap VFS (r268)
+
+Nối `CapMint` vào `spawn_elf_from_fs`: sau `TcbSetArgs`, root mint endpoint VFS
+từ cap GỐC (badge 0) vào slot 1 của chương trình con với **badge 1** — đúng
+danh tính shell, không phải badge root (`BADGE_SUPERUSER`).
+
+- `df` bỏ khỏi danh sách builtin của client; thêm applet `df` trong
+  `vifast-bin` (gọi `STATFS` qua slot 1, không cần IPC buffer vì mọi tham số
+  nằm trong message words).
+- Ảnh đĩa có thêm hard link `/bin/df` (cùng inode `/bin/vf`).
+- Cổng `--interactive` có bước mới `df` → marker `blocks`: nếu cap không được
+  uỷ quyền, applet in `df: error` và bước đỏ.
+
+Đo được (QEMU thật):
+
+```
+[riscv64] df -> 'blocks': OK    -- riscv64 interactive PASS
+[aarch64] df -> 'blocks': OK    -- aarch64 interactive PASS
+```
+
+Đây là **applet đầu tiên cần capability**, tức G2 Phần B đã chạy end-to-end.

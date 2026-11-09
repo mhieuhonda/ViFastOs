@@ -162,6 +162,27 @@ cho chương trình con) rồi chuyển `df` ra applet. Việc này cần chốt
 badge** (badge nào để con thừa hưởng — của shell hay của root), đúng câu hỏi 4
 ở C.3, nên chưa làm trong đêm nay.
 
+### B.3ter Trạng thái cuối (r268) — Phần B **XONG**
+
+Quyết định chính sách badge (câu hỏi 4 ở C.3): **chương trình con thừa hưởng
+badge 1 — đúng danh tính của shell**, không phải badge của root
+(`BADGE_SUPERUSER`). Lý do: applet chạy cùng người dùng với shell; cấp badge
+root sẽ cho nó quyền đọc/ghi mọi file, vượt xa nhu cầu `df`.
+
+Đã nối vào `spawn_elf_from_fs` (root): sau `TcbSetArgs`, `CapMint` endpoint VFS
+từ cap GỐC (badge 0) vào slot 1 của chương trình con với badge 1. `df` đã ra
+khỏi shell builtin và nằm ở `/bin/df` (hard link tới `/bin/vf`).
+
+Kiểm chứng end-to-end (QEMU thật, bước mới trong `--interactive`):
+
+```
+[riscv64] df -> 'blocks': OK      (PASS)
+[aarch64] df -> 'blocks': OK      (PASS)
+```
+
+Nếu cap không được uỷ quyền, applet in `df: error` và bước đó đỏ — nên test này
+thật sự canh đường cap, không phải canh chuỗi.
+
 ### B.4 Điều kiện "xong" của Phần B
 
 - `df` chạy được từ `/bin/vf` (không còn builtin), in cùng con số như bản

@@ -107,7 +107,6 @@ Sinh bằng `python3 scripts/gen-shell-table.py`; **đừng sửa tay** — sử
 | `!!` | - | vifast-client | - |
 | `cat` | vfs_open (Open) + vfs_read_at (Read) + vfs_close (Close) | vifast-client (vfs_read_at) + vifast-server (OPEN/READ) | - |
 | `cd` | *(chưa khai báo)* | vifast-client | - |
-| `df` | vfs_statfs (StatFs) | vifast-client + vifast-server (STATFS) + vifast-fs (usage) | FS USAGE OK |
 | `echo` | - | vifast-client | - |
 | `exec` | send LABEL_RUN | vifast-client + vifast-root (spawn_elf_from_fs) | RUN OK / RUN FS OK |
 | `fsck` | vfs_fsck (Fsck) | vifast-client + vifast-server + vifast-fs (fsck) | FS OPS FSCK OK |
