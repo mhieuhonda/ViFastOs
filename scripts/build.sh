@@ -52,12 +52,19 @@ build_modules() {
     linker="$2"
     shift 2
     for pkg in vifast-server vifast-client; do
+        # r249 (T13): client dùng script KHÔNG căn trang — mỗi khoảng đệm
+        # 4 KiB là một trang ELF thật, và mỗi trang client tốn một Frame
+        # staging lúc boot. Server giữ script cũ (nạp từ ảnh kernel, không
+        # bị ngân sách trang client chi phối).
+        case "$pkg" in
+            vifast-client) module_linker=crates/vifast-root/linkers/module.ld ;;
+            *) module_linker="$linker" ;;
+        esac
         cargo rustc -p "$pkg" --profile root-task --target "$target" -- \
             "$@" \
-            -C link-arg=-T -C link-arg="$linker" \
+            -C link-arg=-T -C link-arg="$module_linker" \
             -C link-arg=--defsym=ROOT_ELF_BASE=0x1000010000 \
-            -C link-arg=-z -C link-arg=max-page-size=4096 \
-            -C link-arg=-z -C link-arg=separate-code
+            -C link-arg=-z -C link-arg=max-page-size=4096
     done
 }
 
@@ -82,7 +89,7 @@ build_bins() {
     shift 3
     cargo rustc -p vifast-bin --profile root-task \
         --target "$target" -- "$@" \
-        -C link-arg=-T -C link-arg="$linker" \
+        -C link-arg=-T -C link-arg=crates/vifast-root/linkers/module.ld \
         -C link-arg=--defsym=ROOT_ELF_BASE=0x1000010000 \
         -C link-arg=-z -C link-arg=max-page-size=4096 \
         -C link-arg=-z -C link-arg=separate-code

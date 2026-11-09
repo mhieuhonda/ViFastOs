@@ -345,6 +345,15 @@ fn write_u64(mut value: u64) {
 
 /// Vòng 161: nhớ lệnh trước đó cho `!!` và `history` (một ô 32 byte).
 /// Dùng con trỏ thô để không tạo tham chiếu tới `static mut`.
+/// r249 (T13): cwd tối giản — chỉ đường dẫn tuyệt đối, xác minh bằng
+/// `vfs_open` trước khi đổi. Đây là trạng thái DUY NHẤT của shell nên đúng
+/// lý do để `cd`/`pwd` là builtin (D10).
+static mut CWD: [u8; 48] = [b'/'; 48];
+static mut CWD_LEN: usize = 1;
+
+fn cwd() -> &'static [u8] {
+    unsafe { &CWD[..CWD_LEN] }
+}
 static mut LAST_CMD: [u8; 32] = [0; 32];
 
 fn last_cmd_at(index: usize) -> u8 {
@@ -416,32 +425,49 @@ fn shell_command(line: &[u8]) {
         shell_command(&owned[..len]);
         return;
     }
-    if line == b"help" {
-        write(b"help history !! jobs kill free ps uname uptime time echo ls [path] cat <path> mkdir <path> rm <path>\n");
-        write(b"mv <old> <new> ln <old> <new> stat <path> sync <path>\n");
-        write(b"truncate <path> <size> df fsck run [path]\n");
-        write(b"runfs <path> [args...]\n");
-    } else if line == b"jobs" {
-        // Vòng 170: đếm TCB đang chạy/ready qua TcbInfo (xấp xỉ "job đang sống").
-        let mut index = 0u64;
-        let mut running = 0u64;
-        loop {
-            let info = vifast_user::tcb_info(index);
-            if info.error != KError::Ok {
-                break;
+    // r249 (T13): `cd`/`pwd` — lệnh CÓ TRẠNG THÁI nên đúng D10 là builtin
+    // (cwd chỉ sống trong tiến trình shell; chương trình ngoài không chia sẻ).
+    if line == b"pwd" {
+        write(cwd());
+        write(b"\n");
+        return;
+    }
+    if let Some(arg) = line.strip_prefix(b"cd ") {
+        if arg.first() == Some(&b'/') {
+            if let Some((fd, _)) = vfs_open(arg, 0) {
+                let _ = vfs_close(fd);
+                // Ghi từng byte (không dùng `copy_from_slice`) để không kéo
+                // `core::slice::copy_from_slice` + nhánh panic vào ảnh client
+                // — mỗi trang client tốn 1 frame Untyped lúc boot.
+                let take = core::cmp::min(arg.len(), 47);
+                unsafe {
+                    let dst = core::ptr::addr_of_mut!(CWD).cast::<u8>();
+                    let mut i = 0;
+                    while i < take {
+                        *dst.add(i) = arg[i];
+                        i += 1;
+                    }
+                    CWD_LEN = take;
+                }
+                write(b"cwd ");
+                write(cwd());
+                write(b"\n");
+            } else {
+                write(b"cd: error\n");
             }
-            let state = (info.value >> 16) & 0xff;
-            if state == 1 || state == 2 {
-                running += 1;
-            }
-            index += 1;
-            if index > 64 {
-                break;
-            }
+        } else {
+            write(b"cd: absolute only\n");
         }
-        write(b"jobs: ");
-        write_u64(running);
-        write(b" runnable\n");
+        return;
+    }
+    if line == b"help" {
+        // r249 (T13): gộp chú thích đối số thành dạng ngắn (`p` = path,
+        // `a b` = hai path, `n` = số) — vừa đủ 38 byte để segment R-X không
+        // tràn sang trang thứ 5, tức tiết kiệm đúng một Frame staging.
+        write(b"help time echo ls history !! cd pwd kill free\n");
+        write(b"cat p mkdir p rm p mv a b ln a b stat p\n");
+        write(b"sync p truncate p n df fsck run [p]\n");
+        write(b"runfs p [args...] ps jobs\n");
     } else if line == b"kill" {
         // Vòng 169: dừng chương trình exec đang chạy (root giữ cap TCB).
         let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_KILL, 0, 0, 0);
@@ -450,36 +476,6 @@ fn shell_command(line: &[u8]) {
         } else {
             b"kill failed\n"
         });
-    } else if line == b"ps" {
-        // Vòng 152: liệt kê TCB đang sống: "<slot> <prio> <state>".
-        let mut index = 0u64;
-        loop {
-            let info = vifast_user::tcb_info(index);
-            if info.error != KError::Ok {
-                break;
-            }
-            write_u64(info.value & 0xff);
-            write(b" ");
-            write_u64((info.value >> 8) & 0xff);
-            write(b" ");
-            write_u64((info.value >> 16) & 0xff);
-            write(b" aff=");
-            write_u64((info.value >> 56) & 0xff);
-            write(b" ");
-            let mut k = 0u32;
-            while k < 4 {
-                let byte = ((info.value >> (24 + k * 8)) & 0xff) as u8;
-                if byte != 0 {
-                    write(&[byte]);
-                }
-                k += 1;
-            }
-            write(b"\n");
-            index += 1;
-            if index > 64 {
-                break;
-            }
-        }
     } else if line == b"time" {
         write_u64(vifast_user::get_time().value);
         write(b"\n");

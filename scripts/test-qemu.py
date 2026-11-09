@@ -94,7 +94,7 @@ def populate_disk(path: str, arch: str) -> None:
     if not os.path.exists(host):
         return
     # D14 (r247): một ảnh multicall + hard link, không còn 3 ảnh riêng.
-    links = ("uname", "uptime", "free", "args")
+    links = ("uname", "uptime", "free", "ps", "jobs", "args")
     subprocess.run([fsutil, "mkfs", path], stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL)
     subprocess.run([fsutil, "mkdir", path, "/bin"], stdout=subprocess.DEVNULL,

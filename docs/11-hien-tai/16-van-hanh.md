@@ -106,20 +106,20 @@ Sinh bằng `python3 scripts/gen-shell-table.py`; **đừng sửa tay** — sử
 |---|---|---|---|
 | `!!` | - | vifast-client | - |
 | `cat` | vfs_open (Open) + vfs_read_at (Read) + vfs_close (Close) | vifast-client (vfs_read_at) + vifast-server (OPEN/READ) | - |
+| `cd` | *(chưa khai báo)* | vifast-client | - |
 | `df` | vfs_statfs (StatFs) | vifast-client + vifast-server (STATFS) + vifast-fs (usage) | FS USAGE OK |
 | `echo` | - | vifast-client | - |
 | `exec` | send LABEL_RUN | vifast-client + vifast-root (spawn_elf_from_fs) | RUN OK / RUN FS OK |
 | `fsck` | vfs_fsck (Fsck) | vifast-client + vifast-server + vifast-fs (fsck) | FS OPS FSCK OK |
 | `help` | - | vifast-client | - |
 | `history` | - | vifast-client | - |
-| `jobs` | tcb_info (TcbInfo) | vifast-client + vifast-kernel (TcbInfo) | - |
 | `kill` | send LABEL_KILL | vifast-client + vifast-root (destroy_exec) | KILL OK (self-test) |
 | `ln` | vfs_link (Link) | vifast-client | - |
 | `loop` | *(chưa khai báo)* | vifast-client | - |
 | `ls` | vfs_open + vfs_read_at + vfs_close | vifast-client + vifast-server | - |
 | `mkdir` | vfs_open (create dir) | vifast-client | - |
 | `mv` | vfs_rename (Rename) | vifast-client | - |
-| `ps` | tcb_info (TcbInfo) | vifast-client + vifast-kernel (TcbInfo) | - |
+| `pwd` | *(chưa khai báo)* | vifast-client | - |
 | `rm` | vfs_unlink (Unlink) | vifast-client | - |
 | `run` | send LABEL_RUN | vifast-client + vifast-root | - |
 | `runfs` | send LABEL_RUN | vifast-client + vifast-root | RUN FS OK / HIARG (QEMU) + persist |

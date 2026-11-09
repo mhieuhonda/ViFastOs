@@ -111,6 +111,63 @@ fn run_uptime() {
     write(b"s\n");
 }
 
+/// `ps`: liệt kê TCB đang sống qua `TcbInfo` (syscall toàn cục, không cần
+/// cap) — chuyển ra chương trình ngoài ở r249 vì nó không phải lệnh có trạng
+/// thái, đúng D10.
+fn run_ps() {
+    let mut index = 0u64;
+    loop {
+        let info = vifast_user::tcb_info(index);
+        if info.error != vifast_abi::KError::Ok {
+            break;
+        }
+        write_decimal(info.value & 0xff);
+        write(b" ");
+        write_decimal((info.value >> 8) & 0xff);
+        write(b" ");
+        write_decimal((info.value >> 16) & 0xff);
+        write(b" aff=");
+        write_decimal((info.value >> 56) & 0xff);
+        write(b" ");
+        let mut k = 0u32;
+        while k < 4 {
+            let byte = ((info.value >> (24 + k * 8)) & 0xff) as u8;
+            if byte != 0 {
+                write(&[byte]);
+            }
+            k += 1;
+        }
+        write(b"\n");
+        index += 1;
+        if index > 64 {
+            break;
+        }
+    }
+}
+
+/// `jobs`: đếm TCB đang Ready/Running qua `TcbInfo` (cùng nguồn với `ps`).
+fn run_jobs() {
+    let mut index = 0u64;
+    let mut running = 0u64;
+    loop {
+        let info = vifast_user::tcb_info(index);
+        if info.error != vifast_abi::KError::Ok {
+            break;
+        }
+        let state = (info.value >> 16) & 0xff;
+        if state == 1 || state == 2 {
+            running += 1;
+        }
+        index += 1;
+        if index > 64 {
+            break;
+        }
+    }
+    write(b"jobs: ");
+    write_decimal(running);
+    write(b" runnable\n");
+}
+
 /// `args`: in các tham số nhận được. Đây là chương trình chứng minh ABI argv:
 /// chuỗi in ra KHÔNG có trong ảnh trên đĩa, chỉ đến từ `argv` của exec.
 fn run_args(argc: usize, argv: *const *const u8) {
@@ -142,6 +199,12 @@ pub extern "C" fn bin_main(argc: usize, argv: *const *const u8) -> ! {
     } else if base == b"free" {
         write(b"BIN OK free\n");
         run_free();
+    } else if base == b"ps" {
+        write(b"BIN OK ps\n");
+        run_ps();
+    } else if base == b"jobs" {
+        write(b"BIN OK jobs\n");
+        run_jobs();
     } else if base == b"args" {
         write(b"BIN OK args\n");
         run_args(argc, argv);
@@ -150,7 +213,7 @@ pub extern "C" fn bin_main(argc: usize, argv: *const *const u8) -> ! {
         write(b"vf: unknown applet '");
         write(base);
         write(b"'\n");
-        write(b"vf: usage: uname | uptime | free | args\n");
+        write(b"vf: usage: uname | uptime | free | ps | jobs | args\n");
         if argc > 1 {
             write(b"vf argv:");
             let mut i = 1usize;
