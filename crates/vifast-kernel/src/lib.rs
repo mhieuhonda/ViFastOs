@@ -4854,11 +4854,23 @@ impl Kernel {
     /// (vòng 100, K8): `revoke_cap` cần biết chắc mọi object sẽ destroy được
     /// trước khi gỡ cap, nếu không rơi vào trạng thái nửa vời (cap mất, object
     /// còn sống, không ai chạm tới).
+    /// T32 (r269): TCB đã `Exited` mà vẫn là `current` của một hart idle.
+    ///
+    /// `current` cố ý giữ TCB đã park cho tới khi runtime lưu context (K37),
+    /// nhưng khi task đã exit thì giữ nó lại chỉ làm object không huỷ được:
+    /// `destroy_object` từ chối, VSpace của nó kẹt `Busy`, và vòng exec sau
+    /// hết slot (`DESTROY DIAG stuck=4` + `BIN EXEC FAIL`, soak 100 vòng 62).
+    fn tcb_is_exited(&self, obj: ObjRef) -> bool {
+        self.tcb(obj)
+            .is_some_and(|tcb| tcb.state == ThreadState::Exited)
+    }
+
     fn can_destroy(&self, obj: ObjRef) -> bool {
         let Some(kind) = self.get(obj).map(|object| object.kind) else {
             return true;
         };
-        if self.current.contains(&Some(obj)) || self.root == Some(obj) {
+        if (self.current.contains(&Some(obj)) && !self.tcb_is_exited(obj)) || self.root == Some(obj)
+        {
             return false;
         }
         if matches!(kind, Kind::VSpace(_))
@@ -4899,7 +4911,17 @@ impl Kernel {
             return Ok(());
         };
         if self.current.contains(&Some(obj)) {
-            return Err(KError::IllegalOperation);
+            if self.tcb_is_exited(obj) {
+                // T32: task đã chết thì `current` chỉ là tàn dư — dọn nó rồi
+                // cho phép huỷ, thay vì để object không bao giờ giải phóng.
+                for slot in self.current.iter_mut() {
+                    if *slot == Some(obj) {
+                        *slot = None;
+                    }
+                }
+            } else {
+                return Err(KError::IllegalOperation);
+            }
         }
         if self.root == Some(obj) {
             return Err(KError::IllegalOperation);
@@ -13455,6 +13477,34 @@ mod tests {
         assert!(kernel
             .lookup_cap(root, 1, Some(ObjType::BlockDevice), Rights::WRITE)
             .is_ok());
+    }
+
+    #[test]
+    fn destroy_object_accepts_an_exited_tcb_that_is_still_current() {
+        // T32 (red-first, D18): `current` cố ý giữ TCB đã park (K37), nhưng
+        // nếu task ĐÃ EXIT mà vẫn là `current` thì object không bao giờ huỷ
+        // được ⇒ VSpace kẹt Busy ⇒ vòng exec sau hết slot (soak 100 vòng 62).
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("worker", 5).unwrap();
+        kernel.enqueue(tcb);
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::Exited;
+        assert_eq!(kernel.current_on(0), Some(tcb));
+        assert_eq!(kernel.destroy_object(tcb), Ok(()));
+        assert_eq!(kernel.current_on(0), None, "tàn dư `current` phải được dọn");
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn destroy_object_still_rejects_a_running_current_tcb() {
+        // Cùng đường, nhưng task ĐANG chạy thì vẫn phải bị từ chối — nếu
+        // không thì ai đó huỷ được task đang thực thi.
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("busy", 5).unwrap();
+        kernel.enqueue(tcb);
+        assert_eq!(kernel.pick_on(0), Some(tcb));
+        assert_eq!(kernel.destroy_object(tcb), Err(KError::IllegalOperation));
+        assert_eq!(kernel.current_on(0), Some(tcb));
     }
 
     #[test]

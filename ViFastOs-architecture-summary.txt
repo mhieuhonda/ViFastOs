@@ -529,6 +529,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 171d524 r268 feat: (T27/G2 Phần B) `df` thành applet — con nhận cap VFS từ root
 - 56ff0ac r268 docs: cập nhật bảng tổng hợp kiến trúc sau gen-docs
 - 5d781ce r269 docs: phụ lục r268 (df thành applet) + ký lại báo cáo
+- 6504ab0 r270 docs: soak 30 tại HEAD cuối (r269) = 90/90 + ký lại báo cáo
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -576,7 +577,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 240/240 PASS
+- `cargo test -p vifast-kernel`: 242/242 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
