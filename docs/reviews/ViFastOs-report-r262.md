@@ -428,12 +428,64 @@ thiết kế (IPC giao 2 lần; ai được destroy một TCB đã exit).
 4. **`TcbGrantCap`**: syscall mới hay mở rộng `TcbConfigure`? (Đề xuất: syscall
    riêng, giữ thứ tự configure → args → caps → start.)
 
+
+---
+
+## Phụ lục A — sau khi ký báo cáo: r263 và r264
+
+Báo cáo trên chốt ở r262. Hai vòng sau đó hoàn tất việc bàn giao và mở đường G2;
+ghi lại ở đây để Agent 0 có trạng thái cuối, không phải đọc thêm tài liệu khác.
+
+### r263 — chốt báo cáo
+
+`docs/reviews/ViFastOs-report-r262.md` (chính tài liệu này) + `scripts/sign-report.py`
+(tính/ghi khối SHA-256 theo quy ước r253) + sửa số case harness 462 → 632 trong
+`docs/11-hien-tai/09-testing.md`.
+
+### r264 — T27 (một phần): `TcbGrantCap`
+
+Đây là **đường mà `exec` đang thiếu** (G2 Phần B). Đã có:
+
+| Thành phần | Nội dung |
+|---|---|
+| ABI | `SyscallId::TcbGrantCap = 57` (`a0`=slot TCB đích, `a1`=slot nguồn, `a2`=slot đích, `a3`=mask quyền; `0` = giữ nguyên trừ `GRANT`) |
+| Kernel | `grant_cap_to_tcb` + arm syscall: kiểm WRITE trên TCB đích, cap nguồn phải có thật, slot đích trống, quyền **thu hẹp**, badge **giữ nguyên**, cấm chuyển Untyped gốc, derive (caller không mất cap) |
+| User | `vifast_user::tcb_grant_cap` |
+| Test | 6 host test, mỗi test khoá một ràng buộc; riêng clamp `GRANT` đã chứng minh **đỏ** khi tạm bỏ |
+
+Kernel host test: 236 → **242** (240 chạy + 2 fuzz `#[ignore]`).
+
+**Chưa làm** (và vì sao): nối `TcbGrantCap` vào đường `exec` rồi chuyển `df` ra
+applet cần chốt **chính sách badge** — badge là `uid` mà FS server dùng để kiểm
+quyền file, nên phải quyết định chương trình con thừa hưởng badge của shell hay
+của root trước khi viết mã. Đây đúng là câu hỏi 4 ở Part 6.
+
+### Một thí nghiệm thất bại, đã hoàn nguyên (ghi để khỏi lặp)
+
+Định sửa lỗi soak 100 vòng 62 (`DESTROY DIAG stuck=4` → `BIN EXEC FAIL`) bằng
+cách nhả `current[hart]` khi hart park. **Boot chết cả 3 kiến trúc** (timeout,
+thiếu 37 marker) ⇒ đã hoàn nguyên toàn bộ, build lại, boot 3/3 PASS. Suy đoán:
+`current` còn là chỗ duy nhất giữ danh tính task để lưu/khôi phục context và để
+`Exit` dọn dẹp. Hướng đúng nhiều khả năng là cho `destroy_object` chấp nhận TCB
+`Exited` và tự gỡ `current` của chính nó, không phải dọn ở đường park.
+
+### Trạng thái cuối phiên
+
+| Chỉ số | Giá trị |
+|---|---|
+| `main` | gate full **PASS** (sau khi `cargo fmt`) |
+| Kernel host test | 242 |
+| Soak 100 × 3 arch (tại r262) | 298/300 = 99,3% (không còn lỗi `FS V2 OK`) |
+| Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
+| Audit P | P1-7 và P2 `AP_GDT` đóng |
+| Việc tiếp theo | bảng T26–T32 trong `docs/reviews/progress-g1.md` |
+
 <!-- SHA-256: phần dưới đây KHÔNG nằm trong hash -->
 
 ## SHA-256
 
 ```text
-60129e3e6485b2489794cc47187aeb884de60b91bffa61202d69f62aeacae756  docs/reviews/ViFastOs-report-r262.md
+ec9602028106eb6a78af83f8fa0e061c2e5527ee1ae8c1e3967aced426c8df2a  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
