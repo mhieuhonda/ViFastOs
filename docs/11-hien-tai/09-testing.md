@@ -144,13 +144,14 @@ Tóm tắt:
   `CAP DELETE OK`, `TCB SUSPEND OK`, `FS LARGE OK`, `FS APPEND OK`,
   `FS OPEN FLAGS OK`, `FS STAT PATH OK`, `HARD LINK OK`, `SYMLINK OK`,
   `IRQ OK`, `CNODE OK`, `TCB REAP OK`, `WAIT REAP OK`, `PAGER OK`,
-  `PAGER2 OK`, `PAGER EVICT OK`, `PAGER3 OK`, `SHELL READY`, `DESTROY OK`
+  `PAGER2 OK`, `PAGER EVICT OK`, `PAGER3 OK`, `SHELL READY`, `DESTROY OK`,
+  `KSTORE CANARY OK` (r229: canary vùng đệm 4 KiB sau `KERNEL_STORAGE`, cả 3 arch)
 - **Fault**: đúng **6** dòng `USER FAULT`; phải có các địa chỉ `0x80000000`,
   `0x1000002000`, `0x1000301000`, `0x1001000000`, `0x1001001000`
   (record còn lại hiện là `0x0`).
 - **Không được xuất hiện**: các marker `... BAD` tương ứng (gồm `DESTROY BAD`), `ROOT PANIC`,
   `STALL`, `BOOT HANDOFF FAIL`, `KERNEL IRQ OUTSIDE IDLE`, `AP PIC IRQ`,
-  `FS CORRUPT`.
+  `FS CORRUPT`, `KSTORE CANARY BAD` (r229).
 - **RISC-V/AArch64**: `SMP OK (... ipi=1)`, `SMP TIMER RATE`, `SMP TIMER OK`,
   `SMP IDLE OK`, `SMP PREEMPT OK`, `SMP SCHED OK`, `SMP WORKERS OK`,
   `SMP POST IDLE OK`, `TLB STATS`; AArch64 yêu cầu TLB `ipi == 0`
