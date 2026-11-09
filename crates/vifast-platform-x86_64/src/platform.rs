@@ -160,6 +160,10 @@ static AP_MAINT_TLB_ADDR: AtomicU64 = AtomicU64::new(0);
 static AP_MAINT_TLB_PAGES: AtomicUsize = AtomicUsize::new(0);
 static AP_MAINT_TLB_ASID: AtomicU32 = AtomicU32::new(0);
 const TRAMPOLINE_STAGE_OFFSET: u64 = 0x802;
+/// P1-7 (r261): ô 4 byte trong trang trampoline ghi hart mà AP sẽ trở thành.
+/// Trước đây `ap_entry` dùng hằng `AP_HART`, nên cùng một trampoline không thể
+/// khởi động hart nào khác; nay danh tính hart đi qua dữ liệu, không qua mã.
+const TRAMPOLINE_HART_OFFSET: u64 = 0x204;
 
 unsafe fn identity_u32(address: u64) -> Option<u32> {
     if address.saturating_add(4) > 0x4000_0000 {
@@ -345,8 +349,15 @@ impl Tss {
     }
 }
 
-static mut GDT: [u64; 7] = [0; 7];
-static mut GDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
+/// P1-7 (r261): GDT riêng cho TỪNG hart.
+///
+/// Trước đây BSP dùng `GDT` còn AP dùng `AP_GDT`; cả hai đều gắn cứng vào một
+/// hart duy nhất, nên trampoline chỉ khởi động được đúng một AP và mọi hart
+/// khác không có GDT/TSS hợp lệ. Nay mọi hart đi chung một đường
+/// `setup_hart_gdt_tss_idt(hart)` và mỗi hart có GDT + GDTR + TSS riêng.
+static mut GDTS: [[u64; GDT_ENTRIES]; MAX_HARTS] = [[0; GDT_ENTRIES]; MAX_HARTS];
+static mut GDT_PTRS: [DescriptorTablePtr; MAX_HARTS] =
+    [DescriptorTablePtr { limit: 0, base: 0 }; MAX_HARTS];
 static mut IDT: [IdtEntry; 256] = [IdtEntry::zero(); 256];
 /// Vùng ảnh kernel mà firmware đã nạp: (base, base + SizeOfImage) theo
 /// `EFI_LOADED_IMAGE_PROTOCOL` (vòng 96, audit #8). Ảnh là DYNAMIC_BASE nên
@@ -368,8 +379,6 @@ pub fn image_range() -> (u64, u64) {
 }
 
 static mut IDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
-static mut AP_GDT: [u64; 7] = [0; 7];
-static mut AP_GDT_PTR: DescriptorTablePtr = DescriptorTablePtr { limit: 0, base: 0 };
 static mut TSSS: [Tss; MAX_HARTS] = [Tss::zero(); MAX_HARTS];
 
 #[repr(C)]
@@ -857,7 +866,7 @@ fn kernel_data_ranges() -> [(u64, usize); 20] {
             core::mem::size_of::<[TrapFrame; vifast_kernel::MAX_TCBS]>(),
         ),
         (
-            core::ptr::addr_of!(GDT) as u64,
+            core::ptr::addr_of!(GDTS) as u64,
             core::mem::size_of::<[u64; 7]>(),
         ),
         (
@@ -903,11 +912,11 @@ fn kernel_data_ranges() -> [(u64, usize); 20] {
         // Vòng 93 (audit #6): các static dưới đây từng bị bỏ khỏi danh sách
         // NX nên vẫn executable trong kernel space.
         (
-            core::ptr::addr_of!(AP_GDT) as u64,
+            core::ptr::addr_of!(GDTS) as u64,
             core::mem::size_of::<[u64; 7]>(),
         ),
         (
-            core::ptr::addr_of!(GDT_PTR) as u64,
+            core::ptr::addr_of!(GDT_PTRS) as u64,
             core::mem::size_of::<DescriptorTablePtr>(),
         ),
         (
@@ -915,7 +924,7 @@ fn kernel_data_ranges() -> [(u64, usize); 20] {
             core::mem::size_of::<DescriptorTablePtr>(),
         ),
         (
-            core::ptr::addr_of!(AP_GDT_PTR) as u64,
+            core::ptr::addr_of!(GDT_PTRS) as u64,
             core::mem::size_of::<DescriptorTablePtr>(),
         ),
         (
@@ -1485,6 +1494,7 @@ unsafe fn install_real_trampoline() {
     // Data: CR3 at 0x200, GDT at 0x300/0x340, stack/entry patched in code.
     let pml4 = core::ptr::addr_of!(PML4) as u32;
     core::ptr::write_unaligned(page.add(0x200) as *mut u32, pml4);
+    core::ptr::write_unaligned(page.add(0x204) as *mut u32, AP_HART as u32);
     let gdt = [
         0u64,
         0x00CF_9A00_0000_FFFFu64,
@@ -1505,6 +1515,12 @@ unsafe fn install_real_trampoline() {
     );
 }
 
+/// Hart mà trampoline đang dựng (đọc từ dữ liệu, không phải hằng số).
+unsafe fn hart_from_trampoline() -> usize {
+    let hart = core::ptr::read_volatile((AP_TRAMPOLINE + TRAMPOLINE_HART_OFFSET) as *const u32);
+    core::cmp::min(hart as usize, MAX_HARTS - 1)
+}
+
 #[allow(asm_sub_register)]
 #[no_mangle]
 pub extern "C" fn ap_entry() -> ! {
@@ -1512,8 +1528,9 @@ pub extern "C" fn ap_entry() -> ! {
         core::arch::asm!("cli");
         let stage_ptr = (AP_TRAMPOLINE + TRAMPOLINE_STAGE_OFFSET) as *mut u8;
         core::ptr::write_volatile(stage_ptr, 3);
-        setup_ap_gdt_tss_idt();
-        init_cpu(AP_HART);
+        let hart = hart_from_trampoline();
+        setup_hart_gdt_tss_idt(hart);
+        init_cpu(hart);
         // r233 (T6, audit92): ba assert cũ đều VACUOUS — chúng đọc lại đúng giá
         // trị vừa ghi (`hart_id()` tra index cố định, `str` trả hằng 0x28,
         // GS_BASE so với chính giá trị vừa set). Chúng không thể fail ⇒ false-green.
@@ -1690,43 +1707,11 @@ unsafe fn init_cpu(hartid: usize) {
     write_msr(IA32_GS_BASE, core::ptr::addr_of!(CPU_STATES[index]) as u64);
     write_msr(IA32_KERNEL_GS_BASE, 0);
 }
-unsafe fn setup_ap_gdt_tss_idt() {
-    let tss = core::ptr::addr_of_mut!(TSSS[AP_HART]);
-    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[AP_HART]) as u64 + 16384;
-    (*tss).ist[0] = core::ptr::addr_of!(IST_STACKS[AP_HART]) as u64 + 32768;
-    (*tss).iomap = core::mem::size_of::<Tss>() as u16;
-    let tss_base = tss as u64;
-    let tss_limit = core::mem::size_of::<Tss>() as u64 - 1;
-    let tss_low = (tss_limit & 0xffff)
-        | ((tss_base & 0xffffff) << 16)
-        | (0x89u64 << 40)
-        | (((tss_limit >> 16) & 0xf) << 48)
-        | (((tss_base >> 24) & 0xff) << 56);
-    let gdt = core::ptr::addr_of_mut!(AP_GDT);
-    (*gdt)[0] = 0;
-    (*gdt)[1] = 0x00AF9A000000FFFF;
-    (*gdt)[2] = 0x00AF92000000FFFF;
-    (*gdt)[3] = 0x00AFF2000000FFFF;
-    (*gdt)[4] = 0x00AFFA000000FFFF;
-    (*gdt)[5] = tss_low;
-    (*gdt)[6] = tss_base >> 32;
-    core::ptr::write_volatile(
-        core::ptr::addr_of_mut!(AP_GDT_PTR),
-        DescriptorTablePtr {
-            limit: 7 * 8 - 1,
-            base: gdt as u64,
-        },
-    );
-    core::arch::asm!("lgdt [{}]", in(reg) core::ptr::addr_of!(AP_GDT_PTR));
-    x86_reload_segments();
-    core::arch::asm!("mov ax, 0x28", "ltr ax");
-    core::arch::asm!("lidt [{}]", in(reg) core::ptr::addr_of!(IDT_PTR));
-}
-
-unsafe fn setup_gdt_tss_idt() {
-    let tss = core::ptr::addr_of_mut!(TSSS[0]);
-    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[0]) as u64 + 16384;
-    (*tss).ist[0] = core::ptr::addr_of!(IST_STACKS[0]) as u64 + 32768;
+unsafe fn setup_hart_gdt_tss_idt(hart: usize) {
+    let hart = core::cmp::min(hart, MAX_HARTS - 1);
+    let tss = core::ptr::addr_of_mut!(TSSS[hart]);
+    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[hart]) as u64 + 16384;
+    (*tss).ist[0] = core::ptr::addr_of!(IST_STACKS[hart]) as u64 + 32768;
     (*tss).iomap = core::mem::size_of::<Tss>() as u16;
     let tss_base = tss as u64;
     let tss_limit = core::mem::size_of::<Tss>() as u64 - 1;
@@ -1736,7 +1721,7 @@ unsafe fn setup_gdt_tss_idt() {
         | (((tss_limit >> 16) & 0xf) << 48)
         | (((tss_base >> 24) & 0xff) << 56);
     let tss_high = tss_base >> 32;
-    let gdt = core::ptr::addr_of_mut!(GDT);
+    let gdt = core::ptr::addr_of_mut!(GDTS[hart]);
     (*gdt)[0] = 0;
     (*gdt)[1] = 0x00AF9A000000FFFF;
     (*gdt)[2] = 0x00AF92000000FFFF;
@@ -1744,17 +1729,17 @@ unsafe fn setup_gdt_tss_idt() {
     (*gdt)[4] = 0x00AFFA000000FFFF;
     (*gdt)[5] = tss_low;
     (*gdt)[6] = tss_high;
+    let gdt_base = core::ptr::addr_of!(GDTS[hart]) as u64;
     core::ptr::write_volatile(
-        core::ptr::addr_of_mut!(GDT_PTR),
+        core::ptr::addr_of_mut!(GDT_PTRS[hart]),
         DescriptorTablePtr {
-            limit: 7 * 8 - 1,
-            base: gdt as u64,
+            limit: GDT_ENTRIES as u16 * 8 - 1,
+            base: gdt_base,
         },
     );
-    core::arch::asm!("lgdt [{}]", in(reg) core::ptr::addr_of!(GDT_PTR));
+    core::arch::asm!("lgdt [{}]", in(reg) core::ptr::addr_of!(GDT_PTRS[hart]));
     x86_reload_segments();
     core::arch::asm!("ltr ax", in("ax") TSS_SEL);
-
     let idt = core::ptr::addr_of_mut!(IDT);
     for entry in (*idt).iter_mut() {
         *entry = IdtEntry::zero();
@@ -2330,7 +2315,7 @@ impl Platform for X86Platform {
             calibrate_tsc_pit();
             // APs start before prepare_user(); install the shared IDT first so
             // their D4 idle window never runs with an empty IDT.
-            setup_gdt_tss_idt();
+            setup_hart_gdt_tss_idt(0);
             // Vòng 98 (audit #9): áp NX toàn ảnh SAU khi IDT đã sẵn sàng — nếu có lỗi
             // mapping thì fault còn in được thay vì triple fault trước khi có IDT.
             // Vòng 97 (audit #8): NX toàn bộ ảnh trừ dải text đọc từ PE section
@@ -2494,7 +2479,7 @@ impl Platform for X86Platform {
                 false,
             )
             && kernel_leaf_ok(root_pa, core::ptr::addr_of!(IST_STACKS) as u64, true, false)
-            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(GDT) as u64, true, false)
+            && kernel_leaf_ok(root_pa, core::ptr::addr_of!(GDTS) as u64, true, false)
             && kernel_leaf_ok(root_pa, core::ptr::addr_of!(TSSS) as u64, true, false)
             && kernel_leaf_ok(root_pa, core::ptr::addr_of!(IDT) as u64, true, false)
             && kernel_leaf_ok(
