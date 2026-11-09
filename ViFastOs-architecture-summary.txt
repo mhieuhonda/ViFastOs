@@ -2512,8 +2512,9 @@ Sau đó mới tới input/gpu. Sau G3: compositor và ViFastKey (mốc 11, 12).
 50. **D7. Đánh số vòng:** commit `rNNN <type>: <nội dung>`, `type` ∈
     feat|fix|test|perf|infra|docs|chore|revert; hậu tố `b`, `c` cho commit tiếp
     theo cùng vòng; **cấm** `vong N` trần và cấm dùng `moc N` thay số vòng.
-51. **D8. `main` chỉ dành cho OS.** `deploy/` và web phải ở nhánh `web`/repo
-    riêng. Agent đo trên tree không có tiến trình nào khác ghi vào; nếu phát
+51. **D8 (đã bỏ tại commit 6073dca).** `deploy/` và web thuộc `main`, thống nhất
+    với ViFastKey/ViFastTts/ViFastSite; không tách nhánh, không chuyển repo
+    riêng. Khi đo, agent vẫn cần tree không có tiến trình khác ghi vào; nếu phát
     hiện commit lạ xen giữa vòng thì dừng đo, ghi lại, đo lại.
 52. **D9. Đóng băng kích thước `Kernel`** cho tới khi khe AArch64 ≥ 4096 byte.
     **Đã đỡ băng ở r229** (khe 4 104 + canary).
