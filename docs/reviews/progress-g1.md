@@ -131,3 +131,37 @@ trong khi **một trang là 4 096 byte**:
 ⇒ Bài học đo lường (đưa vào D17): **"byte" không phải đại lượng quyết định, "trang" mới là.**
 Muốn giảm 1 trang phải cắt ≥ phần dư tới biên trang kế tiếp, hoặc cắt cả trang.
 Từ nay mỗi lần đo ghi: `offset trong trang của PT_LOAD cuối` + số trang thật.
+
+## T9 — main về trạng thái có bằng chứng (DONE)
+
+- **Gate full trên `main` PASS** (`/tmp/main-gate-full3.log`): build, kernel-test,
+  tests-present, fuzz, qemu (3 arch × 3), persist, docs, harness, fmt — tất cả PASS.
+  Trước đó có 1 lần FAIL do flake `input` riscv64 (key chưa tới shell) — đúng loại
+  flake đã ghi ở r224, không phải lỗi code.
+- **D8:** nhánh `web` giữ `deploy/`; trên `main` dùng `git rm -r --cached deploy/`
+  (giữ file trên đĩa để tiến trình web đang chạy không bị xoá đột ngột) + `.gitignore`.
+  Bản sửa dở `index.html` đã lưu `/tmp/web-index-dirty.html`
+  (sha256 `978e0f31…`).
+- **`ipc.rs`:** fix P0 reply-orphan **chưa từng ở main** — chỉ nằm trên `wip/r224`.
+  Nay đã đưa vào (`r242`) kèm **host test `reply_with_bad_cap_slot_restores_caller`**,
+  đã chứng minh **đỏ trên code cũ** (cargo test FAILED) rồi xanh sau fix.
+  Đây là chỗ docs §18 mục 48 mô tả sai — nay đã đúng.
+
+## T10 — đo lại kích thước (DONE): xem bảng ở trên; kết luận "byte ≠ trang".
+
+## T11 — giảm kích thước bằng cấu hình build
+
+| Bước | Thay đổi | RV | A64 | x86 | Kết luận |
+|---|---|---|---|---|---|
+| 0 | baseline (r241) | 25 088 = **7/8** | 29 024 = **8/8** | 33 192 = **9/9** | |
+| 1 | `opt-level = "z"` cho `profile.root-task` | 25 088 = 7/8 | **24 928 = 7/8** | **29 096 = 8/9** | **CÓ LỢI — giữ** (`r244`) |
+| 2 | loại `core::fmt` | — | — | — | **KHÔNG ÁP DỤNG**: `nm` cho thấy chỉ còn `panic_fmt` 16 B, không có fmt machinery |
+| 3 | panic handler không format | — | — | — | đã ở trạng thái tối thiểu (panic = abort) |
+| 4 | linker: gộp rodata | chưa thử | — | — | để vòng sau |
+
+Chuyển `free` thành applet (`r245`): client **không đổi trang** (chỉ cắt ~150 B,
+cần ≥512 B mới vượt biên trên riscv64) — **ghi nhận là kết quả âm có số đo**.
+
+**Hiện tại:** RV 7/8, A64 7/8, x86 8/9 ⇒ **dư 1 trang mỗi arch** (mục tiêu 2, sàn 1).
+Cần thêm 1 trang: theo kế hoạch là T12 (ABI argv) + T13 (df/ps cần cap) — không thể
+đạt bằng cắt chuỗi nhỏ lẻ.
