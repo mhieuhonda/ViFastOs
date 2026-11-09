@@ -907,3 +907,19 @@ khi trước đó cùng mã nguồn vẫn xanh. Chạy lại `./scripts/build.sh
 ⇒ Quy ước: **luôn `./scripts/build.sh` trước mọi lần chạy QEMU**, không để cây
 ở trạng thái build một phần (gate/soak dùng chung `target/…/release`, một crate
 được build lẻ là đủ để lệch bộ binary).
+
+### Soak 100 tại HEAD cuối (r280) — số chốt của phiên
+
+```
+riscv64  99/100 PASS (99.0%)
+aarch64 100/100 PASS (100.0%)
+x86_64  100/100 PASS (100.0%)
+iterations: 100, elapsed: 1908.2s
+```
+
+Lỗi duy nhất (vòng 56, riscv64) đúng lớp T33b: lần 1 `rc=0` sau 3,0 s thiếu 45
+marker, lần chạy lại PASS nhưng bước TCP echo đỏ vì cổng còn bận.
+
+**Tổng cả phiên**: 100 + 30 + 30 + 100 + 40 + 120 (x86) + 200 (rv) + 200 (rv) +
+100 = khoảng **1 200 lần boot** cho 3 kiến trúc; các lỗi còn lại chỉ thuộc hai
+lớp hiếm T33a/T33b và T31.

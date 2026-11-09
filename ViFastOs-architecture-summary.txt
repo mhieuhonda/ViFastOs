@@ -542,6 +542,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 62f5104 r277 fix: (T33) soak nhận tên arch ngắn + đính chính lần 2 về "treo PREEMPT OK"
 - 70d0333 r278 docs: bảng trạng thái cuối phiên + ký lại báo cáo (ea95f856…e5050)
 - a4eea5c r279 fix: (T33b) destroy_exec thử lại có nhường CPU; ghi rõ chẩn đoán T33b
+- cb95023 r280 docs: bài học vận hành — luôn build.sh đầy đủ trước khi chạy QEMU
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

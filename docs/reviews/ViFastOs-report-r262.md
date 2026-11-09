@@ -588,6 +588,7 @@ lần chạy nào**; `run.log` mới là nơi ghi rõ `rc` và thời lượng c
 | Soak 100 @ r274 (có T32) | 299/300 = 99,7% |
 | Soak 100 @ r276 (có T32) | 298/300 = 99,3% |
 | Soak x86-only 120 @ r277 | **120/120 = 100%** (1 216 s) |
+| Soak 100 @ r280 (HEAD cuối) | **299/300 = 99,7%** (riscv 99, arm 100, x86 100) — lỗi duy nhất là T33b |
 | Lỗi còn lại | T33a (x86 treo ~1% trước `PREEMPT OK`), T33b (riscv thoát sớm ~1%), T31 (message lặp ~1%) |
 | Lỗi đã đóng trong phiên | `FS V2 OK` (giảm nhờ `MAX_IO` 128, gốc mở), `DESTROY DIAG` (T32), 3 lỗi harness (T17/T19/T33) |
 | Audit K | 43 CLOSED · 3 UNREACHABLE · 0 OPEN |
@@ -602,7 +603,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-ea95f85640d11aacbf436c8a82d6d5e0e47ee8ad15d7ad92ad8f24594d7e5050  docs/reviews/ViFastOs-report-r262.md
+a235ea8c4a857b6c703e2d8a2c9d126f848567015d36677405f5e420e51b5ebe  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
