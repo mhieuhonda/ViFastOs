@@ -923,3 +923,26 @@ marker, lần chạy lại PASS nhưng bước TCP echo đỏ vì cổng còn b�
 **Tổng cả phiên**: 100 + 30 + 30 + 100 + 40 + 120 (x86) + 200 (rv) + 200 (rv) +
 100 = khoảng **1 200 lần boot** cho 3 kiến trúc; các lỗi còn lại chỉ thuộc hai
 lớp hiếm T33a/T33b và T31.
+
+
+## Hợp nhất từ nhánh `r254` (r283) — phân tích T18 còn giá trị
+
+Nhánh `r254` (r256–r258) không merge nguyên được: hai trong ba commit là tài
+liệu đã cũ, commit `r257` mang bản `scripts/test-qemu.py` CŨ HƠN `main` (main đã
+có bản sửa T19/T20 tốt hơn). Phần duy nhất còn giá trị là phân tích T18 dưới
+đây, được chép nguyên văn vào đây rồi nhánh được xoá.
+
+### Hồi quy về 1 trang sau khi merge r253 của nhánh web (issue #10)
+
+Ngay sau khi rebase lên `d3f2472` ("sửa 12 issue #2–#13"), aarch64 trở lại
+**24 944 B = 7 trang**, tức dư 1. Nguyên nhân đo được: commit đó thêm đường
+`READDIR_BULK` vào client (+107 dòng) làm `.text` aarch64 từ ≤ 0x4000 lên
+**0x4157** (16 727 B). Để về 6 trang cần `.text ≤ 0x4000`, tức phải cắt thêm
+**343 B**; riêng phần bảng section header của file là 280 B và segment RW nằm ở
+0x6000 nên không thể "lấn" sang.
+
+Trạng thái T18: **PARTIAL — đạt sàn (dư 1) cho aarch64**, không đạt mục tiêu 2.
+Các hướng đã thử và bị dữ liệu bác bỏ: `--icf=all` (0 byte), thay mem* builtin
+(đã làm, ăn 4 096 B nhưng bị 343 B của issue #10 lấn trở lại). Hướng còn lại
+đều phải cắt tính năng (help/time/echo thành applet) — để G2 quyết vì free-page
+allocator sẽ bỏ hẳn ràng buộc trang.

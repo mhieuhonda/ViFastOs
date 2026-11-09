@@ -544,6 +544,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - a4eea5c r279 fix: (T33b) destroy_exec thử lại có nhường CPU; ghi rõ chẩn đoán T33b
 - cb95023 r280 docs: bài học vận hành — luôn build.sh đầy đủ trước khi chạy QEMU
 - 390ec65 r281 docs: số chốt soak 100 tại HEAD (299/300) + ký lại báo cáo a235ea8c…1b5ebe
+- d96ecc1 r282 docs: đồng bộ bảng tổng hợp kiến trúc sau lần gen-docs cuối
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
