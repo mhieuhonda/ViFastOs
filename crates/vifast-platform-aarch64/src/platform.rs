@@ -1247,6 +1247,10 @@ impl Platform for Aarch64Platform {
         context.regs[0] = value;
     }
 
+    fn set_context_arg1(context: &mut TrapFrame, value: u64) {
+        context.regs[1] = value;
+    }
+
     fn contexts() -> &'static mut [TrapFrame] {
         unsafe { &mut *core::ptr::addr_of_mut!(CONTEXTS) }
     }

@@ -623,6 +623,19 @@ pub fn tcb_configure(
     result(e, v)
 }
 
+/// D15 (r246): đặt `argc`/`argv` khởi động cho TCB đã `tcb_configure`
+/// nhưng chưa resume. Kernel từ chối `argc > 8`, `argv` lệch 8 B, hoặc
+/// `argc != 0` mà `argv == 0`.
+pub fn tcb_set_args(tcb_slot: u8, argc: u64, argv: u64) -> SyscallResult {
+    let (e, v) = unsafe {
+        syscall(
+            SyscallId::TcbSetArgs as u64,
+            [tcb_slot as u64, argc, argv, 0, 0, 0],
+        )
+    };
+    result(e, v)
+}
+
 pub fn tcb_configure_fault(
     tcb_slot: u8,
     entry: u64,

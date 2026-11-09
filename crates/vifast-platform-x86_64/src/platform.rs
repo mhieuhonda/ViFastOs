@@ -2539,6 +2539,10 @@ impl Platform for X86Platform {
     fn set_context_arg0(context: &mut TrapFrame, value: u64) {
         context.rdi = value;
     }
+
+    fn set_context_arg1(context: &mut TrapFrame, value: u64) {
+        context.rsi = value;
+    }
     fn contexts() -> &'static mut [TrapFrame] {
         unsafe { &mut *core::ptr::addr_of_mut!(CONTEXTS) }
     }

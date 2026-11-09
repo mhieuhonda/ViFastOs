@@ -63,12 +63,22 @@ pub enum UserAction {
         tcb: ObjRef,
         entry: u64,
         stack: u64,
+        argc: u64,
+        argv: u64,
     },
     /// Rebuild a TCB context at its configured entry/stack.
     RestartTcb {
         tcb: ObjRef,
         entry: u64,
         stack: u64,
+        argc: u64,
+        argv: u64,
+    },
+    /// D15 (r246): ghi `argc`/`argv` vào context đã dựng của TCB.
+    SetTcbArgs {
+        tcb: ObjRef,
+        argc: u64,
+        argv: u64,
     },
     /// Copy a user path into the ramfs VFS and return an fd.
     Open {
@@ -821,6 +831,32 @@ impl Kernel {
         table.stack = stack;
         table.vspace = Some(vspace);
         table.priority = priority.min(MAX_PRIORITY);
+        // D15: cấu hình lại nghĩa là chương trình mới ⇒ xoá tham số cũ. Ai
+        // muốn truyền tham số thì gọi `TcbSetArgs` SAU bước này.
+        table.argc = 0;
+        table.argv = 0;
+        Ok(())
+    }
+
+    /// D15 (r246): đặt `argc`/`argv` khởi động cho một TCB đã configure
+    /// nhưng chưa chạy. Chỉ nhận TCB `Inactive`/`Exited` để không ghi đè
+    /// context của task đang sống.
+    pub fn set_tcb_args(&mut self, tcb: ObjRef, argc: u64, argv: u64) -> KResult<()> {
+        if argc > vifast_abi::user_layout::EXEC_ARGS_MAX as u64 {
+            return Err(KError::InvalidArg);
+        }
+        if argc != 0 && argv == 0 {
+            return Err(KError::InvalidArg);
+        }
+        if argv % 8 != 0 {
+            return Err(KError::InvalidArg);
+        }
+        let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
+        if table.state != ThreadState::Inactive && table.state != ThreadState::Exited {
+            return Err(KError::IllegalOperation);
+        }
+        table.argc = argc;
+        table.argv = argv;
         Ok(())
     }
 
@@ -1314,7 +1350,7 @@ impl Kernel {
 
     /// Reset a non-running TCB to its configured entry/stack and make it
     /// runnable again.  The caller must rebuild the architecture context.
-    pub fn restart_tcb(&mut self, target: ObjRef, caller: ObjRef) -> KResult<(u64, u64)> {
+    pub fn restart_tcb(&mut self, target: ObjRef, caller: ObjRef) -> KResult<(u64, u64, u64, u64)> {
         if target == caller {
             return Err(KError::IllegalOperation);
         }
@@ -1333,6 +1369,8 @@ impl Kernel {
         }
         let entry = table.entry;
         let stack = table.stack;
+        let argc = table.argc;
+        let argv = table.argv;
         let sched = table.sched_context;
         // Vòng 101 (K36): cũng cấm restart một client đang BlockedReply —
         // nếu không server ôm caller cũ mà `reply` đòi BlockedReply+epoch
@@ -1390,7 +1428,7 @@ impl Kernel {
         table.wake_at = None;
         table.fds = [None; MAX_FDS];
         self.enqueue(target);
-        Ok((entry, stack))
+        Ok((entry, stack, argc, argv))
     }
 
     fn user_leaf_ok(ops: &dyn PageTableOps, root: u64, va: u64, need_write: bool) -> bool {
@@ -6369,12 +6407,41 @@ impl Kernel {
                         if let Err(error) = self.set_fault_endpoint(cap.obj, fault) {
                             return UserAction::Return { value: 0, error };
                         }
+                        // D15: configure vừa xoá tham số, nên bước này luôn
+                        // dựng context với argc=argv=0; TcbSetArgs bù sau.
+                        let (argc, argv) = self
+                            .tcb(cap.obj)
+                            .map(|t| (t.argc, t.argv))
+                            .unwrap_or((0, 0));
                         UserAction::ConfigureTcb {
                             tcb: cap.obj,
                             entry: a1,
                             stack: a2,
+                            argc,
+                            argv,
                         }
                     }
+                    Err(error) => UserAction::Return { value: 0, error },
+                }
+            }
+            n if n == SyscallId::TcbSetArgs as u64 => {
+                // D15 (r246): chỉ TCB đã configure nhưng CHƯA chạy mới nhận
+                // tham số; nếu không sẽ ghi đè context của task đang sống.
+                let cap = match self.lookup_cap(
+                    tcb,
+                    slot_or_invalid!(a0),
+                    Some(ObjType::Tcb),
+                    Rights::WRITE,
+                ) {
+                    Ok(cap) => cap,
+                    Err(error) => return UserAction::Return { value: 0, error },
+                };
+                match self.set_tcb_args(cap.obj, a1, a2) {
+                    Ok(()) => UserAction::SetTcbArgs {
+                        tcb: cap.obj,
+                        argc: a1,
+                        argv: a2,
+                    },
                     Err(error) => UserAction::Return { value: 0, error },
                 }
             }
@@ -6389,10 +6456,12 @@ impl Kernel {
                     Err(error) => return UserAction::Return { value: 0, error },
                 };
                 match self.restart_tcb(cap.obj, tcb) {
-                    Ok((entry, stack)) => UserAction::RestartTcb {
+                    Ok((entry, stack, argc, argv)) => UserAction::RestartTcb {
                         tcb: cap.obj,
                         entry,
                         stack,
+                        argc,
+                        argv,
                     },
                     Err(error) => UserAction::Return { value: 0, error },
                 }
@@ -13050,7 +13119,7 @@ mod tests {
         assert_eq!(kernel.wait_as(blocked, ntfn), Ok(None));
         assert_eq!(
             kernel.restart_tcb(blocked, waiter),
-            Ok((0x4000_0000, 0x4000_4000))
+            Ok((0x4000_0000, 0x4000_4000, 0, 0))
         );
         // Hàng recv và waiters đã sạch: recv sau đó park lại từ đầu.
         assert_eq!(kernel.recv(waiter, ep, 0), Ok(None));
@@ -13313,8 +13382,53 @@ mod tests {
         assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Exited);
         assert_eq!(kernel.resume_tcb(t), Err(KError::IllegalOperation));
         assert_eq!(kernel.suspend_tcb(t, root), Err(KError::IllegalOperation));
-        assert_eq!(kernel.restart_tcb(t, root), Ok((0x4000_0000, 0x4000_4000)));
+        assert_eq!(
+            kernel.restart_tcb(t, root),
+            Ok((0x4000_0000, 0x4000_4000, 0, 0))
+        );
         assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn r246_set_tcb_args_validates_bounds_and_lifetime() {
+        // D15: argv chỉ nhận TCB đã configure nhưng CHƯA chạy, argc <= 8,
+        // argv canh 8 B, và argc != 0 phải có argv.
+        let mut kernel = Kernel::new();
+        let space = kernel
+            .create_user_vspace(0x1000, 0x4000_a000, 4096)
+            .unwrap();
+        let t = kernel.create_tcb("t", 5).unwrap();
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        assert_eq!(kernel.set_tcb_args(t, 0, 0), Ok(()));
+        assert_eq!(
+            kernel.set_tcb_args(t, 9, 0x4000_3000),
+            Err(KError::InvalidArg)
+        );
+        assert_eq!(kernel.set_tcb_args(t, 2, 0), Err(KError::InvalidArg));
+        assert_eq!(
+            kernel.set_tcb_args(t, 2, 0x4000_3004),
+            Err(KError::InvalidArg)
+        );
+        assert_eq!(kernel.set_tcb_args(t, 2, 0x4000_3000), Ok(()));
+        assert_eq!(kernel.tcb(t).unwrap().argc, 2);
+        assert_eq!(kernel.tcb(t).unwrap().argv, 0x4000_3000);
+        // Configure lại = chương trình mới ⇒ tham số bị xoá.
+        kernel
+            .configure_tcb(t, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        assert_eq!(kernel.tcb(t).unwrap().argc, 0);
+        assert_eq!(kernel.tcb(t).unwrap().argv, 0);
+        // Task đã chạy thì từ chối (không ghi đè context sống).
+        assert_eq!(kernel.set_tcb_args(t, 1, 0x4000_3000), Ok(()));
+        kernel.enqueue(t);
+        assert_eq!(kernel.pick_on(0), Some(t));
+        assert_eq!(
+            kernel.set_tcb_args(t, 1, 0x4000_3000),
+            Err(KError::IllegalOperation)
+        );
         assert!(kernel.check_invariants().is_ok());
     }
 
@@ -13776,7 +13890,7 @@ mod tests {
         assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Exited);
         assert!(kernel.tcb(t).unwrap().pending.is_none());
         // Restart tái sinh.
-        let (entry, stack) = kernel.restart_tcb(t, root).unwrap();
+        let (entry, stack, _argc, _argv) = kernel.restart_tcb(t, root).unwrap();
         assert_eq!((entry, stack), (0x4000_0000, 0x4000_4000));
         let table = kernel.tcb(t).unwrap();
         assert_eq!(table.state, ThreadState::Ready);
@@ -13809,7 +13923,7 @@ mod tests {
         kernel.resume_tcb(t).unwrap();
         assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
         // Restart khi còn Ready (chưa pick lần nào).
-        let (entry, stack) = kernel.restart_tcb(t, root).unwrap();
+        let (entry, stack, _argc, _argv) = kernel.restart_tcb(t, root).unwrap();
         assert_eq!((entry, stack), (0x4000_0000, 0x4000_4000));
         assert_eq!(kernel.tcb(t).unwrap().state, ThreadState::Ready);
         // Tái sinh chạy được ngay.
@@ -14390,7 +14504,9 @@ mod tests {
             UserAction::RestartTcb {
                 tcb: target,
                 entry: 0x1234,
-                stack: 0x9000
+                stack: 0x9000,
+                argc: 0,
+                argv: 0
             }
         );
         let restarted = kernel.tcb(target).unwrap();

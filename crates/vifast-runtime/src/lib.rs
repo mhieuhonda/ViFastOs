@@ -132,6 +132,9 @@ pub trait Platform: Arch + Console {
     fn context_for_user(entry: usize, stack: usize) -> Self::Context;
     /// Set the first integer argument (`a0`/`x0`/`rdi`) of a fresh context.
     fn set_context_arg0(context: &mut Self::Context, value: u64);
+    /// D15 (r246): set the second integer argument (`a1`/`x1`/`rsi`) — the
+    /// `argv` pointer of an exec'd program.
+    fn set_context_arg1(context: &mut Self::Context, value: u64);
     fn contexts() -> &'static mut [Self::Context];
     fn enter_user(context: &Self::Context) -> !;
 
@@ -994,27 +997,59 @@ pub mod syscall {
                 A::write_result(context, error, 0, label, data);
                 A::write_badge(context, value);
             }
-            UserAction::ConfigureTcb { tcb, entry, stack } => {
+            UserAction::ConfigureTcb {
+                tcb,
+                entry,
+                stack,
+                argc,
+                argv,
+            } => {
                 let contexts = A::contexts();
                 let index = kernel
                     .context_slot(tcb)
                     .map(|slot| slot as usize)
                     .unwrap_or(usize::MAX);
                 if let Some(slot) = contexts.get_mut(index) {
-                    *slot = A::context_for_user(entry as usize, stack as usize);
+                    let mut fresh = A::context_for_user(entry as usize, stack as usize);
+                    A::set_context_arg0(&mut fresh, argc);
+                    A::set_context_arg1(&mut fresh, argv);
+                    *slot = fresh;
                     A::write_result(context, KError::Ok, 0, 0, [0; 4]);
                 } else {
                     A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
                 }
             }
-            UserAction::RestartTcb { tcb, entry, stack } => {
+            UserAction::RestartTcb {
+                tcb,
+                entry,
+                stack,
+                argc,
+                argv,
+            } => {
                 let contexts = A::contexts();
                 let index = kernel
                     .context_slot(tcb)
                     .map(|slot| slot as usize)
                     .unwrap_or(usize::MAX);
                 if let Some(slot) = contexts.get_mut(index) {
-                    *slot = A::context_for_user(entry as usize, stack as usize);
+                    let mut fresh = A::context_for_user(entry as usize, stack as usize);
+                    A::set_context_arg0(&mut fresh, argc);
+                    A::set_context_arg1(&mut fresh, argv);
+                    *slot = fresh;
+                    A::write_result(context, KError::Ok, 0, 0, [0; 4]);
+                } else {
+                    A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);
+                }
+            }
+            UserAction::SetTcbArgs { tcb, argc, argv } => {
+                let contexts = A::contexts();
+                let index = kernel
+                    .context_slot(tcb)
+                    .map(|slot| slot as usize)
+                    .unwrap_or(usize::MAX);
+                if let Some(slot) = contexts.get_mut(index) {
+                    A::set_context_arg0(slot, argc);
+                    A::set_context_arg1(slot, argv);
                     A::write_result(context, KError::Ok, 0, 0, [0; 4]);
                 } else {
                     A::write_result(context, KError::IllegalOperation, 0, 0, [0; 4]);

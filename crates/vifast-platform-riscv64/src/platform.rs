@@ -1815,6 +1815,10 @@ impl Platform for RiscvPlatform {
         context.regs[10] = value;
     }
 
+    fn set_context_arg1(context: &mut TrapFrame, value: u64) {
+        context.regs[11] = value;
+    }
+
     fn contexts() -> &'static mut [TrapFrame] {
         unsafe { &mut *core::ptr::addr_of_mut!(CONTEXTS) }
     }

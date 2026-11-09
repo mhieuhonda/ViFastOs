@@ -577,6 +577,11 @@ pub struct Tcb {
     pub priority: u8,
     pub entry: u64,
     pub stack: u64,
+    /// D15 (r246): `argc`/`argv` khởi động, đặt bằng `TcbSetArgs` sau
+    /// `TcbConfigure`. Được chép lại vào context mỗi lần configure/restart
+    /// nên restart giữ nguyên tham số.
+    pub argc: u64,
+    pub argv: u64,
     pub vspace: Option<ObjRef>,
     pub cspace: [Option<Cap>; MAX_CAPS_TASK],
     /// Client waiting for this TCB to reply: (client, reply epoch).
@@ -613,6 +618,8 @@ impl Tcb {
             priority: priority.min(MAX_PRIORITY),
             entry: 0,
             stack: 0,
+            argc: 0,
+            argv: 0,
             vspace: None,
             cspace: [None; MAX_CAPS_TASK],
             caller: None,

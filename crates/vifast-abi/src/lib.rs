@@ -386,6 +386,24 @@ pub mod user_layout {
     /// bản sao ELF. Nằm trong khe trống 0x20000–0x20_0000.
     pub const EXEC_STACK_BASE: usize = CODE_VA + 0x23000;
     pub const EXEC_STACK_TOP: usize = CODE_VA + 0x24000;
+    /// D15 (r246): khối tham số của exec nằm NGAY DƯỚI đỉnh trang stack,
+    /// không còn vá byte vào trang code. Bố cục 256 B:
+    ///
+    /// ```text
+    /// +0x00 .. +0x40  argv[0..8] — 8 con trỏ tới chuỗi (0 = hết)
+    /// +0x40 .. +0x100 vùng chuỗi NUL-terminated (192 B, chia cho các tham số)
+    /// ```
+    ///
+    /// Trình spawn ghi khối này vào frame stack TRƯỚC khi map (chỉ lúc đó
+    /// root mới ghi được vào frame), rồi đặt `a0 = argc`, `a1 = argv`.
+    pub const EXEC_ARGS_MAX: usize = 8;
+    pub const EXEC_ARGS_SIZE: usize = 0x100;
+    pub const EXEC_ARGS_BASE: usize = EXEC_STACK_TOP - EXEC_ARGS_SIZE;
+    pub const EXEC_ARGS_STR_BASE: usize = EXEC_ARGS_BASE + EXEC_ARGS_MAX * 8;
+    pub const EXEC_ARGS_STR_BYTES: usize = EXEC_STACK_TOP - EXEC_ARGS_STR_BASE;
+    const _: () = assert!(EXEC_ARGS_BASE > EXEC_STACK_BASE);
+    const _: () = assert!(EXEC_ARGS_STR_BYTES >= 128);
+    const _: () = assert!(EXEC_ARGS_BASE % 16 == 0);
     /// IPC buffer riêng của root khi tự gọi VFS (mốc 9, vòng 46): 1 trang
     /// trong khe trống 0x24000–0x20_0000, sau EXEC stack.
     pub const ROOT_IPC_BUF_VA: usize = CODE_VA + 0x24000;
@@ -1003,6 +1021,9 @@ pub enum SyscallId {
     TimerInfo = 54,
     /// Vòng 160: thu hồi các trang staging module — value = số trang đã trả.
     ModuleRelease = 55,
+    /// D15 (r246): đặt argc/argv cho TCB đã configure nhưng chưa resume.
+    /// a0 = slot TCB, a1 = argc (≤ 8), a2 = con trỏ mảng argv.
+    TcbSetArgs = 56,
 }
 
 /// Dispatch status for every ABI number.  `true` means the portable kernel
@@ -1065,6 +1086,7 @@ pub const SYSCALL_STATUS: &[(SyscallId, bool)] = &[
     (SyscallId::MemInfo, true),
     (SyscallId::TimerInfo, true),
     (SyscallId::ModuleRelease, true),
+    (SyscallId::TcbSetArgs, true),
 ];
 
 /// Generic register arguments for a syscall.  Architecture ports decode
