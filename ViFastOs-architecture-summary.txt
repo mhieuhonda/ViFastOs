@@ -537,6 +537,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - be10b4a r274 fix: (T32) áp lại bản vá huỷ TCB đã Exited — treo `PREEMPT OK` là lỗi CÓ SẴN
 - 61f0f2e r274 docs: mở T33 (treo PREEMPT OK có sẵn) + ký lại báo cáo 64f9aef5…4912c
 - a4145b4 r275 fix: (T33) đính chính — "treo PREEMPT OK" là flake của HARNESS, không phải kernel
+- 688f2ae r275 docs: ký lại báo cáo (105037ab…ff0281) + bảng tổng hợp sau đính chính T33
+- 53c4be4 r276 fix: (T33) đọc lại serial SAU khi QEMU chết rồi mới kết luận thiếu marker
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

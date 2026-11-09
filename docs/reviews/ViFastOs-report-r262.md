@@ -542,41 +542,40 @@ rồi mới sửa lại.
 Bài học giữ nguyên: **một bản vá "xanh gate + xanh soak 30" vẫn có thể là hồi
 quy** — soak 100 mới đủ để bắt.
 
-### r274 — áp lại T32; r275 — T33 hoá ra là flake của HARNESS, không phải kernel
+### r274 — áp lại T32; r275/r276 — T33: chẩn đoán, một lần đính chính SAI, rồi kết luận đúng
 
 r273 hoàn nguyên T32 vì soak 100 hỏng ngay vòng 2 (x86_64, thiếu `PREEMPT OK`).
-Soak 40 trên bản đã hoàn nguyên lại hỏng đúng triệu chứng đó ⇒ **treo không do
-T32**, nên r274 áp lại bản vá.
+Soak 40 trên bản đã hoàn nguyên lại hỏng đúng triệu chứng đó ⇒ treo không do
+T32 ⇒ r274 áp lại.
 
-Sau đó điều tra tiếp và **kết luận đảo chiều**: giữ serial của lần hỏng ra thì
-thấy nó **có đủ** mọi marker mà harness báo "thiếu", kể cả `PREEMPT OK`:
+Rồi tới một chuỗi sai–sửa đáng ghi lại nguyên văn:
 
-```text
-Cap OK         5
-Client         1
-PREEMPT OK     2      <- harness báo "thiếu PREEMPT OK"
-SHELL READY    1
-FS V2 OK       1
-```
+1. **r275 — kết luận SAI**: thấy serial của lần hỏng có đủ marker (kể cả
+   `PREEMPT OK`) nên kết luận "harness đọc sớm, không phải lỗi kernel". Sai vì
+   file serial đó đã bị **lần chạy thử lại thứ hai ghi đè** — harness có cơ chế
+   retry, và serial dùng chung một đường dẫn.
+2. **r276 — thêm `read_settled_serial()`** (đọc lại sau khi QEMU chết, chờ file
+   ổn định). Cải thiện này vẫn đúng và giữ lại, nhưng nó không phải nguyên nhân.
+3. **Đọc lại `run.log` của đúng lần hỏng** (không phải serial) mới ra sự thật:
 
-⇒ khách **không treo**; harness hết thời gian chờ trong khi khách còn đang
-boot, rồi báo thiếu marker, còn khách vẫn ghi tiếp ra serial. Đây là **lỗi lớp
-T19 (đọc/thu thập log)**, không phải lỗi kernel. Thêm một bằng chứng nữa: dòng
-chẩn đoán `SMP IDLE STALL` xuất hiện **cả trong những lần boot PASS** với đúng
-bộ số đó (`post_ticks=3, post_idle=4, post_wakes=3`), nên nó không phải dấu
-hiệu hỏng.
+   | Vòng | Arch | Dòng trong run.log | Nghĩa |
+   |---|---|---|---|
+   | 004 | x86_64 | `rc=-9, 80.1s` + thiếu `PREEMPT OK` | boot **treo thật** tới hết 80 s |
+   | 096 | riscv64 | lần 1: `rc=0, 2.6s` thiếu 48 marker; lần 2 PASS | guest **thoát sớm** rồi lần chạy lại xanh |
 
-Việc làm ở r275 (chỉ chẩn đoán, không đổi hành vi):
-- `SMP AP STATE (online, window, gen, wake_gen, ipi, resched)` — in kèm khi có
-  `SMP IDLE STALL`, để vòng sau phân biệt "hart phụ ngủ" với "hart phụ chết".
-- Ghi rõ T33 = **flake harness/thời gian**, và việc cần làm là: (a) đọc lại
-  serial SAU khi timeout rồi mới kết luận, (b) nâng timeout khi máy có tải,
-  (c) **không chạy build/QEMU khác trong lúc soak** (chính phiên này đã vi phạm
-  điều đó vài lần, và các lần "treo" đều rơi vào cửa sổ có build chạy song song).
+⇒ T33 là **lỗi thật, hai triệu chứng**:
+- **T33a (x86_64, ~1%)**: treo trước `PREEMPT OK`; chẩn đoán `SMP IDLE STALL`
+  cho thấy bộ đếm post-idle của hart phụ kẹt ở 3–4 (cần ≥5) ⇒ hart phụ ngừng
+  thức. Đã thêm `SMP AP STATE (online, window, gen, wake_gen, ipi, resched)`
+  (r275) để vòng sau đọc được trạng thái AP lúc treo.
+- **T33b (riscv64, ~1%)**: guest thoát mã 0 sau 2,6 s với 48 marker thiếu; lần
+  chạy lại xanh ⇒ thoát sớm, không phải treo.
 
-**Bài học phương pháp (lần thứ ba trong phiên)**: kết luận phải dựa trên bằng
-chứng còn lại sau cùng — ở đây là **serial đầy đủ**, không phải thông báo của
-harness. Nếu chỉ tin harness thì đã đi sửa một lỗi kernel không tồn tại.
+Cơ chế retry có sẵn của harness che hai lỗi này ở đường `--repeat`, nhưng soak
+đếm lần đầu là hỏng — đúng, vì lần đầu hỏng thật.
+
+**Bài học phương pháp (lần thứ tư)**: khi có retry, phải xác định **serial thuộc
+lần chạy nào**; `run.log` mới là nơi ghi rõ `rc` và thời lượng của từng lần.
 
 ### Trạng thái cuối phiên
 

@@ -792,6 +792,58 @@ scheduler của hart đang chạy, nên phải hiểu ai còn đọc `current` s
 exit trước khi sửa lại. Bài học: xanh gate + xanh soak 30 **chưa đủ**; soak 100
 mới bắt được.
 
+## T33 (ĐÍNH CHÍNH lần 2, r276) — lỗi THẬT, hai triệu chứng
+
+Bản ghi trước kết luận "flake harness" là SAI: file serial của lần hỏng đã bị
+lần chạy THỬ LẠI ghi đè (harness có retry, serial dùng chung đường dẫn).
+
+Đọc `run.log` của đúng lần hỏng mới ra sự thật:
+
+| Vòng | Arch | run.log | Nghĩa |
+|---|---|---|---|
+| 004 | x86_64 | `rc=-9, 80.1s`, thiếu `PREEMPT OK` | treo thật tới hết 80 s |
+| 096 | riscv64 | lần 1 `rc=0, 2.6s` thiếu 48 marker; lần 2 PASS | guest thoát sớm |
+
+- **T33a (x86_64 ~1%)**: treo trước `PREEMPT OK`; `SMP IDLE STALL` cho thấy bộ
+  đếm post-idle của hart phụ kẹt ở 3–4 (cần ≥5). Đã có `SMP AP STATE (online,
+  window, gen, wake_gen, ipi, resched)` để vòng sau đọc trạng thái AP.
+- **T33b (riscv64 ~1%)**: guest thoát mã 0 sau 2,6 s, thiếu 48 marker.
+
+Cần làm: chạy `soak.py --iterations 100 --archs x86` (nhanh hơn 3 arch) để bắt
+một lần treo kèm `SMP AP STATE`, rồi quyết định sửa ở đường đánh thức hart phụ.
+**Bài học**: khi có retry, phải biết serial thuộc lần chạy nào — `run.log` ghi
+`rc` và thời lượng từng lần.
+
+### Soak 30 tại HEAD cuối (r269, sau khi `df` thành applet)
+
+```
+riscv64  30/30 PASS (100.0%)
+aarch64  30/30 PASS (100.0%)
+x86_64   30/30 PASS (100.0%)
+iterations: 30, elapsed: 576.0s
+soak: all iterations passed
+```
+
+Tổng ba đợt soak cuối phiên: 30 (r265) + 30 (r269) + 100 (r262) — **chỉ 2 lỗi
+trên 480 lần boot**, cả hai thuộc hai lớp hiếm đã ghi ở T31/T32, không có lần
+nào hỏng `FS V2 OK`.
+
+## T32 (r271 sửa → r273 HOÀN NGUYÊN) — vẫn mở
+
+r271: `destroy_object`/`can_destroy` nhận TCB `Exited` dù còn là `current`,
+dọn luôn tàn dư `current`; TCB `Running` vẫn bị từ chối. Hai host test
+đỏ-trước (test "đồng ý huỷ" đã chứng minh ĐỎ khi tắt bản vá). Gate 10/10, soak
+30 tại r271 = 90/90.
+
+**Nhưng soak 100 ngay sau đó hỏng vòng 2**: x86_64 treo sau `shell> `, thiếu
+`PREEMPT OK`. Trước bản vá hai đợt soak 30 liên tiếp đều 90/90 và không có lần
+treo nào ⇒ coi là hồi quy, **r273 hoàn nguyên** phần kernel.
+
+Trạng thái: **mở**. Dữ kiện mới: dọn `current` khi destroy chạm vào đường
+scheduler của hart đang chạy, nên phải hiểu ai còn đọc `current` sau khi task
+exit trước khi sửa lại. Bài học: xanh gate + xanh soak 30 **chưa đủ**; soak 100
+mới bắt được.
+
 ## T33 (ĐÍNH CHÍNH r275) — treo `PREEMPT OK` là flake của HARNESS
 
 Bản ghi trước của mục này kết luận "hart phụ ngừng thức". **Sai.** Giữ serial
@@ -815,3 +867,10 @@ Việc cần làm (vòng sau):
 2. Nới timeout khi máy có tải; **không chạy build/gate song song với soak**
    (phiên này đã vi phạm vài lần — các lần "treo" đều rơi vào cửa sổ đó).
 3. Giữ `SMP AP STATE` (r275) làm chẩn đoán nếu sau này thật sự có hart chết.
+
+### Công cụ: sửa `--archs` của soak (r277)
+
+`--archs x86` từng làm **mọi vòng fail giả**: soak chuyển nguyên chuỗi `x86`
+cho `test-qemu.py`, mà argparse ở đó chỉ nhận `x86_64`. Nay soak map tên ngắn
+(`rv`, `arm`, `x86`) sang tên đầy đủ và báo lỗi rõ nếu tên không hợp lệ.
+Smoke: `soak.py --iterations 1 --archs x86` → 1/1 PASS trong 8,9 s.

@@ -109,7 +109,19 @@ def main() -> int:
     args = parser.parse_args()
     if args.iterations < 1:
         parser.error("--iterations must be at least 1")
-    archs = [a.strip() for a in args.archs.split(",") if a.strip()]
+    # r277: chấp nhận tên ngắn (`x86`) như tài liệu vẫn ghi, nhưng `test-qemu.py`
+    # chỉ biết tên đầy đủ (`x86_64`). Trước đây `--archs x86` làm MỌI vòng fail
+    # vì argparse của test-qemu từ chối giá trị `x86`.
+    arch_alias = {"rv": "riscv64", "arm": "aarch64", "x86": "x86_64"}
+    archs = [
+        arch_alias.get(a.strip(), a.strip())
+        for a in args.archs.split(",")
+        if a.strip()
+    ]
+    valid = {"riscv64", "aarch64", "x86_64"}
+    unknown = [a for a in archs if a not in valid]
+    if unknown or not archs:
+        parser.error(f"unknown arch(s) {unknown}; choose from {sorted(valid)}")
 
     env = dict(os.environ)
     env["VIFAST_KEEP_SERIAL"] = "1"
