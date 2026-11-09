@@ -418,6 +418,16 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5y-1. `rename`: chống chu trình và giữ dữ liệu (vòng 212)
+
+Hai test mới khoá hành vi nguy hiểm nhất của `rename`:
+- `rename_moves_entry_and_rejects_missing_or_duplicate` — đổi tên xong **tên cũ
+  biến mất**, tên mới tra được, **dữ liệu còn nguyên**; nguồn không tồn tại ⇒
+  `NotFound`, đích đã tồn tại ⇒ `Exists`.
+- `rename_rejects_directory_cycles_and_dotdot` — đổi tên thư mục vào **cây con
+  của chính nó** ⇒ `Invalid` (nếu không sẽ tạo chu trình làm **mount sau đó không
+  dạo được cây**); `..` bị `next_component` từ chối nên không lách được.
+
 ### 5x-2. `NoRights` có HAI nghĩa — đừng chẩn đoán bằng mã lỗi một mình
 
 `FrameMap` trả **`NoRights` (3)** cho **cả hai** trường hợp:

@@ -2269,6 +2269,45 @@ mod tests {
     }
 
     #[test]
+    fn rename_moves_entry_and_rejects_missing_or_duplicate() {
+        // Vòng 212: `rename` chưa có test nào — trong khi nó là lệnh dễ làm hỏng
+        // FS nhất (đổi tên xong mà journal sai là mất cả cây).
+        let mut fs = fresh();
+        fs.create(b"/a.txt", 0, INODE_FILE).unwrap();
+        fs.rename(b"/a.txt", b"/b.txt", 0).unwrap();
+        assert!(fs.lookup(b"/a.txt", 0).is_err(), "tên cũ phải biến mất");
+        assert!(fs.lookup(b"/b.txt", 0).is_ok(), "tên mới phải tra được");
+        // Đích không tồn tại nguồn ⇒ NotFound; đích đã tồn tại ⇒ Exists.
+        assert_eq!(fs.rename(b"/missing", b"/x", 0), Err(FsError::NotFound));
+        fs.create(b"/c.txt", 0, INODE_FILE).unwrap();
+        assert_eq!(fs.rename(b"/b.txt", b"/c.txt", 0), Err(FsError::Exists));
+        // Dữ liệu phải còn nguyên sau khi đổi tên (ghi trước, đọc sau).
+        let ino = fs.lookup(b"/c.txt", 0).unwrap();
+        fs.write(ino, 0, b"hello", 0).unwrap();
+        fs.rename(b"/c.txt", b"/d.txt", 0).unwrap();
+        let ino = fs.lookup(b"/d.txt", 0).unwrap();
+        let mut buf = [0u8; 8];
+        let n = fs.read(ino, 0, &mut buf, 0).unwrap();
+        assert_eq!(&buf[..n], b"hello");
+    }
+
+    #[test]
+    fn rename_rejects_directory_cycles_and_dotdot() {
+        // Vòng 212: đổi tên thư mục vào CHÍNH cây con của nó sẽ tạo chu trình —
+        // mount sau đó không dạo được cây. `..` bị `next_component` từ chối nên
+        // không thể lách bằng đường dẫn tương đối.
+        let mut fs = fresh();
+        fs.mkdir(b"/a", 0).unwrap();
+        fs.mkdir(b"/a/b", 0).unwrap();
+        assert_eq!(fs.rename(b"/a", b"/a/b", 0), Err(FsError::Invalid));
+        assert_eq!(fs.rename(b"/a", b"/a/b/new", 0), Err(FsError::Invalid));
+        assert_eq!(fs.rename(b"/a", b"/x/../y", 0), Err(FsError::Invalid));
+        // Đổi tên thư mục bình thường vẫn phải chạy.
+        fs.rename(b"/a", b"/z", 0).unwrap();
+        assert!(fs.lookup(b"/z/b", 0).is_ok(), "con phải còn nguyên");
+    }
+
+    #[test]
     fn cached_device_hits_and_write_through() {
         let mut cache = CachedDev::new(CountingDev::new());
         let data = [0xab; BLOCK_SIZE];

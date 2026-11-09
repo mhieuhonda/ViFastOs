@@ -3532,3 +3532,19 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   cap trước**, đủ quyền rồi thì đó là W^X — đúng kết luận tôi từng làm sai.
 - Kernel test **206 → 207**, tổng host test **298**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.209 — Vòng 212: `rename` chưa có test nào — khoá chống chu trình + giữ dữ liệu
+
+- Phát hiện: `vifast-fs` có `rename` từ lâu nhưng **không có test nào**, dù đây là
+  lệnh dễ làm hỏng cả cây thư mục nhất.
+- Thêm 2 test (FS **31 → 33**):
+  - `rename_moves_entry_and_rejects_missing_or_duplicate`: tên cũ mất, tên mới
+    tra được, **dữ liệu còn nguyên** (`hello` đọc lại sau khi đổi tên); nguồn
+    thiếu ⇒ `NotFound`, đích trùng ⇒ `Exists`.
+  - `rename_rejects_directory_cycles_and_dotdot`: `/a` → `/a/b`, `/a` →
+    `/a/b/new`, `/a` → `/x/../y` đều `Invalid`; đổi tên bình thường `/a` → `/z`
+    vẫn giữ con.
+- Kết quả: **cả 4 trường hợp chặn đều đúng** như thiết kế (guard theo tiền tố +
+  `next_component` từ chối `..`) ⇒ đây là **xác nhận**, không phải sửa lỗi.
+- Tổng host test **298 → 300**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
