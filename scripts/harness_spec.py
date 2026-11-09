@@ -139,6 +139,7 @@ COMMON = [
 
 # Exactly one occurrence is required for each of these lines.
 EXACT_ONE = [
+    "KSTORE CANARY OK",
     "VFS SERVER OK",
     "VFS OK",
     "VFS STAT OK",
@@ -167,6 +168,7 @@ EXACT_ONE = [
 ]
 
 FORBIDDEN = [
+    "KSTORE CANARY BAD",
     "PERCPU CLOBBER BAD",
     "VFS BAD",
     "ROOT PANIC",
