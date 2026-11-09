@@ -418,6 +418,15 @@ Lưu ý: đây là phép đo **thủ công**, chưa phải marker của cổng �
 chu kỳ **một lần** qua `EXEC MEM OK`. Muốn tự động hoá nhiều vòng cần một
 self-test boot-time riêng (chưa làm để tránh xáo trộn nhịp boot).
 
+### 5x-5. `GetTime`: đơn điệu, chỉ BSP đẩy đồng hồ (vòng 220)
+
+`uptime`/`time` đọc `GetTime`. Test `get_time_is_monotonic_and_driven_by_bsp_ticks`:
+- **không tick ⇒ thời gian không đổi**;
+- **5 tick của BSP ⇒ tăng đúng 5**;
+- **tick của hart phụ KHÔNG** đẩy đồng hồ hệ thống ⇒ task migrate giữa các hart
+  không thấy thời gian nhảy;
+- thời gian **đơn điệu không giảm**.
+
 ### 5x-4. `TcbInfo`: `ps` báo đúng slot/state/prio/tên (vòng 219)
 
 `ps` lấy mọi thứ từ `TcbInfo`; nếu syscall báo sai `state` thì người dùng tưởng

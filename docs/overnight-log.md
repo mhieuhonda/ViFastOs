@@ -3638,3 +3638,14 @@ kernel nhúng client **vượt ranh giới căn lề** ⇒ headroom `destroy-smp
   `index 1` — bản nháp dùng 0 và thất bại đúng vì lý do đó (đã ghi vào runbook).
 - Tổng host test **307 → 308**.
 - Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.
+
+## 9.217 — Vòng 220: `GetTime` đơn điệu, chỉ BSP đẩy đồng hồ
+
+- Test `get_time_is_monotonic_and_driven_by_bsp_ticks` (kernel **210 → 211**):
+  không tick ⇒ thời gian **không đổi**; 5 tick BSP ⇒ **tăng đúng 5**; tick của
+  **hart phụ không** đẩy đồng hồ hệ thống (task migrate không thấy nhảy);
+  thời gian **đơn điệu không giảm**.
+- Ý nghĩa: `uptime`/`time` sẽ sai nếu đồng hồ nhảy — và loại sai này rất khó thấy
+  vì nó phụ thuộc lịch chạy giữa các hart.
+- Tổng host test **308 → 309**.
+- Gate: build 0 warning, QEMU 3/3×3, persist 3/3, harness 592, docs PASS, fmt sạch.

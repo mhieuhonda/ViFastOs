@@ -7257,6 +7257,46 @@ mod tests {
     }
 
     #[test]
+    fn get_time_is_monotonic_and_driven_by_bsp_ticks() {
+        // Vòng 220: `uptime`/`time` đọc GetTime. Phải TĂNG đơn điệu, không nhảy
+        // khi không có tick, và không bị đẩy bởi tick của hart phụ (task migrate
+        // giữa các hart mà thời gian nhảy là lỗi rất khó thấy).
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let t0 = match kernel.user_syscall(root, SyscallId::GetTime as u64, 0, 0, 0, 0, 0, 0) {
+            UserAction::Return { value, error } => {
+                assert_eq!(error, KError::Ok);
+                value
+            }
+            _ => panic!("GetTime phải trả về ngay"),
+        };
+        // Không tick ⇒ thời gian KHÔNG được đổi.
+        let t0b = match kernel.user_syscall(root, SyscallId::GetTime as u64, 0, 0, 0, 0, 0, 0) {
+            UserAction::Return { value, .. } => value,
+            _ => panic!("GetTime phải trả về ngay"),
+        };
+        assert_eq!(t0, t0b, "không tick thì thời gian không đổi");
+
+        for _ in 0..5 {
+            kernel.tick(0);
+        }
+        let t1 = match kernel.user_syscall(root, SyscallId::GetTime as u64, 0, 0, 0, 0, 0, 0) {
+            UserAction::Return { value, .. } => value,
+            _ => panic!("GetTime phải trả về ngay"),
+        };
+        assert_eq!(t1, t0 + 5, "5 tick của BSP phải làm thời gian tăng đúng 5");
+
+        // Tick của hart phụ KHÔNG được đẩy đồng hồ hệ thống.
+        kernel.tick(1);
+        let t2 = match kernel.user_syscall(root, SyscallId::GetTime as u64, 0, 0, 0, 0, 0, 0) {
+            UserAction::Return { value, .. } => value,
+            _ => panic!("GetTime phải trả về ngay"),
+        };
+        assert_eq!(t2, t1, "tick hart phụ không được làm thời gian nhảy");
+        assert!(t2 >= t1, "thời gian phải đơn điệu không giảm");
+    }
+
+    #[test]
     fn tcb_info_reports_slot_state_priority_and_name() {
         // Vòng 219: `ps` in `slot/prio/state/aff/name` từ TcbInfo. Nếu syscall
         // báo sai state, người dùng sẽ tưởng hệ thống treo khi nó chỉ đang chờ.
