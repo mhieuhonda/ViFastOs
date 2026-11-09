@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ViFastOs — microkernel nhỏ, viết bằng Rust</title>
+  <meta name="description" content="ViFastOs là microkernel kiểu seL4, capability-based, viết bằng Rust (no_std). Chạy trên QEMU với riscv64, aarch64 và x86_64. Đang ở giai đoạn nghiên cứu/demo.">
+  <meta name="color-scheme" content="light">
+  <meta property="og:title" content="ViFastOs — microkernel nhỏ, viết bằng Rust">
+  <meta property="og:description" content="seL4-style, capability-based, no_std. Chạy trên QEMU với riscv64 / aarch64 / x86_64.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="/static/brand/vifastos-icon.svg" type="image/svg+xml">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/vifastos-icon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/brand/vifastos-icon-16.png">
+  <link rel="apple-touch-icon" href="/static/brand/vifastos-icon-180.png">
+  <link rel="manifest" href="/static/brand/site.webmanifest">
+  <meta property="og:site_name" content="ViFastOs">
+  <meta property="og:url" content="https://os.vifast.org/">
+  <meta property="og:image" content="https://os.vifast.org/static/brand/og-1200.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ViFastOs — microkernel viết bằng Rust, capability-based">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ViFastOs — microkernel nhỏ, viết bằng Rust">
+  <meta name="twitter:description" content="seL4-style, capability-based, no_std. Chạy trên QEMU với riscv64 / aarch64 / x86_64.">
+  <meta name="twitter:image" content="https://os.vifast.org/static/brand/og-1200.png">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="topline" aria-hidden="true"></div>
+  <a class="skip-link" href="#dang-ky">Bỏ qua tới form đăng ký</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/">
+        <img class="brand-mark" src="/static/brand/vifastos-icon.svg" alt="" width="40" height="40">
+        <span class="brand-word"><span class="red">Vi</span><em>Fast</em><span class="red">Os</span></span>
+      </a>
+      <nav class="site-nav" id="site-nav" aria-label="Điều hướng chính">
+        <a href="#la-gi">Nó là gì</a>
+        <a href="#hien-trang">Hiện trạng</a>
+        <a href="#san-pham">Sản phẩm</a>
+        <a class="nav-cta" href="#dang-ky">Đăng ký sớm</a>
+        <a class="nav-home" href="https://vifast.org" title="Về vifast.org">← ViFast</a>
+      </nav>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Mở menu">
+        <span class="nav-toggle__bars" aria-hidden="true"></span>
+      </button>
+      <a class="ghost-btn" href="https://github.com/vifast-oss/ViFastOs" target="_blank" rel="noopener noreferrer">
+        <svg class="gh-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 1.8a10.2 10.2 0 0 0-3.2 19.9c.5.1.7-.2.7-.5v-1.9c-2.8.6-3.4-1.2-3.4-1.2-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.6 1.1 1.6 1.1.9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.7-1.4-2.3-.3-4.7-1.1-4.7-5.1 0-1.1.4-2 1.1-2.7-.1-.3-.5-1.3.1-2.7 0 0 .9-.3 2.8 1.1a9.8 9.8 0 0 1 5.2 0c1.9-1.4 2.8-1.1 2.8-1.1.6 1.4.2 2.4.1 2.7.7.7 1.1 1.6 1.1 2.7 0 4-2.4 4.8-4.7 5.1.4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10.2 10.2 0 0 0 12 1.8z"/></svg> GitHub
+      </a>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- 1. Hero -->
+    <section class="hero">
+      <div class="wrap hero-inner">
+        <p class="badge">Đang phát triển · đăng ký sớm</p>
+        <h1>ViFastOs — microkernel nhỏ, viết bằng Rust</h1>
+        <p class="hero-en">A small seL4-style, capability-based microkernel written in Rust.</p>
+        <p class="hero-lead">
+          Kiểu seL4, capability-based, kernel <code>no_std</code> — chạy trên QEMU
+          với ba kiến trúc: <strong>riscv64</strong>, <strong>aarch64</strong> và
+          <strong>x86_64</strong>. Đây là dự án nghiên cứu/demo, chưa dùng cho
+          production.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#dang-ky">Đăng ký nhận tin</a>
+          <a class="btn btn-secondary" href="https://github.com/vifast-oss/ViFastOs"
+             target="_blank" rel="noopener noreferrer">GitHub repo ↗</a>
+        </div>
+        <dl class="hero-facts">
+          <div><dt>Ngôn ngữ</dt><dd>Rust · <code>no_std</code></dd></div>
+          <div><dt>Mô hình</dt><dd>Capability-based</dd></div>
+          <div><dt>Kiến trúc</dt><dd>riscv64 · aarch64 · x86_64</dd></div>
+          <div><dt>Giấy phép</dt><dd>MIT / Apache-2.0</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- 2. Nó là gì -->
+    <section class="section" id="la-gi">
+      <div class="wrap">
+        <h2>Nó là gì</h2>
+        <p class="section-lead">
+          Một kernel tối giản: chỉ giữ những cơ chế không thể đặt ở user space,
+          còn lại đẩy ra ngoài thành các task riêng.
+        </p>
+        <div class="cards">
+          <article class="card">
+            <h3>Capability-based</h3>
+            <p>
+              Mọi quyền truy cập đều đi qua capability. TCB, endpoint, notification,
+              VSpace, untyped memory và page table đều là object; capability được
+              cài vào CSpace riêng của từng task.
+            </p>
+          </article>
+          <article class="card">
+            <h3>IPC + Notification</h3>
+            <p>
+              Giao tiếp đồng bộ với Send / Call / Recv / Reply / ReplyRecv, kèm
+              notification cho tín hiệu bất đồng bộ. Khoảng 50+ syscall phủ thread,
+              memory, caps, IPC và IRQ.
+            </p>
+          </article>
+          <article class="card">
+            <h3><code>no_std</code> + <code>forbid(unsafe_code)</code></h3>
+            <p>
+              Kernel là <code>no_std</code>. Các crate kernel, runtime và fs đều bật
+              <code>#![forbid(unsafe_code)]</code> — không có khối <code>unsafe</code>
+              nào trong các crate đó.
+            </p>
+          </article>
+          <article class="card">
+            <h3>3 kiến trúc, chạy trên QEMU</h3>
+            <p>
+              riscv64 (OpenSBI, Sv39), aarch64 (QEMU virt, GICv2) và x86_64
+              (UEFI/OVMF, PML4). Cùng một kernel, ba target khác nhau.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Hiện trạng -->
+    <section class="section section-alt" id="hien-trang">
+      <div class="wrap">
+        <h2>Hiện trạng</h2>
+        <p class="section-lead">
+          Trạng thái thật của repo: <strong>research / demo</strong> — boot và chạy
+          được test binary trên QEMU, chưa sẵn sàng cho production. Những điểm dưới
+          đây là việc đang làm, không phải tính năng đã xong.
+        </p>
+        <ul class="status-list">
+          <li>
+            <span class="status-tag status-done">đang chạy</span>
+            Boot và chạy test binary trên QEMU ở cả ba kiến trúc: riscv64, aarch64, x86_64.
+          </li>
+          <li>
+            <span class="status-tag status-wip">đang làm</span>
+            <strong>BKL</strong> — kernel hiện vẫn dùng một global lock; chưa tách
+            thành fine-grained locking.
+          </li>
+          <li>
+            <span class="status-tag status-wip">đang làm</span>
+            Chưa có physical allocator toàn cục.
+          </li>
+          <li>
+            <span class="status-tag status-wip">đang làm</span>
+            Driver mới ở mức QEMU, chưa có driver cho phần cứng thật.
+          </li>
+          <li>
+            <span class="status-tag status-wip">đang làm</span>
+            Chưa có audio.
+          </li>
+        </ul>
+        <p class="note-inline">
+          Chi tiết và mã nguồn:
+          <a href="https://github.com/vifast-oss/ViFastOs" target="_blank"
+             rel="noopener noreferrer">github.com/vifast-oss/ViFastOs</a>
+          · giấy phép MIT hoặc Apache-2.0.
+        </p>
+      </div>
+    </section>
+
+    <!-- 4. Lộ trình -->
+    <section class="section" id="lo-trinh">
+      <div class="wrap">
+        <h2>Lộ trình</h2>
+        <p class="section-lead">
+          Sáu mốc tiếp theo. Không đặt ngày — thứ tự có thể đổi khi có dữ liệu mới.
+        </p>
+        <ol class="timeline">
+          <li>
+            <h3>Physical memory allocator toàn cục</h3>
+            <p>Quản lý toàn bộ physical memory, cấp phát untyped memory có kiểm soát.</p>
+          </li>
+          <li>
+            <h3>Fine-grained locking</h3>
+            <p>Giảm phụ thuộc vào BKL, tiến tới khoá theo từng đối tượng.</p>
+          </li>
+          <li>
+            <h3>Driver thật</h3>
+            <p>Từ QEMU-only sang driver cho phần cứng thật, bắt đầu từ những thiết bị phổ biến.</p>
+          </li>
+          <li>
+            <h3>SMP mở rộng</h3>
+            <p>Chạy nhiều core ổn định hơn, kèm kiểm thử tranh chấp.</p>
+          </li>
+          <li>
+            <h3>Kiểm chứng hình thức một phần</h3>
+            <p>Chứng minh một số tính chất cốt lõi ở mức từng phần, không phải toàn bộ kernel.</p>
+          </li>
+          <li>
+            <h3>Image cài đặt được</h3>
+            <p>Đóng gói thành image có thể cài và boot trên máy thật.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- 5. Bản phát hành -->
+    <section class="section section-alt" id="ban-phat-hanh">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Bản phát hành</h2>
+          <a class="link-muted" href="https://github.com/vifast-oss/ViFastOs/releases"
+             target="_blank" rel="noopener noreferrer">Xem trên GitHub ↗</a>
+        </div>
+        <div id="releases" class="releases" aria-busy="true">
+          <div class="release-skeleton" aria-hidden="true">
+            <div class="skel skel-title"></div>
+            <div class="skel skel-line"></div>
+            <div class="skel skel-line skel-line-short"></div>
+          </div>
+          <div class="release-skeleton" aria-hidden="true">
+            <div class="skel skel-title"></div>
+            <div class="skel skel-line"></div>
+          </div>
+          <p class="sr-only" role="status" aria-live="polite">Đang tải danh sách bản phát hành…</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. Sản phẩm cùng hệ -->
+    <section class="section" id="san-pham">
+      <div class="wrap">
+        <h2>Sản phẩm cùng hệ</h2>
+        <p class="section-lead">Ba sản phẩm, một hệ sinh thái: gõ tiếng Việt, đọc tiếng Việt và giữ lõi hệ điều hành. Cùng chạy local-first, cùng giấy phép MIT hoặc Apache-2.0.</p>
+        <div class="prod-grid">
+          <article class="prod-card current">
+            <span class="prod-tag">Đang xem · Hệ điều hành</span>
+            <h3>ViFastOs</h3>
+            <p>Microkernel viết bằng Rust, capability-based, chạy trên QEMU.</p>
+            <ul>
+            <li>Capability, IPC + notification, no_std</li>
+            <li>riscv64, aarch64 và x86_64 (UEFI/OVMF)</li>
+            <li>Đang phát triển — chưa có bản phát hành</li>
+            </ul>
+            <div class="prod-actions">
+              <a class="prod-btn" href="https://os.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-link" href="https://github.com/vifast-oss/ViFastOs" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
+            </div>
+          </article>
+          <article class="prod-card">
+            <span class="prod-tag">Cùng hệ sinh thái · Bộ gõ</span>
+            <h3>ViFastKey</h3>
+            <p>Bộ gõ tiếng Việt nhỏ, nhanh, thuần logic trên lõi Rust.</p>
+            <ul>
+            <li>Telex, Simple Telex, VNI, VIQR · 16 bảng mã</li>
+            <li>WASM gõ thử trong trình duyệt, C API, API Python</li>
+            <li>Windows, macOS, Linux, Android, iOS và demo UEFI</li>
+            </ul>
+            <div class="prod-actions">
+              <a class="prod-btn" href="https://key.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-link" href="https://github.com/vifast-oss/ViFastKey" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
+            </div>
+          </article>
+          <article class="prod-card">
+            <span class="prod-tag">Cùng hệ sinh thái · Giọng đọc</span>
+            <h3>ViFastTts</h3>
+            <p>Giọng đọc tiếng Việt chạy CPU trên ONNX, 24 kHz.</p>
+            <ul>
+            <li>Model Ngọc Huyền small 6,1M tham số</li>
+            <li>Windows, macOS, Linux, Android, extension</li>
+            <li>API REST/stream, CLI server, Python, ONNX</li>
+            </ul>
+            <div class="prod-actions">
+              <a class="prod-btn" href="https://tts.vifast.org/" target="_blank" rel="noopener">Website ↗</a>
+              <a class="prod-link" href="https://github.com/vifast-oss/ViFastTts" target="_blank" rel="noopener">Mã nguồn GitHub ↗</a>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. Đăng ký sớm -->
+    <section class="section" id="dang-ky">
+      <div class="wrap narrow">
+        <h2>Đăng ký sớm</h2>
+        <p class="section-lead">
+          Nhận thông báo khi có bản phát hành hoặc mốc kỹ thuật mới. Không spam,
+          không bán danh sách.
+        </p>
+
+        <form id="signup-form" class="signup-form" novalidate>
+          <div class="field">
+            <label for="email">Email <span class="req" aria-hidden="true">*</span></label>
+            <input id="email" name="email" type="email" inputmode="email"
+                   autocomplete="email" required maxlength="254"
+                   aria-describedby="email-hint" placeholder="ban@example.com">
+            <p class="hint" id="email-hint">Chỉ dùng để liên hệ về ViFastOs.</p>
+          </div>
+
+          <div class="field">
+            <label for="note">Ghi chú <span class="optional">(không bắt buộc, tối đa 200 ký tự)</span></label>
+            <textarea id="note" name="note" rows="3" maxlength="200"
+                      aria-describedby="note-counter" placeholder="Bạn quan tâm kiến trúc nào?"></textarea>
+            <p class="hint" id="note-counter"><span id="note-count">0</span>/200</p>
+          </div>
+
+          <button class="btn btn-primary btn-block" type="submit" id="submit-btn">
+            Đăng ký nhận tin
+          </button>
+
+          <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
+        </form>
+
+        <p class="stats-line" id="stats-line" hidden>
+          Đã có <strong id="stats-total">0</strong> người đăng ký sớm.
+        </p>
+
+        <p class="privacy">
+          Chỉ lưu email và thời điểm đăng ký, không lưu IP. Hủy bất cứ lúc nào bằng
+          email tới <a href="mailto:vifastoss@gmail.com">vifastoss@gmail.com</a>.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <!-- 7. Footer -->
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p class="footer-copy">© 2026 ViFastOs · MIT or Apache-2.0 License</p>
+      <nav class="footer-nav" aria-label="Liên kết">
+        <a href="https://vifast.org" target="_blank" rel="noopener noreferrer">vifast.org</a>
+        <a href="https://key.vifast.org" target="_blank" rel="noopener noreferrer">key.vifast.org</a>
+        <a href="https://tts.vifast.org" target="_blank" rel="noopener noreferrer">tts.vifast.org</a>
+        <a href="https://github.com/vifast-oss/ViFastOs" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="/static/app.js" defer></script>
+<script>
+(function(){var b=document.querySelector('.nav-toggle'),n=document.getElementById('site-nav');
+if(!b||!n)return;
+function s(o){n.classList.toggle('is-open',o);b.setAttribute('aria-expanded',o?'true':'false');b.setAttribute('aria-label',o?'Đóng menu':'Mở menu');}
+b.addEventListener('click',function(){s(!n.classList.contains('is-open'));});
+n.addEventListener('click',function(e){if(e.target.closest('a'))s(false);});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')s(false);});
+window.addEventListener('resize',function(){if(window.innerWidth>780)s(false);});})();
+</script>
+<script>window.addEventListener("load",function(){document.getElementById("site-nav").classList.add("is-open");});</script>
+</body>
+</html>
