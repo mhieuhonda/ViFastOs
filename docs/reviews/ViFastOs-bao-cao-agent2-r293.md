@@ -58,6 +58,27 @@ Thay thế phần r293/r294 của tệp `ViFastOs-quyet-dinh-agent2-r289-r294.md
   và boot QEMU nhiều lần, sẽ làm nhiễu phép đo 300 boot của 293.8 nếu chạy xen
   kẽ. Thứ tự đã chọn giữ cho phép đo nền sạch. Không đổi nội dung công việc.
 
+## Manh mối T33a mới (từ artifact run 36/300 của 293.8)
+
+Lần hỏng thứ nhất trong phép đo nền (run 36) đã để lại đúng thứ cần: serial +
+`registers.txt` của máy đóng băng (nhờ 293.2). Đọc ra:
+
+| Hart | Trạng thái lúc đóng băng |
+|---|---|
+| CPU#0 | **CPL=3** (user), `RIP=0x1000206898`, `RFL=0x246` ⇒ **IF=1**, `HLT=0`, `CR2=0x1001003000` |
+| CPU#1 | CPL=0, **HLT=1** (idle-halt kernel), `RFL=0x202` ⇒ IF=1 |
+
+Serial dừng ngay sau `shell>`, **không** in `SMP WAIT` (chỉ in khi tick ≥ 99),
+**không** `SMP NO READY`, **không** `KERNEL FAULT`. Suy ra **tick chưa tới 99**,
+tức nguồn tick của BSP (PIT qua PIC 8259) đã **ngừng phát**, chứ hart 0 không
+kẹt trong kernel — nó đang chạy user với IF=1.
+
+Loại trừ được: (a) hart 0 kẹt BKL/console (nó ở CPL=3, không phải kernel);
+(b) nhánh "thoát im lặng" `pick_on == None` (không có `SMP NO READY`).
+Hướng còn lại: PIC in-service bit của IRQ0 bị kẹt (thiếu EOI ở một nhánh), hoặc
+PIT bị nạp lại hỏng. Đèn kế tiếp cho r294: in `TICK n` mỗi 16 tick (sau
+`test-exit`) để biết tick dừng ở con số nào.
+
 ## Lỗi mới phát hiện, chưa sửa
 
 - `KERNEL FAULT (... hart idle, bỏ qua)` (r293 prelude) là **thay đổi hành vi**
@@ -66,11 +87,19 @@ Thay thế phần r293/r294 của tệp `ViFastOs-quyet-dinh-agent2-r289-r294.md
 - BKL `owner_hart()`/`holders()` + `BKL STUCK` (feature `diag-stall`, mặc định
   TẮT) chưa dùng để kết luận gì — dành cho r294.
 
-## Câu hỏi cần Agent 0 quyết
+## Agent 0 đã chốt (14:05) và đã thi hành
 
-1. **293.4 có được phép làm SAU 293.8 không?** Lý do: 293.4 cần build + ≥20 lần
-   boot riscv; chạy xen kẽ sẽ làm nhiễu phép đo nền 300 boot. Đề xuất: đo nền
-   xong → 293.4 → r294.
-2. **`KERNEL FAULT` guard**: cho phép giữ nguyên hành vi "hart idle gặp ngoại lệ
-   thì bỏ qua + ack" (an toàn hơn `halt()`), hay phải quay lại `halt()` cho tới
-   khi r294 tìm được chuỗi sự kiện?
+1. **293.4 làm SAU 293.8** — thứ tự: đo nền → 293.4 → r294.
+2. **`KERNEL FAULT` guard mặc định quay về `halt()`**:
+   - "bỏ qua + ack" chỉ tồn tại sau feature `diag-idle-fault` (mặc định TẮT);
+   - harness tính mỗi dòng `KERNEL FAULT` là **T-SCHED** (case spec riêng);
+   - **số đo nền 300 boot đang chạy bị HUỶ** (đo lúc guard bật mà không đếm) —
+     đo lại với guard TẮT; báo cáo ghi rõ trạng thái guard.
+
+Commit thi hành: `39589cb`.
+
+## Trạng thái phép đo nền 293.8 (đo lại)
+
+- Guard `KERNEL FAULT`: **TẮT** (mặc định `halt()`), đúng chốt của Agent 0.
+- `MAX_IO = 128`, cùng một sha binary, x86_64, 300 lần boot.
+- Kết quả RETRY theo loại: xem mục "Số đo" (cập nhật sau khi chạy xong).
