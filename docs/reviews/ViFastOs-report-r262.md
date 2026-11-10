@@ -821,11 +821,22 @@ chỉ chờ `BSY`), P1 (`read_dir_entry_full` đọc bằng `read_staged`), P3 (
 xanh ⇒ **hồi quy cấu hình sản phẩm**, đã **revert theo D18** (giữ trong
 `git stash` để vòng sau lấy lại).
 
-**Nhưng P2 cho manh mối lớn:** nó chỉ *báo* lỗi ATA thay vì bỏ qua, mà đã làm
-xuất hiện đỏ ở 128 ⇒ **thiết bị có trả lỗi ghi mà bản cũ che mất**. Giả thuyết
-H1 của bản phân tích ("ghi bị bỏ âm thầm, cache đánh dấu clean, readdir đọc ảnh
-cũ") có **cơ sở thực nghiệm**. Hướng đúng là **thử lại/đồng bộ đúng ở tầng ATA**,
-không phải chỉ báo lỗi; và phải đo lại cả 128 lẫn 256 trên **cả hai máy**.
+**ĐÍNH CHÍNH (subagent bắt được, quan trọng):** kết luận "P2 làm lộ lỗi ATA" là
+**SAI**. `ERR/DF` là bit **dính**, chỉ bị xoá khi host ghi thanh ghi Command; tôi
+lại dùng `ata_wait_bsy` (đã kiểm `0x21`) làm **cổng TRƯỚC khi phát lệnh** trong
+`ata_prepare` ⇒ sau lỗi đầu tiên mọi lệnh ATA chết ⇒ 3 lượt retry không hề phát
+lại lệnh nào. Đỏ 2/40 ở 128 là **cascade tự gây**, không phải bằng chứng về thiết
+bị. Đã revert `platform.rs` + `vifast-fs`.
+
+Thiết kế đúng (vòng sau): tách `wait_bsy_only` (chỉ BSY, dùng TRƯỚC khi ghi
+command) và `wait_done` (BSY=0 rồi mới xét ERR/DF + đọc Error 0x1F1, dùng SAU khi
+ghi command, SAU 256 word và sau FLUSH); đèn có `stage`/`class`/`lba`; ngân sách
+retry toàn cục; `ATA_DEAD` khi timeout lặp. Kèm đèn `ATA STAT cmds=` ở **cả 128
+và 256**: nếu số lệnh ATA xấp xỉ nhau thì lỗi ATA **không thể** giải thích chênh
+lệch 12–18/40 — retry là sửa bug thật nhưng **không phải** sửa T26.
+
+**Số đo sau revert (128, song song 2 máy):** local 40/40; `ps` 39/40 ⇒ chưa đủ
+kết luận 128 tuyệt đối xanh trên `ps`; cần ≥120 boot nữa.
 
 ### Trạng thái cuối phiên (r254 → r283)
 
@@ -854,7 +865,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-fc9e82057a5971084658c4d6f7b092a5b5e6cb44dc671801d42c081203b850e2  docs/reviews/ViFastOs-report-r262.md
+ebe1a33fc3828fc792145e5e7cf03203d716af6159938a7668ad1aaec37b6222  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

@@ -1663,3 +1663,19 @@ mà là **thử lại / đồng bộ đúng** ở tầng ATA, và phải đo l�
 
 Ba bản vá được giữ trong `git stash` (`P1+P2+P3 tạm`) để vòng sau lấy lại; cây
 đang ở HEAD xanh.
+
+## r294.T26 — đính chính: P2 là cascade tự gây (subagent bắt)
+
+`ERR/DF` là bit **dính**, chỉ xoá khi ghi thanh ghi Command. Tôi dùng
+`ata_wait_bsy` (đã kiểm `0x21`) làm cổng **trước khi phát lệnh** trong
+`ata_prepare` ⇒ sau lỗi đầu tiên mọi `ata_prepare` fail ⇒ retry không phát lại
+lệnh nào ⇒ **toàn bộ I/O ATA chết**. Vì vậy "2/40 đỏ ở 128" của vòng trước là
+**hồi quy do tôi gây**, không phải bằng chứng về thiết bị. Đã revert.
+
+Sau revert, đo song song 2 máy ở `MAX_IO=128`: local **40/40 xanh**, `ps`
+**39/40** ⇒ chưa được nói "128 tuyệt đối xanh trên mọi máy"; cần ≥120 boot/máy.
+
+Thiết kế đúng đã có trong báo cáo (tách `wait_bsy_only`/`wait_done`, đèn
+`stage`/`class`/`lba`, ngân sách retry, `ATA_DEAD`), kèm **phép kiểm quyết định**:
+in `ATA STAT cmds=` ở cả 128 và 256 — nếu số lệnh ATA xấp xỉ nhau thì lỗi ATA
+không thể giải thích chênh lệch 12–18/40.
