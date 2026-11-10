@@ -99,6 +99,13 @@ static KERNEL_PTR: KernelPointer =
 static mut SMAP_ENABLED: bool = false;
 static mut PCID_ENABLED: bool = false;
 static BKL: BigKernelLock = BigKernelLock::new();
+/// r294.B (bằng chứng từ vòng đệm): AP được thả trong `init_platform`, TRƯỚC
+/// khi kernel được khởi tạo và TRƯỚC cả selftest — mà `init_kernel()` gọi
+/// `reset()` hai lần. AP nào kịp `pick_on(1)` trong cửa sổ đó sẽ chạy TCB của
+/// thời kỳ trước reset (ring ghi `tick=2` với tcb 130/132 lặp vô hạn) ⇒
+/// `GetTime` trên hart 1 đọc đồng hồ đã bị reset về 0 ⇒ `now < last` ⇒
+/// `ROOT PANIC main.rs:480`. Nay AP chỉ `hlt` cho tới khi BSP báo kernel xong.
+static KERNEL_READY: AtomicBool = AtomicBool::new(false);
 
 // 294.B (r294): đèn chẩn đoán T33a — "tick BSP ngừng phát". CHỈ bật sau
 // feature `diag-tick` (mặc định TẮT); bản phát hành không có các marker này.
@@ -1454,6 +1461,12 @@ unsafe fn calibrate_lapic_timer() {
 unsafe fn ap_idle_loop() -> ! {
     calibrate_lapic_timer();
     loop {
+        if !KERNEL_READY.load(Ordering::Acquire) {
+            // Ngủ một nhịp (sti; hlt; cli) rồi kiểm lại: không chạm runqueue
+            // khi kernel còn đang init/selftest (sẽ bị reset).
+            core::arch::asm!("sti", "hlt", "cli", options(nomem, nostack));
+            continue;
+        }
         let (picked, ready) = {
             let bkl = bkl_lock();
             let picked = X86Platform::kernel().pick_on(1);
@@ -2544,6 +2557,8 @@ impl Platform for X86Platform {
     }
 
     fn prepare_user() {
+        // Kernel đã init + selftest xong: từ đây AP mới được chạy task.
+        KERNEL_READY.store(true, Ordering::Release);
         unsafe {
             // The GDT/TSS/IDT was installed in init_platform before the AP
             // started; do not rebuild it while the AP may be idle with IF=1.
@@ -3406,6 +3421,14 @@ extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
     assert_current_tcb("irq0");
     if cpu_state() == unsafe { core::ptr::addr_of!(CPU_STATES[0]) as *mut _ } {
         let ticks = BSP_PIT_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+        // Đèn truy vết LINT0: in mỗi 64 tick để biết CHÍNH XÁC tick nào nó bị
+        // mask (nếu bị). Chỉ bản có đèn.
+        #[cfg(feature = "diag-tick")]
+        if ticks % 64 == 0 {
+            let base = unsafe { lapic_base() };
+            let lvt0 = unsafe { core::ptr::read_volatile((base + 0x350) as *const u32) };
+            vifast_kernel::klog!(X86Platform, "LINT0 TRACE tick={} lvt0={:#x}", ticks, lvt0);
+        }
         #[cfg(feature = "diag-tick")]
         if ticks % 16 == 0 {
             vifast_kernel::klog!(
