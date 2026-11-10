@@ -1096,3 +1096,37 @@ nguyên: `mkdir` OK nhưng `readdir` ngay sau đọc ảnh CŨ của block thư 
 Ba nghi phạm xếp thứ tự điều tra: (1) cache block 32 entry của FS server không
 invalidate khi ghi staged; (2) `commit()` từng chunk 512 B để lộ trạng thái
 trung gian; (3) mailbox maintenance (r289) chưa phủ hết vùng FS.
+
+## T33a / T33b (r293) — chẩn đoán bật đèn + guard hart idle
+
+### T33a (x86_64 treo trước `PREEMPT OK`)
+
+Đã thêm hai thứ **không phải marker**:
+- `SMP NO READY (hart, ticks, exitted_current, alive)` ở đúng nhánh
+  `pick_on(hart) == None` của đường timer — trước đây nhánh này thoát IM LẶNG
+  (`exit(1)`), nên harness chỉ thấy "thiếu PREEMPT OK" mà không biết vì sao;
+- `Kernel::live_tcb_count()` để phân biệt "hết việc thật" (0 TCB sống) với
+  "còn TCB sống mà hart không chạy được".
+
+Đo (x86_64, 80 lần boot, diagnostic bật): **80/80 PASS**, 1 lần hỏng sớm thuộc
+lớp T33b (USER FAULT → "no runnable thread after fault"), retry cứu.
+**0 lần** `SMP NO READY` ⇒ nhánh thoát im lặng không phải gốc của T33a.
+
+Lần hỏng T33a còn lại (59/60 ở đợt đo thứ ba) có dấu hiệu: serial dừng ngay sau
+`shell>`, **không** in `SMP WAIT` (chỉ in khi tick ≥ 99), **không** in
+`SMP NO READY`, **không** in `KERNEL FAULT` ⇒ hart 0 kẹt TRƯỚC khi tick tới 99
+và trước mọi nhánh thoát ⇒ nghi hart 0 quay BKL (hoặc lock console) do hart phụ
+giữ rồi hart phụ chết. Việc của vòng sau: thêm bộ đếm spin BKL in-một-lần khi
+vượt ngưỡng (`BKL STUCK owner=.., holders=..`) để xác nhận.
+
+### T33b (riscv64 thoát sớm)
+
+`fault::suspend` khi `current_on(hart) == None` (hart đang idle trong kernel)
+trước đây đi thẳng tới `fault_current_on(hart)` (không có current ⇒ `None`) ⇒
+"no runnable thread after fault" ⇒ `halt()` ⇒ **chết cả máy** vì một ngắt mồ
+côi. Nay: in `KERNEL FAULT (hart, cause, addr) — hart idle, bỏ qua`,
+`ack_timer()`, quay lại vòng idle.
+
+Đo riscv64 **60/60 PASS**, **0** `KERNEL FAULT` (tỉ lệ cũ ~1,5% ⇒ kỳ vọng ~1
+lần; mẫu chưa đủ để kết luận, cần ≥300 lần mới nói được). x86_64 59/60 sau vá,
+lần hỏng vẫn là T33a, 0 `KERNEL FAULT`/`SMP NO READY`.
