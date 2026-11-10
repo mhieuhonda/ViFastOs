@@ -347,49 +347,49 @@ def main() -> int:
         # Phân loại: thiếu FS V2 OK ⇒ T-FS; thiếu PREEMPT OK ⇒ T-SCHED;
         # thiếu cả hai ⇒ T-FS (ưu tiên đúng thứ tự mục 2.5); lỗi lạ ⇒ T-KHAC.
         classify_cases = [
-            ("booting on\nFS V2 OK\nPREEMPT OK\n", "T-KHAC", "đủ marker nhưng gọi phân loại"),
+            ("KERNEL ENTRY\nbooting on\nFS V2 OK\nPREEMPT OK\n", "T-KHAC", "đủ marker nhưng gọi phân loại"),
             # 294.C + D3: T-BOOT khi kernel chưa in dòng nào; T-ROOT kèm
             # `<file>:<dòng>`; cả hai dạng in (có/không dấu hai chấm) đều đọc được.
             ("", "T-BOOT", "không có dòng kernel nào"),
             (
-                "booting on\nROOT PANIC\ncrates/vifast-root/src/main.rs:480\n",
+                "KERNEL ENTRY\nbooting on\nROOT PANIC\ncrates/vifast-root/src/main.rs:480\n",
                 "T-ROOT crates/vifast-root/src/main.rs:480",
                 "ROOT PANIC + file:có dấu hai chấm",
             ),
             (
-                "booting on\nROOT PANIC\ncrates/vifast-root/src/main.rs480\n",
+                "KERNEL ENTRY\nbooting on\nROOT PANIC\ncrates/vifast-root/src/main.rs480\n",
                 "T-ROOT crates/vifast-root/src/main.rs:480",
                 "ROOT PANIC + file KHÔNG dấu hai chấm (artifact cũ)",
             ),
             (
-                "booting on\nSMP NO CURRENT hart=1 nr=5\nROOT PANIC\nmain.rs:9\n",
+                "KERNEL ENTRY\nbooting on\nSMP NO CURRENT hart=1 nr=5\nROOT PANIC\nmain.rs:9\n",
                 "T-SCHED",
                 "mất current được xét TRƯỚC panic (kế hoạch §4)",
             ),
-            ("booting on\nPREEMPT OK\nSHELL READY\n", "T-FS", "thiếu FS V2 OK sau SHELL READY"),
-            ("booting on\nFS V2 OK\n", "T-SCHED", "thiếu PREEMPT OK"),
+            ("KERNEL ENTRY\nbooting on\nPREEMPT OK\nSHELL READY\n", "T-FS", "thiếu FS V2 OK sau SHELL READY"),
+            ("KERNEL ENTRY\nbooting on\nFS V2 OK\n", "T-SCHED", "thiếu PREEMPT OK"),
             # Chết SỚM: thiếu cả FS V2 OK lẫn PREEMPT OK, nhưng có chữ ký
             # scheduler ⇒ phải là T-SCHED, KHÔNG được dán nhãn T-FS (lỗi phân
             # loại đã mắc ở phép đo nền đầu r293).
             (
-                "booting on\nSHELL READY\nUSER FAULT tcb=None cause=0x0\nno runnable thread after fault\n",
+                "KERNEL ENTRY\nbooting on\nSHELL READY\nUSER FAULT tcb=None cause=0x0\nno runnable thread after fault\n",
                 "T-SCHED",
                 "chết sớm có chữ ký scheduler — không phải T-FS",
             ),
             (
-                "booting on\nSHELL READY\nMEM OOM BAD\n",
+                "KERNEL ENTRY\nbooting on\nSHELL READY\nMEM OOM BAD\n",
                 "T-FS",
                 "thiếu FS V2 OK sau SHELL READY, không chữ ký ⇒ T-FS",
             ),
 
-            ("booting on\nFS V2 OK\nPREEMPT OK\nUSER FAULT tcb=None \n", "T-SCHED", "USER FAULT tcb=None"),
-            ("booting on\nFS V2 OK\nPREEMPT OK\nSMP NO READY (hart=0)\n", "T-SCHED", "SMP NO READY"),
+            ("KERNEL ENTRY\nbooting on\nFS V2 OK\nPREEMPT OK\nUSER FAULT tcb=None \n", "T-SCHED", "USER FAULT tcb=None"),
+            ("KERNEL ENTRY\nbooting on\nFS V2 OK\nPREEMPT OK\nSMP NO READY (hart=0)\n", "T-SCHED", "SMP NO READY"),
             (
-                "booting on\nFS V2 OK\nPREEMPT OK\nKERNEL FAULT (hart=1, cause=0xd) — bỏ qua\n",
+                "KERNEL ENTRY\nbooting on\nFS V2 OK\nPREEMPT OK\nKERNEL FAULT (hart=1, cause=0xd) — bỏ qua\n",
                 "T-SCHED",
                 "KERNEL FAULT (Agent 0: phải đếm, không được nuốt)",
             ),
-            ("booting on\nFS V2 OK\nPREEMPT OK\nchuyện lạ\n", "T-KHAC", "không khớp chữ ký nào"),
+            ("KERNEL ENTRY\nbooting on\nFS V2 OK\nPREEMPT OK\nchuyện lạ\n", "T-KHAC", "không khớp chữ ký nào"),
         ]
         for output, want, desc in classify_cases:
             cases += 1

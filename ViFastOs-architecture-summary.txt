@@ -580,6 +580,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 3699fe7 build x86: tắt hẳn đèn chẩn đoán trong bản mặc định (đo ngân sách trên bản không đèn)
 - 6c026a4 r294 khối D: D1.a (marker mất current, hàm thuần + 3 test host) + D3 (file:dòng có dấu hai chấm) + D2 revert
 - 8cd767f r294.B khối A: AP chạy task TRƯỚC khi kernel init xong — gốc của T-ROOT main.rs:480
+- 6e0ee9c harness: artifact đọc LẠI serial đã settled (vá lỗi artifact T31 thiếu dòng marker gây hỏng)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

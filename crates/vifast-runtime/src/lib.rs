@@ -493,6 +493,10 @@ fn note_current_tcb<A: Platform>(kernel: &Kernel) {
 pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     A::init();
     A::irq_disable();
+    // 294.C: mốc sớm NHẤT mà kernel chắc chắn in được — dùng để phân biệt
+    // T-BOOT (chết trước khi kernel chạy) với các lớp khác. In trước cả
+    // `init_platform` để nếu platform chết thì vẫn biết kernel đã vào.
+    vifast_kernel::klog!(A, "KERNEL ENTRY");
     A::init_platform(info);
     vifast_kernel::klog!(
         A,

@@ -605,8 +605,10 @@ def classify_failure(output: str) -> str:
     Vì sao T-SCHED "mất current" đứng TRƯỚC T-ROOT: kế hoạch qua đêm §4 xếp
     `SMP NO CURRENT` trước — nếu mất current thì panic của root chỉ là hệ quả.
     """
-    # (0) T-BOOT: kernel chưa hề in dòng khởi động nào.
-    if "booting on" not in output and "SELFTEST PASS" not in output:
+    # (0) T-BOOT: kernel chưa hề vào được (không có `KERNEL ENTRY`).
+    # Phiếu soát §1.5 chốt: T-BOOT ⇔ KHÔNG thấy `KERNEL ENTRY` — thấy nó mà chết
+    # trước marker khác thì không phải T-BOOT.
+    if "KERNEL ENTRY" not in output:
         return "T-BOOT"
     # (1) Mất current — chữ ký riêng, xét trước panic.
     if "SMP NO CURRENT" in output:
