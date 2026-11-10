@@ -3409,6 +3409,8 @@ extern "efiapi" fn x86_ap_irq_handler(frame: *mut TrapFrame, vector: u64) {
                     lvt0,
                     isr_vec
                 );
+                #[cfg(feature = "diag-sched")]
+                vifast_runtime::diag::flush::<X86Platform>("watchdog hart phụ");
             }
         } else {
             DIAG_LAST_TICKS0.store(ticks0, Ordering::Relaxed);

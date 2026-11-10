@@ -1023,6 +1023,8 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     } else {
         vifast_kernel::klog!(A, "BLOCK SKIP");
     }
+    #[cfg(feature = "diag-sched")]
+    vifast_kernel::klog!(A, "RING ADDR {:#x}", crate::diag::address());
     A::start_timer();
     #[cfg(feature = "test-exit")]
     TEST_EXPECT_WORKERS.store(
@@ -1036,39 +1038,122 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
 }
 
 /// Syscall/action dispatch shared by all trap entry implementations.
-/// r294.B: đèn phân biệt ba cơ chế làm hỏng context (ghi chú soát độc lập §2.2):
-///   (a) cùng một TCB bị pick trên HAI hart;
-///   (b) hai TCB khác nhau dùng CHUNG một `context_slot`;
-///   (c) resume khôi phục context cũ.
-/// Mặc định TẮT (`diag-pick`): mỗi lần chuyển ngữ cảnh một dòng làm boot rất chậm.
-#[cfg(feature = "diag-pick")]
+/// r294.B: ghi sự kiện PICK vào vòng đệm (không in — xem `diag`).
+#[cfg(feature = "diag-sched")]
 pub fn note_context<A: Platform>(
     kernel: &vifast_kernel::Kernel,
     next: vifast_kernel::ObjRef,
     hart: usize,
 ) {
-    let slot = kernel.context_slot(next);
+    let slot = kernel
+        .context_slot(next)
+        .map(usize::from)
+        .unwrap_or(usize::MAX);
     let state = kernel
         .tcb(next)
-        .map(|table| table.state as u8)
+        .map(|table| table.state as u64)
         .unwrap_or(255);
-    vifast_kernel::klog!(
-        A,
-        "PICK hart={} tcb={} slot={} state={}",
+    diag::record(
+        diag::PICK,
         hart,
-        next.index,
-        slot.map(u64::from).unwrap_or(u64::MAX),
-        state
+        next.index as usize,
+        slot,
+        state,
+        kernel.fast_time(),
     );
 }
 
-#[cfg(not(feature = "diag-pick"))]
+#[cfg(not(feature = "diag-sched"))]
 #[inline]
 pub fn note_context<A: Platform>(
     _kernel: &vifast_kernel::Kernel,
     _next: vifast_kernel::ObjRef,
     _hart: usize,
 ) {
+}
+
+pub mod diag {
+    use super::*;
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    pub const PICK: u64 = 1;
+    pub const CTX_SAVE: u64 = 2;
+    pub const CTX_LOAD: u64 = 3;
+    pub const SUSPEND: u64 = 4;
+    pub const RESUME: u64 = 5;
+
+    const RING: usize = 96;
+    const EMPTY: u64 = u64::MAX;
+    static EVENTS: [AtomicU64; RING] = [const { AtomicU64::new(EMPTY) }; RING];
+    static INDEX: AtomicUsize = AtomicUsize::new(0);
+    static RECORDED: AtomicUsize = AtomicUsize::new(0);
+
+    /// Đóng gói một sự kiện vào 64 bit (không cấp phát, không khoá).
+    pub fn pack(kind: u64, hart: usize, tcb: usize, slot: usize, state: u64, tick: u64) -> u64 {
+        (kind & 0xf)
+            | ((hart as u64 & 0x3) << 4)
+            | ((tcb as u64 & 0xff) << 6)
+            | ((slot as u64 & 0xff) << 14)
+            | ((state & 0xf) << 22)
+            | ((tick & 0xffff_ffff) << 26)
+    }
+
+    pub fn unpack(raw: u64) -> (u64, usize, usize, usize, u64, u64) {
+        (
+            raw & 0xf,
+            ((raw >> 4) & 0x3) as usize,
+            ((raw >> 6) & 0xff) as usize,
+            ((raw >> 14) & 0xff) as usize,
+            (raw >> 22) & 0xf,
+            (raw >> 26) & 0xffff_ffff,
+        )
+    }
+
+    pub fn record(kind: u64, hart: usize, tcb: usize, slot: usize, state: u64, tick: u64) {
+        let position = INDEX.fetch_add(1, Ordering::Relaxed) % RING;
+        EVENTS[position].store(pack(kind, hart, tcb, slot, state, tick), Ordering::Release);
+        RECORDED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Địa chỉ (VA) của vòng đệm — để harness đọc bằng monitor QEMU khi CẢ HAI
+    /// hart đều không chạy được nữa (trường hợp `PIC STALL`/treo câm: hart 0
+    /// quay user với IRQ0 đang chờ, hart 1 `hlt` với IF=0 ⇒ không hook nào chạy).
+    pub fn address() -> u64 {
+        &EVENTS as *const _ as u64
+    }
+
+    pub fn capacity() -> usize {
+        RING
+    }
+
+    /// Đổ vòng đệm ra serial (đường in của kernel, KHÔNG qua syscall).
+    pub fn flush<A: Platform>(why: &str) {
+        let recorded = RECORDED.swap(0, Ordering::AcqRel);
+        if recorded == 0 {
+            return;
+        }
+        let total = INDEX.load(Ordering::Acquire);
+        let count = recorded.min(RING);
+        vifast_kernel::klog!(A, "RING DUMP ({} sự kiện, vì {})", count, why);
+        for offset in 0..count {
+            let position = (total + RING - count + offset) % RING;
+            let raw = EVENTS[position].swap(EMPTY, Ordering::AcqRel);
+            if raw == EMPTY {
+                continue;
+            }
+            let (kind, hart, tcb, slot, state, tick) = unpack(raw);
+            vifast_kernel::klog!(
+                A,
+                "RING kind={} hart={} tcb={} slot={} state={} tick={}",
+                kind,
+                hart,
+                tcb,
+                slot,
+                state,
+                tick
+            );
+        }
+    }
 }
 
 pub mod syscall {
@@ -1362,6 +1447,11 @@ pub mod syscall {
                 }
             }
             UserAction::Exit => {
+                // Phiếu soát §1.1: `vifast_user::exit()` luôn gửi mã 0 nên
+                // "exit mã khác 0" KHÔNG BAO GIỜ đúng — phải đổ vòng đệm ngay
+                // khi XỬ LÝ Exit, nếu không mọi ca panic→exit sẽ mất bằng chứng.
+                #[cfg(feature = "diag-sched")]
+                crate::diag::flush::<A>("UserAction::Exit");
                 // Mốc 1: exit chỉ kết thúc TASK gọi, không kill cả máy.
                 // Task rời scheduler thành zombie (Exited); hart chọn task
                 // khác chạy tiếp. Chỉ halt khi không còn task nào.
@@ -1433,6 +1523,18 @@ pub mod syscall {
         crate::note_context::<A>(kernel, next, hart);
         let slot = kernel.context_slot(next).unwrap_or(0) as usize;
         *context = contexts[slot];
+        #[cfg(feature = "diag-sched")]
+        crate::diag::record(
+            crate::diag::CTX_LOAD,
+            hart,
+            next.index as usize,
+            slot,
+            kernel
+                .tcb(next)
+                .map(|table| table.state as u64)
+                .unwrap_or(255),
+            kernel.fast_time(),
+        );
         crate::syscall::apply_resume::<A>(context, next);
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
@@ -1454,6 +1556,18 @@ pub mod syscall {
         crate::note_context::<A>(kernel, next, hart);
         let slot = kernel.context_slot(next).unwrap_or(0) as usize;
         *context = contexts[slot];
+        #[cfg(feature = "diag-sched")]
+        crate::diag::record(
+            crate::diag::CTX_LOAD,
+            hart,
+            next.index as usize,
+            slot,
+            kernel
+                .tcb(next)
+                .map(|table| table.state as u64)
+                .unwrap_or(255),
+            kernel.fast_time(),
+        );
         crate::syscall::apply_resume::<A>(context, next);
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
@@ -1580,6 +1694,18 @@ pub mod timer {
         if let Some(old) = old {
             let slot = kernel.context_slot(old).unwrap_or(0) as usize;
             contexts[slot] = *context;
+            #[cfg(feature = "diag-sched")]
+            crate::diag::record(
+                crate::diag::CTX_SAVE,
+                hart,
+                old.index as usize,
+                slot,
+                kernel
+                    .tcb(old)
+                    .map(|table| table.state as u64)
+                    .unwrap_or(255),
+                kernel.fast_time(),
+            );
         }
         let woke = kernel.tick(hart);
         let irq_woke = kernel.irq_raise(vifast_abi::IRQ_TIMER);
@@ -1857,6 +1983,18 @@ pub mod timer {
         crate::note_context::<A>(kernel, next, hart);
         let slot = kernel.context_slot(next).unwrap_or(0) as usize;
         *context = contexts[slot];
+        #[cfg(feature = "diag-sched")]
+        crate::diag::record(
+            crate::diag::CTX_LOAD,
+            hart,
+            next.index as usize,
+            slot,
+            kernel
+                .tcb(next)
+                .map(|table| table.state as u64)
+                .unwrap_or(255),
+            kernel.fast_time(),
+        );
         crate::syscall::apply_resume::<A>(context, next);
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);

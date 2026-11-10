@@ -341,6 +341,46 @@ def write_artifacts(
     if registers:
         with open(os.path.join(directory, "registers.txt"), "w") as handle:
             handle.write(registers)
+    # Khối A (kế hoạch qua đêm): khi CẢ HAI hart đều không chạy được (hart 0 quay
+    # user với IRQ0 đang chờ, hart 1 `hlt` IF=0) thì không hook nào đổ được vòng
+    # đệm — phải đọc bộ nhớ khách qua monitor. Chỉ làm khi serial có RING ADDR.
+    ring_address = None
+    for line in output.splitlines():
+        if line.startswith("RING ADDR "):
+            try:
+                ring_address = int(line.split()[2], 16)
+            except (IndexError, ValueError):
+                ring_address = None
+    if ring_address is not None and monitor and os.path.exists(monitor):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2.0)
+                sock.connect(monitor)
+                banner = b""
+                while b"(qemu)" not in banner:
+                    try:
+                        chunk = sock.recv(65536)
+                    except socket.timeout:
+                        break
+                    if not chunk:
+                        break
+                    banner += chunk
+                sock.sendall(f"xp /96gx {ring_address:#x}\n".encode())
+                chunks: list[bytes] = []
+                while True:
+                    try:
+                        chunk = sock.recv(65536)
+                    except socket.timeout:
+                        break
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    if b"(qemu)" in chunk:
+                        break
+                with open(os.path.join(directory, "ring.txt"), "wb") as handle:
+                    handle.write(b"".join(chunks))
+        except OSError:
+            pass
 
     print(f"artifacts: {directory}")
     return directory

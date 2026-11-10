@@ -22,6 +22,9 @@ diag-idle-fault = []
 # hart, (b) hai TCB dùng chung một context slot, (c) resume khôi phục context cũ.
 # Mặc định TẮT — mỗi tick in vài dòng sẽ làm chậm boot rất nhiều.
 diag-pick = []
+# Khối A (kế hoạch qua đêm): vòng đệm sự kiện lập lịch (PICK/CTX SAVE/CTX LOAD),
+# chỉ đổ ra khi xử lý Exit hoặc watchdog bắn. Mặc định TẮT.
+diag-sched = []
 # r259 (T21/D19): kiểm bất biến sched ở ranh giới trả về user.
 check-boundary = ["vifast-kernel/check-boundary"]
 # D18: biến thể cố ý làm hỏng bất biến để chứng minh phép kiểm bắt được.

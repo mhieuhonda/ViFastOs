@@ -3666,6 +3666,25 @@ impl Kernel {
                 }
             }
         }
+        // A2 / phiếu soát §1.3 (kế hoạch qua đêm): ĐẾM TCB sống có
+        // `context_slot` hợp lệ và so với số bit đã bật trong
+        // `context_slot_used`. Hai TCB dùng CHUNG một slot chỉ bật MỘT bit,
+        // nên trước đây lỗi này vô hình; nay nó lộ ngay ở đây.
+        let mut with_slot = 0usize;
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if let Some(table) = self.tcb(reference) {
+                if (table.context_slot as usize) < MAX_TCBS {
+                    with_slot += 1;
+                }
+            }
+        }
+        if with_slot != self.context_slot_used.count_ones() as usize {
+            return Err(KError::IllegalOperation);
+        }
         // 294.3: chiều "Running ⇒ đúng một current" KHÔNG thể thành bất biến —
         // đã đo ở r251 (`r251_running_without_current_is_a_valid_state`): kernel
         // hợp lệ có TCB Running mà không hart nào giữ `current` (pick xong chưa
@@ -13317,6 +13336,70 @@ mod tests {
             seen.len(),
             "có epoch trùng trong 260 lần Call — epoch chưa đủ rộng"
         );
+    }
+
+    /// A2 / phiếu soát §1.3: hai TCB dùng CHUNG một `context_slot` phải bị
+    /// `check_invariants` bắt — đây là phép kiểm QUYẾT ĐỊNH cho giả thuyết (b)
+    /// (hai TCB ghi chung một context ⇒ giá trị `last` trên stack bị đè).
+    #[test]
+    fn two_tcbs_sharing_a_context_slot_is_caught() {
+        let mut kernel = Kernel::new();
+        let first = kernel.create_tcb("first", 5).unwrap();
+        let second = kernel.create_tcb("second", 5).unwrap();
+        assert!(kernel.check_invariants().is_ok());
+        let slot = kernel.tcb(first).unwrap().context_slot;
+        assert!((slot as usize) < MAX_TCBS);
+        assert_ne!(kernel.tcb(second).unwrap().context_slot, slot);
+
+        // Mô phỏng ĐÚNG lỗi của bộ cấp slot: nó cấp trùng slot cho TCB thứ hai
+        // nên bitmask chỉ có MỘT bit cho hai TCB (bit của slot cũ không bao giờ
+        // được bật). Chỉ gán trường mà không sửa bitmask là mô phỏng sai.
+        let stale = kernel.tcb(second).unwrap().context_slot;
+        if (stale as usize) < MAX_TCBS {
+            kernel.context_slot_used &= !(1u32 << stale);
+        }
+        kernel.tcb_mut(second).unwrap().context_slot = slot;
+        assert_eq!(
+            kernel.check_invariants(),
+            Err(KError::IllegalOperation),
+            "hai TCB chung một context slot phải bị bắt"
+        );
+
+        // Trả lại slot riêng ⇒ xanh.
+        kernel.tcb_mut(second).unwrap().context_slot = 0xff;
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    /// A1 của kế hoạch qua đêm: giả thuyết (d) "fast_time không đơn điệu khi
+    /// worker đổi hart". `fast_time()` là MỘT biến toàn cục cập nhật bằng
+    /// `fetch_max`, nên phải đơn điệu bất kể hart nào tick trước.
+    #[test]
+    fn fast_time_never_goes_backwards_when_harts_tick_out_of_order() {
+        let mut kernel = Kernel::new();
+        assert_eq!(kernel.fast_time(), 0);
+        for _ in 0..7 {
+            kernel.tick(1);
+        }
+        assert_eq!(kernel.fast_time(), 7, "hart 1 cũng đẩy đồng hồ toàn cục");
+        for _ in 0..3 {
+            kernel.tick(0);
+        }
+        assert_eq!(
+            kernel.fast_time(),
+            7,
+            "hart 0 tick ít hơn không được kéo đồng hồ xuống"
+        );
+        let mut last = kernel.fast_time();
+        for round in 0..50u32 {
+            kernel.tick((round % MAX_HARTS as u32) as usize);
+            let now = kernel.fast_time();
+            assert!(now >= last, "đồng hồ tụt: {now} < {last} ở vòng {round}");
+            last = now;
+        }
+        for _ in 0..100 {
+            kernel.tick(0);
+        }
+        assert!(kernel.fast_time() >= 100);
     }
 
     /// 294.3 (r294, đỏ-trước): bất biến Running ↔ current.

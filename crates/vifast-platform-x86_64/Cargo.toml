@@ -13,6 +13,8 @@ test-skip-tlb-ipi = []
 diag-stall = []
 # 294.B (r294): đèn T33a (`TICK n` mỗi 16 tick, `PIC STALL isr/imr`). TẮT mặc định.
 diag-tick = []
+# Khối A: vòng đệm sự kiện lập lịch, đổ ra khi watchdog bắn.
+diag-sched = ["vifast-runtime/diag-sched"]
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
