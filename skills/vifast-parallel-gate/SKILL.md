@@ -78,3 +78,47 @@ kiệm từ việc đẩy x86_64 sang máy khác. Chỉ nên dùng khi:
 sh -n scripts/par-gate.sh
 ./scripts/par-gate.sh --repeat 1 --local-only   # phải PASS trước khi bật remote
 ```
+
+## Kiểm chứng 2026-11-11 (đêm r294)
+
+**Cách vào máy `ps`:** phải chỉ định user, KHÔNG dùng user mặc định (tailnet
+chặn `mps`):
+
+```sh
+ssh -l ps ps 'uname -a'        # OK: Linux ps ... x86_64, 12 CPU
+ssh ps 'uname -a'              # HỎNG: "tailnet policy does not permit ... user mps"
+```
+
+`scripts/par-gate.sh` mặc định `REMOTE=ps@100.113.214.23` nên chạy được ngay;
+nếu đổi tay thì dùng `--remote ps@ps`.
+
+**Môi trường trên `ps` đã kiểm tra đủ (không cần cài thêm):**
+
+| Thứ cần | Trạng thái |
+|---|---|
+| rustup target | `riscv64gc/riscv64imac-unknown-none-elf`, `aarch64-unknown-none(-softfloat)`, `x86_64-unknown-none`, `x86_64-unknown-uefi` — đủ 5 |
+| QEMU | `/usr/bin/qemu-system-{x86_64,riscv64,aarch64}` |
+| OVMF | `OVMF_CODE.fd → OVMF_CODE_4M.fd`, `OVMF_VARS.fd → OVMF_VARS_4M.fd` (symlink đã có) |
+| Khác | `rsync`, `python3`, repo `~/ViFastOs` |
+| Máy | 12 CPU, 14 GB (chạy 1 phiến QEMU thoải mái) |
+
+**Kết quả chạy thật:** `./scripts/par-gate.sh --repeat 1` ⇒ `par-gate: PASS`,
+`RETRY 0/1`, `x86_64 1/1 PASS` (x86_64 chạy ở `ps`, riscv64+aarch64 chạy local).
+
+## Dùng để NHÂN ĐÔI thông lượng soak (cách đúng)
+
+Chia theo **kiến trúc**, không chia theo lần lặp cùng arch (luật 1):
+
+```sh
+# Máy local: riscv64+T33b, máy ps: x86_64+T33a — chạy ĐỒNG THỜI
+python3 -u scripts/test-qemu.py --arch riscv64 --repeat 100 > /tmp/riscv-100.log 2>&1 &
+ssh -l ps ps 'cd ~/ViFastOs && ~/.cargo/bin/cargo build --release ... && \
+  python3 -u scripts/test-qemu.py --arch x86_64 --repeat 100' > /tmp/x86-100.log 2>&1
+wait
+```
+
+Thời gian ≈ `max(t_local, t_remote)` thay vì tổng. Điều kiện: **rsync mã nguồn
+sang `ps` TRƯỚC** (`./scripts/par-gate.sh` làm việc này) và **hai bên dùng arch
+khác nhau**. Sau khi sửa mã, nhớ rsync lại; nếu không, `ps` chạy bản cũ và kết
+quả vô nghĩa — luôn đối chiếu `source_sha256` trong `target/vifast-qemu-last.json`
+của hai máy.
