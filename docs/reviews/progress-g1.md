@@ -1472,3 +1472,38 @@ Sửa: lệch thì **sửa cache theo kernel** + in MỘT lần
 Việc tiếp cho T33b: (a) "thiếu marker `IPC RIGHTS OK`" 1/201 — cần đèn/artifact
 để xem guest dừng ở đâu; (b) bước TCP echo giờ tách khỏi panic, cần đo riêng
 (listener của harness mở sau khi guest đã in marker?).
+
+## r294.T26 — khoanh vùng race FS: hai phép đo quyết định
+
+### Số đo (x86_64, `scripts/fs-smp-regression.py`)
+
+| Cấu hình | N | Kết quả |
+|---|---:|---|
+| `MAX_IO=128`, IPC buf 256 B (sản phẩm) | 40 | **40/40 xanh** |
+| `MAX_IO=256`, IPC buf 256 B | 40 | **12/40 đỏ** (30 %) — tái hiện đúng con số 12/49 của r262 |
+| `MAX_IO=256`, **IPC buf 512 B** (`IPC_BUFFER_WORDS` 32→64) | 40 | **8/40 đỏ** |
+
+**Kết luận 1 (âm tính, quan trọng):** nới đệm IPC 256 → 512 B **không** diệt được
+lỗi (12/40 → 8/40, chênh lệch nằm trong nhiễu). Vậy **không** phải "payload 256 B
+đụng trần đệm IPC" như giả thuyết ban đầu — đây là **race thật** ở đường FS khi
+≥2 hart, đúng như ghi chú r262.
+
+Đã trả `IPC_BUFFER_WORDS=32`, `MAX_IO=128` về nguyên trạng; build + gate xanh.
+
+### Đính chính dữ liệu (do subagent phát hiện, ghi để không lặp lại sai)
+
+- Artifact `artifacts/flake-x86_64-1-a0` mà tôi đọc lúc đầu **có `FS V2 BAD`**
+  (dòng 193) — tôi kết luận sai là "treo không in OK lẫn BAD".
+- Ba artifact thật sự **không có** `FS V2` (`flake-x86_64-{17,20,113}-a0`) lại có
+  `serial.txt` **0 byte** ⇒ hiện **không có serial** của ca treo; muốn kết luận
+  "treo ở đâu" phải có đèn, không suy từ log rỗng.
+
+### Việc tiếp cho T26 (đã có thứ tự)
+
+1. Thêm đèn **một marker mỗi bước** trong khối V2 (`crates/vifast-client/src/main.rs`
+   ~1000-1155) để biết lần đỏ dừng ở bước nào; in cả mã lỗi trong `vfs_reply`
+   thay vì gộp thành `EIO`.
+2. Vá hai chỗ kernel làm **mất phản hồi** (giả thuyết H1 của bản phân tích):
+   `ipc.rs` `reply()` khi `valid==false` phải `wake_error(client, ObjectDestroyed)`
+   thay vì bỏ rơi client `BlockedReply`; `reply_recv()` không được `?` trước `recv`.
+3. Chỉ sau khi hết đỏ ở 256 mới đổi `MAX_IO` về 256 (luật D19, N≥40).
