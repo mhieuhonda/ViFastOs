@@ -810,6 +810,23 @@ phân biệt được "fsck nói hỏng" với "mất phản hồi IPC".
 Điều này **bác** cách giải thích cũ ở đây ("readdir đọc ảnh cũ"): nếu readdir sai
 thì `v2` phải bằng 0. Ở `MAX_IO=128` sau khi thêm đèn: **40/40 xanh**.
 
+### r294.T26 — máy thứ hai làm lộ hai điều
+
+**Số nền đúng (HEAD, `MAX_IO=128`):** Mac 40/40 xanh **và** `ps` (Ubuntu x86_64)
+40/40 xanh.
+
+**Ba bản vá thử từ bản phân tích:** P2 (`ata_wait_bsy` kiểm bit `ERR/DF` thay vì
+chỉ chờ `BSY`), P1 (`read_dir_entry_full` đọc bằng `read_staged`), P3 (tách nhóm
+đèn 04). Ở `MAX_IO=128` trên `ps`: **2/40 đỏ** trong khi baseline cùng máy 40/40
+xanh ⇒ **hồi quy cấu hình sản phẩm**, đã **revert theo D18** (giữ trong
+`git stash` để vòng sau lấy lại).
+
+**Nhưng P2 cho manh mối lớn:** nó chỉ *báo* lỗi ATA thay vì bỏ qua, mà đã làm
+xuất hiện đỏ ở 128 ⇒ **thiết bị có trả lỗi ghi mà bản cũ che mất**. Giả thuyết
+H1 của bản phân tích ("ghi bị bỏ âm thầm, cache đánh dấu clean, readdir đọc ảnh
+cũ") có **cơ sở thực nghiệm**. Hướng đúng là **thử lại/đồng bộ đúng ở tầng ATA**,
+không phải chỉ báo lỗi; và phải đo lại cả 128 lẫn 256 trên **cả hai máy**.
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -837,7 +854,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-e2650528b29f1fccdaf35255075ab7a05513967a0a0336325e8006944548960c  docs/reviews/ViFastOs-report-r262.md
+fc9e82057a5971084658c4d6f7b092a5b5e6cb44dc671801d42c081203b850e2  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
