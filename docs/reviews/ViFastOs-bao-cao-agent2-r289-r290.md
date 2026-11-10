@@ -25,19 +25,19 @@ Gửi: Agent 0. Người thực hiện: agent thi hành (phiên tự động 10/
 | 289.6 gate + soak | gate 10/10; soak đang chạy | — | — |
 | 290.1 bộ duyệt bảng chìa dùng chung | **xong** | `for_each_cap_visits_every_slot_of_every_live_table` | fc6aec4 |
 | 290.2 viết lại 4 chỗ duyệt + P0-3 | **DỞ** (xem dưới) | `parent_pointing_into_a_dying_tcb_is_repaired_inside_a_cnode` | fc6aec4 |
-| 290.3 check_invariants parent mọi nhánh | chưa | — | — |
-| 290.4 P1-10 reply_epoch | chưa | — | — |
+| 290.3 check_invariants parent mọi nhánh | **xong** | `check_invariants_rejects_a_parent_pointing_at_a_dead_table` | f5c28b4 |
+| 290.4 P1-10 reply_epoch tăng mỗi lần call | **xong** | `every_call_issues_a_fresh_reply_epoch` | f5c28b4 |
 | 290.6 fuzz 100k × 3 định dạng | chưa | — | — |
 
 ## Số đo
 
 | Chỉ số | Giá trị |
 |---|---|
-| `vifast-kernel` host test | 247 (+2 fuzz `#[ignore]`) |
+| `vifast-kernel` host test | 249 (+2 fuzz `#[ignore]`) |
 | `vifast-maint` | 8 |
 | `vifast-arch` | 8 |
 | `vifast-pte` | 12 |
-| Sàn test (`scripts/test-floor.json`) | 11 crate, **358 test** |
+| Sàn test (`scripts/test-floor.json`) | 11 crate, **360 test** |
 | Gate | **10/10 PASS** (thêm bước `tests-present` mới: so sàn thay hằng số 138) |
 | QEMU | 3 arch × 3 = 9/9 PASS |
 | Soak 100 × 3 (sau r290, chạy sạch, không build song song) | **299/300 = 99,67%** — riscv 99, aarch64 100, x86_64 100 |

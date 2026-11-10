@@ -85,3 +85,4 @@
 | r289 | riscv64 CHƯA nối hộp thư dùng chung: nối vào boot hỏng 0/5, revert thì 3/3 | Không hy sinh mạng xanh cho đối xứng hình thức; giữ mã cũ + ghi việc | cùng commit |
 | r290 | 290.1 xong: `CapRef.cnode` + `TableId` + `for_each_cap` + `resolve_cap_ref` + `cap_slot_capacity`; 290.2 dở (parent qua CNode đã tháo nay được sửa) | Bốn bộ duyệt cũ bỏ sót CNode đã tháo — gốc P0-3 | fc6aec4 |
 | r290 | Soak 100×3 = 299/300; lần hỏng duy nhất là T33b riscv (fault + no runnable thread), không liên quan TLB/IPI | Tiêu chí 289.6 | — |
+| r290 | 290.3 invariant cap.parent ở mọi nhánh qua `for_each_cap`; 290.4 `reply_epoch` tăng mỗi lần call (guard K49 hết rỗng) | Bản soát: parent chỉ kiểm khi badge!=0; epoch không bao giờ tăng | f5c28b4 |
