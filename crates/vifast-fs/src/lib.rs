@@ -1379,6 +1379,16 @@ impl<D: BlockDev> Fs<D> {
         }
     }
 
+    /// 291.4 (r291): trả một inode vừa cấp về trạng thái tự do (rollback).
+    fn release_inode(&mut self, ino: u16) {
+        if let Some(inode) = self.inodes.get_mut(ino as usize - 1) {
+            inode.kind = INODE_FREE;
+            inode.nlink = 0;
+            inode.size = 0;
+            inode.blocks = [0; MAX_BLOCKS_PER_INODE];
+        }
+    }
+
     fn alloc_inode(&mut self) -> Result<u16, FsError> {
         for index in 1..self.inode_limit {
             if self.inodes[index].kind == INODE_FREE {
@@ -1672,7 +1682,15 @@ impl<D: BlockDev> Fs<D> {
         inode.size = 0;
         self.stage_inode(ino)?;
         self.stage_bitmap()?;
-        self.write_dir_entry(parent, &name[..name_len], ino)?;
+        // 291.4 (r291): nếu bước ghi entry thư mục hỏng (thư mục đầy là ca
+        // thật), các thay đổi ĐÃ STAGE (inode + bitmap) phải được ROLLBACK.
+        // Bản cũ để nguyên: lần commit sau sẽ ghi inode đã cấp mà không có
+        // entry ⇒ rò rỉ inode, `fsck` báo lệch.
+        if let Err(error) = self.write_dir_entry(parent, &name[..name_len], ino) {
+            self.release_inode(ino);
+            self.tx_count = 0;
+            return Err(error);
+        }
         if kind == INODE_DIR {
             let parent_inode = &mut self.inodes[parent as usize - 1];
             parent_inode.nlink = parent_inode.nlink.saturating_add(1);
@@ -2517,6 +2535,61 @@ mod tests {
         let mut hole = [0xffu8; 64];
         assert_eq!(fs.read(ino, 0, &mut hole, 0).unwrap(), 64);
         assert!(hole.iter().all(|b| *b == 0), "phần lỗ phải đọc ra 0");
+        fs.fsck().unwrap();
+    }
+
+    /// 291.4 (r291, đỏ-trước): `create` hỏng giữa đường (thư mục đầy) phải
+    /// ROLLBACK inode đã cấp — nếu không, lần commit sau ghi một inode mồ côi
+    /// (không entry nào trỏ tới) và bộ đếm inode của FS bị rò rỉ.
+    #[test]
+    fn failed_create_rolls_back_the_allocated_inode() {
+        // Thư mục gốc chỉ 1 block (12 entry) nhưng 64 inode ⇒ thư mục ĐẦY
+        // trước khi cạn inode, đúng nhánh `write_dir_entry` hỏng.
+        let mut dev = MemDev::new();
+        format_with_options(
+            &mut dev,
+            FormatOptions {
+                total_blocks: 0,
+                inode_limit: MAX_INODES as u16,
+                dir_block_limit: 1,
+            },
+        )
+        .unwrap();
+        let mut fs = Fs::mount(dev).unwrap();
+        let alive = |fs: &Fs<MemDev>| {
+            fs.inodes
+                .iter()
+                .filter(|inode| inode.kind != INODE_FREE)
+                .count()
+        };
+        let baseline = alive(&fs);
+        let mut created = 0usize;
+        let mut failure = None;
+        let mut index = 0usize;
+        while index < 400 {
+            // Tên DÀI để thư mục đầy trước khi cạn inode (mỗi entry ~100 B).
+            let name = std::format!("/{}{index:02}", "n".repeat(24));
+            match fs.create(name.as_bytes(), 0, INODE_FILE) {
+                Ok(_) => created += 1,
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            index += 1;
+        }
+        let error = failure.expect("phải chạm giới hạn thư mục");
+        assert!(
+            matches!(error, FsError::NoSpace),
+            "lỗi phải là NoSpace: {error:?}"
+        );
+        assert!(created > 0);
+        assert_eq!(
+            alive(&fs),
+            baseline + created,
+            "create hỏng không được để lại inode mồ côi (rò rỉ)"
+        );
+        // Và FS vẫn lành: một create mới thành công rồi fsck sạch.
         fs.fsck().unwrap();
     }
 
