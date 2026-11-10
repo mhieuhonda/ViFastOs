@@ -119,9 +119,8 @@ static mut AP_APIC_ID: u32 = 0;
 static mut AP_STARTED: bool = false;
 static mut AP_LONG_ONLINE: bool = false;
 static AP_ONLINE: AtomicBool = AtomicBool::new(false);
-static AP_MAINT_SEQ: AtomicUsize = AtomicUsize::new(0);
-static AP_MAINT_ACK: AtomicUsize = AtomicUsize::new(0);
-static AP_MAINT_KIND: AtomicU32 = AtomicU32::new(0);
+/// P0-2 (r289): hộp thư maintenance dùng chung (xem `vifast-maint`).
+static AP_MAINT: vifast_maint::Mailbox = vifast_maint::Mailbox::new();
 const APIC_MAINT_VECTOR: u32 = 0x30;
 const APIC_TIMER_VECTOR: u32 = 0x31;
 const APIC_HALT_VECTOR: u32 = 0x32;
@@ -1161,11 +1160,9 @@ unsafe fn flush_tagged_va(asid: u16, va: u64, pages: usize) {
 }
 
 unsafe fn process_maintenance() {
-    let seq = AP_MAINT_SEQ.load(Ordering::Acquire);
-    if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
+    let Some((seq, kind)) = AP_MAINT.take() else {
         return;
-    }
-    let kind = AP_MAINT_KIND.swap(0, Ordering::AcqRel);
+    };
     if kind & AP_MAINT_TLB_VA != 0 {
         flush_tagged_va(
             AP_MAINT_TLB_ASID.load(Ordering::Acquire) as u16,
@@ -1179,7 +1176,7 @@ unsafe fn process_maintenance() {
     if kind & AP_MAINT_ICACHE != 0 {
         core::arch::asm!("wbinvd");
     }
-    AP_MAINT_ACK.store(seq, Ordering::Release);
+    AP_MAINT.ack(seq);
 }
 
 #[cfg_attr(feature = "test-skip-tlb-ipi", allow(dead_code))]
@@ -1195,8 +1192,9 @@ unsafe fn publish_tlb_va_ap(asid: u16, va: u64, pages: usize) -> usize {
     AP_MAINT_TLB_ASID.store(asid as u32, Ordering::Release);
     AP_MAINT_TLB_ADDR.store(va, Ordering::Release);
     AP_MAINT_TLB_PAGES.store(pages, Ordering::Release);
-    let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    AP_MAINT_KIND.fetch_or(AP_MAINT_TLB_VA, Ordering::AcqRel);
+    let seq = AP_MAINT.publish(AP_MAINT_TLB_VA);
+    // rào chắn: ghi mailbox phải tới trước doorbell (P0-2).
+    core::sync::atomic::fence(Ordering::SeqCst);
     AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, APIC_MAINT_VECTOR);
@@ -1210,7 +1208,7 @@ unsafe fn wait_ap(seq: usize) -> bool {
         return false;
     }
     for _ in 0..100_000 {
-        if AP_MAINT_ACK.load(Ordering::Acquire) >= seq {
+        if AP_MAINT.acked(seq) {
             return true;
         }
         core::arch::asm!("pause");
@@ -1233,8 +1231,8 @@ unsafe fn publish_full_tlb_ap() -> usize {
         return 0;
     }
     let base = lapic_base();
-    let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    AP_MAINT_KIND.fetch_or(AP_MAINT_TLB, Ordering::AcqRel);
+    let seq = AP_MAINT.publish(AP_MAINT_TLB);
+    core::sync::atomic::fence(Ordering::SeqCst);
     AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, APIC_MAINT_VECTOR);
@@ -1679,13 +1677,13 @@ unsafe fn start_ap_real() {
         return;
     }
     vifast_kernel::klog!(X86Platform, "AP LONG MODE OK (cpu=1)");
-    let seq = AP_MAINT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    AP_MAINT_KIND.fetch_or(AP_MAINT_TLB | AP_MAINT_ICACHE, Ordering::AcqRel);
+    let seq = AP_MAINT.publish(AP_MAINT_TLB | AP_MAINT_ICACHE);
+    core::sync::atomic::fence(Ordering::SeqCst);
     AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, APIC_MAINT_VECTOR);
     for _ in 0..100_000 {
-        if AP_MAINT_ACK.load(Ordering::Acquire) >= seq && AP_IPI_SEEN.load(Ordering::Acquire) > 0 {
+        if AP_MAINT.acked(seq) && AP_IPI_SEEN.load(Ordering::Acquire) > 0 {
             BSP_RATE_BASE.store(BSP_PIT_TICKS.load(Ordering::Acquire), Ordering::Release);
             vifast_kernel::klog!(X86Platform, "SMP OK (harts=2, ipi=1)");
             return;

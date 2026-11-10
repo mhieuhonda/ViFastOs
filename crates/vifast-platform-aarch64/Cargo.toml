@@ -9,6 +9,7 @@ license.workspace = true
 vifast-virtio = { path = "../vifast-virtio" }
 vifast-abi = { path = "../vifast-abi" }
 vifast-pte = { path = "../vifast-pte" }
+vifast-maint = { path = "../vifast-maint" }
 vifast-arch = { path = "../vifast-arch" }
 vifast-arch-aarch64 = { path = "../vifast-arch-aarch64" }
 vifast-kernel = { path = "../vifast-kernel" }

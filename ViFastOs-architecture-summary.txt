@@ -550,6 +550,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 07f831b r285 docs: ghi nhận T33a đã bắt được cả gate (x86_64 2/3, timeout PREEMPT OK) + ký lại báo cáo
 - b791b5e r286 docs: đồng bộ bảng tổng hợp kiến trúc (gen-docs) sau lần gate cuối
 - cc37c90 r287 docs: ghi chú bảng tổng hợp kiến trúc luôn chậm một commit (vòng lặp tự tham chiếu)
+- 1355f01 r288 fix: (T33a/T33b) hai lỗi "hart phụ hết việc ⇒ giết cả máy" + giữ serial đúng lần thử
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -599,7 +600,7 @@ Test hiện tại:
 - `cargo test -p vifast-abi`: 8/8 PASS
 - `cargo test -p vifast-kernel`: 243/243 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
-- `cargo test -p vifast-pte`: 11/11 PASS
+- `cargo test -p vifast-pte`: 12/12 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS

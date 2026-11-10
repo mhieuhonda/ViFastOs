@@ -115,6 +115,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vifast-maint"
+version = "0.1.0"
+
+[[package]]
 name = "vifast-platform-aarch64"
 version = "0.1.0"
 dependencies = [
@@ -122,6 +126,7 @@ dependencies = [
  "vifast-arch",
  "vifast-arch-aarch64",
  "vifast-kernel",
+ "vifast-maint",
  "vifast-pte",
  "vifast-runtime",
  "vifast-virtio",
@@ -149,6 +154,7 @@ dependencies = [
  "vifast-arch",
  "vifast-arch-x86_64",
  "vifast-kernel",
+ "vifast-maint",
  "vifast-pte",
  "vifast-runtime",
 ]

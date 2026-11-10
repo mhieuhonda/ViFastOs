@@ -1000,3 +1000,36 @@ in MỘT lần khi `PREEMPT OK` chưa đủ điều kiện — để lần sau b
 Đo được ở lần treo còn lại: `done=false … post=false cur0=true cur1=true rq0=4`,
 guest dừng NGAY SAU `shell>` (hart 0 không tiến nữa) ⇒ nghi bộ đếm LAPIC của
 hart 0 ngừng phát; đây vẫn là phần **mở** của T33a.
+
+## Soát tầng đáy (r289) — P0-1 + P0-2 (một phần P0-2), theo `docs/audits/2026-11-10-soat-tang-day.md`
+
+### P0-1 — aarch64 leaf user thiếu nG (ĐÃ SỬA, có test đỏ-trước)
+
+`vifast-pte` `aarch64::encode_leaf` không đặt bit 11 (nG) ⇒ mọi leaf là *global*,
+mà `tlbi aside1is` **không** xoá entry global ⇒ hai VSpace cùng map một VA
+(client/server đều map `CODE_VA`) thấy entry của nhau.
+
+- Test đỏ-trước `aarch64_leaf_is_non_global` (đỏ trước bản vá, xanh sau).
+- Sửa kèm `flush_va` của platform-aarch64: gắn ASID
+  (`(active_asid() << 48) | va`), nếu không thì khi đã có nG lệnh flush thành
+  vô dụng — đúng cảnh báo "hai chỗ phải sửa cùng nhau" trong bản soát.
+
+### P0-2 — publish `seq` trước payload ⇒ mất một lần invalidate (SỬA 2/3 port)
+
+Thêm crate **`vifast-maint`** (no_std, không `unsafe`) cài giao thức hộp thư
+MỘT lần: `publish` ghi `kind` (Release) **trước** rồi mới tăng `seq`; `take`
+trả `None` khi `kind == 0` và **không ACK**; `ack` chỉ gọi sau khi làm xong.
+
+| Port | Trạng thái | Ghi chú |
+|---|---|---|
+| aarch64 | **đã nối** | `MAINT: [Mailbox; MAX_HARTS]`, thêm `dsb ish` trước doorbell |
+| x86_64 | **đã nối** | `AP_MAINT: Mailbox`, `fence` trước khi ghi ICR |
+| riscv64 | **CHƯA** | nối vào thì boot hỏng 0/5 (revert ⇒ 3/3 xanh); giữ mã cũ, đã ghi việc |
+
+Test host của crate (chạy được vì không asm):
+- `publish_then_take_yields_the_kind`;
+- `take_without_kind_must_not_ack` — **đỏ** khi trả về giao thức cũ (đã chứng
+  minh bằng cách tạm đảo lại), đây là test khoá đúng lỗi P0-2;
+- `concurrent_publish_never_loses_a_flush` (20 000 lần, hai luồng).
+
+Đo sau khi sửa: build PASS, QEMU 3 arch × 3 = 9/9 PASS, gate 10/10.

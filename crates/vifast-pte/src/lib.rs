@@ -216,6 +216,10 @@ pub mod aarch64 {
     pub const AP_USER_RO: u64 = (1 << 6) | (1 << 7);
     pub const PXN: u64 = 1 << 53;
     pub const UXN: u64 = 1 << 54;
+    /// P0-1 (r289): bit 11 = nG (non-global). Bắt buộc với mọi leaf user, nếu
+    /// không `tlbi aside1is` (theo ASID) sẽ KHÔNG xoá entry và hai VSpace cùng
+    /// VA sẽ thấy entry của nhau.
+    pub const NG: u64 = 1 << 11;
     pub const PA_MASK: u64 = 0x0000_ffff_ffff_f000;
 
     pub fn index(va: u64, level: usize) -> usize {
@@ -233,7 +237,8 @@ pub mod aarch64 {
         } else {
             UXN
         };
-        (pa & PA_MASK) | 0b11 | AF | SH_INNER | ap | PXN | uxn
+        // P0-1 (r289): nG cho MỌI leaf user (xem `NG`).
+        (pa & PA_MASK) | 0b11 | AF | SH_INNER | ap | PXN | uxn | NG
     }
 
     pub fn encode_table(pa: u64) -> u64 {
@@ -269,6 +274,32 @@ pub mod aarch64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P0-1 (r289, đỏ-trước): mọi leaf user của aarch64 phải có bit nG (11).
+    ///
+    /// Thiếu nG thì entry là "global", mà `tlbi aside1is` **không** xoá entry
+    /// global; hai VSpace cùng map một VA (client/server đều map `CODE_VA`) sẽ
+    /// thấy entry của VSpace trước ⇒ chạy nhầm mã. QEMU flush rộng tay nên lỗi
+    /// này xanh trên QEMU và sai trên máy thật.
+    #[test]
+    fn aarch64_leaf_is_non_global() {
+        for access in [
+            Rights::READ,
+            Rights::READ | Rights::WRITE,
+            Rights::READ | Rights::EXEC,
+            Rights::ALL,
+        ] {
+            let leaf = aarch64::encode_leaf(0x1234_5000, access);
+            assert!(
+                leaf & (1 << 11) != 0,
+                "leaf aarch64 phải có nG (bit 11), entry={:#x}",
+                leaf
+            );
+        }
+        // Bảng (table) thì không mang nG — chỉ leaf mới có nghĩa TLB.
+        let table = aarch64::encode_table(0x1234_5000);
+        assert_eq!(table & (1 << 11), 0, "table descriptor không được có nG");
+    }
 
     #[test]
     fn riscv_roundtrip_and_wx() {

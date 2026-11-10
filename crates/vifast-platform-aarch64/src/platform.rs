@@ -121,23 +121,14 @@ static MAINT_TLB_ASID: [AtomicU32; MAX_HARTS] = [
     AtomicU32::new(0),
     AtomicU32::new(0),
 ];
-static MAINT_SEQ: [AtomicUsize; MAX_HARTS] = [
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-];
-static MAINT_ACK: [AtomicUsize; MAX_HARTS] = [
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-];
-static MAINT_KIND: [AtomicU32; MAX_HARTS] = [
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
+/// P0-2 (r289): hộp thư maintenance dùng chung `vifast-maint` — một cài đặt
+/// đúng cho cả ba kiến trúc (publish `kind` TRƯỚC `seq`, consumer không ACK
+/// khi chưa có việc). Trước đây mỗi port tự cài và cả ba đều sai cùng kiểu.
+static MAINT: [vifast_maint::Mailbox; MAX_HARTS] = [
+    vifast_maint::Mailbox::new(),
+    vifast_maint::Mailbox::new(),
+    vifast_maint::Mailbox::new(),
+    vifast_maint::Mailbox::new(),
 ];
 static BKL: BigKernelLock = BigKernelLock::new();
 static SCHED_READY: AtomicBool = AtomicBool::new(false);
@@ -243,11 +234,9 @@ fn poll_maintenance() {
     if hart >= MAX_HARTS {
         return;
     }
-    let seq = MAINT_SEQ[hart].load(Ordering::Acquire);
-    if MAINT_ACK[hart].load(Ordering::Acquire) >= seq {
+    let Some((seq, kind)) = MAINT[hart].take() else {
         return;
-    }
-    let kind = MAINT_KIND[hart].swap(0, Ordering::AcqRel);
+    };
     if kind & MAINT_TLB != 0 {
         // Full stage-1 invalidate for EL1 (remote side of flush_all_asid /
         // request_ipi); previously only `dsb ish`, so the handler was dead.
@@ -282,7 +271,7 @@ fn poll_maintenance() {
             core::arch::asm!("isb");
         }
     }
-    MAINT_ACK[hart].store(seq, Ordering::Release);
+    MAINT[hart].ack(seq);
 }
 
 fn maintenance_target_online(target: usize) -> bool {
@@ -310,8 +299,11 @@ fn publish_maintenance(target: usize, kind: u32) -> usize {
         BKL.held_by(current_hart()),
         "maintenance IPI sender must hold BKL"
     );
-    let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
-    MAINT_KIND[target].fetch_or(kind, Ordering::AcqRel);
+    let seq = MAINT[target].publish(kind);
+    // rào chắn để việc ghi mailbox tới trước doorbell (P0-2).
+    unsafe {
+        core::arch::asm!("dsb ish");
+    }
     // GICv2 SGIR SGI 0, target list bit for the destination CPU.
     write32(GICD + 0xF00, 1 << (16 + target));
     seq
@@ -325,12 +317,12 @@ fn wait_maintenance(target: usize, seq: usize) -> bool {
         return false;
     }
     let mut spins = 0usize;
-    while MAINT_ACK[target].load(Ordering::Acquire) < seq && spins < 5_000_000 {
+    while !MAINT[target].acked(seq) && spins < 5_000_000 {
         poll_maintenance();
         core::hint::spin_loop();
         spins += 1;
     }
-    MAINT_ACK[target].load(Ordering::Acquire) >= seq
+    MAINT[target].acked(seq)
 }
 
 fn send_maintenance(target: usize, kind: u32) -> bool {
@@ -900,8 +892,12 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn flush_va(&self, va: u64) {
+        // P0-1 (r289): leaf user nay mang nG, nên `vae1is` phải gắn ASID của
+        // KHÔNG GIAN ĐỊA CHỈ hiện tại — không gắn thì chỉ ASID 0 mới bị xoá và
+        // entry của VSpace đang chạy sống sót (đúng lỗi mà nG vừa phơi ra).
+        let asid_tag = (active_asid() as u64) << 48;
         unsafe {
-            core::arch::asm!("tlbi vae1is, {}", in(reg) va);
+            core::arch::asm!("tlbi vae1is, {}", in(reg) va | asid_tag);
             core::arch::asm!("dsb ish");
             core::arch::asm!("isb");
         }

@@ -1,0 +1,7 @@
+[package]
+name = "vifast-maint"
+version = "0.1.0"
+edition = "2021"
+description = "Hộp thư maintenance (TLB shootdown) dùng chung cho cả ba kiến trúc"
+
+[dependencies]

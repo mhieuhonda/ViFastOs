@@ -12,6 +12,7 @@ test-skip-tlb-ipi = []
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
 vifast-pte = { path = "../vifast-pte" }
+vifast-maint = { path = "../vifast-maint" }
 vifast-arch = { path = "../vifast-arch" }
 vifast-arch-x86_64 = { path = "../vifast-arch-x86_64" }
 vifast-kernel = { path = "../vifast-kernel" }
