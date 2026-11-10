@@ -145,6 +145,23 @@ pub trait BlockDev {
 /// larger cache only alongside an ATA driver that paces burst writes.
 pub const CACHE_SLOTS: usize = 8;
 
+/// T26: ba số đo của lần `read_dir_entry_full` trả `Ok(None)` gần nhất:
+/// `(index, số entry đếm được qua cache, số entry đếm được qua đường RAW)`.
+/// Lệch nhau ⇒ ảnh cache khác ảnh đĩa (đèn quyết định), không phải "hết thật".
+static DIR_PROBE: [core::sync::atomic::AtomicU32; 3] = [
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+];
+
+pub fn dir_probe() -> (u32, u32, u32) {
+    (
+        DIR_PROBE[0].load(core::sync::atomic::Ordering::Relaxed),
+        DIR_PROBE[1].load(core::sync::atomic::Ordering::Relaxed),
+        DIR_PROBE[2].load(core::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 #[derive(Clone, Copy)]
 struct CacheSlot {
     lba: u32,
@@ -2130,6 +2147,22 @@ impl<D: BlockDev> Fs<D> {
                 seen += 1;
             }
         }
+        // T26: tới đây là "hết" — đo lại bằng đường RAW (bỏ cache) để biết
+        // ảnh nào đúng. Lệch ⇒ bug cache/inode, không phải hết thật.
+        let mut raw_seen = 0u32;
+        for block_index in 0..inode.blocks_used() {
+            let mut raw = zero_block();
+            if self.dev.read(inode.blocks[block_index], &mut raw).is_ok() {
+                for slot in 0..DIR_ENTRIES_PER_BLOCK {
+                    if get_u16(&raw, slot * DIR_ENTRY_SIZE) != 0 {
+                        raw_seen += 1;
+                    }
+                }
+            }
+        }
+        DIR_PROBE[0].store(index as u32, core::sync::atomic::Ordering::Relaxed);
+        DIR_PROBE[1].store(seen as u32, core::sync::atomic::Ordering::Relaxed);
+        DIR_PROBE[2].store(raw_seen, core::sync::atomic::Ordering::Relaxed);
         Ok(None)
     }
 

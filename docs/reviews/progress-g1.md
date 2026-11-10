@@ -1818,3 +1818,26 @@ client dừng ⇒ mất `d`. Đây là chỗ hẹp nhất và đã có file:dòn
 gốc ngay trong `read_dir_entry_full` khi trả `Ok(None)` mà `index` còn nhỏ hơn số
 entry đếm được bằng đường khác; nếu lệch ⇒ vá cache/inode-refresh (nghi
 `self.inodes`/slot cache không được cập nhật sau `commit`).
+
+## r294.T26 — ảnh cache và ảnh đĩa KHỚP nhau ⇒ nghi inode trong RAM thiếu block
+
+Đèn mới: mỗi lần `read_dir_entry_full` trả `Ok(None)`, đếm lại số entry bằng
+đường đọc thứ hai và **in `DIR i=<index> c=<đếm-lần-1> r=<đếm-lần-2>` nếu lệch**.
+
+**Đo `MAX_IO=256`, 7/20 boot đỏ — KHÔNG lần nào in `DIR`** ⇒ hai lần đếm **bằng
+nhau** (cùng đọc ra 6 entry rồi hết). Vậy **không phải** cache trả ảnh khác đĩa
+trong phạm vi những block mà inode khai báo.
+
+Kết hợp `V2RD end n=06` ⇒ `read_dir_entry_full` chỉ thấy **6 entry không rỗng**
+trong toàn bộ `inode.blocks_used()` block của thư mục gốc, rồi tuyên bố hết.
+
+⇒ Giả thuyết hẹp nhất còn lại: **bản inode trong `self.inodes` (RAM) thiếu block**
+— `blocks_used()`/`size` nhỏ hơn đĩa (entry `d` nằm ở block thứ hai chưa được
+tính). Phép đo trên chỉ quét trong `blocks_used()` nên **không thể** thấy chênh
+lệch đó; muốn chứng minh phải so **inode RAM với inode trên đĩa**.
+
+**Việc tiếp (đúng một phép đo):** trong `read_dir_entry_full`, đọc lại inode từ
+đĩa (`stage_inode`/`load`) và so `size` + `blocks_used()` với bản RAM; in
+`INO ram=<a> disk=<b>` khi lệch. Nếu lệch ⇒ vá chỗ làm mới `self.inodes` sau
+`write_dir_entry`/`commit` (nghi thiếu cập nhật cho thư mục cha khi entry mới rơi
+sang block kế).

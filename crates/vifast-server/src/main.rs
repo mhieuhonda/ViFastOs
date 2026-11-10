@@ -734,6 +734,32 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             // không trả lời".
             write(if ok { b"FSV ok\n" } else { b"FSV err\n" });
             // T26: bằng chứng TRỰC TIẾP của mất lệnh ghi (ghi xong đọc lại khác).
+            // T26: index / entry-đếm-qua-cache / entry-đếm-qua-RAW của lần
+            // `read_dir_entry_full` trả "hết" gần nhất. Lệch ⇒ cache khác đĩa.
+            let (probe_index, probe_cached, probe_raw) = vifast_fs::dir_probe();
+            if probe_cached != probe_raw {
+                let mut line = [0u8; 32];
+                line[0] = b'D';
+                line[1] = b'I';
+                line[2] = b'R';
+                line[3] = b' ';
+                line[4] = b'i';
+                line[5] = b'=';
+                line[6] = b'0' + ((probe_index / 10) % 10) as u8;
+                line[7] = b'0' + (probe_index % 10) as u8;
+                line[8] = b' ';
+                line[9] = b'c';
+                line[10] = b'=';
+                line[11] = b'0' + ((probe_cached / 10) % 10) as u8;
+                line[12] = b'0' + (probe_cached % 10) as u8;
+                line[13] = b' ';
+                line[14] = b'r';
+                line[15] = b'=';
+                line[16] = b'0' + ((probe_raw / 10) % 10) as u8;
+                line[17] = b'0' + (probe_raw % 10) as u8;
+                line[18] = b'\n';
+                write(&line[..19]);
+            }
             let lost = fs().dev().lost_writes();
             if lost > 0 {
                 let mut line = [0u8; 16];
