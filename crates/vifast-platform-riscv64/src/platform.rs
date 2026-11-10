@@ -2117,9 +2117,18 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         unsafe {
             core::arch::asm!("csrr {}, stval", out(reg) stval);
         }
-        vifast_runtime::fault::suspend::<RiscvPlatform>(frame, frame.scause, stval);
+        // r294.4: nhả BKL trước khi halt (suspend trả `false` = hết TCB chạy được).
+        let resumed = vifast_runtime::fault::suspend::<RiscvPlatform>(frame, frame.scause, stval);
         drop(bkl);
         assert_bkl_released();
+        if !resumed {
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "SMP PARK (hart={})",
+                RiscvPlatform::hart_id()
+            );
+            RiscvPlatform::halt();
+        }
         return;
     }
     let number = frame.regs[17];

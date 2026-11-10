@@ -491,12 +491,16 @@ def format_retry_line(stats: dict) -> str:
 
 
 def classify_failure(output: str) -> str:
-    """Phân loại một lần boot hỏng theo mục 2.5 của tệp quyết định."""
-    if "FS V2 OK" not in output or "FS V2 BAD" in output:
-        return "T-FS"
-    sched_signatures = (
+    """Phân loại một lần boot hỏng theo mục 2.5 của tệp quyết định.
+
+    THỨ TỰ QUAN TRỌNG (sửa ở r293 sau phép đo nền đầu): chữ ký SCHED phải xét
+    TRƯỚC "thiếu FS V2 OK", nếu không **mọi lần chết sớm** (guest dừng trước cả
+    `FS V2 OK`) đều bị dán nhãn T-FS và ta tưởng BLOCKER FS tái phát. Lần đo
+    300 boot đầu đã mắc đúng lỗi này: 4 lần chết sớm bị đếm thành T-FS=4.
+    """
+    # (1) Chữ ký scheduler rõ ràng ⇒ T-SCHED, bất kể đã in tới marker nào.
+    for signature in (
         "ROOT PANIC",
-        "PREEMPT OK",
         "USER FAULT tcb=None",
         "no runnable thread",
         "SMP NO READY",
@@ -504,13 +508,18 @@ def classify_failure(output: str) -> str:
         # `KERNEL FAULT` là một sự kiện T-SCHED — phải đếm, không được để nó
         # trôi qua như log vô hại.
         "KERNEL FAULT",
-    )
-    for signature in sched_signatures:
-        if signature == "PREEMPT OK":
-            if signature not in output:
-                return "T-SCHED"
-        elif signature in output:
+    ):
+        if signature in output:
             return "T-SCHED"
+    # (2) Hỏng ĐÚNG tầng FS: hoặc marker BAD, hoặc thiếu `FS V2 OK` trong khi
+    # guest đã đi qua `SHELL READY`/các marker sau FS (tức là nó tới được đó).
+    if "FS V2 BAD" in output:
+        return "T-FS"
+    if "FS V2 OK" not in output and "SHELL READY" in output:
+        return "T-FS"
+    # (3) Thiếu `PREEMPT OK` (mà không có chữ ký nào ở trên) vẫn là scheduler.
+    if "PREEMPT OK" not in output:
+        return "T-SCHED"
     return "T-KHAC"
 
 

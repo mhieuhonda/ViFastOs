@@ -2011,9 +2011,19 @@ extern "C" fn aarch64_trap_handler(frame: *mut TrapFrame) {
     let bkl = bkl_lock();
     assert_current_tcb();
     if ec != 0x15 {
-        vifast_runtime::fault::suspend::<Aarch64Platform>(frame, frame.esr, frame.far);
+        // r294.4: nhả BKL trước khi halt (suspend trả `false` = hết TCB chạy được).
+        let resumed =
+            vifast_runtime::fault::suspend::<Aarch64Platform>(frame, frame.esr, frame.far);
         drop(bkl);
         assert_bkl_released();
+        if !resumed {
+            vifast_kernel::klog!(
+                Aarch64Platform,
+                "SMP PARK (hart={})",
+                Aarch64Platform::hart_id()
+            );
+            Aarch64Platform::halt();
+        }
         return;
     }
     let number = frame.regs[8];

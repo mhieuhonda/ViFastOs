@@ -348,8 +348,21 @@ def main() -> int:
         # thiếu cả hai ⇒ T-FS (ưu tiên đúng thứ tự mục 2.5); lỗi lạ ⇒ T-KHAC.
         classify_cases = [
             ("FS V2 OK\nPREEMPT OK\n", "T-KHAC", "đủ marker nhưng gọi phân loại"),
-            ("PREEMPT OK\n", "T-FS", "thiếu FS V2 OK"),
+            ("PREEMPT OK\nSHELL READY\n", "T-FS", "thiếu FS V2 OK sau SHELL READY"),
             ("FS V2 OK\n", "T-SCHED", "thiếu PREEMPT OK"),
+            # Chết SỚM: thiếu cả FS V2 OK lẫn PREEMPT OK, nhưng có chữ ký
+            # scheduler ⇒ phải là T-SCHED, KHÔNG được dán nhãn T-FS (lỗi phân
+            # loại đã mắc ở phép đo nền đầu r293).
+            (
+                "SHELL READY\nUSER FAULT tcb=None cause=0x0\nno runnable thread after fault\n",
+                "T-SCHED",
+                "chết sớm có chữ ký scheduler — không phải T-FS",
+            ),
+            (
+                "SHELL READY\nMEM OOM BAD\n",
+                "T-FS",
+                "thiếu FS V2 OK sau SHELL READY, không chữ ký ⇒ T-FS",
+            ),
             ("FS V2 OK\nPREEMPT OK\nROOT PANIC\n", "T-SCHED", "có ROOT PANIC"),
             ("FS V2 OK\nPREEMPT OK\nUSER FAULT tcb=None \n", "T-SCHED", "USER FAULT tcb=None"),
             ("FS V2 OK\nPREEMPT OK\nSMP NO READY (hart=0)\n", "T-SCHED", "SMP NO READY"),

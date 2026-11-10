@@ -3066,9 +3066,20 @@ extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: 
     // vòng 92: frame thật (audit #6) — pager cứu được task và nó chạy lại
     // đúng instruction đã fault.
     let mut context = unsafe { TrapFrame::from_raw(frame, true) };
-    vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, 0);
+    // r294.4: suspend trả `false` khi hart không còn TCB nào chạy được —
+    // phải NHẢ BKL trước khi halt, nếu không hart kia quay BKL mãi với IF=0.
+    let resumed = vifast_runtime::fault::suspend::<X86Platform>(&mut context, vector, 0);
     drop(bkl);
     assert_bkl_released();
+    if !resumed {
+        vifast_kernel::klog!(
+            X86Platform,
+            "SMP PARK (hart={}, cause={})",
+            X86Platform::hart_id(),
+            vector
+        );
+        X86Platform::halt();
+    }
     <X86Platform as Platform>::enter_user(&context);
 }
 
@@ -3092,9 +3103,18 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
         X86_64::exit(1);
     }
     let mut context = unsafe { TrapFrame::from_raw(_frame, false) };
-    vifast_runtime::fault::suspend::<X86Platform>(&mut context, error, cr2);
+    let resumed = vifast_runtime::fault::suspend::<X86Platform>(&mut context, error, cr2);
     drop(bkl);
     assert_bkl_released();
+    if !resumed {
+        vifast_kernel::klog!(
+            X86Platform,
+            "SMP PARK (hart={}, cause={})",
+            X86Platform::hart_id(),
+            error
+        );
+        X86Platform::halt();
+    }
     <X86Platform as Platform>::enter_user(&context);
 }
 

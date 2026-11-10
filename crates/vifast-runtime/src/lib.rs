@@ -1431,7 +1431,7 @@ pub mod syscall {
 pub mod fault {
     use super::*;
 
-    pub fn suspend<A: Platform>(context: &mut A::Context, cause: u64, addr: u64) {
+    pub fn suspend<A: Platform>(context: &mut A::Context, cause: u64, addr: u64) -> bool {
         let kernel = A::kernel();
         let hart = A::hart_id();
         let old = kernel.current_on(hart);
@@ -1500,8 +1500,14 @@ pub mod fault {
             _ => kernel.fault_current_on(hart),
         };
         let Some(mut next) = next else {
+            // r294.4: KHÔNG `halt()` ở đây. Hàm này chạy trong trap handler
+            // ĐANG GIỮ BKL và IF=0; `halt()` là `loop { hlt }` nên guard BKL
+            // không bao giờ được nhả ⇒ hart còn lại quay BKL mãi với IF=0 ⇒
+            // CẢ MÁY chết (đúng chữ ký `USER FAULT tcb=None` +
+            // `no runnable thread after fault` trong 4/305 lần đo nền).
+            // Trả `false` để caller nhả khoá rồi mới halt.
             vifast_kernel::klog!(A, "no runnable thread after fault");
-            A::halt();
+            return false;
         };
         note_current_tcb::<A>(kernel);
         loop {
@@ -1509,12 +1515,12 @@ pub mod fault {
             *context = A::contexts()[slot];
             crate::syscall::apply_resume::<A>(context, next);
             if ensure_current_root::<A>().is_ok() {
-                return;
+                return true;
             }
             vifast_kernel::klog!(A, "FAULT SUSPEND tcb={:?}: no VSpace", next);
             let Some(candidate) = kernel.fault_current_on(hart) else {
                 vifast_kernel::klog!(A, "no runnable thread with VSpace after fault");
-                A::halt();
+                return false;
             };
             note_current_tcb::<A>(kernel);
             next = candidate;
