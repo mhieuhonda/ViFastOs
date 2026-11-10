@@ -865,6 +865,28 @@ là may (P(0/40) ≈ 22 % khi p ≈ 0,0375). Ba hệ quả:
 phải gốc T26. (Bản vá `wait_done` + `ATA STAT` vẫn đúng và đang để trong
 `git stash` để đo riêng.)
 
+### r294.T26 — ĐỘT PHÁ: không mất dữ liệu, lỗi ở tầng LIỆT KÊ
+
+Đèn phân biệt chạy ngay trong client khi `readdir("/")` thiếu `d`: hỏi thẳng
+`open("/d")` rồi lặp readdir 2 lần nữa. Kết quả ở `MAX_IO=256` (2/2 lần đỏ):
+
+```
+V2GROUP 06  V2CHK open=1 rd=2
+```
+
+`open=1` ⇒ ảnh FS **có** `d`; `rd=2` ⇒ **cả hai** lần readdir lặp lại đều **thấy**
+`d`. ⇒ **Không mất dữ liệu**, **không phải race hai hart ghi**; chỉ **lần liệt kê
+đầu** bỏ sót.
+
+Hệ quả: loại cơ chế "RMW đọc ảnh cũ ghi đè" và "hai hart cùng thực thi một `Fs`";
+còn lại **tầng liệt kê** — gói nhiều record vào khung IPC 256 B (`READDIR_REC=32`
+⇒ 8 record = 256 B = **đầy khung, không slack**), client giải mã lười từng record,
+và cả hai phía `break` im lặng khi gặp `Err`
+(`vifast-client/src/main.rs:575-581`, `vifast-server/src/main.rs:648-652`).
+
+Hướng sửa đổi hẳn: **không** sửa journal/cache mà sửa **đường readdir** (trang hoá
++ không cắt danh sách trong im lặng). Ở `MAX_IO=128`: 40/40 xanh.
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -892,7 +914,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-02202b6c9ed20d5214127b9bf0913b984cd2cc21b45ebca700ad67519ad6ae9c  docs/reviews/ViFastOs-report-r262.md
+e5835e93502e730091781f605cd3732fc47ceb90fe0abe36e93ca444aff00a81  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
