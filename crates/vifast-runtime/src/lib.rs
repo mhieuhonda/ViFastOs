@@ -1036,6 +1036,41 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
 }
 
 /// Syscall/action dispatch shared by all trap entry implementations.
+/// r294.B: đèn phân biệt ba cơ chế làm hỏng context (ghi chú soát độc lập §2.2):
+///   (a) cùng một TCB bị pick trên HAI hart;
+///   (b) hai TCB khác nhau dùng CHUNG một `context_slot`;
+///   (c) resume khôi phục context cũ.
+/// Mặc định TẮT (`diag-pick`): mỗi lần chuyển ngữ cảnh một dòng làm boot rất chậm.
+#[cfg(feature = "diag-pick")]
+pub fn note_context<A: Platform>(
+    kernel: &vifast_kernel::Kernel,
+    next: vifast_kernel::ObjRef,
+    hart: usize,
+) {
+    let slot = kernel.context_slot(next);
+    let state = kernel
+        .tcb(next)
+        .map(|table| table.state as u8)
+        .unwrap_or(255);
+    vifast_kernel::klog!(
+        A,
+        "PICK hart={} tcb={} slot={} state={}",
+        hart,
+        next.index,
+        slot.map(u64::from).unwrap_or(u64::MAX),
+        state
+    );
+}
+
+#[cfg(not(feature = "diag-pick"))]
+#[inline]
+pub fn note_context<A: Platform>(
+    _kernel: &vifast_kernel::Kernel,
+    _next: vifast_kernel::ObjRef,
+    _hart: usize,
+) {
+}
+
 pub mod syscall {
     use super::*;
 
@@ -1341,6 +1376,7 @@ pub mod syscall {
                     // Có task kế tiếp: nạp context của nó như switch_blocked.
                     let next = kernel.current_on(hart).unwrap();
                     note_current_tcb::<A>(kernel);
+                    crate::note_context::<A>(kernel, next, hart);
                     let slot = kernel.context_slot(next).unwrap_or(0) as usize;
                     *context = A::contexts()[slot];
                     crate::syscall::apply_resume::<A>(context, next);
@@ -1394,6 +1430,7 @@ pub mod syscall {
             return false;
         };
         note_current_tcb::<A>(kernel);
+        crate::note_context::<A>(kernel, next, hart);
         let slot = kernel.context_slot(next).unwrap_or(0) as usize;
         *context = contexts[slot];
         crate::syscall::apply_resume::<A>(context, next);
@@ -1414,6 +1451,7 @@ pub mod syscall {
             return false;
         };
         note_current_tcb::<A>(kernel);
+        crate::note_context::<A>(kernel, next, hart);
         let slot = kernel.context_slot(next).unwrap_or(0) as usize;
         *context = contexts[slot];
         crate::syscall::apply_resume::<A>(context, next);
@@ -1511,6 +1549,7 @@ pub mod fault {
         };
         note_current_tcb::<A>(kernel);
         loop {
+            crate::note_context::<A>(kernel, next, hart);
             let slot = kernel.context_slot(next).unwrap_or(0) as usize;
             *context = A::contexts()[slot];
             crate::syscall::apply_resume::<A>(context, next);
@@ -1815,6 +1854,7 @@ pub mod timer {
             A::exit(1);
         };
         note_current_tcb::<A>(kernel);
+        crate::note_context::<A>(kernel, next, hart);
         let slot = kernel.context_slot(next).unwrap_or(0) as usize;
         *context = contexts[slot];
         crate::syscall::apply_resume::<A>(context, next);

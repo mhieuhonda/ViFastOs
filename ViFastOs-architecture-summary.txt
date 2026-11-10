@@ -571,6 +571,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 39589cb r293: theo Agent 0 — KERNEL FAULT guard mặc định quay về halt()
 - c2a8968 r294.4: nhả BKL trước khi halt — gốc của lớp "USER FAULT tcb=None"
 - fc87374 r294.3: bất biến current ↔ TCB (hai chiều ĐÚNG), có ghi "lệch có chủ đích"
+- 4c8f608 r294.B0: đèn TICK/PIC/LAPIC (sau feature) + hai giả thuyết bị BÁC, và lộ ra T-ROOT
+- 4e8e23e r294.B1'+B2': MỘT đường ghi artifact, giữ nguyên khối ROOT PANIC
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

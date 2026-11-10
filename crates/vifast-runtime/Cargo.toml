@@ -18,6 +18,10 @@ test-shell-linger = []
 # thì bỏ qua + ack" thay vì halt(). Mặc định TẮT — bỏ qua im lặng sẽ nuốt lớp
 # lỗi T33 mà r294 cần đếm.
 diag-idle-fault = []
+# r294.B: đèn phân biệt ba cơ chế hỏng context (a) cùng TCB bị pick trên hai
+# hart, (b) hai TCB dùng chung một context slot, (c) resume khôi phục context cũ.
+# Mặc định TẮT — mỗi tick in vài dòng sẽ làm chậm boot rất nhiều.
+diag-pick = []
 # r259 (T21/D19): kiểm bất biến sched ở ranh giới trả về user.
 check-boundary = ["vifast-kernel/check-boundary"]
 # D18: biến thể cố ý làm hỏng bất biến để chứng minh phép kiểm bắt được.

@@ -466,7 +466,7 @@ def run_qemu(
         # r293.1 + B1': mọi lần hỏng đều được đếm + phân loại + lưu artifact
         # (kể cả lần sẽ được retry che), qua MỘT hàm ghi duy nhất.
         RUN_STATS["retries"] += 1
-        record_failure(
+        kind = record_failure(
             name, index, attempt, LAST_OUTPUT["text"], f"attempt {attempt} hỏng"
         )
         if not (retry_timeout or retry_boot or retry_exit or retry_shell):
