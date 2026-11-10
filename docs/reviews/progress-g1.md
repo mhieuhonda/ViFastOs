@@ -1249,3 +1249,18 @@ AP chỉ mask **LINT1**; LINT0 để nguyên; thêm đèn `AP LVT0=` đọc lạ
 
 Giới hạn: 0/100 chỉ viết được "tỉ lệ < 3/100"; lượt 300 boot không đèn ở khối Z
 mới là số chốt.
+
+### Trạng thái ngay sau bản vá LINT0 (ghi trung thực)
+
+Lượt 300 boot **không đèn** (sha `3699fe7`, bản vá LINT0 đã có) đang chạy.
+Tới run 66/300 đã có **1 lần treo sau `shell>`** (thiếu `PREEMPT OK`) ⇒
+**không được kết luận "đã hết"**: hoặc lớp này còn nguyên nhân thứ hai, hoặc
+lượt 0/100 trước đó là may mắn.
+
+Việc phải làm để phân biệt (lượt sau, có đèn): bật lại `diag-tick` + `diag-sched`,
+chạy ~120 boot, xem lần treo kế tiếp có `NO TICK` với `lvt0=0x10000` nữa không.
+- Nếu còn `lvt0=0x10000` ⇒ còn chỗ khác mask LINT0 (phải tìm, không đoán).
+- Nếu `NO TICK` không in (tick vẫn chạy) ⇒ treo này là lớp khác, phải đặt tên mới.
+
+Ghi chú: bản **không đèn** không có `NO TICK` nên sự vắng mặt của nó trong
+artifact lượt này **không** chứng minh được gì.
