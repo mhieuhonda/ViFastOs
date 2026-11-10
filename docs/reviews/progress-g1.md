@@ -1948,3 +1948,23 @@ Ba kết luận:
 Nếu commit record bị xoá TRƯỚC khi target xuống đĩa (hoặc `flush` không đảm bảo),
 thì cửa sổ "đã trả Ok mà entry chưa bền" là thật. Đèn chốt: sau `commit()` đọc
 lại bằng `read_uncached` chính block vừa ghi và so với ảnh staged.
+
+## r294.T26 — đọc `commit()`: thứ tự ĐÚNG; còn một nghi vấn hẹp
+
+`Fs::commit` (`crates/vifast-fs/src/lib.rs:1153-1196`) làm đúng thứ tự chuẩn:
+journal data → header → **commit record** → ghi từng `targets[i]` → `dev.flush()`
+→ **xoá commit record**. Có ghi chú rõ "never clear the commit journal until
+dirty data blocks and their write-back cache have reached the device".
+
+⇒ Giả thuyết "commit record bị xoá trước khi target bền" **không đúng** với mã
+hiện tại.
+
+Vậy còn đúng một nghi vấn: **`targets[]` có chứa block thư mục cha không**, và
+`dev.write(target)` có thực sự tới thiết bị không. Phép đo chốt kế tiếp (chưa
+làm): ngay sau `self.dev.flush()` trong `commit()`, với mỗi `targets[i]` đọc lại
+bằng `read_uncached` và so với ảnh journal; lệch thì in `COMMIT LOST <lba>`.
+- Có `COMMIT LOST` ⇒ lỗi ở tầng ghi/flush (đã kiểm ATA là sạch, nên nghi
+  `CachedDev::write` khi `lba < DATA_START` dùng write-through nhưng KHÔNG flush
+  thiết bị, và lệnh đọc sau đó lại đi qua cache của thiết bị theo thứ tự khác).
+- Không có `COMMIT LOST` mà đĩa vẫn thiếu ⇒ block thư mục **không nằm trong
+  `targets[]`**, tức lỗi ở `write_dir_entry`/`stage`.
