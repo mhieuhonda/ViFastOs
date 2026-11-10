@@ -88,3 +88,9 @@
 | r290 | 290.3 invariant cap.parent ở mọi nhánh qua `for_each_cap`; 290.4 `reply_epoch` tăng mỗi lần call (guard K49 hết rỗng) | Bản soát: parent chỉ kiểm khi badge!=0; epoch không bao giờ tăng | f5c28b4 |
 | r291 | FS: biên theo superblock (`capacity`), chặn chỉ số indirect bịa, lỗ file thưa hợp lệ (read trả 0, fsck bỏ qua), `fsck_mark_block` theo capacity | Bản soát P1-1/P1-2 + 291.3; ba test đỏ-trước | (commit r291) |
 | r291 | 291.4 `create` hỏng rollback inode đã cấp (`release_inode`) | Thư mục đầy giữa `create` để lại inode mồ côi; test đỏ-trước chứng minh rò rỉ đúng 1 inode | ca78f58 |
+| r293.1 | Harness đếm RETRY (`RETRY n/N`), phân loại T-FS/T-SCHED/T-KHAC, ghi JSON | "PASS" đang che flake: 12/49 hỏng ở MAX_IO=256 vẫn ra xanh nhờ retry | 2a04bd2 |
+| r293.2 | Mọi lần boot hỏng lưu `artifacts/flake-<arch>-<i>-a<lần>/` (serial+status+tail) | Trước đây chỉ lưu khi timeout có monitor | 2a04bd2 |
+| r293.3 | `--strict` (RETRY>0 là ĐỎ), chưa bật trong gate | Theo lộ trình: bật từ r296 | 2a04bd2 |
+| r293.5 | `other_caps_to` + `reparent_tcb_caps` đi qua `for_each_cap`/`for_each_cap_mut` | Q2: bỏ quy tắc tự viết "bỏ qua TCB có CNode" — cùng lớp lỗi P0-3 | 2380cc5 |
+| r293.6 | `reply_epoch` u8 → u16; canary TCB = 1648 byte | u8 quay vòng sau 256 Call ⇒ guard K49 khớp lại record cũ | 2380cc5 |
+| r293 (lệch có chủ đích) | Làm 293.5/293.6/293.7 trước 293.4 | 293.4 cần build + boot riscv nhiều lần, sẽ làm nhiễu phép đo nền 293.8 nếu chạy xen kẽ | — |

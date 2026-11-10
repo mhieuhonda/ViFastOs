@@ -29,11 +29,12 @@ Quy ước trạng thái:
 | K46 | CLOSED | r260 (T22, D18): `poll` tiêu thụ word nay hạ `pending` của mọi IRQ trỏ tới notification đó, nên cạnh kế tiếp không bị coalesce ⇒ hết mất ngắt. Test đỏ-trước: `poll_clears_irq_pending_so_the_next_edge_is_delivered` (bỏ bản vá ⇒ test đỏ). |
 | K47 | CLOSED | `lib.rs:808,825,861` — chặn IRQ ≥ 64 thay vì `& 63` |
 | K48 | CLOSED | `ipc.rs:107,197` — trả về đầu hàng khi grant fail |
-| K49 | CLOSED | `ipc.rs:88,155,202` — snapshot object thay vì chỉ số slot |
+| K49 | CLOSED (mở lại rồi đóng lại) | `ipc.rs:88,155,202` — snapshot object thay vì chỉ số slot. **r290 + r293.6:** guard "caller còn hợp" mượn `reply_epoch`, nhưng `reply_epoch` KHÔNG BAO GIỜ tăng nên so sánh luôn là `0 == 0` (rỗng) — tức K49 đã bị mở lại một cách âm thầm. Nay epoch tăng mỗi lần Call và nới lên `u16` (u8 quay vòng sau 256 lần); test `every_call_issues_a_fresh_reply_epoch`, `epoch_survives_256_calls`, canary `tcb_size_stays_within_budget` (TCB = 1648 byte). |
 | K50 | CLOSED | r251: hệ quả của K37–K39 (không phải lỗi) và K45 (còn OPEN, độc lập). Không còn triệu chứng nào quy về K50. |
 | K51 | CLOSED | `ipc.rs:531` — chỉ cấm khi đã bound nơi khác |
 | K52 | CLOSED | `lib.rs:3873` vùng — thứ tự flush/unmap |
 | K53 | CLOSED | `lib.rs:2585` vùng — giữ `harts_loaded` sau flush lớn |
+| Q1-A (nợ r293) | OPEN | Chưa thống nhất kênh wake trong `Mailbox` cho cả 3 port: riscv64 dùng `vifast-maint` cho TLB/ICACHE + một từ doorbell riêng cho reschedule (không ACK), aarch64/x86_64 dùng mailbox chung. Thống nhất (thêm trường wake vào `Mailbox`) để sau đợt r293–r298. |
 | K54 | CLOSED | `lib.rs:2341` vùng — `map_page_table` shootdown theo mask |
 | K55 | CLOSED | `lib.rs:2527,420` — khoá W^X chéo CPU/DMA |
 | K56 | CLOSED | `lib.rs:4233` vùng — destroy IOMMU domain gỡ mapping |
