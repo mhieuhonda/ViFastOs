@@ -1862,3 +1862,28 @@ thấy `d`), dữ kiện còn lại duy nhất là: **tại đúng thời điể
 theo từng block** ngay tại chỗ trả `Ok(None)`; nếu block 1 có entry `d` mà
 `size`=512 thì lỗi ở bước cập nhật `size`; nếu `size`=1024 mà block 1 rỗng thì
 lỗi ở bước ghi entry.
+
+### Bản đọc mã (subagent) củng cố + nêu 2 khả năng mới
+
+**Xác nhận:** `write_dir_entry` ghi lại `self.inodes[CHA]` (`vifast-fs/src/lib.rs:1664`)
+rồi `stage_inode` — nên "inode RAM thiếu block" **không thể** là nguyên nhân.
+Quan trọng hơn: `read_dir_entry_full` và `lookup_child` quét **cùng inode RAM,
+cùng `blocks_used()`** ⇒ `end n=06` và `open("/d")=Ok` **không thể** cùng đúng ở
+một thời điểm ⇒ **sai lệch theo THỜI GIAN**, không theo không gian.
+
+**Cảnh báo phương pháp:** đèn `DIR` **không** loại được giả thuyết inode thiếu
+block, vì probe đọc lại bằng **cùng `dev.read` + cùng `blocks_used()` của inode
+RAM** — nó chỉ chứng minh cache khớp đĩa, không chứng minh dải quét đủ.
+
+**Hai khả năng mới (có file:dòng):**
+
+1. **`truncate` không chặn thư mục** — `Fs::truncate` (`2017-2028`) chỉ kiểm
+   `INODE_FILE`, và `truncate_request` phía server cũng **không** kiểm `fd.dir`
+   ⇒ truncate trên **fd thư mục** sẽ xoá block của thư mục và đặt `size = 0`.
+   Nếu bài test có truncate fd thư mục thì đây là bug thật, độc lập T26.
+2. **Bất đối xứng ghi/đọc** — đường ghi thư mục dùng `read_staged` (journal),
+   đường đọc dùng `dev.read`; nếu ảnh `dev.read` cũ hơn ảnh đã stage thì lần
+   đọc ngay sau sẽ thấy danh sách ngắn ⇒ khớp triệu chứng "thoáng qua".
+
+**Phép đo chốt (vòng sau):** in `size`, `blocks_used()`, `blocks[0..n]` và **số
+entry không rỗng theo TỪNG block** ngay tại chỗ trả `Ok(None)`.
