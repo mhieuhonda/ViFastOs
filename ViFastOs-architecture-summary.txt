@@ -574,6 +574,10 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 4c8f608 r294.B0: đèn TICK/PIC/LAPIC (sau feature) + hai giả thuyết bị BÁC, và lộ ra T-ROOT
 - 4e8e23e r294.B1'+B2': MỘT đường ghi artifact, giữ nguyên khối ROOT PANIC
 - 6783974 r294.B: root phân biệt "GetTime lỗi" với "thời gian lùi" + đèn PICK (sau feature)
+- 17e3c44 r294.B (§0): bỏ nhánh GetTime (đã lưu patch), tắt diag-pick tạm; ghi T0=17:49
+- 4e580f3 r294.B khối A: (d) bị BÁC bằng test host; bất biến context-slot; vòng đệm sự kiện
+- 28aefcd r294.B khối A: TÌM RA GỐC T33a — AP mask LINT0 của BSP ⇒ PIC không đẩy được IRQ0
+- 3699fe7 build x86: tắt hẳn đèn chẩn đoán trong bản mặc định (đo ngân sách trên bản không đèn)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -621,7 +625,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 254/254 PASS
+- `cargo test -p vifast-kernel`: 256/256 PASS
 - `cargo test -p vifast-arch`: 8/8 PASS
 - `cargo test -p vifast-pte`: 12/12 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
