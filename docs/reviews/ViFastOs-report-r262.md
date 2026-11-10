@@ -797,6 +797,19 @@ Bài học: thay đổi `wake_error` trên đường IPC nóng là thay đổi *
 đo riêng từng bản vá và luôn kiểm cấu hình đang xanh (128) trước khi tin kết quả
 ở cấu hình đỏ (256).
 
+### r294.T26 — khoanh vùng được: lỗi ở `vfs_fsck()`, không phải bước FS nào khác
+
+Thêm ba đèn giữ lại lâu dài: mốc `V2S01..V2S11` sau mỗi bước của khối FS V2,
+dòng `V2FAIL v2=<0|1> fsck=<0|1>` ngay trước `FS V2 BAD`, và mã lỗi fsck hai phía
+(server `FS ERR <mã>`, client `FSCKERR <mã>`) — trước đây chỉ có bool nên không
+phân biệt được "fsck nói hỏng" với "mất phản hồi IPC".
+
+**Kết quả (`MAX_IO=256`, 12/40 đỏ):** 100 % lần đỏ đều đi hết `V2S11` và in
+`V2FAIL v2=1 fsck=0` ⇒ mọi kiểm tra V2 khác ĐẠT, chỉ `vfs_fsck()` trả false.
+
+Điều này **bác** cách giải thích cũ ở đây ("readdir đọc ảnh cũ"): nếu readdir sai
+thì `v2` phải bằng 0. Ở `MAX_IO=128` sau khi thêm đèn: **40/40 xanh**.
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -824,7 +837,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-6f10d8679e83d5a1568f8b734342cf964c7b4828df673bec426f16bc12d5894b  docs/reviews/ViFastOs-report-r262.md
+e2650528b29f1fccdaf35255075ab7a05513967a0a0336325e8006944548960c  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
