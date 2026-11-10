@@ -1284,3 +1284,44 @@ RETRY 2/301 (T-FS=0, T-SCHED=1, T-KHAC=1)
 So với mốc nền `c2a8968`: 8/305 = **2,6 %** → nay 2/301 = **0,66 %**.
 Theo luật thống kê: 2/301 viết là "≈0,66 %, KTC 95 % khoảng 0,1–2,4 %" — **chưa**
 được nói đã đạt mức tạm ≤1 %/boot một cách chắc chắn; cần thêm mẫu.
+
+## r294.B — GỐC THỨ HAI: AP chạy task trước khi kernel init xong
+
+### Bằng chứng (vòng đệm 96 sự kiện, đổ ra khi xử lý `Exit`)
+
+```
+ROOT PANIC
+crates/vifast-root/src/main.rs:480
+RING DUMP (96 sự kiện, vì UserAction::Exit)
+RING kind=1 hart=1 tcb=132 slot=15 state=2 tick=2
+RING kind=3 hart=1 tcb=130 slot=14 state=2 tick=2
+… 96/96 sự kiện đều hart=1, tick=2, luân phiên hai TCB
+```
+
+Hart 1 chạy TCB ở **tick 2** trong khi BSP đã ở tick hàng trăm; `fast_time()` là
+`fetch_max` nên không thể giảm — **trừ khi kernel bị reset**. Và đúng là bị
+reset: `boot()` gọi `A::init_kernel()` **hai lần** (selftest + kernel thật), mỗi
+lần `reset()`. AP được thả trong `init_platform()` **trước** cả hai lần đó, nên
+AP kịp `pick_on(1)` trên trạng thái tiền-reset: `last` trên stack của worker đến
+từ đồng hồ cũ, `GetTime` sau reset đọc đồng hồ mới ⇒ `now < last` ⇒
+`TIME MONOTONIC BAD` + `ROOT PANIC main.rs:480`.
+
+### Sửa
+
+Cờ `KERNEL_READY` (platform x86), BSP bật ở `prepare_user()` — sau
+`init_kernel()` + selftest; `ap_idle_loop()` chỉ `sti; hlt; cli` cho tới khi cờ
+bật, **không chạm runqueue** trước đó.
+
+### Đo
+
+| Lượt (x86_64, có đèn) | N | Kết quả |
+|---|---:|---|
+| Trước cờ | 120 | `RETRY 2/120` — 1 **T-ROOT `main.rs:480`**, 1 T-KHAC |
+| Sau cờ | 120 | **`RETRY 0/120`**, 0 `TIME MONOTONIC BAD`, 0 `NO TICK` |
+
+Hai gốc đã tìm và vá trong đêm, cùng một lớp "hart phụ chạm trạng thái chưa
+sẵn sàng":
+1. **AP mask LINT0 của BSP** ⇒ PIC không đẩy được IRQ0 ⇒ tick ngừng (commit
+   `28aefcd`);
+2. **AP chạy task trước khi kernel init xong** ⇒ `GetTime` lùi ⇒
+   `ROOT PANIC main.rs:480` (commit `8cd767f`).
