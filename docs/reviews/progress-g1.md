@@ -1421,3 +1421,24 @@ Còn mở, đã ghi rõ cách làm tiếp: T-ROOT `main.rs:480` 1/200 (cần lư
 xem `RING` còn `tick=2`), T-SCHED 1/301 (cần đèn xem `lvt0`), T31 (dùng phép đo
 `USER FAULT` ở trên), `BIN EXEC FAIL`/`DESTROY DIAG stuck=4` (TCB kẹt `Busy` —
 nghi TCB còn `Running` trên hart phụ nên không huỷ được), T26/T33b/294.5 chưa làm.
+
+## Chốt hết ngày 10/11/2026 (Asia/Tokyo)
+
+Cây ở `fb88b1c`, gate **10/10**, bản phát hành **không đèn**.
+
+| Hạng mục của mục tiêu | Trạng thái | Bằng chứng |
+|---|---|---|
+| **T33a** treo trước `PREEMPT OK` | **giảm 2,6 % → 0,66 %**, hai GỐC đã tìm + vá | `NO TICK … lvt0=0x10000` (LINT0); `RING … hart=1 tick=2` (AP chạy trước init) |
+| **T31** `PAGER2_LABEL` hai lần | bản vá gốc tiềm năng + phép đo xác nhận đã dựng, **chưa chốt số** | tái hiện 1 lần (`dup=PAGER EVICT OK`) |
+| **T33b** riscv64 thoát sớm | **chưa làm** | — |
+| **T26** race FS/`MAX_IO=256` | **chưa làm** | — |
+| 294.C (mốc boot) | một phần: `KERNEL ENTRY` + T-BOOT theo mốc | spec 652 case |
+| 294.5 (riscv `vifast-maint`) | **chưa làm** | — |
+
+Việc tiếp theo, theo thứ tự đã phân tích:
+1. Đo 200 boot bản `79e0f13` **có đèn** để xem T-ROOT/T31 còn không; nếu T31 tái hiện, đếm
+   `USER FAULT addr=0x1001001000` (2 ⇒ replay phía server, 3 ⇒ replay phía client).
+2. `BIN EXEC FAIL` / `DESTROY DIAG stuck=4`: TCB kẹt `Busy` — kiểm TCB còn `Running`
+   trên hart phụ (`can_destroy` từ chối TCB không `Exited` đang là `current`).
+3. T26: dựng lại phép đo `--repeat 40` ở `MAX_IO=256` để có số nền trước khi sửa.
+4. T33b: chạy 200 boot riscv64 có đèn để bắt "thoát sớm".

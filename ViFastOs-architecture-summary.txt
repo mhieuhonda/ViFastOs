@@ -583,6 +583,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 6e0ee9c harness: artifact đọc LẠI serial đã settled (vá lỗi artifact T31 thiếu dòng marker gây hỏng)
 - 4a4bf89 r294.C: mốc `KERNEL ENTRY` + T-BOOT định nghĩa theo mốc (phiếu soát §1.5)
 - 79e0f13 r294.T31: ghi LẠI context sau apply_resume + báo khi thiếu slot (theo phân tích subagent)
+- fb88b1c build x86: tắt đèn chẩn đoán trong bản mặc định (bản phát hành không đèn)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
