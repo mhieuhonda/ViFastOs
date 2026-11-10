@@ -592,6 +592,13 @@ def panic_site(output: str) -> str:
             match = re.search(r"([A-Za-z0-9_/.-]+\.rs):?(\d+)", candidate)
             if match:
                 return f"{match.group(1)}:{match.group(2)}"
+    # Kernel panic của riscv64/aarch64 (T33b): `PANIC AT <file>:<dòng>`.
+    for position, line in enumerate(lines):
+        if "PANIC AT" not in line:
+            continue
+        match = re.search(r"PANIC AT ([A-Za-z0-9_/.-]+\.rs):(\d+)", line)
+        if match:
+            return f"{match.group(1)}:{match.group(2)}"
     return ""
 
 
@@ -624,7 +631,7 @@ def classify_failure(output: str) -> str:
         if signature in output:
             return "T-SCHED"
     # (3) T-ROOT kèm lớp con `<file>:<dòng>`.
-    if "ROOT PANIC" in output:
+    if "ROOT PANIC" in output or "PANIC AT" in output:
         site = panic_site(output)
         return f"T-ROOT {site}" if site else "T-ROOT"
     # (4) Hỏng đúng tầng FS (chỉ khi guest đã tới SHELL READY).

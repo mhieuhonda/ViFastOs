@@ -352,6 +352,11 @@ def main() -> int:
             # `<file>:<dòng>`; cả hai dạng in (có/không dấu hai chấm) đều đọc được.
             ("", "T-BOOT", "không có dòng kernel nào"),
             (
+                "KERNEL ENTRY\nbooting on\nPANIC AT crates/vifast-kernel/src/lib.rs:1234\n",
+                "T-ROOT crates/vifast-kernel/src/lib.rs:1234",
+                "panic kernel riscv/aarch64 có vị trí (T33b)",
+            ),
+            (
                 "KERNEL ENTRY\nbooting on\nROOT PANIC\ncrates/vifast-root/src/main.rs:480\n",
                 "T-ROOT crates/vifast-root/src/main.rs:480",
                 "ROOT PANIC + file:có dấu hai chấm",

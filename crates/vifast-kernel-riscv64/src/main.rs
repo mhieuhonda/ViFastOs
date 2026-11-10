@@ -97,6 +97,17 @@ fn panic(_info: &PanicInfo) -> ! {
     let hart = <RiscvPlatform as vifast_runtime::Platform>::hart_id();
     vifast_arch::panic::lock_console();
     vifast_kernel::klog!(RiscvPlatform, "PANIC (hart={})", hart);
+    // T33b: in VỊ TRÍ panic (`file:dòng`) — bản cũ nuốt `_info` nên log chỉ có
+    // "PANIC (hart=1)" và không thể biết chỗ nào panic (đo 200 boot riscv64
+    // gặp 2 lần đúng dòng này, không có manh mối nào thêm).
+    if let Some(location) = _info.location() {
+        vifast_kernel::klog!(
+            RiscvPlatform,
+            "PANIC AT {}:{}",
+            location.file(),
+            location.line()
+        );
+    }
     vifast_arch::panic::unlock_console();
     vifast_platform_riscv64::platform::panic_halt_others();
     for _ in 0..10_000_000 {
