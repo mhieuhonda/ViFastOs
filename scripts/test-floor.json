@@ -7,7 +7,7 @@
   "vifast-kernel": 258,
   "vifast-maint": 7,
   "vifast-pte": 12,
-  "vifast-runtime": 0,
+  "vifast-runtime": 3,
   "vifast-user": 0,
   "vifast-virtio": 7
 }

@@ -546,7 +546,7 @@ LAST_OUTPUT = {"text": ""}
 RUN_STATS = {
     "boots": 0,
     "retries": 0,
-    "classes": {"T-FS": 0, "T-SCHED": 0, "T-KHAC": 0},
+    "classes": {},
     "events": [],
 }
 
@@ -558,41 +558,64 @@ def format_retry_line(stats: dict) -> str:
     QEMU: case âm (bỏ đếm) làm test đỏ vì hàm/khóa không còn.
     """
     classes = stats["classes"]
-    return (
-        f"RETRY {stats['retries']}/{max(1, stats['boots'])} "
-        f"(T-FS={classes['T-FS']}, T-SCHED={classes['T-SCHED']}, "
-        f"T-KHAC={classes['T-KHAC']})"
-    )
+    parts = ", ".join(f"{name}={count}" for name, count in sorted(classes.items()))
+    detail = parts if parts else "không lớp nào"
+    return f"RETRY {stats['retries']}/{max(1, stats['boots'])} ({detail})"
+
+
+def panic_site(output: str) -> str:
+    """Lấy `file:dòng` của dòng `ROOT PANIC` (D3, kế hoạch qua đêm).
+
+    Chấp nhận CẢ hai dạng: bản mới in `main.rs:480`, bản cũ (artifact trước D3)
+    in `main.rs480` — regex `\.rs:?(\d+)` đọc được cả hai.
+    """
+    lines = output.splitlines()
+    for position, line in enumerate(lines):
+        if "ROOT PANIC" not in line:
+            continue
+        for candidate in lines[position : position + 3]:
+            match = re.search(r"([A-Za-z0-9_/.-]+\.rs):?(\d+)", candidate)
+            if match:
+                return f"{match.group(1)}:{match.group(2)}"
+    return ""
 
 
 def classify_failure(output: str) -> str:
-    """Phân loại một lần boot hỏng theo mục 2.5 của tệp quyết định.
+    """Phân loại một lần boot hỏng theo bảng của kế hoạch qua đêm (294.C + D3).
 
-    THỨ TỰ QUAN TRỌNG (sửa ở r293 sau phép đo nền đầu): chữ ký SCHED phải xét
-    TRƯỚC "thiếu FS V2 OK", nếu không **mọi lần chết sớm** (guest dừng trước cả
-    `FS V2 OK`) đều bị dán nhãn T-FS và ta tưởng BLOCKER FS tái phát. Lần đo
-    300 boot đầu đã mắc đúng lỗi này: 4 lần chết sớm bị đếm thành T-FS=4.
+    Thứ tự xét (gặp lớp nào trước thì dừng):
+      T-BOOT (kernel không in dòng nào) > T-SCHED "mất current"
+      > T-ROOT <file:dòng> > T-FS > T-SCHED chung > T-KHAC.
+
+    Vì sao T-SCHED "mất current" đứng TRƯỚC T-ROOT: kế hoạch qua đêm §4 xếp
+    `SMP NO CURRENT` trước — nếu mất current thì panic của root chỉ là hệ quả.
     """
-    # (1) Chữ ký scheduler rõ ràng ⇒ T-SCHED, bất kể đã in tới marker nào.
+    # (0) T-BOOT: kernel chưa hề in dòng khởi động nào.
+    if "booting on" not in output and "SELFTEST PASS" not in output:
+        return "T-BOOT"
+    # (1) Mất current — chữ ký riêng, xét trước panic.
+    if "SMP NO CURRENT" in output:
+        return "T-SCHED"
+    # (2) Các chữ ký scheduler rõ ràng khác.
     for signature in (
-        "ROOT PANIC",
         "USER FAULT tcb=None",
         "no runnable thread",
         "SMP NO READY",
-        # r293 (Agent 0 chốt): khi feature `diag-idle-fault` được bật, mỗi dòng
-        # `KERNEL FAULT` là một sự kiện T-SCHED — phải đếm, không được để nó
-        # trôi qua như log vô hại.
         "KERNEL FAULT",
+        "no current thread",
     ):
         if signature in output:
             return "T-SCHED"
-    # (2) Hỏng ĐÚNG tầng FS: hoặc marker BAD, hoặc thiếu `FS V2 OK` trong khi
-    # guest đã đi qua `SHELL READY`/các marker sau FS (tức là nó tới được đó).
+    # (3) T-ROOT kèm lớp con `<file>:<dòng>`.
+    if "ROOT PANIC" in output:
+        site = panic_site(output)
+        return f"T-ROOT {site}" if site else "T-ROOT"
+    # (4) Hỏng đúng tầng FS (chỉ khi guest đã tới SHELL READY).
     if "FS V2 BAD" in output:
         return "T-FS"
     if "FS V2 OK" not in output and "SHELL READY" in output:
         return "T-FS"
-    # (3) Thiếu `PREEMPT OK` (mà không có chữ ký nào ở trên) vẫn là scheduler.
+    # (5) Thiếu PREEMPT OK mà không có dấu hiệu nào ở trên: vẫn là scheduler.
     if "PREEMPT OK" not in output:
         return "T-SCHED"
     return "T-KHAC"
@@ -601,7 +624,7 @@ def classify_failure(output: str) -> str:
 def record_failure(name: str, index: int, attempt: int, output: str, reason: str) -> str:
     """Ghi nhận một lần hỏng + lưu artifact đầy đủ (r293.1, r293.2, r294.B B1')."""
     kind = classify_failure(output)
-    RUN_STATS["classes"][kind] += 1
+    RUN_STATS["classes"][kind] = RUN_STATS["classes"].get(kind, 0) + 1
     RUN_STATS["events"].append(
         {
             "arch": name,
@@ -613,39 +636,6 @@ def record_failure(name: str, index: int, attempt: int, output: str, reason: str
     )
     write_artifacts(name, index, attempt, output, reason)
     return kind
-
-
-def classify_failure(output: str) -> str:
-    """Phân loại một lần boot hỏng theo mục 2.5 của tệp quyết định.
-
-    THỨ TỰ QUAN TRỌNG (sửa ở r293 sau phép đo nền đầu): chữ ký SCHED phải xét
-    TRƯỚC "thiếu FS V2 OK", nếu không **mọi lần chết sớm** (guest dừng trước cả
-    `FS V2 OK`) đều bị dán nhãn T-FS và ta tưởng BLOCKER FS tái phát. Lần đo
-    300 boot đầu đã mắc đúng lỗi này: 4 lần chết sớm bị đếm thành T-FS=4.
-    """
-    # (1) Chữ ký scheduler rõ ràng ⇒ T-SCHED, bất kể đã in tới marker nào.
-    for signature in (
-        "ROOT PANIC",
-        "USER FAULT tcb=None",
-        "no runnable thread",
-        "SMP NO READY",
-        # r293 (Agent 0 chốt): khi feature `diag-idle-fault` được bật, mỗi dòng
-        # `KERNEL FAULT` là một sự kiện T-SCHED — phải đếm, không được để nó
-        # trôi qua như log vô hại.
-        "KERNEL FAULT",
-    ):
-        if signature in output:
-            return "T-SCHED"
-    # (2) Hỏng ĐÚNG tầng FS: hoặc marker BAD, hoặc thiếu `FS V2 OK` trong khi
-    # guest đã đi qua `SHELL READY`/các marker sau FS (tức là nó tới được đó).
-    if "FS V2 BAD" in output:
-        return "T-FS"
-    if "FS V2 OK" not in output and "SHELL READY" in output:
-        return "T-FS"
-    # (3) Thiếu `PREEMPT OK` (mà không có chữ ký nào ở trên) vẫn là scheduler.
-    if "PREEMPT OK" not in output:
-        return "T-SCHED"
-    return "T-KHAC"
 
 
 # Vòng 162: đánh dấu lần chạy vừa rồi có "guest chưa hề boot" hay không.

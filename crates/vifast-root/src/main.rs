@@ -4143,6 +4143,9 @@ fn panic(info: &PanicInfo) -> ! {
     if let Some(location) = info.location() {
         let file = location.file().as_bytes();
         let _ = vifast_user::debug_write(file.as_ptr() as u64, file.len() as u64);
+        // D3 (kế hoạch qua đêm): in DẤU HAI CHẤM trước số dòng để `file:line`
+        // đọc được bằng mắt và bằng regex `\.rs:?(\d+)`.
+        let _ = vifast_user::debug_write(b":".as_ptr() as u64, 1);
         let mut digits = [0u8; 20];
         let mut value = location.line();
         let mut at = digits.len();

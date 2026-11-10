@@ -1156,6 +1156,47 @@ pub mod diag {
     }
 }
 
+/// D1.a (kế hoạch qua đêm, khối D): dựng marker `SMP NO CURRENT` thành HÀM
+/// THUẦN để test host được (không cần fake Platform). Trả về số byte đã ghi.
+pub fn no_current_marker(hart: u32, number: u64, out: &mut [u8; 40]) -> usize {
+    let mut at = 0usize;
+    for byte in b"SMP NO CURRENT hart=" {
+        if at < out.len() {
+            out[at] = *byte;
+            at += 1;
+        }
+    }
+    at = write_decimal_into(hart as u64, out, at);
+    for byte in b" nr=" {
+        if at < out.len() {
+            out[at] = *byte;
+            at += 1;
+        }
+    }
+    write_decimal_into(number, out, at)
+}
+
+fn write_decimal_into(mut value: u64, out: &mut [u8; 40], mut at: usize) -> usize {
+    let mut digits = [0u8; 20];
+    let mut count = 0usize;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        value /= 10;
+        count += 1;
+        if value == 0 {
+            break;
+        }
+    }
+    while count > 0 {
+        count -= 1;
+        if at < out.len() {
+            out[at] = digits[count];
+            at += 1;
+        }
+    }
+    at
+}
+
 pub mod syscall {
     use super::*;
 
@@ -1164,6 +1205,15 @@ pub mod syscall {
         let kernel = A::kernel();
         let hart = A::hart_id();
         let Some(tcb) = kernel.current_on(hart) else {
+            // D1.a: in marker bằng ĐƯỜNG IN CỦA KERNEL (không qua syscall) rồi
+            // mới exit — để lần hỏng sau phân loại được là "mất current" chứ
+            // không phải "hết việc".
+            let mut buffer = [0u8; 40];
+            let length = crate::no_current_marker(hart as u32, number, &mut buffer);
+            for byte in buffer.iter().take(length) {
+                A::putc(*byte);
+            }
+            A::putc(b'\n');
             A::exit(1);
         };
         let action = kernel.user_syscall_on(
@@ -2000,5 +2050,45 @@ pub mod timer {
             fault::suspend::<A>(context, 0, 0);
         }
         old_index != Some(next.index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+
+    /// D1.a (kế hoạch qua đêm): marker `SMP NO CURRENT` là HÀM THUẦN để test
+    /// host được (không cần dựng fake Platform 30+ method).
+    #[test]
+    fn no_current_marker_formats_hart_and_syscall_number() {
+        let mut out = [0u8; 40];
+        let length = no_current_marker(1, 57, &mut out);
+        let text = core::str::from_utf8(&out[..length]).unwrap();
+        assert_eq!(text, "SMP NO CURRENT hart=1 nr=57");
+    }
+
+    #[test]
+    fn no_current_marker_handles_zero_and_large_numbers() {
+        let mut out = [0u8; 40];
+        let length = no_current_marker(0, 0, &mut out);
+        assert_eq!(
+            core::str::from_utf8(&out[..length]).unwrap(),
+            "SMP NO CURRENT hart=0 nr=0"
+        );
+        let length = no_current_marker(3, 4_294_967_295, &mut out);
+        assert_eq!(
+            core::str::from_utf8(&out[..length]).unwrap(),
+            "SMP NO CURRENT hart=3 nr=4294967295"
+        );
+    }
+
+    /// Test canh: marker KHÔNG được tràn buffer kể cả khi số lớn.
+    #[test]
+    fn no_current_marker_never_overflows_a_small_buffer() {
+        let mut out = [0u8; 40];
+        let length = no_current_marker(u32::MAX, u64::MAX, &mut out);
+        assert!(length <= out.len());
+        assert!(core::str::from_utf8(&out[..length]).is_ok());
     }
 }
