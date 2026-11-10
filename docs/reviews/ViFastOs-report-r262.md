@@ -887,6 +887,37 @@ và cả hai phía `break` im lặng khi gặp `Err`
 Hướng sửa đổi hẳn: **không** sửa journal/cache mà sửa **đường readdir** (trang hoá
 + không cắt danh sách trong im lặng). Ở `MAX_IO=128`: 40/40 xanh.
 
+### T26 — tổng hợp điều tra (sau 11 giả thuyết bị loại bằng đo)
+
+Triệu chứng: ở `MAX_IO=256`, ~10–45 %/boot (tuỳ máy) `readdir("/")` không thấy
+entry `d` vừa `mkdir`, rồi `V2GROUP 06`. Ở `MAX_IO=128` vẫn có ~1–4 %/boot trên
+máy thứ hai (`ps`), nên **race có ở cả 128** — `MAX_IO` chỉ khuếch đại tần suất.
+
+Đã **loại bằng đo**, mỗi kết luận kèm số:
+
+| Giả thuyết | Phép đo | Kết quả |
+|---|---|---|
+| Mất lệnh ghi ATA | `ATA STAT` 128 vs 256 | 256 **ít** lệnh hơn, 0 lỗi/retry |
+| Trần đệm IPC 256 B | nới `IPC_BUFFER_WORDS` 32→64 | 12/40 → 8/40 (trong nhiễu) |
+| Reply-orphan `ipc.rs` | vá + đo | 9/40 **và** 128 đỏ 1/40 ⇒ revert |
+| Retry `readdir` | +2 lần thử | 9/30 như cũ ⇒ revert |
+| Ghi xong đọc lại | `FS LOST` | 0 lệch/12 boot |
+| Commit mất target | `COM l=/v=` | **0/201** lệch |
+| Cache ≠ đĩa | `read_uncached` vs `dev.read` | `mm=00` khớp |
+| Inode RAM thiếu block | đọc `write_dir_entry` | cập nhật đủ `blocks/size/self.inodes` |
+| Thứ tự `commit()` | đọc mã | đúng chuẩn (không xoá commit record sớm) |
+| Thứ tự giữa hai client | `open` ngay sau `mkdir` | `open=1` ⇒ entry tồn tại ngay |
+| Cache đường dẫn | `grep` | không có cache nào |
+
+**Dữ kiện còn lại:** bản đồ slot tại lần "hết" cho `SLO 02 04 05 06 07 00 09 00`
+— block **thiếu ino 08** dù `open("/d")` thành công ngay trước đó. Lưu ý phương
+pháp: các đèn hiện ghi "lần gần nhất" và chỉ in ở FSCK, nên có thể thuộc hai thời
+điểm khác nhau ⇒ **phải thêm `seq`** trước khi kết luận tiếp.
+
+**Việc tiếp:** thêm `seq` cho ba đèn (`V2RD`/`LOOK`/`SLO`) để chúng chắc chắn cùng
+một sự kiện; nếu vẫn thiếu ino 08 thì soi nhánh **tái dùng slot trống** trong
+`write_dir_entry` sau `remove_dir_entry`.
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -914,7 +945,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-e5835e93502e730091781f605cd3732fc47ceb90fe0abe36e93ca444aff00a81  docs/reviews/ViFastOs-report-r262.md
+b004445e501c9ff0adf745ca52be4a05c14491c1941b674fed7bc8f350a53aa3  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
