@@ -565,6 +565,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 927ca70 r292: ghi bằng chứng tái hiện race FS ở MAX_IO=256 (3/20) vào báo cáo; giữ MAX_IO=128
 - 9c6d29f r293: chẩn đoán T33a/T33b + guard "hart idle gặp ngoại lệ"
 - 9a9a1ae r293 (prelude): đèn chẩn đoán flake nằm sau feature, không vào bản phát hành
+- 2a04bd2 r293.1–293.3: harness đếm RETRY, phân loại T-FS/T-SCHED/T-KHÁC, lưu artifact, --strict
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -612,7 +613,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 250/250 PASS
+- `cargo test -p vifast-kernel`: 253/253 PASS
 - `cargo test -p vifast-arch`: 8/8 PASS
 - `cargo test -p vifast-pte`: 12/12 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS

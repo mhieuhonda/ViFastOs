@@ -3798,6 +3798,52 @@ impl Kernel {
         }
     }
 
+    /// 293.5 (Q2, r293): bản MUTABLE của `for_each_cap`, cùng một quy tắc "bảng
+    /// vật lý nào tồn tại": root_cspace, bảng nhúng của TCB không dùng CNode, và
+    /// slots của **mọi** CNode (kể cả đã tháo khỏi TCB).
+    pub fn for_each_cap_mut<F: FnMut(TableId, usize, &mut Cap)>(&mut self, mut f: F) {
+        for (slot, entry) in self.root_cspace.iter_mut().enumerate() {
+            if let Some(cap) = entry {
+                f(TableId::Root, slot, cap);
+            }
+        }
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self.root == Some(reference) {
+                continue;
+            }
+            match self.get(reference).map(|object| object.kind) {
+                Some(Kind::Tcb(_)) => {
+                    let uses_cnode = self
+                        .tcb(reference)
+                        .is_some_and(|table| table.cnode.is_some());
+                    if !uses_cnode {
+                        if let Some(table) = self.tcb_mut(reference) {
+                            for (slot, entry) in table.cspace.iter_mut().enumerate() {
+                                if let Some(cap) = entry {
+                                    f(TableId::Tcb(reference), slot, cap);
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(Kind::CNode(_)) => {
+                    if let Some(node) = self.cnode_mut(reference) {
+                        for (slot, entry) in node.slots.iter_mut().enumerate() {
+                            if let Some(cap) = entry {
+                                f(TableId::CNode(reference), slot, cap);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Số slot mà `for_each_cap` sẽ đi qua — dùng cho test "đếm bằng tổng
     /// dung lượng các bảng đang tồn tại".
     pub fn cap_slot_capacity(&self) -> usize {
@@ -4121,50 +4167,26 @@ impl Kernel {
             }
         }
 
-        // 290.2: sửa `parent` trong MỌI bảng vật lý — root_cspace, bảng nhúng
-        // của từng TCB, và slots của MỌI CNode (kể cả CNode đã tháo khỏi TCB).
-        // Bản cũ chỉ đi qua `cspace_mut(r)`, mà hàm đó chỉ với tới CNode thông
-        // qua TCB đang dùng nó ⇒ CNode đã tháo không bao giờ được sửa (P0-3).
-        let fix = |cap: &mut Cap| {
+        // 290.2 + 293.5: sửa `parent` trong MỌI bảng vật lý qua `for_each_cap_mut`
+        // — cùng một quy tắc với chỗ ĐỌC, không còn vòng lặp tự liệt kê bảng.
+        let mut dying_positions = [0usize; MAX_CAPS_ROOT];
+        let mut survivors_copy = [None; MAX_CAPS_ROOT];
+        for i in 0..count {
+            dying_positions[i] = i;
+            survivors_copy[i] = survivors[i];
+        }
+        let alive = count;
+        self.for_each_cap_mut(|_table, _slot, cap| {
             let Some(parent) = cap.parent else {
                 return;
             };
-            if let Some(index) = dying[..count].iter().position(|c| *c == parent) {
-                cap.parent = survivors[index];
-            }
-        };
-        for cap in self.root_cspace.iter_mut().flatten() {
-            fix(cap);
-        }
-        for i in 0..MAX_OBJECTS {
-            let r = ObjRef {
-                index: i as u8,
-                gen: self.objs[i].gen,
-            };
-            match self.get(r).map(|object| object.kind) {
-                Some(Kind::Tcb(_)) => {
-                    if self.root == Some(r) {
-                        continue;
-                    }
-                    let uses_cnode = self.tcb(r).is_some_and(|table| table.cnode.is_some());
-                    if !uses_cnode {
-                        if let Some(table) = self.tcb_mut(r) {
-                            for cap in table.cspace.iter_mut().flatten() {
-                                fix(cap);
-                            }
-                        }
-                    }
+            for i in 0..alive {
+                if dying[i] == parent {
+                    cap.parent = survivors_copy[i];
+                    break;
                 }
-                Some(Kind::CNode(_)) => {
-                    if let Some(node) = self.cnode_mut(r) {
-                        for cap in node.slots.iter_mut().flatten() {
-                            fix(cap);
-                        }
-                    }
-                }
-                _ => {}
             }
-        }
+        });
     }
 
     fn detach_tcb(&mut self, obj: ObjRef) {
@@ -4788,38 +4810,19 @@ impl Kernel {
     /// Count capabilities that still point at `object`, ignoring the cap the
     /// caller is about to destroy.  Every capability lives in exactly one
     /// physical table: the root cspace, a TCB's embedded cspace, or a CNode.
+    /// Đếm cap còn trỏ tới `object` ngoài vé `keep` (điều kiện `HasDependents`).
+    ///
+    /// 293.5 (Q2, r293): đi qua `for_each_cap` — bộ duyệt bảng chìa DÙNG CHUNG
+    /// — thay vì tự liệt kê root_cspace / TCB / CNode. Bản cũ viết quy tắc riêng
+    /// ("bỏ qua TCB có CNode") nên có hai nguồn sự thật về "bảng nào tồn tại";
+    /// đó đúng là lớp lỗi đã sinh ra P0-3.
     fn other_caps_to(&self, object: ObjRef, keep: u64) -> usize {
         let mut count = 0usize;
-        for cap in self.root_cspace.iter().flatten() {
+        self.for_each_cap(|_table, _slot, cap| {
             if cap.obj == object && cap.id != keep {
                 count += 1;
             }
-        }
-        for index in 0..MAX_OBJECTS {
-            let reference = ObjRef {
-                index: index as u8,
-                gen: self.objs[index].gen,
-            };
-            if self.root == Some(reference) {
-                continue;
-            }
-            if let Some(table) = self.tcb(reference) {
-                if table.cnode.is_none() {
-                    for cap in table.cspace.iter().flatten() {
-                        if cap.obj == object && cap.id != keep {
-                            count += 1;
-                        }
-                    }
-                }
-            }
-            if let Some(node) = self.cnode(reference) {
-                for cap in node.slots.iter().flatten() {
-                    if cap.obj == object && cap.id != keep {
-                        count += 1;
-                    }
-                }
-            }
-        }
+        });
         count
     }
 
@@ -13214,6 +13217,106 @@ mod tests {
             "cap trong CNode đã bị thu hồi nên không còn tham chiếu nào khác"
         );
         assert_eq!(kernel.destroy_object(endpoint), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    /// 293.6 (r293): ngân sách tĩnh — mở epoch lên `u16` không được làm TCB
+    /// phình quá mức đã chốt. Nếu phải nới, sửa CẢ con số này lẫn báo cáo,
+    /// không nới lặng lẽ.
+    #[test]
+    fn tcb_size_stays_within_budget() {
+        let size = core::mem::size_of::<crate::object::Tcb>();
+        // r293 (293.6): nới `reply_epoch` u8 → u16 làm TCB +4 byte (1644 →
+        // 1648). Con số này là CHỐT CÓ Ý THỨC: mọi thay đổi kích thước TCB
+        // phải sửa ở đây và ghi vào báo cáo, không được trôi lặng lẽ.
+        assert_eq!(
+            size, 1648,
+            "kích thước TCB đổi ({size} != 1648) — cập nhật số chốt + báo cáo"
+        );
+    }
+
+    /// 293.6 (r293): epoch phải sống qua nhiều lần Call. Bản `u8` quay vòng ở
+    /// 256 lần ⇒ một record `caller` cũ sẽ "khớp" lại (guard K49 mở toang) —
+    /// test này khoá đúng giới hạn đó: sau 256 Call, epoch không được trùng
+    /// epoch của lần gần nhất.
+    #[test]
+    fn epoch_survives_256_calls() {
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 1).unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let mut previous: Option<u16> = None;
+        let mut seen = std::vec::Vec::new();
+        for round in 0..260u32 {
+            assert_eq!(kernel.recv(server, endpoint, 4), Ok(None));
+            assert_eq!(
+                kernel.send(
+                    client,
+                    endpoint,
+                    0,
+                    Message::new(round as u64, &[1]).unwrap(),
+                    true
+                ),
+                Ok(true)
+            );
+            let (_, epoch) = kernel.tcb(server).unwrap().caller.unwrap();
+            if let Some(old) = previous {
+                assert_ne!(old, epoch, "epoch lặp ở vòng {round} — quay vòng quá sớm");
+            }
+            previous = Some(epoch);
+            seen.push(epoch);
+            kernel.reply(server, Message::empty(0)).unwrap();
+        }
+        // Không chỉ "khác lần trước": không được trùng BẤT KỲ epoch nào trong
+        // 260 lần (u8 sẽ trùng sau 256).
+        let mut unique = seen.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            seen.len(),
+            "có epoch trùng trong 260 lần Call — epoch chưa đủ rộng"
+        );
+    }
+
+    /// 293.5 (Q2, r293): `other_caps_to` phải thấy cap nằm trong CNode **đã**
+    /// tháo khỏi TCB** — nếu không, `destroy_cap_object` trả `Ok` trong khi
+    /// vẫn còn vé trỏ tới object (đúng lớp P0-3 nhưng ở chiều ngược lại).
+    #[test]
+    fn other_caps_to_sees_caps_inside_a_detached_cnode() {
+        let mut kernel = Kernel::new();
+        let root = test_root_with_untyped(&mut kernel, 0x720_0000, 8);
+        // Frame ở root slot 2 = cap GỐC (được phép destroy).
+        let frame = retype_at(&mut kernel, root, ObjType::Frame, 2);
+        let root_cap_id = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap().id;
+
+        // CNode ở slot 3, KHÔNG TCB nào dùng làm cspace ⇒ chỉ bộ duyệt đi qua
+        // mọi CNode mới thấy vé trong đó.
+        let cnode = retype_at(&mut kernel, root, ObjType::CNode, 3);
+        let mut derived = Cap::new(frame, ObjType::Frame, Rights::READ);
+        derived.id = 42;
+        derived.parent = Some(CapRef {
+            addr: SlotAddr { tcb: root, slot: 2 },
+            id: root_cap_id,
+            cnode: None,
+        });
+        kernel.cnode_mut(cnode).unwrap().slots[1] = Some(derived);
+
+        assert_eq!(
+            kernel.other_caps_to(frame, root_cap_id),
+            1,
+            "phải thấy cap trong CNode đã tháo"
+        );
+        assert_eq!(
+            kernel.destroy_cap_object(root, 2),
+            Err(KError::HasDependents),
+            "còn vé trỏ tới object thì không được huỷ"
+        );
+
+        // Gỡ vé trong CNode ⇒ hết tham chiếu ⇒ huỷ được.
+        kernel.cnode_mut(cnode).unwrap().slots[1] = None;
+        assert_eq!(kernel.other_caps_to(frame, root_cap_id), 0);
+        assert_eq!(kernel.destroy_cap_object(root, 2), Ok(()));
         assert!(kernel.check_invariants().is_ok());
     }
 

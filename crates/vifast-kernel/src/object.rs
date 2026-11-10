@@ -637,8 +637,12 @@ pub struct Tcb {
     pub vspace: Option<ObjRef>,
     pub cspace: [Option<Cap>; MAX_CAPS_TASK],
     /// Client waiting for this TCB to reply: (client, reply epoch).
-    pub caller: Option<(ObjRef, u8)>,
-    pub reply_epoch: u8,
+    /// `(client, epoch)`: epoch là `u16` (293.6, r293) — bản `u8` chỉ chịu
+    /// được 255 lần Call trước khi epoch quay vòng và guard K49 "khớp" lại một
+    /// record cũ. `u16` là mức tối thiểu còn an toàn trong ngân sách tĩnh
+    /// (xem `epoch_survives_256_calls` và assert kích thước TCB).
+    pub caller: Option<(ObjRef, u16)>,
+    pub reply_epoch: u16,
     pub recv_slot: u8,
     pub bound_ntfn: Option<ObjRef>,
     /// Optional external flat CNode used as this TCB's capability space.
