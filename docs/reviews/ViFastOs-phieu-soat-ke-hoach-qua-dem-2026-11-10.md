@@ -3,6 +3,9 @@
 **Soát bởi:** phiên kiểm độc lập · **Lúc:** 2026-11-10, 17:45
 **Đối tượng:** `ViFastOs-ke-hoach-qua-dem-agent2-2026-11-10.md`
 **Mốc đối chiếu:** HEAD `4e8e23e`, cây dở `crates/vifast-root/src/main.rs`
+**Hiệu lực:** phiếu này **sửa năm điểm** của kế hoạch qua đêm. Chỗ nào phiếu
+không nhắc thì **kế hoạch vẫn đúng**. Khi hai tệp mâu thuẫn: **phiếu này thắng**.
+
 
 > **Kết luận: kế hoạch dùng được, cấu trúc và kỷ luật mốc giờ tốt.** Có **năm
 > điểm** nếu không vá sẽ làm mất chính bằng chứng mà khối A cần tìm — trong đó
