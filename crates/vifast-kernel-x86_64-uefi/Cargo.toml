@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 test-destroy-smp = []
-default = ["test-exit", "diag-tick", "diag-sched"]
+default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
 # TẠM (săn T33a): chuyển tiếp cờ chẩn đoán xuống platform.
 diag-tick = ["vifast-platform-x86_64/diag-tick"]
