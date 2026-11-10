@@ -1538,3 +1538,21 @@ IPC nóng, không phải sửa lỗi cục bộ — muốn thử lại phải đ
 
 **Việc tiếp (giữ nguyên thứ tự):** đèn một marker mỗi bước trong khối V2 để biết
 lần đỏ dừng ở đâu; chỉ sau đó mới suy tiếp cơ chế.
+
+## r294.T26 — KHOANH VÙNG: lỗi nằm ở `vfs_fsck()`, không phải bước FS nào khác
+
+Ba đèn được thêm và **giữ lại lâu dài** (output ngắn, không nằm trong hợp đồng marker):
+
+1. `V2S01..V2S11` — một mốc sau mỗi bước của khối FS V2
+   (`crates/vifast-client/src/main.rs`).
+2. `V2FAIL v2=<0|1> fsck=<0|1>` — in lý do trước khi in `FS V2 BAD`.
+3. Mã lỗi fsck hai phía: server `FS ERR <mã>`, client `FSCKERR <mã>`.
+
+**Kết quả (MAX_IO=256, 12/40 đỏ):** 100 % lần đỏ đều tới `V2S11` và in
+**`V2FAIL v2=1 fsck=0`** ⇒ mọi kiểm tra V2 khác ĐẠT, chỉ `vfs_fsck()` trả false.
+
+Điều này **bác** cách giải thích cũ trong r262 ("mkdir OK nhưng readdir đọc ảnh
+cũ"): nếu readdir sai thì `found_d`/`found_a` sẽ sai và `v2=0`. Dữ liệu mới nói
+lỗi ở **tính nhất quán mà fsck nhìn thấy**.
+
+Đo lại ở `MAX_IO=128` sau khi thêm đèn: **40/40 xanh**.

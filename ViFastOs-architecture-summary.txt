@@ -587,6 +587,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 9176afe r294.T33b: in vị trí panic (file:dòng) trên riscv64/aarch64 + phân loại T-ROOT theo PANIC AT
 - d673f7e r294.T33b: riscv64 — panic `assert_current_tcb` giết hart phụ; in vị trí panic
 - 210ed6e r294.T26: thử giả thuyết reply-orphan (H1) — đo bác bỏ + hồi quy 1/40 ở 128 ⇒ revert theo D18
+- 63dddae r294.T26: KHOANH VÙNG ĐƯỢC — lỗi ở `vfs_fsck()` chứ không phải bước FS nào khác
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
