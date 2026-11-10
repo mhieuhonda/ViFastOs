@@ -169,6 +169,18 @@ static DIR_SHAPE: [core::sync::atomic::AtomicU32; 4] = [
     core::sync::atomic::AtomicU32::new(0),
 ];
 
+/// Số lần `commit()` ghi xong mà đọc lại (bỏ cache) thấy KHÁC ảnh journal.
+static COMMIT_LOST: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Tổng số target đã kiểm (mẫu số của đèn trên).
+static COMMIT_VERIFIED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+pub fn commit_lost() -> (u32, u32) {
+    (
+        COMMIT_LOST.load(core::sync::atomic::Ordering::Relaxed),
+        COMMIT_VERIFIED.load(core::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 pub fn dir_shape() -> (u32, u32, u32, u32) {
     (
         DIR_SHAPE[0].load(core::sync::atomic::Ordering::Relaxed),
@@ -1189,6 +1201,23 @@ impl<D: BlockDev> Fs<D> {
         // Never clear the journal commit until dirty data blocks and their
         // write-back cache have reached the device.
         self.dev.flush()?;
+        // T26 (đèn quyết định cuối): sau khi flush, đọc lại TỪNG target bằng
+        // đường BỎ CACHE và so với ảnh journal. Lệch ⇒ lệnh ghi không tới đĩa
+        // dù commit đã "thành công". Đây là phép đo phân biệt hai nhánh còn lại.
+        for index in 0..count {
+            let mut on_disk = zero_block();
+            if self
+                .dev
+                .read_uncached(self.targets[index], &mut on_disk)
+                .is_ok()
+            {
+                let start = index * BLOCK_SIZE;
+                if on_disk[..] != self.journal[start..start + BLOCK_SIZE] {
+                    COMMIT_LOST.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                }
+                COMMIT_VERIFIED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            }
+        }
         self.dev.write(JOURNAL_COMMIT_LBA, &zero_block())?;
         self.seq = self.seq.wrapping_add(1);
         self.tx_count = 0;

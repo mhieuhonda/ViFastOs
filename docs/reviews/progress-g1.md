@@ -1968,3 +1968,32 @@ bằng `read_uncached` và so với ảnh journal; lệch thì in `COMMIT LOST <
   thiết bị, và lệnh đọc sau đó lại đi qua cache của thiết bị theo thứ tự khác).
 - Không có `COMMIT LOST` mà đĩa vẫn thiếu ⇒ block thư mục **không nằm trong
   `targets[]`**, tức lỗi ở `write_dir_entry`/`stage`.
+
+## r294.T26 — `commit()` ghi ĐÚNG: 0 mất trên 201 target
+
+Đèn cuối: sau `dev.flush()` trong `commit()`, đọc lại **từng target** bằng
+`read_uncached` (bỏ hẳn cache) và so với ảnh journal.
+
+**Đo `MAX_IO=256` (2 boot đỏ trong 10):**
+
+```
+V2RD end n=06
+COM l=00 v=201          ← 0 lệch / 201 target đã kiểm
+DIRP s=0512 b=1 e0=06 mm=00
+```
+
+⇒ **Mọi target của mọi commit đều nằm đúng trên đĩa** (`l=00`), cache khớp đĩa
+(`mm=00`), và thư mục gốc trên đĩa **thật sự** chỉ có 6 entry tại thời điểm đọc.
+
+Ba tầng dữ liệu đều sạch: thiết bị (ATA 0 lỗi), đường ghi (0/201 lệch), cache
+(khớp đĩa). Vậy thông tin "entry thứ 7" **chưa được tạo ra** ở thời điểm lần đọc
+đầu — tức `mkdir` đã trả `Ok` **trước khi** việc thêm entry vào thư mục cha được
+thực hiện, hoặc entry được thêm **sau** bởi một đường khác.
+
+Nghi vấn hẹp nhất còn lại: **root và client test là hai client FS**, và thứ tự
+`mkdir` → `readdir` bị đảo giữa hai client (server xử lý tuần tự, nhưng dãy yêu
+cầu của client test có thể chạy **trước** khi yêu cầu mkdir của nó tới server nếu
+reply/lệnh bị lẫn). Phép đo chốt: in **thứ tự yêu cầu** ở server (seq + op) quanh
+lúc mkdir/readdir, và in seq của reply mà client nhận.
+
+Đây là chỗ duy nhất còn lại sau khi đã loại 10 giả thuyết bằng đo.

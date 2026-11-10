@@ -737,6 +737,27 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             // T26: index / entry-đếm-qua-cache / entry-đếm-qua-RAW của lần
             // `read_dir_entry_full` trả "hết" gần nhất. Lệch ⇒ cache khác đĩa.
             // T26: hình dạng thư mục tại lần "hết" gần nhất.
+            // T26: số target ghi-xong-mà-đọc-lại-khác / tổng số target đã kiểm.
+            let (lost, verified) = vifast_fs::commit_lost();
+            if verified > 0 {
+                let mut line = [0u8; 24];
+                line[0] = b'C';
+                line[1] = b'O';
+                line[2] = b'M';
+                line[3] = b' ';
+                line[4] = b'l';
+                line[5] = b'=';
+                line[6] = b'0' + ((lost / 10) % 10) as u8;
+                line[7] = b'0' + (lost % 10) as u8;
+                line[8] = b' ';
+                line[9] = b'v';
+                line[10] = b'=';
+                line[11] = b'0' + ((verified / 100) % 10) as u8;
+                line[12] = b'0' + ((verified / 10) % 10) as u8;
+                line[13] = b'0' + (verified % 10) as u8;
+                line[14] = b'\n';
+                write(&line[..15]);
+            }
             let (shape_size, shape_blocks, shape_e0, shape_e1) = vifast_fs::dir_shape();
             // `mm=1` = ảnh cache KHÁC ảnh đĩa thật (đèn quyết định của T26).
             if shape_blocks > 0 {
