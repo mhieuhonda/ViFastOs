@@ -1355,3 +1355,29 @@ Việc phải làm tiếp (ghi rõ để phiên sau không đoán):
 2. T-SCHED 1/301: cần đèn để xem `lvt0` còn bị mask hay là lớp khác.
 3. T31: đã tái hiện **lần đầu** bằng marker `dup=['PAGER EVICT OK']`; cần lưu
    đúng serial của lần thử đã sinh ra nó (sửa `write_artifacts` dùng attempt).
+
+## r294.C — mốc `KERNEL ENTRY`, T-BOOT định nghĩa theo mốc
+
+- Kernel in `KERNEL ENTRY` ngay đầu `boot()`, **trước** `init_platform`.
+- `classify_failure`: `T-BOOT ⇔ không có KERNEL ENTRY` (phiếu soát §1.5), xét
+  trước mọi lớp khác. Spec **652 case**, có ca âm "đã vào kernel mà thiếu
+  PREEMPT OK ⇒ T-SCHED".
+- Harness: artifact đọc **lại** serial đã settled từ file — vá lỗi lượt trước,
+  khi artifact của lần hỏng T31 (`dup=PAGER EVICT OK`) lại không chứa marker
+  gây hỏng.
+
+### Số đo vòng 7
+
+| Lượt (x86_64, không đèn, sha `6e0ee9c`+`4a4bf89`) | N | Kết quả |
+|---|---:|---|
+| Săn T31 | 200 | `RETRY 1/200` — **không** tái hiện T31; 1 lần là T-ROOT `main.rs:480` |
+| Gate | 3×3 | 10/10, `RETRY 0/9` |
+
+**T-ROOT `main.rs:480` vẫn còn 1/200 sau cờ `KERNEL_READY`** ⇒ cờ chỉ chặn một
+phần; cần đèn để xem AP còn chạm runqueue trước khi kernel sẵn sàng ở đường nào,
+hoặc `last` bị hỏng bởi cơ chế context-slot (giả thuyết (b) của bản soát).
+Artifact lần này có `ROOT PANIC` + `main.rs:480` + serial đầy đủ nhưng **không**
+có `RING DUMP` (bản đo không đèn) ⇒ lượt sau phải chạy có đèn để có vòng đệm.
+
+**T31**: không tái hiện trong 200 boot; đã có (1 lần) trong lượt 300 boot trước.
+Chưa sửa được ⇒ giữ mở, cần lượt có đèn để chụp chuỗi `PAGER2_LABEL`.
