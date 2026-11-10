@@ -11,6 +11,7 @@ default = ["test-exit"]
 test-exit = ["vifast-runtime/test-exit"]
 # TẠM (săn T33a): chuyển tiếp cờ chẩn đoán xuống platform.
 diag-tick = ["vifast-platform-x86_64/diag-tick"]
+diag-pick = ["vifast-runtime/diag-pick"]
 test-panic-hart1 = ["vifast-runtime/test-panic-hart1"]
 # r259 (T21/D19): bản biến thể kiểm bất biến sched ở ranh giới user.
 check-boundary = ["vifast-runtime/check-boundary"]

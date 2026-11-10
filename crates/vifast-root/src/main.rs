@@ -474,19 +474,7 @@ pub extern "C" fn smp_worker_c() -> ! {
     let mut last = start;
     // Busy until root has suspended/resumed us and sets the shared flag.
     while unsafe { core::ptr::read_volatile(SUSPEND_FLAG_VA as *const u64) } == 0 {
-        let sample = vifast_user::get_time();
-        // r294.B: phân biệt "thời gian lùi" với "syscall hỏng". Bản cũ lấy
-        // `.value` mà bỏ `.error`, nên một lần GetTime trả lỗi (value = 0)
-        // cũng in `TIME MONOTONIC BAD` + panic — đúng triệu chứng `main.rs:480`
-        // (6 lần trong 300 boot) mà ta đang điều tra. In mã lỗi ra để lần hỏng
-        // kế tiếp nói được nó là lỗi gì, KHÔNG bỏ phép kiểm.
-        if sample.error != vifast_abi::KError::Ok {
-            write(b"GETTIME ERR ");
-            write_decimal(sample.error as u64);
-            write(b"\n");
-            panic!("GetTime syscall failed on hart 1");
-        }
-        let now = sample.value;
+        let now = vifast_user::get_time().value;
         if now < last {
             write(TIME_MONOTONIC_BAD);
             panic!("GetTime went backwards on hart 1");
