@@ -1435,6 +1435,24 @@ pub mod fault {
         let kernel = A::kernel();
         let hart = A::hart_id();
         let old = kernel.current_on(hart);
+        // T33b (r293): ngoại lệ khi hart KHÔNG chạy TCB nào — hart đang idle
+        // trong kernel, nên không có ngữ cảnh user để "fault". Trước đây nhánh
+        // này đi thẳng tới `fault_current_on(hart)` (không có current ⇒ None)
+        // ⇒ "no runnable thread after fault" ⇒ `halt()` ⇒ cả máy chết dù chỉ
+        // là một ngắt mồ côi. Nay: in chẩn đoán (KHÔNG phải marker), ack ngắt
+        // và quay lại vòng idle. Nếu là lỗi kernel thật thì nó sẽ lặp lại và
+        // hiện thành `KERNEL FAULT` dày đặc trong serial.
+        if old.is_none() {
+            vifast_kernel::klog!(
+                A,
+                "KERNEL FAULT (hart={}, cause={:#x}, addr={:#x}) — hart idle, bỏ qua",
+                hart,
+                cause,
+                addr
+            );
+            A::ack_timer();
+            return;
+        }
         // Vòng 90 (audit #4 P1-3): lưu frame đang fault vào context slot của
         // TCB để nếu pager cứu nó (map trang rồi cho chạy lại), task tiếp tục
         // đúng điểm fault thay vì chạy lại frame cũ / entry point.
@@ -1770,6 +1788,17 @@ pub mod timer {
             let _ = kernel.yield_current_on(hart);
         }
         let Some(next) = kernel.pick_on(hart) else {
+            // T33a (r293): chẩn đoán KHÔNG-phải-marker. Thoát im lặng ở đây
+            // là "hart 0 không còn TCB nào chạy được"; nếu lúc đó bài test
+            // chưa xong thì đó chính là lần hỏng "thiếu PREEMPT OK".
+            vifast_kernel::klog!(
+                A,
+                "SMP NO READY (hart={}, ticks={}, exitted_current={}, alive={})",
+                hart,
+                kernel.ticks_on(hart),
+                old.is_some(),
+                kernel.live_tcb_count()
+            );
             A::exit(1);
         };
         note_current_tcb::<A>(kernel);

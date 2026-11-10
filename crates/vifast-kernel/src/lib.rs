@@ -5582,6 +5582,25 @@ impl Kernel {
     /// kết thúc cả máy nếu KHÔNG còn task nào ở bất kỳ hart nào — nếu không thì
     /// một worker thoát trên hart phụ sẽ giết cả hệ thống (triệu chứng: guest
     /// in `USER EXIT` ngay sau `TCB REAP OK`, boot dừng giữa đường).
+    /// T33a (r293): số TCB còn sống (không phải `Exited`). Dùng cho chẩn
+    /// đoán "hart không còn TCB chạy được" — nếu vẫn còn TCB sống thì thoát
+    /// là SAI (phải chờ timer đánh thức), chỉ khi bằng 0 mới thực sự hết việc.
+    pub fn live_tcb_count(&self) -> usize {
+        let mut count = 0usize;
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if let Some(table) = self.tcb(reference) {
+                if table.state != ThreadState::Exited {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     pub fn has_any_ready(&self) -> bool {
         for owner in 0..MAX_HARTS {
             for queued in self.runq[owner][..self.runq_len[owner]].iter().flatten() {

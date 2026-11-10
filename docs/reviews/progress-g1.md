@@ -1062,3 +1062,37 @@ giữ mã cũ, ghi thành việc của vòng sau.
   vật lý. Test đỏ-trước `parent_pointing_into_a_dying_tcb_is_repaired_inside_a_cnode`.
   **Chưa** dựng được kịch bản 5 bước đầy đủ (revoke + destroy) ⇒ **không** tuyên
   bố đóng P0-3.
+
+## r291 — FS: capacity, biên indirect, lỗ file thưa, rollback create
+
+- **291.1/P1-1**: `Fs.capacity` lấy từ superblock (`total`) thay `dev.block_count()`;
+  `block_is_used`/`mark_*`/`alloc_block`/`usage` đều dùng biên này. Test đỏ-trước
+  `mount_accepts_a_device_larger_than_the_formatted_area` (ĐỎ khi trả biên về
+  `dev.block_count()`: panic `index out of bounds: len 1024 index 1024`).
+- **291.2/P1-2**: chỉ số block bịa trong inode → `Corrupt` thay vì panic. Test
+  `read_with_a_forged_size_returns_corrupt_instead_of_panicking`.
+- **291.3**: ghi quá EOF tạo LỖ hợp lệ — `read` trả 0 cho block trống trong
+  phạm vi `size`, `fsck` bỏ qua lỗ. Test
+  `writing_past_eof_leaves_a_readable_zero_filled_hole` (ĐỎ khi trả `read` về
+  `Corrupt`).
+- **291.4**: `create` hỏng ở bước ghi entry phải rollback inode đã cấp
+  (`release_inode`). Test `failed_create_rolls_back_the_allocated_inode` (ĐỎ khi
+  gỡ rollback: `left: 18, right: 17` — rò rỉ đúng một inode).
+- **291.6 (một phần)**: `fsck_mark_block` dùng biên `capacity` của FS.
+
+Đo: `vifast-fs` **44 test**, gate 10/10, QEMU 3×3 = 9/9.
+
+## r292 — tái hiện race FS ở MAX_IO=256 (chưa sửa gốc)
+
+Đo trên cây HEAD (chỉ tạm đổi `MAX_IO=256`, trả về 128 ngay sau khi đo):
+
+```
+python3 scripts/fs-smp-regression.py --iterations 20 --expect red
+→ 3/20 lần đỏ (thiếu marker "FS V2 OK"), 17/20 xanh
+```
+
+Khớp bảng đo cũ (12/49 ≈ 24% ở bản 256, 0/32 ở bản 128). Triệu chứng giữ
+nguyên: `mkdir` OK nhưng `readdir` ngay sau đọc ảnh CŨ của block thư mục gốc.
+Ba nghi phạm xếp thứ tự điều tra: (1) cache block 32 entry của FS server không
+invalidate khi ghi staged; (2) `commit()` từng chunk 512 B để lộ trạng thái
+trung gian; (3) mailbox maintenance (r289) chưa phủ hết vùng FS.
