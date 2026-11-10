@@ -632,6 +632,36 @@ gặp ngoại lệ nay KHÔNG `halt()` cả máy mà ack + quay lại idle (đo 
 Số đo tổng: gate **10/10** ở mỗi mốc; soak 100×3 (sau r290) = **299/300**;
 `vifast-kernel` 250 test, `vifast-fs` 44; sàn **365 test / 11 crate**.
 
+### r293 – r294.B — thước đo mới, flake scheduler, và GỐC của T33a
+
+**Thước đo (r293.1–293.3, commit `2a04bd2`)**: harness đếm `RETRY n/N`, phân lớp
+T-FS/T-SCHED/T-KHAC, lưu artifact đầy đủ cho MỌI lần hỏng, có `--strict`. Nhờ nó
+mà lộ ra flake thật **2,6 %/boot** — trước đó "PASS" che mất.
+
+**r294.4 (`c2a8968`)**: `fault::suspend` gặp "hết TCB chạy được" thì `halt()`
+TRONG trap handler đang giữ BKL ⇒ hart kia quay BKL mãi với IF=0 ⇒ chết máy
+(4/305). Sửa: trả `false`, caller nhả BKL rồi mới halt. Đo sau vá: **0/301** lần
+`tcb=None`/`SMP PARK` ⇒ đóng theo số đo (tỉ lệ < 3/301).
+
+**GỐC T33a (`28aefcd`)**: đèn `NO TICK` (chạy trên hart còn sống) cho
+`lvt0=0x10000` — **LINT0 của BSP bị MASK** từ tick 2, nên PIC không đẩy được
+IRQ0 ⇒ tick ngừng vĩnh viễn ⇒ `PREEMPT OK` (cần tick ≥ 99) không bao giờ in.
+Chỉ có hai chỗ ghi LVT0 trong toàn bộ mã: BSP đặt `0x700` (ExtINT, không mask)
+và **AP mask `1<<16`**. Sửa: AP chỉ mask LINT1.
+
+| Lượt (x86_64) | Sha | N | Kết quả |
+|---|---|---:|---|
+| Nền | `c2a8968` | 305 | 8 hỏng = **2,6 %** (6 T-ROOT `main.rs:480`, 1 T-BOOT, 1 T-INFRA) |
+| Sau vá LINT0, không đèn | `3699fe7` | 301 | **2 hỏng = 0,66 %** (1 T-SCHED treo, 1 T-DUP `PREEMPT OK` in hai lần) |
+
+Hai giả thuyết bị BÁC bằng đèn trước khi tìm ra gốc: "PIT ngừng phát"
+(`TICK`/`eoi` khớp) và "PIC kẹt in-service" (`isr=0, imr=0xec`).
+
+**Khối D (`6c026a4`)**: D1.a marker `SMP NO CURRENT` qua hàm thuần + 3 test host;
+D3 panic in `file:dòng` có dấu hai chấm, harness đọc được cả hai dạng; bảng phân
+loại 294.C có `T-BOOT`/`T-ROOT <file:dòng>`/`T-INFRA`. **D2 đã revert theo luật**
+(3 test scheduler + `selftest_passes` đỏ — đúng như r251 đã ghi).
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -659,7 +689,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-2bcc0dbe645a2962699f3a0a909375cd881c4f9407c87d5e497b3d4b43e165ec  docs/reviews/ViFastOs-report-r262.md
+6cea62a3093e21e8d344501d18d58d02901821d0620c13e1b300406e3ddf7740  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
