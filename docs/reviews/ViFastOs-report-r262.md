@@ -777,6 +777,26 @@ Việc tiếp: đèn một marker mỗi bước trong khối V2 + in mã lỗi t
 `ipc.rs::reply()` (không bỏ rơi client `BlockedReply` khi `valid==false`) và
 `reply_recv()` (không `?` trước `recv`).
 
+### r294.T26 — giả thuyết reply-orphan bị BÁC bằng đo (đã revert)
+
+Đã thử bản vá theo giả thuyết H1 của bản phân tích: `ipc.rs::reply()` đánh thức
+client `BlockedReply` khi caller stale, và `reply_recv()` không bỏ lượt `recv`
+khi reply lỗi. Kèm test đỏ-trước đã chứng minh ĐỎ khi tắt bản vá.
+
+| Cấu hình | N | Đỏ |
+|---|---:|---:|
+| `MAX_IO=256` trước vá | 40 | 12 |
+| `MAX_IO=256` sau vá | 40 | 9 |
+| `MAX_IO=128` sau vá | 40 | **1 (hồi quy)** |
+| `MAX_IO=128` sau revert | 40 | **0** |
+
+12 → 9 nằm trong nhiễu ⇒ H1 **không** phải gốc; và bản vá làm **cấu hình sản
+phẩm** đỏ 1/40. Theo D18 đã **revert cả bản vá lẫn test**; cây về 40/40 xanh.
+
+Bài học: thay đổi `wake_error` trên đường IPC nóng là thay đổi **hành vi**, phải
+đo riêng từng bản vá và luôn kiểm cấu hình đang xanh (128) trước khi tin kết quả
+ở cấu hình đỏ (256).
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -804,7 +824,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-9661174f5ca85e7e8ce4880427cccd8e9afc2fa32ac2183f5499ebf96bcec1ab  docs/reviews/ViFastOs-report-r262.md
+6f10d8679e83d5a1568f8b734342cf964c7b4828df673bec426f16bc12d5894b  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
