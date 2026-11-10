@@ -739,6 +739,27 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             // T26: hình dạng thư mục tại lần "hết" gần nhất.
             // T26: số target ghi-xong-mà-đọc-lại-khác / tổng số target đã kiểm.
             // T26: hình dạng inode lúc lookup THẤY (so với lúc readdir hết).
+            // T26: 8 ino đầu của block 0 tại lần readdir "hết".
+            {
+                let slots = vifast_fs::slot_inos();
+                if slots.iter().any(|value| *value != 0) {
+                    let mut line = [0u8; 40];
+                    let mut at = 0usize;
+                    for (index, byte) in b"SLO ".iter().enumerate() {
+                        line[index] = *byte;
+                        at = index + 1;
+                    }
+                    for slot in 0..8 {
+                        let value = slots[slot];
+                        line[at] = b'0' + ((value / 10) % 10) as u8;
+                        line[at + 1] = b'0' + (value % 10) as u8;
+                        line[at + 2] = b' ';
+                        at += 3;
+                    }
+                    line[at] = b'\n';
+                    write(&line[..at + 1]);
+                }
+            }
             let (look_size, look_blocks, look_b0, look_ino) = vifast_fs::look_hit();
             if look_blocks > 0 {
                 let mut line = [0u8; 32];

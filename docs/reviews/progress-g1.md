@@ -2059,3 +2059,32 @@ cuối trước khi vá.
 
 Đây là lần đầu tiên toàn bộ tầng lưu trữ (thiết bị, commit, cache, inode) được
 chứng minh SẠCH bằng số, và lỗi bị dồn vào đúng một vòng lặp.
+
+## r294.T26 — BẢN ĐỒ SLOT: block thật sự THIẾU ino 08, và lộ churn
+
+Đèn `SLO` in `ino` của 8 slot đầu block 0 tại lần `Ok(None)`.
+
+**Đo `MAX_IO=256` (2 boot đỏ):**
+
+```
+SLO 02 04 05 06 07 00 09 00
+LOOK s=0512 b=1 b0=30 i=08
+```
+
+Đọc bản đồ: block có entry ở slot 0,1,2,3,4,6 → **ino 02 04 05 06 07 09**, slot 5
+**trống**, và **không có ino 08**. Vậy `d` (ino 8) **thật sự không có trong block**
+tại thời điểm đó — khớp `mm=00` và `COM l=00`.
+
+**Lỗi phương pháp của hai đèn trước (ghi để không lặp):** `LOOK` và `SLO` đều giữ
+giá trị của lần gần NHẤT, mà mỗi lần in chỉ xảy ra ở FSCK ⇒ chúng có thể thuộc
+**hai thời điểm khác nhau**, nên "cùng inode, cùng block" ở vòng trước là kết luận
+**quá mạnh**. Phải ghi kèm số thứ tự sự kiện (seq) mới so được.
+
+**Dữ kiện mới quan trọng:** dãy ino `02 04 05 06 07 09` với **slot 5 trống** cho
+thấy thư mục đã qua nhiều lần tạo/xoá; cuối khối V2 có `vfs_unlink("/d")` rồi
+`vfs_mkdir("/d")` lại ⇒ entry cuối phải nằm ở slot trống (5) nhưng lại **trống**.
+
+**Việc tiếp:** in kèm **seq** cho cả ba đèn (`V2RD`, `LOOK`, `SLO`) để chắc chắn
+chúng thuộc cùng một sự kiện; nếu vẫn thiếu ino 08 thì lỗi ở chính
+`write_dir_entry` khi tái dùng slot trống (nghi: ghi vào slot vừa unlink nhưng
+`commit`/`stage` không mang block đó).

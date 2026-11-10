@@ -184,6 +184,31 @@ static LOOK_HIT: [core::sync::atomic::AtomicU32; 4] = [
     core::sync::atomic::AtomicU32::new(0),
 ];
 
+/// T26: `ino` của 8 slot đầu trong block 0 thư mục, tại lần `Ok(None)` gần nhất.
+static SLOT_INOS: [core::sync::atomic::AtomicU32; 8] = [
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+];
+
+pub fn slot_inos() -> [u32; 8] {
+    [
+        SLOT_INOS[0].load(core::sync::atomic::Ordering::Relaxed),
+        SLOT_INOS[1].load(core::sync::atomic::Ordering::Relaxed),
+        SLOT_INOS[2].load(core::sync::atomic::Ordering::Relaxed),
+        SLOT_INOS[3].load(core::sync::atomic::Ordering::Relaxed),
+        SLOT_INOS[4].load(core::sync::atomic::Ordering::Relaxed),
+        SLOT_INOS[5].load(core::sync::atomic::Ordering::Relaxed),
+        SLOT_INOS[6].load(core::sync::atomic::Ordering::Relaxed),
+        SLOT_INOS[7].load(core::sync::atomic::Ordering::Relaxed),
+    ]
+}
+
 pub fn look_hit() -> (u32, u32, u32, u32) {
     (
         LOOK_HIT[0].load(core::sync::atomic::Ordering::Relaxed),
@@ -2274,6 +2299,18 @@ impl<D: BlockDev> Fs<D> {
             }
         }
         DIR_SHAPE[3].store(disk_mismatch, core::sync::atomic::Ordering::Relaxed);
+        // Ghi 8 ino đầu của block 0 để so với những gì `lookup_child` đã thấy.
+        if inode.blocks_used() > 0 {
+            let mut probe = zero_block();
+            if self.dev.read(inode.blocks[0], &mut probe).is_ok() {
+                for slot in 0..8 {
+                    SLOT_INOS[slot].store(
+                        get_u16(&probe, slot * DIR_ENTRY_SIZE) as u32,
+                        core::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+            }
+        }
         DIR_SHAPE[0].store(inode.size, core::sync::atomic::Ordering::Relaxed);
         DIR_SHAPE[1].store(
             inode.blocks_used() as u32,
