@@ -342,27 +342,41 @@ fn vfs_truncate(fd: u64, size: u64) -> Result<(), u64> {
 }
 
 fn vfs_readdir(fd: u64, index: u64) -> Result<Option<(u64, [u8; 28], usize)>, u64> {
-    let reply = unsafe { vifast_user::call_message(1, vfs::READDIR, fd, index, 0) };
-    match vfs_reply(reply) {
-        Ok(reply) => {
-            if reply.label != vfs::OK {
-                return Ok(None);
+    // T26 (bằng chứng `V2CHK open=1 rd=2`): lần liệt kê ĐẦU có thể trả lỗi
+    // thoáng qua cho một index, mà người gọi (`while let Ok(Some(..))`) coi lỗi
+    // là "hết thư mục" ⇒ **cắt danh sách trong im lặng**, mất entry `d` dù ảnh
+    // FS có nó (các lần sau đọc được, `open` cũng được). Vì vậy thử lại tại
+    // chỗ, đúng bằng số lần đã đo là đủ; lỗi thật vẫn trả về.
+    let mut attempt = 0u32;
+    loop {
+        let reply = unsafe { vifast_user::call_message(1, vfs::READDIR, fd, index, 0) };
+        match vfs_reply(reply) {
+            Ok(reply) => {
+                if reply.label != vfs::OK {
+                    break Ok(None);
+                }
+                // Vòng 83 (audit #2): server trả về độ dài; phải kẹp theo buffer
+                // đích trước khi copy, nếu không một reply sai làm ghi quá biên.
+                let len = core::cmp::min(reply.data[1] as usize, 28);
+                let mut name = [0u8; 28];
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        IPC_BUF_CLIENT_VA as *const u8,
+                        name.as_mut_ptr(),
+                        len,
+                    );
+                }
+                break Ok(Some((reply.data[0], name, len)));
             }
-            // Vòng 83 (audit #2): server trả về độ dài; phải kẹp theo buffer
-            // đích trước khi copy, nếu không một reply sai làm ghi quá biên.
-            let len = core::cmp::min(reply.data[1] as usize, 28);
-            let mut name = [0u8; 28];
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    IPC_BUF_CLIENT_VA as *const u8,
-                    name.as_mut_ptr(),
-                    len,
-                );
+            Err(vfs::ENOENT) => break Ok(None),
+            Err(code) => {
+                if attempt < 2 {
+                    attempt += 1;
+                    continue;
+                }
+                break Err(code);
             }
-            Ok(Some((reply.data[0], name, len)))
         }
-        Err(vfs::ENOENT) => Ok(None),
-        Err(code) => Err(code),
     }
 }
 

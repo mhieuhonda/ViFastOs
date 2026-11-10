@@ -1770,3 +1770,24 @@ journal/cache, mà sửa **đường readdir** (trang hoá + xử lý lỗi khô
 danh sách trong im lặng).
 
 Đo lại ở `MAX_IO=128`: 40/40 xanh (đèn mới chỉ in khi lỗi nên không ảnh hưởng).
+
+## r294.T26 — retry readdir KHÔNG cứu được (bằng chứng: nó không bắn)
+
+Thêm **thử lại 2 lần** khi `vfs_readdir` nhận `Err(code != ENOENT)` (đèn
+`V2CHK open=1 rd=2` cho thấy lần sau đọc được).
+
+**Đo `MAX_IO=256`, 30 boot: 9/30 đỏ (30 %)** — **y như trước** (12/40 = 30 %).
+
+⇒ Lỗi **không** đi qua nhánh `Err`; nó đi qua nhánh **`Ok(None)`/ENOENT**, tức
+server tuyên bố "hết thư mục" ở một index **trước** entry `d`, và client dừng
+vòng lặp. Đúng như bản đánh giá subagent cảnh báo: "retry chỉ phủ MỘT NỬA triệu
+chứng".
+
+Vì vậy **revert** retry (không chứng minh được tác dụng, luật D18) và chuyển
+sang đèn đúng chỗ: in **lý do dừng** ở điểm cắt (`ENOENT` do hết thật vs do
+`read_dir_entry_full` đếm thiếu) cùng `index` dừng.
+
+Bản đánh giá còn nêu rủi ro quan trọng khác: `vfs_reply` gộp `EIO` với `Corrupt`
+nên retry không phân biệt được lỗi thoáng qua với block hỏng, và việc "xanh ở
+256" không được quy công cho retry khi `MAX_IO` cũng vừa đổi — hai thay đổi phải
+đo **tách rời**.
