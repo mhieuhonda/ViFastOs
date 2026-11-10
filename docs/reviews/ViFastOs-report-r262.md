@@ -732,6 +732,29 @@ Còn mở (đã ghi việc tiếp trong `progress-g1.md`): T-ROOT `main.rs:480` 
 T-SCHED 1/301, T31 (phép đo ở trên), `BIN EXEC FAIL`/`DESTROY DIAG stuck=4`,
 T26, T33b, 294.5.
 
+### r294.T33b — riscv64: panic của hart phụ (`assert_current_tcb`)
+
+Handler panic của riscv64/aarch64 nuốt `PanicInfo` nên log chỉ có
+`PANIC (hart=1)` — đo 200 boot riscv64 gặp 2 lần mà **không biết chỗ nào**. Đã in
+`PANIC AT <file>:<dòng>` (cùng kiểu D3 của root) và cho harness phân loại
+`T-ROOT <file:dòng>`; spec 653 case.
+
+Chụp được ngay: `crates/vifast-platform-riscv64/src/platform.rs:671` —
+`assert_current_tcb()` "per-CPU current_tcb mismatch". Gốc: `fault_to_endpoint`
+xoá `current` của **mọi** hart khi task bị park vì fault, còn cache per-CPU
+không được cập nhật ⇒ lần trap sau lệch ⇒ **máy chết**. Đây là bất biến **chẩn
+đoán**, nên bản vá là: lệch thì **sửa cache theo kernel** và in một lần
+`CURRENT MISMATCH`, không `assert_eq!`.
+
+| Lượt riscv64 | N | Kết quả |
+|---|---:|---|
+| Trước | 200 | 2 hỏng — **2 × `PANIC (hart=1)`** |
+| Sau | 201 | 1 hỏng — **0 panic**; 1 lần thiếu marker `IPC RIGHTS OK` |
+
+Triệu chứng "TCP echo đỏ" hoá ra chỉ là **hệ quả** của panic (guest chết trước
+khi in marker). Sau khi vá, TCP echo không còn là nguyên nhân duy nhất; việc
+tiếp là đo riêng "thiếu marker `IPC RIGHTS OK`".
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -759,7 +782,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-ab4061933ca2694a739c9c811959c219fadb801999e31d880f701abb6dd6ff1e  docs/reviews/ViFastOs-report-r262.md
+0f4dfd02e187b844c75833ee9b399755bc201509b51001528ca0be68d428d750  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
