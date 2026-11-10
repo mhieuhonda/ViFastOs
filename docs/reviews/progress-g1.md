@@ -1841,3 +1841,24 @@ lệch đó; muốn chứng minh phải so **inode RAM với inode trên đĩa**
 `INO ram=<a> disk=<b>` khi lệch. Nếu lệch ⇒ vá chỗ làm mới `self.inodes` sau
 `write_dir_entry`/`commit` (nghi thiếu cập nhật cho thư mục cha khi entry mới rơi
 sang block kế).
+
+## r294.T26 — giả thuyết "inode RAM thiếu block" cũng bị BÁC (đọc mã)
+
+Đọc `write_dir_entry` (`crates/vifast-fs/src/lib.rs:1637-1668`): khi entry mới rơi
+sang **block kế**, hàm có làm **đủ ba việc**:
+`inode.blocks[blocks_used()] = block_no` → `inode.size += BLOCK_SIZE` →
+**`self.inodes[dir - 1] = inode`** → `stage_inode(dir)` + `stage_bitmap()`.
+
+Và `blocks_used()` (`lib.rs:2414-2430`) = `ceil(size / 512)` kẹp theo
+`MAX_BLOCKS_PER_INODE`, nên nếu `size` đúng thì vòng quét **có** đi qua block thứ
+hai.
+
+⇒ Giả thuyết "inode trong RAM thiếu block sau `mkdir`" **không đứng** với mã hiện
+tại. Kết hợp các phép đo trước (cache == đĩa, `open("/d")` Ok, readdir lặp lại
+thấy `d`), dữ kiện còn lại duy nhất là: **tại đúng thời điểm đó, `seen` chỉ đếm
+được 6 entry không rỗng**, rồi hết.
+
+Điều cần đo tiếp (chưa làm): in **`size`, `blocks_used()`, và số entry đếm được
+theo từng block** ngay tại chỗ trả `Ok(None)`; nếu block 1 có entry `d` mà
+`size`=512 thì lỗi ở bước cập nhật `size`; nếu `size`=1024 mà block 1 rỗng thì
+lỗi ở bước ghi entry.
