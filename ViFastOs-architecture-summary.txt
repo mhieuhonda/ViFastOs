@@ -592,6 +592,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 35249c9 skill: kiểm chứng 2026-11-11 luồng song song 2 máy (ssh -l ps, môi trường ps đủ, cách nhân đôi soak)
 - f4a5199 skill: đo 2× thông lượng soak (80 boot/148s song song so với 40 boot/149s tuần tự)
 - ee79173 r294.T26: ĐÍNH CHÍNH — P2 của tôi là CASCADE tự gây, không phải "lỗi ATA thật"
+- f9dc3b8 r294.T26: đèn đọc-lại-sau-ghi — 12 boot (4 đỏ) đều FS LOST=0 ⇒ loại trừ mất lệnh ghi
+- e957703 r294.T26 ĐỘT PHÁ: open(/d)=Ok và readdir lặp lại thấy d ⇒ KHÔNG mất dữ liệu, lỗi ở tầng liệt kê
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
