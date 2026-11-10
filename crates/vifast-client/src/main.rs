@@ -1160,6 +1160,7 @@ pub extern "C" fn client_main() -> ! {
 
     v2_step(4);
     let mut found_d = false;
+    let mut group4 = 0u8;
     if let Some((root_fd, _)) = vfs_open(b"/", 0) {
         let mut entry = 0u64;
         while let Ok(Some((_, name, len))) = vfs_readdir(root_fd, entry) {
@@ -1168,9 +1169,21 @@ pub extern "C" fn client_main() -> ! {
             }
             entry += 1;
         }
-        v2 &= vfs_close(root_fd).is_some();
+        // T26: tách nhóm 04 thành 04a (open "/"), 04b (close), 04c (không thấy
+        // entry "d") — bản cũ gộp cả ba nên đọc ra "04" KHÔNG đủ khẳng định.
+        if !vfs_close(root_fd).is_some() {
+            group4 = 2;
+            v2 = false;
+        }
+        if !found_d && group4 == 0 {
+            group4 = 3;
+        }
     } else {
+        group4 = 1;
         v2 = false;
+    }
+    if group4 != 0 && v2_failed == 0 {
+        v2_failed = 3 + group4;
     }
     v2 &= found_d;
     if !v2 && v2_failed == 0 {
