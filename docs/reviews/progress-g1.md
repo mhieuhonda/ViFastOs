@@ -1175,3 +1175,40 @@ thêm `SMP PARK (hart, cause)`.
 
 Đo: 60 boot sau vá ⇒ `RETRY 1/61 (T-FS=0, T-SCHED=1, T-KHAC=0)`; lần hỏng duy
 nhất là flake boot sớm (thiếu `SELFTEST PASS`); **0** lần `tcb=None`.
+
+## r294.B — T33a thật ra là T-ROOT `main.rs:480` (GetTime trên hart 1)
+
+### Phân loại lại (bảng mới của Agent 0)
+
+7 lần "T-SCHED" của số đo nền 293.8 (`RETRY 8/305`) được phân loại lại:
+**6 lần là T-ROOT `crates/vifast-root/src/main.rs:480`** (có dòng `ROOT PANIC`),
+1 lần là **T-BOOT** (chết trước kernel, thiếu `SELFTEST PASS`); riêng lần
+"race debug-exit" là **T-INFRA** (ngoài ngân sách). Bộ phân loại cũ xét
+"thiếu marker" trước nên gộp nhầm.
+
+### Hai giả thuyết bị BÁC bằng đèn (không bằng suy đoán)
+
+| Giả thuyết | Số đo | Kết luận |
+|---|---|---|
+| PIT ngừng phát | `TICK n` vẫn chạy, `eoi` khớp `ticks` | Bác |
+| PIC kẹt in-service / bị mask | `PIC STALL (isr=0x00, irr=0x01, imr=0xec)` | Bác — PIC trong sạch, IRQ0 chỉ đang chờ |
+
+(Theo bản soát độc lập: `fast_time()` = `fetch_max` nên **không thể** giảm ⇒ cái
+sai là **context user của worker**, không phải đồng hồ.)
+
+### Đã làm
+
+- `write_artifacts()` — MỘT đường ghi artifact: `serial.txt` đầy đủ, `status.txt`
+  giữ nguyên khối `ROOT PANIC` + dòng `file:dòng`, `tail.txt`, `registers.txt`.
+  Spec **649 case**, 4 case âm mới.
+- Root: tách `GETTIME ERR <mã>` khỏi `TIME MONOTONIC BAD` (trước đây gộp).
+- Đèn `diag-pick` (mặc định TẮT): `PICK hart tcb slot state` trước mỗi lần nạp
+  context — để phân biệt (a) cùng TCB trên hai hart, (b) hai TCB chung một
+  `context_slot`, (c) resume khôi phục context cũ.
+
+### Việc kế tiếp (r294.B theo thứ tự mới của bản soát)
+
+1. Bật `diag-pick`, chạy **một** lượt 60–120 boot cùng sha, đọc 20 dòng cuối
+   trước `ROOT PANIC`.
+2. Phân biệt (a)/(b)/(c) ⇒ sửa gốc + test đỏ-trước (có thể là D2.a: chặn tại
+   `pick_on` / cấm `context_slot` trùng).
