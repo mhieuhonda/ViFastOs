@@ -174,6 +174,25 @@ static COMMIT_LOST: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU3
 /// Tổng số target đã kiểm (mẫu số của đèn trên).
 static COMMIT_VERIFIED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+/// T26: hình dạng inode của lần `lookup_child` TÌM THẤY gần nhất:
+/// `(size, blocks_used, blocks[0], ino)`. So với lần `read_dir_entry_full` trả
+/// `Ok(None)` để biết hai hàm có thấy cùng một phiên bản inode không.
+static LOOK_HIT: [core::sync::atomic::AtomicU32; 4] = [
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+];
+
+pub fn look_hit() -> (u32, u32, u32, u32) {
+    (
+        LOOK_HIT[0].load(core::sync::atomic::Ordering::Relaxed),
+        LOOK_HIT[1].load(core::sync::atomic::Ordering::Relaxed),
+        LOOK_HIT[2].load(core::sync::atomic::Ordering::Relaxed),
+        LOOK_HIT[3].load(core::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 pub fn commit_lost() -> (u32, u32) {
     (
         COMMIT_LOST.load(core::sync::atomic::Ordering::Relaxed),
@@ -1554,6 +1573,13 @@ impl<D: BlockDev> Fs<D> {
                     continue;
                 }
                 if len == name.len() && &block[off + 3..off + 3 + len] == name {
+                    LOOK_HIT[0].store(inode.size, core::sync::atomic::Ordering::Relaxed);
+                    LOOK_HIT[1].store(
+                        inode.blocks_used() as u32,
+                        core::sync::atomic::Ordering::Relaxed,
+                    );
+                    LOOK_HIT[2].store(inode.blocks[0], core::sync::atomic::Ordering::Relaxed);
+                    LOOK_HIT[3].store(ino as u32, core::sync::atomic::Ordering::Relaxed);
                     return Ok(Some(ino));
                 }
             }

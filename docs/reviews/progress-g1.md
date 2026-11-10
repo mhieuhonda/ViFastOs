@@ -2029,3 +2029,33 @@ và `read_dir_entry_full` (dùng bởi readdir) đọc **cùng inode RAM, cùng
 `lookup_child` (khi tìm thấy) và `read_dir_entry_full` (khi trả `Ok(None)`) kèm
 `index` — nếu hai bên khác nhau thì lỗi ở inode; nếu giống nhau thì lỗi ở logic
 đếm `seen`/`corrupt` bên trong vòng của `read_dir_entry_full`.
+
+## r294.T26 — MÂU THUẪN QUYẾT ĐỊNH: cùng inode, cùng block, lookup thấy mà đếm không thấy
+
+Đèn `LOOK` ghi hình dạng inode của lần `lookup_child` **tìm thấy**; đèn `DIRP`
+ghi hình dạng của lần `read_dir_entry_full` trả `Ok(None)`.
+
+**Đo `MAX_IO=256` (3/12 boot đỏ, cả ba cùng dạng):**
+
+```
+V2MK open=1
+V2RD end n=06
+LOOK s=0512 b=1 b0=30 i=08      ← lookup TÌM THẤY `d` (ino 8) trong block 30
+DIRP s=0512 b=1 e0=06 mm=00     ← đếm cùng block đó chỉ ra 6 entry
+```
+
+**Cùng inode (size 512, 1 block), CÙNG block số 30, cùng `dev.read`** — mà
+`lookup_child` thấy ino 8 còn `read_dir_entry_full` đếm được 6 entry rồi hết.
+
+⇒ Đây **không thể** là vấn đề dữ liệu/đĩa/cache/thứ tự nữa. Lỗi nằm **trong logic
+đếm của `read_dir_entry_full`** (`crates/vifast-fs/src/lib.rs:2114-2148`): một
+slot có `ino != 0` bị **bỏ qua** ở một điều kiện nào đó trước khi `seen` được
+tăng, hoặc nhánh `corrupt` (`return Err(Corrupt)`) đang bị chạm ở một index khác.
+
+**Phép đo chốt (rất hẹp, đèn theo từng slot):** trong vòng của
+`read_dir_entry_full`, khi `index` là 6, in **5 slot cuối** dạng
+`(slot, ino, len, seen)` để thấy chính xác slot nào bị bỏ và vì sao. Đó là bước
+cuối trước khi vá.
+
+Đây là lần đầu tiên toàn bộ tầng lưu trữ (thiết bị, commit, cache, inode) được
+chứng minh SẠCH bằng số, và lỗi bị dồn vào đúng một vòng lặp.

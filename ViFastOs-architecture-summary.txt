@@ -600,6 +600,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 280d8cf r294.T26: đèn DIRP — thư mục gốc chỉ 6 entry ngay sau mkdir Ok ⇒ đọc thấy ảnh cũ; cảnh báo đèn DIR cũ không đủ
 - 28eb584 r294.T26 QUYẾT ĐỊNH: đĩa thật thiếu entry (mm=0) ⇒ thứ tự bền vững, không phải cache/liệt kê
 - c647c76 r294.T26: commit ghi đúng 0/201 lệch ⇒ dữ liệu không mất; còn nghi thứ tự yêu cầu giữa hai client
+- 1b1be78 r294.T26: open(/d) Ok ngay sau mkdir mà readdir ngay sau đó vẫn thiếu ⇒ nghịch lý cùng thời điểm; đèn V2MK
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

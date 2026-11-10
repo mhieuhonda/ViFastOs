@@ -738,6 +738,39 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             // `read_dir_entry_full` trả "hết" gần nhất. Lệch ⇒ cache khác đĩa.
             // T26: hình dạng thư mục tại lần "hết" gần nhất.
             // T26: số target ghi-xong-mà-đọc-lại-khác / tổng số target đã kiểm.
+            // T26: hình dạng inode lúc lookup THẤY (so với lúc readdir hết).
+            let (look_size, look_blocks, look_b0, look_ino) = vifast_fs::look_hit();
+            if look_blocks > 0 {
+                let mut line = [0u8; 32];
+                line[0] = b'L';
+                line[1] = b'O';
+                line[2] = b'O';
+                line[3] = b'K';
+                line[4] = b' ';
+                line[5] = b's';
+                line[6] = b'=';
+                line[7] = b'0' + ((look_size / 1000) % 10) as u8;
+                line[8] = b'0' + ((look_size / 100) % 10) as u8;
+                line[9] = b'0' + ((look_size / 10) % 10) as u8;
+                line[10] = b'0' + (look_size % 10) as u8;
+                line[11] = b' ';
+                line[12] = b'b';
+                line[13] = b'=';
+                line[14] = b'0' + (look_blocks % 10) as u8;
+                line[15] = b' ';
+                line[16] = b'b';
+                line[17] = b'0';
+                line[18] = b'=';
+                line[19] = b'0' + ((look_b0 / 10) % 10) as u8;
+                line[20] = b'0' + (look_b0 % 10) as u8;
+                line[21] = b' ';
+                line[22] = b'i';
+                line[23] = b'=';
+                line[24] = b'0' + ((look_ino / 10) % 10) as u8;
+                line[25] = b'0' + (look_ino % 10) as u8;
+                line[26] = b'\n';
+                write(&line[..27]);
+            }
             let (lost, verified) = vifast_fs::commit_lost();
             if verified > 0 {
                 let mut line = [0u8; 24];
