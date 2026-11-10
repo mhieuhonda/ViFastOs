@@ -396,13 +396,30 @@ def main() -> int:
 
         # Artifact: mọi lần hỏng phải để lại serial/status/tail (r293.2).
         cases += 1
-        for name in ("save_flake_artifacts", "classify_failure", "format_retry_line"):
+        for name in ("write_artifacts", "classify_failure", "format_retry_line"):
             if not hasattr(qemu, name):
                 failures.append(f"retry-count: thiếu {name} (đã bị gỡ?)")
 
+        source = qemu_path.read_text()
+        # B1' (r294.B): MỌI đường hỏng phải đi qua MỘT hàm ghi artifact, và
+        # hàm đó phải ghi serial.txt đầy đủ. Case âm: viết lại một hàm riêng
+        # (như `dump_timeout_artifacts` cũ) là đỏ ngay.
+        cases += 1
+        if "def write_artifacts(" not in source:
+            failures.append("B1': thiếu write_artifacts (đường ghi artifact dùng chung)")
+        if "dump_timeout_artifacts(" in source or "save_flake_artifacts(" in source:
+            failures.append("B1': còn đường ghi artifact riêng (phải gom về write_artifacts)")
+        if "serial.txt" not in source:
+            failures.append("B1': write_artifacts không ghi serial.txt")
+
+        # B2': status.txt phải giữ dòng `ROOT PANIC` VÀ dòng kế tiếp
+        # (`crates/.../main.rs<dòng>`) — đó là thứ phân loại T-ROOT.
+        cases += 1
+        if "panic_block" not in source:
+            failures.append("B2': status.txt không có khối panic (mất file:dòng)")
+
         # --strict phải là cờ của harness (r293.3).
         cases += 1
-        source = qemu_path.read_text()
         if '"--strict"' not in source:
             failures.append("retry-count: thiếu cờ --strict")
 
@@ -415,10 +432,10 @@ def main() -> int:
             failures.append(
                 "retry-count: `run_qemu` không cộng RUN_STATS['retries'] (bỏ đếm là che flake)"
             )
-        if "classify_failure(" not in run_qemu_body:
-            failures.append("retry-count: `run_qemu` không phân loại lần hỏng")
-        if "save_flake_artifacts(" not in source.split("def save_flake_artifacts", 1)[0]:
-            failures.append("retry-count: không có chỗ GỌI save_flake_artifacts (r293.2)")
+        if "record_failure(" not in run_qemu_body:
+            failures.append("retry-count: `run_qemu` không phân loại/ghi nhận lần hỏng")
+        if source.count("write_artifacts(") < 2:
+            failures.append("retry-count: không có chỗ GỌI write_artifacts (B1')")
 
     if failures:
         print("harness negative tests FAILED:")

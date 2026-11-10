@@ -257,19 +257,63 @@ def make_monitor(name: str, index: int) -> str:
     return os.path.join(directory, "mon.sock")
 
 
-def dump_timeout_artifacts(
-    name: str, index: int, monitor: str, output: str
-) -> None:
-    """Collect frozen-machine diagnostics before QEMU is killed."""
-    directory = os.path.join(ARTIFACT_ROOT, f"flake-{name}-{index}")
+def write_artifacts(
+    name: str,
+    index: int,
+    attempt: int,
+    output: str,
+    reason: str,
+    monitor: str | None = None,
+) -> str:
+    """Ghi artifact cho MỘT lần boot hỏng — ĐƯỜNG DUY NHẤT (B1', r294.B).
+
+    Trước đây có hai đường ghi khác nhau (`dump_timeout_artifacts` cho timeout
+    có monitor, `save_flake_artifacts` cho lỗi marker) và cả hai đều có thể bỏ
+    sót `serial.txt`. Hệ quả: dòng `ROOT PANIC` + `file:dòng` — thứ quyết định
+    phân loại T-ROOT — bị vứt đi, nên mọi kết luận sau đó đều đoán.
+
+    Ghi: `serial.txt` (toàn bộ), `status.txt` (dòng quan trọng + khối panic),
+    `tail.txt` (80 dòng cuối), `registers.txt` (nếu có monitor).
+    """
+    directory = os.path.join(ARTIFACT_ROOT, f"flake-{name}-{index}-a{attempt}")
     os.makedirs(directory, exist_ok=True)
+
+    with open(os.path.join(directory, "serial.txt"), "w") as handle:
+        handle.write(output)
+
+    lines = output.splitlines()
+    important = [
+        line
+        for line in lines
+        if re.search(
+            r"STALL|PANIC|SMP |USER FAULT|KERNEL EXCEPTION|BKL|T-ROOT|TICK ", line
+        )
+    ]
+    # B2': khối panic phải vào status.txt NGUYÊN VẸN — dòng `ROOT PANIC` và
+    # dòng kế tiếp (thường là `crates/.../main.rs<dòng>`) là thứ phân loại
+    # T-ROOT <file:dòng>. Bản cũ lọc theo regex nên dòng file:dòng bị rơi.
+    panic_block: list[str] = []
+    for position, line in enumerate(lines):
+        if "ROOT PANIC" in line or "PANIC" in line and "ROOT" in line:
+            panic_block.append(line)
+            if position + 1 < len(lines):
+                panic_block.append(lines[position + 1])
+    with open(os.path.join(directory, "status.txt"), "w") as handle:
+        handle.write(f"reason: {reason}\n")
+        handle.write("\n".join(important[-40:]) + "\n")
+        if panic_block:
+            handle.write("--- panic ---\n")
+            handle.write("\n".join(panic_block) + "\n")
+
+    with open(os.path.join(directory, "tail.txt"), "w") as handle:
+        handle.write("\n".join(lines[-80:]) + "\n")
+
     registers = ""
-    if os.path.exists(monitor):
+    if monitor and os.path.exists(monitor):
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(2.0)
                 sock.connect(monitor)
-                # Drain the human monitor banner and its first prompt.
                 banner = b""
                 while b"(qemu)" not in banner:
                     try:
@@ -294,19 +338,12 @@ def dump_timeout_artifacts(
                 registers = b"".join(chunks).decode("utf-8", errors="replace")
         except OSError as error:
             registers = f"monitor unavailable: {error}\n"
-    with open(os.path.join(directory, "registers.txt"), "w") as handle:
-        handle.write(registers)
-    tail = "\n".join(output.splitlines()[-80:])
-    with open(os.path.join(directory, "tail.txt"), "w") as handle:
-        handle.write(tail + "\n")
-    important = [
-        line
-        for line in output.splitlines()
-        if re.search(r"STALL|PANIC|SMP |USER FAULT|KERNEL EXCEPTION|BKL", line)
-    ]
-    with open(os.path.join(directory, "status.txt"), "w") as handle:
-        handle.write("\n".join(important[-40:]) + "\n")
+    if registers:
+        with open(os.path.join(directory, "registers.txt"), "w") as handle:
+            handle.write(registers)
+
     print(f"artifacts: {directory}")
+    return directory
 
 
 def smp_idle(output: str) -> tuple[int, int, int, int]:
@@ -426,13 +463,11 @@ def run_qemu(
             not timed_out and MARKERS_OK["flag"] and bonus > 0 and not retry_boot
         )
         retry_shell = (not SHELL_READY["flag"] and bonus > 0 and not retry_boot)
-        # r293.1: mọi lần hỏng đều được đếm + phân loại + lưu artifact, kể cả
-        # lần sẽ được retry che.
-        kind = classify_failure(LAST_OUTPUT["text"])
+        # r293.1 + B1': mọi lần hỏng đều được đếm + phân loại + lưu artifact
+        # (kể cả lần sẽ được retry che), qua MỘT hàm ghi duy nhất.
         RUN_STATS["retries"] += 1
-        RUN_STATS["classes"][kind] += 1
-        RUN_STATS["events"].append(
-            {"arch": name, "run": index, "attempt": attempt, "class": kind}
+        record_failure(
+            name, index, attempt, LAST_OUTPUT["text"], f"attempt {attempt} hỏng"
         )
         if not (retry_timeout or retry_boot or retry_exit or retry_shell):
             return False
@@ -524,7 +559,7 @@ def classify_failure(output: str) -> str:
 
 
 def record_failure(name: str, index: int, attempt: int, output: str, reason: str) -> str:
-    """Ghi nhận một lần hỏng + lưu artifact đầy đủ (r293.1, r293.2)."""
+    """Ghi nhận một lần hỏng + lưu artifact đầy đủ (r293.1, r293.2, r294.B B1')."""
     kind = classify_failure(output)
     RUN_STATS["classes"][kind] += 1
     RUN_STATS["events"].append(
@@ -536,27 +571,41 @@ def record_failure(name: str, index: int, attempt: int, output: str, reason: str
             "reason": reason,
         }
     )
-    save_flake_artifacts(name, index, attempt, output, reason)
+    write_artifacts(name, index, attempt, output, reason)
     return kind
 
 
-def save_flake_artifacts(
-    name: str, index: int, attempt: int, output: str, reason: str
-) -> str:
-    """Lưu serial + status + tail + registers cho MỌI lần boot hỏng (r293.2).
+def classify_failure(output: str) -> str:
+    """Phân loại một lần boot hỏng theo mục 2.5 của tệp quyết định.
 
-    Trước đây chỉ lưu khi timeout có monitor — lần hỏng "guest in thiếu marker"
-    không để lại dấu vết nào, nên mọi cuộc điều tra flake phải đoán.
+    THỨ TỰ QUAN TRỌNG (sửa ở r293 sau phép đo nền đầu): chữ ký SCHED phải xét
+    TRƯỚC "thiếu FS V2 OK", nếu không **mọi lần chết sớm** (guest dừng trước cả
+    `FS V2 OK`) đều bị dán nhãn T-FS và ta tưởng BLOCKER FS tái phát. Lần đo
+    300 boot đầu đã mắc đúng lỗi này: 4 lần chết sớm bị đếm thành T-FS=4.
     """
-    target = os.path.join(ROOT, "artifacts", f"flake-{name}-{index}-a{attempt}")
-    os.makedirs(target, exist_ok=True)
-    with open(os.path.join(target, "serial.txt"), "w") as handle:
-        handle.write(output)
-    with open(os.path.join(target, "status.txt"), "w") as handle:
-        handle.write(reason + "\n")
-    with open(os.path.join(target, "tail.txt"), "w") as handle:
-        handle.write("\n".join(output.splitlines()[-80:]) + "\n")
-    return target
+    # (1) Chữ ký scheduler rõ ràng ⇒ T-SCHED, bất kể đã in tới marker nào.
+    for signature in (
+        "ROOT PANIC",
+        "USER FAULT tcb=None",
+        "no runnable thread",
+        "SMP NO READY",
+        # r293 (Agent 0 chốt): khi feature `diag-idle-fault` được bật, mỗi dòng
+        # `KERNEL FAULT` là một sự kiện T-SCHED — phải đếm, không được để nó
+        # trôi qua như log vô hại.
+        "KERNEL FAULT",
+    ):
+        if signature in output:
+            return "T-SCHED"
+    # (2) Hỏng ĐÚNG tầng FS: hoặc marker BAD, hoặc thiếu `FS V2 OK` trong khi
+    # guest đã đi qua `SHELL READY`/các marker sau FS (tức là nó tới được đó).
+    if "FS V2 BAD" in output:
+        return "T-FS"
+    if "FS V2 OK" not in output and "SHELL READY" in output:
+        return "T-FS"
+    # (3) Thiếu `PREEMPT OK` (mà không có chữ ký nào ở trên) vẫn là scheduler.
+    if "PREEMPT OK" not in output:
+        return "T-SCHED"
+    return "T-KHAC"
 
 
 # Vòng 162: đánh dấu lần chạy vừa rồi có "guest chưa hề boot" hay không.
@@ -601,7 +650,14 @@ def run_qemu_once(
         if os.path.exists(serial):
             output_at_timeout = open(serial, "rb").read().decode("utf-8", errors="replace")
         if monitor:
-            dump_timeout_artifacts(name, index, monitor, output_at_timeout)
+            write_artifacts(
+                name,
+                index,
+                attempt,
+                output_at_timeout,
+                "timeout (guest chưa thoát)",
+                monitor,
+            )
         proc.kill()
         rc = proc.wait()
     elapsed = time.time() - started
