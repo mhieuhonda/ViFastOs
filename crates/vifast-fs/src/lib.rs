@@ -129,6 +129,12 @@ pub trait BlockDev {
     fn flush(&mut self) -> Result<(), FsError> {
         Ok(())
     }
+
+    /// Đọc **bỏ qua cache** (T26: đèn phân biệt "cache khác đĩa" với "đĩa thật
+    /// sự cũ"). Thiết bị không có cache giữ mặc định = `read`.
+    fn read_uncached(&mut self, lba: u32, out: &mut [u8; BLOCK_SIZE]) -> Result<(), FsError> {
+        self.read(lba, out)
+    }
 }
 
 /// Number of 512-byte blocks kept in the write-through cache.
@@ -315,6 +321,11 @@ impl<D: BlockDev> BlockDev for CachedDev<D> {
 
     fn block_count(&self) -> u32 {
         self.inner.block_count()
+    }
+
+    /// Đi thẳng xuống thiết bị, **không** qua slot cache.
+    fn read_uncached(&mut self, lba: u32, out: &mut [u8; BLOCK_SIZE]) -> Result<(), FsError> {
+        self.inner.read(lba, out)
     }
 
     fn flush(&mut self) -> Result<(), FsError> {
@@ -2191,6 +2202,23 @@ impl<D: BlockDev> Fs<D> {
                 }
             }
         }
+        // T26: so ảnh CACHE với ảnh ĐĨA THẬT (bỏ hẳn cache) của block 0.
+        // Đèn `DIR` trước đây dùng `dev.read` cho cả hai phía nên không chứng
+        // minh được gì (subagent chỉ ra). Nay một phía đi `read_uncached`.
+        let mut disk_mismatch = 0u32;
+        if inode.blocks_used() > 0 {
+            let mut cached = zero_block();
+            let mut on_disk = zero_block();
+            let cached_ok = self.dev.read(inode.blocks[0], &mut cached).is_ok();
+            let disk_ok = self
+                .dev
+                .read_uncached(inode.blocks[0], &mut on_disk)
+                .is_ok();
+            if cached_ok && disk_ok && cached != on_disk {
+                disk_mismatch = 1;
+            }
+        }
+        DIR_SHAPE[3].store(disk_mismatch, core::sync::atomic::Ordering::Relaxed);
         DIR_SHAPE[0].store(inode.size, core::sync::atomic::Ordering::Relaxed);
         DIR_SHAPE[1].store(
             inode.blocks_used() as u32,

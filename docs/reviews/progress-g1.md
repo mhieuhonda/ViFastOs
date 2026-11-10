@@ -1916,3 +1916,35 @@ ghi/đọc" mà subagent nêu: đường **ghi** thư mục dùng `read_staged` 
 **Phép đo chốt còn lại:** tại `Ok(None)`, đọc block 0 của thư mục gốc qua
 `dev.inner()` (bỏ hẳn cache) và so với `dev.read`; nếu khác ⇒ vá chỗ làm mới
 cache sau `commit`/`stage`, không phải vá `read_staged`.
+
+## r294.T26 — QUYẾT ĐỊNH: đĩa THẬT cũng thiếu entry ⇒ không phải cache, mà là thứ tự ghi
+
+Thêm `BlockDev::read_uncached` (mặc định = `read`; `CachedDev` override đi thẳng
+`inner`) và tại chỗ `Ok(None)` so **ảnh cache** với **ảnh đĩa thật**, in `mm=`.
+
+**Đo `MAX_IO=256`, 2/14 boot đỏ — cả hai:**
+
+```
+V2RD end n=06
+DIRP s=0512 b=1 e0=06 mm=00
+```
+
+`mm=00` ⇒ ảnh cache **BẰNG** ảnh đĩa thật ⇒ **đĩa thật cũng chỉ có 6 entry**; entry
+`d` **chưa hề được ghi xuống** ở thời điểm `readdir` chạy, dù `mkdir` đã trả `Ok`.
+
+Ba kết luận:
+
+1. **Loại hẳn** giả thuyết "cache trả ảnh cũ" — đây là lần đầu tiên phép đo dùng
+   đúng đường bỏ cache (nhờ `read_uncached`), sau khi subagent chỉ ra đèn cũ
+   không hợp lệ.
+2. **Không phải** lỗi tầng liệt kê (client/server readdir đều đúng: 6 entry là
+   đúng sự thật của đĩa lúc đó).
+3. Lỗi nằm ở **thứ tự bền vững**: `mkdir` trả `Ok` trong khi block thư mục cha
+   (chứa entry mới) **chưa** xuống đĩa; lần đọc ngay sau thấy ảnh trước-commit;
+   lần đọc sau (khi commit đã xong) thì thấy.
+
+**Việc tiếp (đúng một chỗ):** trong `Fs::commit` (`crates/vifast-fs/src/lib.rs`
+~1090-1135), kiểm thứ tự: ghi target → `dev.flush()` → **xoá commit record**.
+Nếu commit record bị xoá TRƯỚC khi target xuống đĩa (hoặc `flush` không đảm bảo),
+thì cửa sổ "đã trả Ok mà entry chưa bền" là thật. Đèn chốt: sau `commit()` đọc
+lại bằng `read_uncached` chính block vừa ghi và so với ảnh staged.

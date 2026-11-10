@@ -738,6 +738,7 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             // `read_dir_entry_full` trả "hết" gần nhất. Lệch ⇒ cache khác đĩa.
             // T26: hình dạng thư mục tại lần "hết" gần nhất.
             let (shape_size, shape_blocks, shape_e0, shape_e1) = vifast_fs::dir_shape();
+            // `mm=1` = ảnh cache KHÁC ảnh đĩa thật (đèn quyết định của T26).
             if shape_blocks > 0 {
                 let mut line = [0u8; 40];
                 line[0] = b'D';
@@ -762,8 +763,8 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
                 line[19] = b'0' + ((shape_e0 / 10) % 10) as u8;
                 line[20] = b'0' + (shape_e0 % 10) as u8;
                 line[21] = b' ';
-                line[22] = b'e';
-                line[23] = b'1';
+                line[22] = b'm';
+                line[23] = b'm';
                 line[24] = b'=';
                 line[25] = b'0' + ((shape_e1 / 10) % 10) as u8;
                 line[26] = b'0' + (shape_e1 % 10) as u8;
