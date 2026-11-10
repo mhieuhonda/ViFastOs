@@ -85,3 +85,32 @@ Chưa mở lại trong đợt này (r292 mới tới lượt). `MAX_IO` vẫn 12
 2. **290.2**: nếu không dựng được kịch bản 5 bước trong vòng này, có được phép
    coi P0-3 là "đã giảm thiểu" (fix một phần: parent qua CNode đã tháo nay được
    sửa) và chuyển sang 290.3/290.4, hay phải đóng P0-3 trước?
+
+## r292 — bằng chứng tái hiện (chưa sửa gốc)
+
+Đã đo lại trên cây HEAD (sau r291), chỉ tạm đổi `MAX_IO = 256` rồi **trả về
+128** ngay sau khi đo:
+
+```
+python3 scripts/fs-smp-regression.py --iterations 20 --expect red
+→ 3/20 lần đỏ (thiếu marker "FS V2 OK"), 17/20 xanh
+```
+
+Tức cửa sổ race vẫn còn nguyên: `MAX_IO=256` làm x86_64 hỏng ~15% lần boot,
+đúng như bảng đo ở `crates/vifast-abi/src/lib.rs` (12/49 ≈ 24% ở bản 256,
+0/32 ở bản 128). Triệu chứng: `mkdir` trả OK nhưng `readdir` ngay sau đọc ảnh
+CŨ của block thư mục gốc — vi phạm read-your-own-write ở tầng FS server khi
+có ≥2 hart.
+
+Bước tiếp theo cho r292 (chưa làm): dựng test host tái hiện
+"write rồi read ngay, có ≥2 đường gọi xen kẽ" trong `vifast-runtime` (FS
+server), rồi soi ba nghi phạm theo thứ tự:
+1. cache block của FS server (32 entry) có bị ghi đè bởi đường ghi staged
+   (journal) mà không invalidate không;
+2. `commit()` một-chunk-512B (TẠM REVERT #8) có để lộ trạng thái trung gian
+   cho đường đọc chạy song song không;
+3. thứ tự publish/ack của mailbox maintenance (r289) có làm hart đọc thấy
+   TLB cũ của vùng FS không.
+
+Chỉ khi có test tái hiện + sửa gốc mới được nâng `MAX_IO` trở lại 256 (điều
+kiện của Agent 0, mục 5 tệp quyết định).
