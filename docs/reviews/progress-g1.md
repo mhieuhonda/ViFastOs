@@ -1212,3 +1212,40 @@ sai là **context user của worker**, không phải đồng hồ.)
    trước `ROOT PANIC`.
 2. Phân biệt (a)/(b)/(c) ⇒ sửa gốc + test đỏ-trước (có thể là D2.a: chặn tại
    `pick_on` / cấm `context_slot` trùng).
+
+## r294.B — GỐC T33a tìm được: AP mask LINT0 của BSP (2026-11-10, T0+1h30)
+
+### Bằng chứng (đèn `NO TICK`, chạy trên hart còn sống nên không phụ thuộc timer)
+
+```
+NO TICK (ticks=2, traps=4096, tpr=0x0, svr=0x1ff,
+         lvt0=0x10000, pic_isr=0x00, pic_irr=0x00, pic_imr=0xec, eoi=2)
+```
+
+`lvt0 = 0x10000` ⇒ **bit 16 = MASKED**: LINT0 (cửa ExtINT của PIC 8259 vào CPU)
+bị mask trên **BSP** từ **tick 2**. PIC sạch (`isr=0, irr=0, imr=0xec`), nhưng
+không đường nào đẩy IRQ0 vào CPU ⇒ **tick ngừng vĩnh viễn** ⇒ `PREEMPT OK`
+(cần tick ≥ 99) không bao giờ in — đúng chữ ký "treo sau `shell>`", vì `shell>`
+chỉ là marker cuối trước `PREEMPT OK`.
+
+Trước đó hai giả thuyết đã bị bác bằng đèn: PIT ngừng phát (`TICK`/`eoi` khớp),
+PIC kẹt in-service/bị mask (`PIC STALL isr=0, imr=0xec`).
+
+### Ai mask
+
+Toàn bộ mã chỉ có **hai** chỗ ghi LVT0 (0x350): BSP đặt `0x700` (ExtINT, không
+mask) và **AP mask `1<<16`** trong init hart phụ. MMIO LAPIC định tuyến theo CPU
+đang chạy nên dòng của AP không được phép đổi LINT0 của BSP — nhưng thực đo thì
+BSP bị mask đúng lúc AP khởi động.
+
+### Bản vá + đo
+
+AP chỉ mask **LINT1**; LINT0 để nguyên; thêm đèn `AP LVT0=` đọc lại.
+
+| Lượt | Sha | N | Kết quả |
+|---|---|---|---|
+| Trước vá (có đèn) | `4e580f3` | 100 | 2 hỏng (1 T-SCHED treo, 1 T-KHAC `BIN OK`) |
+| Sau vá (có đèn) | `28aefcd` | 100 | **0 hỏng**, 0 `NO TICK` |
+
+Giới hạn: 0/100 chỉ viết được "tỉ lệ < 3/100"; lượt 300 boot không đèn ở khối Z
+mới là số chốt.
