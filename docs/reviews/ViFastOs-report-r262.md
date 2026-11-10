@@ -662,6 +662,32 @@ D3 panic in `file:dòng` có dấu hai chấm, harness đọc được cả hai 
 loại 294.C có `T-BOOT`/`T-ROOT <file:dòng>`/`T-INFRA`. **D2 đã revert theo luật**
 (3 test scheduler + `selftest_passes` đỏ — đúng như r251 đã ghi).
 
+### Sau nửa đêm — hai GỐC của lớp flake x86 đã tìm và vá
+
+**Gốc 1 (`28aefcd`)**: AP ghi LINT0 (0x350) của LAPIC ⇒ BSP bị **mask LINT0**
+(`lvt0=0x10000` đọc lại bằng đèn `NO TICK` ngay từ tick 2) ⇒ PIC không đẩy được
+IRQ0 ⇒ tick ngừng vĩnh viễn ⇒ `PREEMPT OK` (cần tick ≥ 99) không bao giờ in.
+Chỉ có một chỗ ghi LVT0 trong toàn mã (BSP đặt `0x700`), nên bản vá là: AP chỉ
+mask **LINT1**.
+
+**Gốc 2 (`8cd767f`)**: AP được thả trong `init_platform()` **trước** cả hai lần
+`A::init_kernel()` (mỗi lần `reset()` xoá `system_ticks`/runqueue/`current`).
+AP kịp `pick_on(1)` trên trạng thái tiền-reset ⇒ worker chạy với `last` từ đồng
+hồ cũ, `GetTime` sau reset đọc đồng hồ mới ⇒ `TIME MONOTONIC BAD` ⇒
+`ROOT PANIC crates/vifast-root/src/main.rs:480`. Bằng chứng: vòng đệm 96 sự kiện
+toàn `hart=1, tick=2`. Bản vá: cờ `KERNEL_READY`, AP chỉ `sti; hlt; cli` tới khi
+BSP bật cờ ở `prepare_user()`.
+
+| Lượt (x86_64) | Sha | N | Kết quả |
+|---|---|---:|---|
+| Nền | `c2a8968` | 305 | 8 hỏng = **2,6 %** |
+| Vá LINT0 | `3699fe7` | 301 | 2 hỏng = **0,66 %** |
+| Vá LINT0 + `KERNEL_READY` | `8cd767f` | 301 | 3 hỏng = **1,0 %** (1 T-ROOT, 1 T-SCHED, 1 **T31 dup `PAGER EVICT OK`** — lần đầu tái hiện được T31) |
+
+Hai mốc sau chênh nhau 3/301 so với 2/301 ⇒ trong nhiễu; **không** kết luận bản
+vá thứ hai làm tệ đi, cũng **không** nói đã hết lớp T-ROOT. Việc tiếp đã ghi ở
+`progress-g1.md`.
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -689,7 +715,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-6cea62a3093e21e8d344501d18d58d02901821d0620c13e1b300406e3ddf7740  docs/reviews/ViFastOs-report-r262.md
+3012089b82d0d12d01d4ad9f7c766e21d1aee6df6d72ba2045d4f8f49d0baa63  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
