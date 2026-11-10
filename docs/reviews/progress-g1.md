@@ -1610,3 +1610,26 @@ Nhóm: 3 = đọc lại 600 B, **4 = readdir("/") thấy `d`**, 5 = readdir("/d"
 Đo `MAX_IO=256`, 3/3 lần đỏ đều `V2GROUP 04` ⇒ **read-your-own-write hỏng ngay ở
 bước đọc thư mục gốc sau `mkdir("/d")`**. Đây là dữ liệu để vòng sau soi
 `vfs_readdir`/cache block thư mục ở FS server.
+
+## Luồng kiểm thử SONG SONG 2 máy — đã dựng và ĐO được 2× (2026-11-11)
+
+Máy `ps` (Ubuntu x86_64, 12 CPU) đã sẵn: rustup đủ 5 target bare-metal,
+`qemu-system-{x86_64,riscv64,aarch64}`, symlink OVMF 4M, rsync, python3, repo
+`~/ViFastOs`.
+
+**Cách vào máy:** `ssh -l ps ps` (user mặc định `mps` bị tailnet chặn);
+`scripts/par-gate.sh` mặc định `REMOTE=ps@100.113.214.23` nên chạy được ngay.
+
+**Đo thật (cùng đêm):**
+
+| Cách chạy | Số boot | Thời gian |
+|---|---:|---:|
+| Tuần tự một máy (riscv64) | 40 | **149 s** |
+| Song song: local riscv64 ×40 + `ps` x86_64 ×40 | **80** | **148 s** |
+
+⇒ **2× thông lượng**, cả hai bên đều `PASS` (`RETRY 0`). Quy tắc: chia theo
+**kiến trúc**, không chạy hai harness cùng arch trên một máy; rsync mã nguồn
+sang `ps` trước và đối chiếu `source_sha256` của hai máy.
+
+Đã ghi vào skill `skills/vifast-parallel-gate/SKILL.md` (kèm số đo, cách vào
+máy, và bảng kiểm môi trường) để vòng sau dùng lại ngay.
