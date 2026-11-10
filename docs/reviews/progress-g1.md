@@ -1679,3 +1679,39 @@ Thiết kế đúng đã có trong báo cáo (tách `wait_bsy_only`/`wait_done`,
 `stage`/`class`/`lba`, ngân sách retry, `ATA_DEAD`), kèm **phép kiểm quyết định**:
 in `ATA STAT cmds=` ở cả 128 và 256 — nếu số lệnh ATA xấp xỉ nhau thì lỗi ATA
 không thể giải thích chênh lệch 12–18/40.
+
+## r294.T26 — PHÉP ĐO QUYẾT ĐỊNH: race có ở CẢ 128 trên máy thứ hai
+
+**Câu hỏi:** 1–2/40 đỏ ở 128 trên `ps` là do các bản vá của tôi hay là flake có sẵn?
+
+**Trả lời bằng đo, không bằng suy đoán:** revert TOÀN BỘ về HEAD (`207e988`, cây
+sạch, không đèn, không bản vá ATA) rồi chạy **80 boot** trên `ps`:
+
+```
+KẾT QUẢ: HỎNG — 3/80 lần đỏ
+```
+
+⇒ **`MAX_IO=128` KHÔNG tuyệt đối xanh trên `ps`**: tỉ lệ ~3,75 %/boot. Lượt
+"40/40 xanh" trước đó chỉ là may (với p≈0,0375 thì P(0/40) ≈ 22 %, hoàn toàn có
+thể xảy ra).
+
+**Ba kết luận:**
+
+1. Các bản vá của tôi **không phải** nguyên nhân của 1–2/40 ở 128 — chúng nằm
+   trong tỉ lệ nền có sẵn.
+2. **Race read-your-own-write của FS server KHÔNG phụ thuộc `MAX_IO`**: nó có ở
+   cả 128 (3,75 % trên `ps`) lẫn 256 (10–45 % tuỳ máy). `MAX_IO` chỉ **khuếch đại**
+   tần suất, đúng như giả thuyết "khác nhau ở thời điểm, không ở bộ đếm".
+3. Vì vậy **không được** dùng câu "128 xanh nên 128 an toàn" — phải nói
+   "128 có tỉ lệ ~1–4 % tuỳ máy; mức chấp nhận được phải định nghĩa bằng số".
+
+**Đo ATA (loại trừ dứt khoát bằng số):**
+
+| `MAX_IO` | cmds | writes | flushes | retry | fail |
+|---|---:|---:|---:|---:|---:|
+| 128 | 2303 | 2304 | 2568 | **0** | **0** |
+| 256 | 1535 | 1536 | 1694 | **0** | **0** |
+
+Ở 256 có **ít lệnh ATA hơn** (ít round-trip hơn) và **0 lỗi/0 retry** — kể cả ở
+lần boot đỏ. ⇒ **tầng ATA bị loại khỏi T26**. (Bản vá `wait_done`/`ATA STAT` vẫn
+là cải thiện đúng và đang để trong `git stash` để đo riêng trước khi nhận.)
