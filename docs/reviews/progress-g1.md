@@ -1325,3 +1325,33 @@ sẵn sàng":
    `28aefcd`);
 2. **AP chạy task trước khi kernel init xong** ⇒ `GetTime` lùi ⇒
    `ROOT PANIC main.rs:480` (commit `8cd767f`).
+
+## Số chốt vòng 6: 300 boot KHÔNG ĐÈN sau HAI bản vá (LINT0 + KERNEL_READY)
+
+Sha `8cd767f`, `MAX_IO=128`, đèn TẮT, cùng máy.
+
+```
+RETRY 3/301 (T-KHAC=1, T-ROOT crates/vifast-root/src/main.rs:480=1, T-SCHED=1)
+```
+
+| Lớp | Số lần | Chữ ký | Ghi chú |
+|---|---:|---|---|
+| T-ROOT `main.rs:480` | 1 | `TIME MONOTONIC BAD` + panic | cờ `KERNEL_READY` giảm nhưng **chưa** hết ⇒ còn đường khác làm AP chạm trạng thái chưa sẵn sàng, hoặc cờ bật quá sớm |
+| T-SCHED | 1 | treo, thiếu `PREEMPT OK` | chưa rõ có phải LINT0 nữa hay không (lượt này không đèn) |
+| T-KHAC `dup=['PAGER EVICT OK']` | 1 | **đúng chữ ký T31** (`PAGER2_LABEL` xử lý hai lần) | artifact `flake-x86_64-97-a0` **không** chứa marker này (serial lưu ở lần thử khác) ⇒ cần sửa B1' cho khớp lần thử, ghi nợ |
+
+Tổng: **3/301 = 1,0 %** — đúng sát mức tạm ≤1 %/boot, **chưa** đạt (cần ≤3 lần
+tính ngân sách trên 300 và KTC hẹp hơn).
+
+So sánh ba mốc trên cùng máy: **2,6 %** (nền `c2a8968`) → **0,66 %** (`3699fe7`,
+chỉ vá LINT0) → **1,0 %** (`8cd767f`, thêm `KERNEL_READY`). Chênh lệch giữa hai
+mốc sau nằm trong nhiễu thống kê (3/301 so với 2/301) ⇒ **không** được nói bản
+vá thứ hai làm tệ đi, cũng **không** được nói nó đã hết lớp T-ROOT.
+
+Việc phải làm tiếp (ghi rõ để phiên sau không đoán):
+1. T-ROOT còn 1/301 ⇒ bật lại đèn, chạy tới khi bắt được, đọc `RING` xem còn
+   `tick=2` không; nếu có ⇒ còn đường AP chạm runqueue trước `KERNEL_READY`
+   (grep mọi `AP_STARTED`/`wake_hart` trước `prepare_user`).
+2. T-SCHED 1/301: cần đèn để xem `lvt0` còn bị mask hay là lớp khác.
+3. T31: đã tái hiện **lần đầu** bằng marker `dup=['PAGER EVICT OK']`; cần lưu
+   đúng serial của lần thử đã sinh ra nó (sửa `write_artifacts` dùng attempt).
