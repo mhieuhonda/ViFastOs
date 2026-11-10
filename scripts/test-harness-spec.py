@@ -353,6 +353,11 @@ def main() -> int:
             ("FS V2 OK\nPREEMPT OK\nROOT PANIC\n", "T-SCHED", "có ROOT PANIC"),
             ("FS V2 OK\nPREEMPT OK\nUSER FAULT tcb=None \n", "T-SCHED", "USER FAULT tcb=None"),
             ("FS V2 OK\nPREEMPT OK\nSMP NO READY (hart=0)\n", "T-SCHED", "SMP NO READY"),
+            (
+                "FS V2 OK\nPREEMPT OK\nKERNEL FAULT (hart=1, cause=0xd) — hart idle, bỏ qua\n",
+                "T-SCHED",
+                "KERNEL FAULT (Agent 0: phải đếm, không được nuốt)",
+            ),
             ("FS V2 OK\nPREEMPT OK\nchuyện lạ\n", "T-KHAC", "không khớp chữ ký nào"),
         ]
         for output, want, desc in classify_cases:

@@ -500,6 +500,10 @@ def classify_failure(output: str) -> str:
         "USER FAULT tcb=None",
         "no runnable thread",
         "SMP NO READY",
+        # r293 (Agent 0 chốt): khi feature `diag-idle-fault` được bật, mỗi dòng
+        # `KERNEL FAULT` là một sự kiện T-SCHED — phải đếm, không được để nó
+        # trôi qua như log vô hại.
+        "KERNEL FAULT",
     )
     for signature in sched_signatures:
         if signature == "PREEMPT OK":

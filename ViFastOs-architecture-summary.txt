@@ -566,6 +566,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 9c6d29f r293: chẩn đoán T33a/T33b + guard "hart idle gặp ngoại lệ"
 - 9a9a1ae r293 (prelude): đèn chẩn đoán flake nằm sau feature, không vào bản phát hành
 - 2a04bd2 r293.1–293.3: harness đếm RETRY, phân loại T-FS/T-SCHED/T-KHÁC, lưu artifact, --strict
+- 2380cc5 r293.5 + r293.6: other_caps_to qua for_each_cap; reply_epoch u16
+- 50133fa r293.7: nhật ký quyết định + open-items (K49 mở lại rồi đóng, nợ Q1-A) + báo cáo r293
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

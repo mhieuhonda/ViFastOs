@@ -14,6 +14,10 @@ test-skip-tlb-ipi = []
 # r254 (T17): giữ guest sống lâu hơn để `--interactive` kịp gõ kịch bản shell.
 # CHỈ dùng cho bản kernel biến thể của test tương tác; gate/soak không dùng.
 test-shell-linger = []
+# r293 (Agent 0 chốt): CHỈ feature này mới bật hành vi "hart idle gặp ngoại lệ
+# thì bỏ qua + ack" thay vì halt(). Mặc định TẮT — bỏ qua im lặng sẽ nuốt lớp
+# lỗi T33 mà r294 cần đếm.
+diag-idle-fault = []
 # r259 (T21/D19): kiểm bất biến sched ở ranh giới trả về user.
 check-boundary = ["vifast-kernel/check-boundary"]
 # D18: biến thể cố ý làm hỏng bất biến để chứng minh phép kiểm bắt được.

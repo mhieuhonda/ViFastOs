@@ -1436,12 +1436,16 @@ pub mod fault {
         let hart = A::hart_id();
         let old = kernel.current_on(hart);
         // T33b (r293): ngoại lệ khi hart KHÔNG chạy TCB nào — hart đang idle
-        // trong kernel, nên không có ngữ cảnh user để "fault". Trước đây nhánh
-        // này đi thẳng tới `fault_current_on(hart)` (không có current ⇒ None)
-        // ⇒ "no runnable thread after fault" ⇒ `halt()` ⇒ cả máy chết dù chỉ
-        // là một ngắt mồ côi. Nay: in chẩn đoán (KHÔNG phải marker), ack ngắt
-        // và quay lại vòng idle. Nếu là lỗi kernel thật thì nó sẽ lặp lại và
-        // hiện thành `KERNEL FAULT` dày đặc trong serial.
+        // trong kernel, nên không có ngữ cảnh user để "fault".
+        //
+        // QUYẾT ĐỊNH CỦA AGENT 0 (r293): **mặc định vẫn `halt()`**. Bản cũ đi
+        // thẳng tới `fault_current_on(hart)` (không có current ⇒ None) ⇒ "no
+        // runnable thread after fault" ⇒ `halt()`. Hành vi "bỏ qua + ack" chỉ
+        // được bật sau feature `diag-idle-fault` (mặc định TẮT), vì bỏ qua
+        // im lặng sẽ NUỐT đúng lớp lỗi họ T33 mà r294 cần đếm. Khi feature
+        // bật, mỗi dòng `KERNEL FAULT` vẫn bị harness tính là một sự kiện
+        // T-SCHED (xem `classify_failure`).
+        #[cfg(feature = "diag-idle-fault")]
         if old.is_none() {
             #[cfg(feature = "test-exit")]
             vifast_kernel::klog!(
