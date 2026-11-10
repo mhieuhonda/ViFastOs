@@ -1548,11 +1548,46 @@ Ba đèn được thêm và **giữ lại lâu dài** (output ngắn, không n�
 2. `V2FAIL v2=<0|1> fsck=<0|1>` — in lý do trước khi in `FS V2 BAD`.
 3. Mã lỗi fsck hai phía: server `FS ERR <mã>`, client `FSCKERR <mã>`.
 
-**Kết quả (MAX_IO=256, 12/40 đỏ):** 100 % lần đỏ đều tới `V2S11` và in
-**`V2FAIL v2=1 fsck=0`** ⇒ mọi kiểm tra V2 khác ĐẠT, chỉ `vfs_fsck()` trả false.
+**Kết quả (MAX_IO=256, 12/40 đỏ):** lần đỏ QUAN SÁT ĐƯỢC (n=1, xem đính chính
+bên dưới) tới `V2S11` và in **`V2FAIL v2=1 fsck=0`** ⇒ mọi kiểm tra V2 khác ĐẠT,
+chỉ `vfs_fsck()` trả false.
+
+**ĐÍNH CHÍNH (subagent phát hiện, quan trọng):** con số "12/40 đỏ" là đúng, nhưng
+câu "100 % lần đỏ đều in V2FAIL" chỉ có **n=1** — ba lần đỏ còn lại là build CŨ
+chưa có đèn `V2S`/`V2FAIL`. Và artifact đỏ có thể chưa có đèn `FSCKERR` (mtime
+client 02:50:54 chồng lấn với serial 02:53:34), nên kết luận "không thấy mã lỗi
+fsck" **chưa** đứng vững. Phải build lại và đo lại mới được nói.
+
+**Bằng chứng mạnh, không phụ thuộc build:** quét mọi artifact thì `FS CORRUPT`
+(server in cho MỌI lỗi của `fsck()`, mã đã commit từ lâu) **không xuất hiện lần
+nào** trong khi `FS V2 BAD` có 4 file ⇒ **fsck chưa từng kết luận hỏng**; lỗi
+nằm ở **lời gọi IPC không hoàn tất**, không phải kế toán FS sai.
 
 Điều này **bác** cách giải thích cũ trong r262 ("mkdir OK nhưng readdir đọc ảnh
 cũ"): nếu readdir sai thì `found_d`/`found_a` sẽ sai và `v2=0`. Dữ liệu mới nói
 lỗi ở **tính nhất quán mà fsck nhìn thấy**.
 
 Đo lại ở `MAX_IO=128` sau khi thêm đèn: **40/40 xanh**.
+
+### Bảng quyết định cho T26 (từ bản phân tích subagent, dùng ngay vòng sau)
+
+Thêm 5 đèn (không `unsafe`), chạy MỘT lượt ở `MAX_IO=256` là đủ kết luận:
+
+| Đèn | Chỗ đặt | Ý nghĩa |
+|---|---|---|
+| **L1** `FKE <error> <label>` | client, ngay `FSCKERR` (`vifast-client/src/main.rs` ~371) | phân biệt `error != Ok` (WouldBlock=18/OOM=5/…) với server trả `ERR/EIO` |
+| **L2** `FSQ <n>` | server, đầu nhánh `vfs::FSCK`, **vô điều kiện** | 2 = server vào nhánh 2 lần; 1 = request V2 chưa bao giờ tới |
+| **L3** `FSV ok`/`FSV err <mã>` | server, **bỏ cổng `FSCK_PRINTED`** | đừng suy "server không trả lời" từ số lần `FS FSCK OK` |
+| **L4** đếm guard `ipc.rs:129` | kernel, in trong dòng stats | guard `WouldBlock` có bắn không |
+| **L5** `WKE <tcb> <err>` | kernel `wake_error` | nếu H2 (bị đánh thức kèm lỗi) đúng sẽ thấy ngay trước `V2FAIL` |
+
+Suy luận: `FKE 011` + `FSQ=1` + không `WKE` ⇒ H1 (guard từ chối Call);
+`FKE 011` + có `WKE` ⇒ H2 (client bị đánh thức kèm lỗi);
+`FSQ=2` + `FSV err` ⇒ H3/H4 (fsck hỏng thật); `fsck=0` mà **không** `FKE` ⇒
+binary cũ (H5).
+
+Bản vá cho H1 (nếu đèn xác nhận): `Call` **không bao giờ** được trả `WouldBlock`
+— thay `return Err(WouldBlock)` ở `ipc.rs:118-131` bằng cờ `held` rồi để client
+park trong `ep.send`; kèm `ep.recv.remove(receiver)` trước `push` (`ipc.rs:335`).
+Rủi ro phải đo: nếu trạng thái "giữ caller + còn trong hàng recv" là vĩnh viễn
+thì đỏ sẽ biến thành **treo** (mất `V2S11`) — phải chạy lại 40 boot để so.
