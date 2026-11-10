@@ -13113,6 +13113,91 @@ mod tests {
     /// epoch 0 và guard K49 (`reply_epoch == epoch`) thành `0 == 0`, tức rỗng.
     /// Test này khoá đúng điều đó: hai lần call liên tiếp phải khác epoch.
     #[test]
+    /// P0-3 (r290, đỏ-trước) — KỊCH BẢN ĐẦY ĐỦ 5 bước của bản soát:
+    ///
+    /// 1. root cấp cho A một cap endpoint (parent = cap của root) và một cap
+    ///    tới CNode C;
+    /// 2. A mint chính cap endpoint đó vào C ⇒ `C.slots[0].parent` = slot của A;
+    /// 3. huỷ A ⇒ `parent` phải được **nâng lên tổ tiên còn sống** (cap của
+    ///    root), không được thành con trỏ chết;
+    /// 4. `revoke` cap gốc của root phải thu hồi được cap trong C;
+    /// 5. sau đó object endpoint không còn ai tham chiếu ⇒ destroy được.
+    ///
+    /// Bản cũ: vòng sửa `parent` chỉ đi qua `cspace_mut` (chỉ với tới CNode
+    /// qua TCB đang dùng nó) nên C không bao giờ được sửa ⇒ bước 4 trả 0 và
+    /// bước 5 trả `HasDependents` (object bất tử).
+    #[test]
+    fn orphan_cap_in_a_detached_cnode_is_reparented_and_revoked() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let a = kernel.create_tcb("a", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let untyped = kernel.create_untyped(0x6000_0000, 4096).unwrap();
+        let cnode = kernel.retype(untyped, ObjType::CNode).unwrap();
+
+        // root: slot 1 = endpoint, slot 2 = CNode.
+        kernel
+            .install_cap(root, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(cnode, ObjType::CNode, Rights::ALL))
+            .unwrap();
+        // (1) A nhận cap endpoint (parent = root slot 1) và cap CNode.
+        assert_eq!(kernel.copy_cap(root, 1, a, 2, Rights::READ, 0), Ok(()));
+        assert_eq!(kernel.copy_cap(root, 2, a, 1, Rights::ALL, 0), Ok(()));
+        // (2) A mint cap endpoint của mình vào C tại slot 0.
+        assert_eq!(
+            kernel.user_syscall(
+                a,
+                SyscallId::CNodeMint as u64,
+                1,
+                1,
+                2,
+                Rights::READ.0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        let minted = kernel.cnode(cnode).unwrap().slots[1].unwrap();
+        assert_eq!(minted.parent.unwrap().addr.tcb, a);
+
+        // (3) A chết — C KHÔNG phải cspace của A, nên C chỉ được sửa nếu bộ
+        // duyệt đi qua mọi CNode.
+        kernel.destroy_object(a).unwrap();
+        let after = kernel.cnode(cnode).unwrap().slots[1].unwrap();
+        let parent = after.parent.expect("phải được nâng lên tổ tiên còn sống");
+        assert_eq!(
+            parent.addr.tcb, root,
+            "parent phải trỏ về cap gốc của root, không phải TCB đã chết"
+        );
+        assert!(kernel.resolve_cap_ref(parent).is_some());
+
+        // (4) revoke cap gốc phải thu hồi được cap trong C.
+        assert_eq!(
+            kernel.revoke_cap(root, 1).unwrap(),
+            1,
+            "phải thu hồi cap nằm trong CNode đã tháo khỏi TCB"
+        );
+        assert!(kernel.cnode(cnode).unwrap().slots[1].is_none());
+
+        // (5) object không còn tham chiếu NGOÀI cap gốc ⇒ destroy được.
+        let root_cap_id = kernel
+            .cap_at(SlotAddr { tcb: root, slot: 1 })
+            .expect("cap gốc vẫn còn")
+            .id;
+        assert_eq!(
+            kernel.other_caps_to(endpoint, root_cap_id),
+            0,
+            "cap trong CNode đã bị thu hồi nên không còn tham chiếu nào khác"
+        );
+        assert_eq!(kernel.destroy_object(endpoint), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
     /// 290.3 (r290, đỏ-trước): `check_invariants` phải bắt được `cap.parent`
     /// trỏ vào bảng ĐÃ CHẾT ở **mọi** nhánh (không chỉ khi `badge != 0`).
     #[test]
