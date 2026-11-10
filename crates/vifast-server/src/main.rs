@@ -726,7 +726,25 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             )
         }
         vfs::FSCK => {
-            let ok = fs().fsck().is_ok();
+            // T26: in MÃ LỖI fsck (trước đây chỉ "FS CORRUPT", không biết vì sao).
+            let outcome = fs().fsck();
+            let ok = outcome.is_ok();
+            if let Err(error) = outcome {
+                let mut line = [0u8; 24];
+                line[0] = b'F';
+                line[1] = b'S';
+                line[2] = b' ';
+                line[3] = b'E';
+                line[4] = b'R';
+                line[5] = b'R';
+                line[6] = b' ';
+                let mut value = error as u8;
+                line[7] = b'0' + value / 100 % 10;
+                line[8] = b'0' + value / 10 % 10;
+                line[9] = b'0' + value % 10;
+                line[10] = b'\n';
+                write(&line[..11]);
+            }
             unsafe {
                 if ok && !FSCK_PRINTED {
                     FSCK_PRINTED = true;

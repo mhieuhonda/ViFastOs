@@ -116,6 +116,21 @@ fn copy_path(path: &[u8]) -> usize {
     len
 }
 
+/// T26: đèn khoanh vùng — in `V2S<nn>` sau mỗi bước của khối FS V2 để biết lần
+/// đỏ DỪNG Ở BƯỚC NÀO (trước đây chỉ biết "thiếu FS V2 OK", không biết dừng ở
+/// đâu). Mười một dòng ngắn, chỉ in trên đường V2; không nằm trong hợp đồng
+/// marker nên không ảnh hưởng gate.
+fn v2_step(number: u8) {
+    let mut buffer = [0u8; 8];
+    buffer[0] = b'V';
+    buffer[1] = b'2';
+    buffer[2] = b'S';
+    buffer[3] = b'0' + (number / 10) % 10;
+    buffer[4] = b'0' + number % 10;
+    buffer[5] = b'\n';
+    let _ = vifast_user::debug_write(buffer.as_ptr() as u64, 6);
+}
+
 fn vfs_reply(reply: vifast_user::MessageResult) -> Result<vifast_user::MessageResult, u64> {
     if reply.error != KError::Ok {
         return Err(vfs::EIO);
@@ -353,7 +368,27 @@ fn vfs_readdir(fd: u64, index: u64) -> Result<Option<(u64, [u8; 28], usize)>, u6
 
 fn vfs_fsck() -> bool {
     let reply = unsafe { vifast_user::call_message(1, vfs::FSCK, 0, 0, 0) };
-    vfs_reply(reply).is_ok()
+    let outcome = vfs_reply(reply);
+    // T26: in MÃ LỖI của chính lời gọi fsck (trước đây chỉ trả bool nên không
+    // phân biệt được "fsck nói hỏng" với "mất phản hồi IPC").
+    if let Err(error) = outcome {
+        let mut line = [0u8; 20];
+        line[0] = b'F';
+        line[1] = b'S';
+        line[2] = b'C';
+        line[3] = b'K';
+        line[4] = b'E';
+        line[5] = b'R';
+        line[6] = b'R';
+        line[7] = b' ';
+        let code = (error % 1000) as u8;
+        line[8] = b'0' + (code / 100) % 10;
+        line[9] = b'0' + (code / 10) % 10;
+        line[10] = b'0' + code % 10;
+        line[11] = b'\n';
+        let _ = vifast_user::debug_write(line.as_ptr() as u64, 12);
+    }
+    outcome.is_ok()
 }
 
 fn write_u64(mut value: u64) {
@@ -1046,7 +1081,9 @@ pub extern "C" fn client_main() -> ! {
     });
 
     let mut v2 = true;
+    v2_step(1);
     v2 &= vfs_mkdir(b"/d").is_ok();
+    v2_step(2);
     let fd = match vfs_open(b"/d/a", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
         Some((fd, _)) => fd,
         None => {
@@ -1054,6 +1091,7 @@ pub extern "C" fn client_main() -> ! {
             0
         }
     };
+    v2_step(3);
     let mut pattern = [0u8; 600];
     let mut index = 0usize;
     while index < pattern.len() {
@@ -1098,6 +1136,7 @@ pub extern "C" fn client_main() -> ! {
         v2 = false;
     }
 
+    v2_step(4);
     let mut found_d = false;
     if let Some((root_fd, _)) = vfs_open(b"/", 0) {
         let mut entry = 0u64;
@@ -1112,6 +1151,7 @@ pub extern "C" fn client_main() -> ! {
         v2 = false;
     }
     v2 &= found_d;
+    v2_step(5);
     let mut found_a = false;
     if let Some((dir_fd, _)) = vfs_open(b"/d", 0) {
         let mut entry = 0u64;
@@ -1126,7 +1166,9 @@ pub extern "C" fn client_main() -> ! {
         v2 = false;
     }
     v2 &= found_a;
+    v2_step(6);
     v2 &= vfs_rename(b"/d/a", b"/d/b").is_ok();
+    v2_step(7);
     v2 &= vfs_open_error(b"/d/a", 0) == vfs::ENOENT;
     if let Some((fd, _)) = vfs_open(b"/d/b", 0) {
         v2 &= vfs_stat(fd) == Some(600);
@@ -1136,8 +1178,10 @@ pub extern "C" fn client_main() -> ! {
     } else {
         v2 = false;
     }
+    v2_step(8);
     v2 &= vfs_unlink(b"/d/b").is_ok();
     v2 &= vfs_open_error(b"/d/b", 0) == vfs::ENOENT;
+    v2_step(9);
     v2 &= vfs_mkdir(b"/d/x").is_ok();
     v2 &= vfs_unlink(b"/d").is_err(); // ENOTEMPTY
     v2 &= vfs_unlink(b"/d/x").is_ok();
@@ -1146,7 +1190,34 @@ pub extern "C" fn client_main() -> ! {
     v2 &= vfs_mkdir(b"/d").is_err(); // EEXIST
     v2 &= vfs_unlink(b"/d").is_ok();
     v2 &= vfs_open_error(b"/does-not-exist", 0) == vfs::ENOENT;
+    v2_step(10);
     let fsck = vfs_fsck();
+    v2_step(11);
+    // T26: in LÝ DO — nhóm kiểm tra nào làm `v2` sai và `fsck` đúng/sai. Không
+    // có dòng này thì chỉ biết "FS V2 BAD", không biết vì sao.
+    if !(v2 && fsck) {
+        let mut reason = [0u8; 24];
+        reason[0] = b'V';
+        reason[1] = b'2';
+        reason[2] = b'F';
+        reason[3] = b'A';
+        reason[4] = b'I';
+        reason[5] = b'L';
+        reason[6] = b' ';
+        reason[7] = b'v';
+        reason[8] = b'2';
+        reason[9] = b'=';
+        reason[10] = b'0' + u8::from(!v2);
+        reason[11] = b' ';
+        reason[12] = b'f';
+        reason[13] = b's';
+        reason[14] = b'c';
+        reason[15] = b'k';
+        reason[16] = b'=';
+        reason[17] = b'0' + u8::from(!fsck);
+        reason[18] = b'\n';
+        let _ = vifast_user::debug_write(reason.as_ptr() as u64, 19);
+    }
     write(if v2 && fsck {
         b"FS V2 OK\n"
     } else {
