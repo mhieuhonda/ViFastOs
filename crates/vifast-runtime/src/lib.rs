@@ -1201,6 +1201,42 @@ fn write_decimal_into(mut value: u64, out: &mut [u8; 40], mut at: usize) -> usiz
     at
 }
 
+/// T31/bản phân tích: `context_slot(..)` trả `None` (TCB chưa có slot / đã bị
+/// thu hồi) mà mã cũ lặng lẽ `unwrap_or(0)` — tức ghi/đọc NHẦM context của
+/// slot 0 (thường là root). Nay báo MỘT lần rồi vẫn giữ hành vi cũ để không
+/// đổi ngữ nghĩa trong đêm, nhưng có bằng chứng trên serial.
+/// Phần THUẦN (test host được): `(slot dùng, có thiếu slot không)`.
+/// `None` ⇒ (0, true): hành vi cũ là rơi về slot 0, nhưng nay phải BÁO.
+pub fn slot_choice(slot: Option<u8>) -> (usize, bool) {
+    match slot {
+        Some(value) => (value as usize, false),
+        None => (0, true),
+    }
+}
+
+pub fn slot_or_report<A: Platform>(
+    kernel: &vifast_kernel::Kernel,
+    next: vifast_kernel::ObjRef,
+    hart: usize,
+) -> usize {
+    let (slot, missing) = slot_choice(kernel.context_slot(next));
+    if missing {
+        {
+            static REPORTED: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                vifast_kernel::klog!(
+                    A,
+                    "CTX SLOT NONE hart={} tcb={} (dùng slot 0)",
+                    hart,
+                    next.index
+                );
+            }
+        }
+    }
+    slot
+}
+
 pub mod syscall {
     use super::*;
 
@@ -1521,9 +1557,10 @@ pub mod syscall {
                     let next = kernel.current_on(hart).unwrap();
                     note_current_tcb::<A>(kernel);
                     crate::note_context::<A>(kernel, next, hart);
-                    let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+                    let slot = slot_or_report::<A>(kernel, next, hart);
                     *context = A::contexts()[slot];
                     crate::syscall::apply_resume::<A>(context, next);
+                    A::contexts()[slot] = *context;
                     if ensure_current_root::<A>().is_err() {
                         fault::suspend::<A>(context, 0, 0);
                     }
@@ -1575,7 +1612,7 @@ pub mod syscall {
         };
         note_current_tcb::<A>(kernel);
         crate::note_context::<A>(kernel, next, hart);
-        let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+        let slot = slot_or_report::<A>(kernel, next, hart);
         *context = contexts[slot];
         #[cfg(feature = "diag-sched")]
         crate::diag::record(
@@ -1590,6 +1627,9 @@ pub mod syscall {
             kernel.fast_time(),
         );
         crate::syscall::apply_resume::<A>(context, next);
+        // Ghi LẠI slot: `apply_resume` vá context SỐNG, nếu không ghi lại thì
+        // lần nạp sau sẽ chạy lại snapshot cũ (bản phân tích T31: cơ chế (c)).
+        contexts[slot] = *context;
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
         }
@@ -1608,7 +1648,7 @@ pub mod syscall {
         };
         note_current_tcb::<A>(kernel);
         crate::note_context::<A>(kernel, next, hart);
-        let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+        let slot = slot_or_report::<A>(kernel, next, hart);
         *context = contexts[slot];
         #[cfg(feature = "diag-sched")]
         crate::diag::record(
@@ -1623,6 +1663,9 @@ pub mod syscall {
             kernel.fast_time(),
         );
         crate::syscall::apply_resume::<A>(context, next);
+        // Ghi LẠI slot: `apply_resume` vá context SỐNG, nếu không ghi lại thì
+        // lần nạp sau sẽ chạy lại snapshot cũ (bản phân tích T31: cơ chế (c)).
+        contexts[slot] = *context;
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
         }
@@ -1718,9 +1761,10 @@ pub mod fault {
         note_current_tcb::<A>(kernel);
         loop {
             crate::note_context::<A>(kernel, next, hart);
-            let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+            let slot = slot_or_report::<A>(kernel, next, hart);
             *context = A::contexts()[slot];
             crate::syscall::apply_resume::<A>(context, next);
+            A::contexts()[slot] = *context;
             if ensure_current_root::<A>().is_ok() {
                 return true;
             }
@@ -2035,7 +2079,7 @@ pub mod timer {
         };
         note_current_tcb::<A>(kernel);
         crate::note_context::<A>(kernel, next, hart);
-        let slot = kernel.context_slot(next).unwrap_or(0) as usize;
+        let slot = slot_or_report::<A>(kernel, next, hart);
         *context = contexts[slot];
         #[cfg(feature = "diag-sched")]
         crate::diag::record(
@@ -2050,6 +2094,9 @@ pub mod timer {
             kernel.fast_time(),
         );
         crate::syscall::apply_resume::<A>(context, next);
+        // Ghi LẠI slot: `apply_resume` vá context SỐNG, nếu không ghi lại thì
+        // lần nạp sau sẽ chạy lại snapshot cũ (bản phân tích T31: cơ chế (c)).
+        contexts[slot] = *context;
         if ensure_current_root::<A>().is_err() {
             fault::suspend::<A>(context, 0, 0);
         }
@@ -2085,6 +2132,20 @@ mod tests {
             core::str::from_utf8(&out[..length]).unwrap(),
             "SMP NO CURRENT hart=3 nr=4294967295"
         );
+    }
+
+    /// T31 (bản phân tích): `context_slot(..) == None` KHÔNG được lặng lẽ dùng
+    /// slot 0. Phần quyết định tách thành hàm THUẦN `slot_choice` để test host
+    /// được mà không phải dựng fake Platform (đúng cách đã làm với D1.a).
+    #[test]
+    fn slot_choice_keeps_the_real_slot_and_flags_a_missing_one() {
+        assert_eq!(slot_choice(Some(7)), (7, false));
+        assert_eq!(
+            slot_choice(Some(0)),
+            (0, false),
+            "slot 0 hợp lệ vẫn là hợp lệ"
+        );
+        assert_eq!(slot_choice(None), (0, true), "thiếu slot thì phải BÁO");
     }
 
     /// Test canh: marker KHÔNG được tràn buffer kể cả khi số lớn.

@@ -21,7 +21,6 @@ diag-idle-fault = []
 # r294.B: đèn phân biệt ba cơ chế hỏng context (a) cùng TCB bị pick trên hai
 # hart, (b) hai TCB dùng chung một context slot, (c) resume khôi phục context cũ.
 # Mặc định TẮT — mỗi tick in vài dòng sẽ làm chậm boot rất nhiều.
-diag-pick = []
 # Khối A (kế hoạch qua đêm): vòng đệm sự kiện lập lịch (PICK/CTX SAVE/CTX LOAD),
 # chỉ đổ ra khi xử lý Exit hoặc watchdog bắn. Mặc định TẮT.
 diag-sched = []

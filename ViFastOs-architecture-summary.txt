@@ -633,14 +633,14 @@ Test hiện tại:
 - `cargo test -p vifast-arch`: 8/8 PASS
 - `cargo test -p vifast-pte`: 12/12 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
-- `cargo test -p vifast-runtime`: 3/3 PASS
+- `cargo test -p vifast-runtime`: 4/4 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
 - `cargo test -p vifast-fs`: 44/44 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 2279792 byte (`kernel_end=0x803d3690`)
+- RISC-V headroom: 2275696 byte (`kernel_end=0x803d4690`)
 - `Kernel = 552120`, `Object = 3192`, `Tcb = 1648`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status
