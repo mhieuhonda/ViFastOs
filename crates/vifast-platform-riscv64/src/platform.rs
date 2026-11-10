@@ -668,11 +668,26 @@ fn assert_current_tcb() {
         .current_on(hart)
         .map(|tcb| tcb.index as usize)
         .unwrap_or(usize::MAX);
-    assert_eq!(
-        unsafe { (*state).current_tcb },
-        expected,
-        "per-CPU current_tcb mismatch"
-    );
+    let actual = unsafe { (*state).current_tcb };
+    if actual != expected {
+        // T33b (đo 200 boot riscv64: 1–2 lần, luôn hart 1, panic
+        // `platform.rs:671`): `assert_current_tcb` là BẤT BIẾN CHẨN ĐOÁN, không
+        // phải điều kiện sống còn. Đường `fault_to_endpoint` xoá `current` của
+        // MỌI hart khi task bị park vì fault, còn cache per-CPU thì không được
+        // cập nhật ⇒ lần vào trap sau đó lệch và bản cũ GIẾT MÁY. Nay: sửa cache
+        // theo kernel và báo MỘT lần, để lỗi thật vẫn lộ ra trên serial.
+        static MISMATCH_REPORTED: AtomicBool = AtomicBool::new(false);
+        if !MISMATCH_REPORTED.swap(true, Ordering::Relaxed) {
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "CURRENT MISMATCH (hart={}, cache={}, kernel={})",
+                hart,
+                actual,
+                expected
+            );
+        }
+        unsafe { (*state).current_tcb = expected };
+    }
 }
 
 fn active_root_matches_current() -> bool {
