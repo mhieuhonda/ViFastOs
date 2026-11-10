@@ -1633,3 +1633,33 @@ sang `ps` trước và đối chiếu `source_sha256` của hai máy.
 
 Đã ghi vào skill `skills/vifast-parallel-gate/SKILL.md` (kèm số đo, cách vào
 máy, và bảng kiểm môi trường) để vòng sau dùng lại ngay.
+
+## r294.T26 — phát hiện quan trọng nhờ máy thứ hai: lỗi phụ thuộc MÁY, và P2 làm lộ lỗi ATA
+
+**Số đo 2 máy (cùng mã nguồn HEAD `adf762d`, `MAX_IO=128`)**
+
+| Máy | N | Kết quả |
+|---|---:|---|
+| Mac (arm64) | 40 | 40/40 xanh |
+| `ps` (Ubuntu x86_64, 12 CPU) | 40 | **40/40 xanh** |
+
+⇒ Cấu hình sản phẩm xanh trên **cả hai** máy (đây là số nền đúng).
+
+**Thử hai bản vá từ bản phân tích subagent:**
+
+1. **P2** — `ata_wait_bsy` nay kiểm bit `ERR(0x01)/DF(0x20)` thay vì chỉ chờ `BSY`.
+2. **P1** — `read_dir_entry_full` đọc block thư mục bằng `read_staged` (cùng khung
+   nhìn với đường ghi).
+3. **P3** — tách nhóm đèn 04 thành 04a/04b/04c.
+
+**Kết quả ở `MAX_IO=128` trên `ps`: 2/40 ĐỎ** ⇒ **hồi quy ở cấu hình sản phẩm**,
+trong khi baseline cùng máy 40/40 xanh. Theo D18 phải **revert**.
+
+**Nhưng đây là manh mối lớn cho T26:** P2 chỉ *báo* lỗi ATA thay vì bỏ qua; việc
+nó làm xuất hiện đỏ ở 128 nghĩa là **thiết bị có trả lỗi ghi mà bản cũ che mất**
+⇒ giả thuyết H1 của bản phân tích ("ghi bị bỏ âm thầm, cache đánh dấu clean")
+**có cơ sở thực nghiệm**, không chỉ là suy luận. Hướng đúng không phải "báo lỗi"
+mà là **thử lại / đồng bộ đúng** ở tầng ATA, và phải đo lại ở 128 lẫn 256.
+
+Ba bản vá được giữ trong `git stash` (`P1+P2+P3 tạm`) để vòng sau lấy lại; cây
+đang ở HEAD xanh.
