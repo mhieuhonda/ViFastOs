@@ -1130,3 +1130,48 @@ côi. Nay: in `KERNEL FAULT (hart, cause, addr) — hart idle, bỏ qua`,
 Đo riscv64 **60/60 PASS**, **0** `KERNEL FAULT` (tỉ lệ cũ ~1,5% ⇒ kỳ vọng ~1
 lần; mẫu chưa đủ để kết luận, cần ≥300 lần mới nói được). x86_64 59/60 sau vá,
 lần hỏng vẫn là T33a, 0 `KERNEL FAULT`/`SMP NO READY`.
+
+## r293 — thước đo mới + harness đếm RETRY (theo tệp quyết định r293–r298)
+
+- **293.1/293.2/293.3** (`2a04bd2`): `RETRY n/N` + phân loại T-FS/T-SCHED/T-KHAC,
+  lưu `artifacts/flake-<arch>-<i>-a<lần>/` cho MỌI lần hỏng, `--strict` (chưa bật
+  trong gate). `test-harness-spec.py` **647 case**, có case âm: gỡ chỗ đếm ⇒ ĐỎ.
+- **293.5** (`2380cc5`): `other_caps_to` + `reparent_tcb_caps` đi qua
+  `for_each_cap`/`for_each_cap_mut`; grep còn 3 chỗ `iter().flatten()` và cả ba
+  là view của MỘT đối tượng.
+- **293.6** (`2380cc5`): `reply_epoch` u8 → u16, test 260 lần Call không trùng
+  epoch, canary `size_of::<Tcb>() == 1648`.
+- **293 (theo Agent 0)** (`39589cb`): guard `KERNEL FAULT` mặc định quay về
+  `halt()`, chỉ bật sau feature `diag-idle-fault`; harness đếm `KERNEL FAULT`
+  là T-SCHED.
+
+### 293.8 — số đo nền x86_64 (một sha, guard TẮT, MAX_IO=128)
+
+```
+RETRY 8/305 (T-FS=0, T-SCHED=7, T-KHAC=1)   — 297/300 PASS
+```
+
+| Nhóm | Số lần | Run |
+|---|---:|---|
+| treo sau `shell>`, thiếu `PREEMPT OK` | 3 | 36, 192, 287 |
+| `USER FAULT tcb=None` + `no runnable thread` | 4 | 102, 108, 212, 217 |
+| race debug-exit (retry cứu) | 1 | 122 |
+
+**T-FS = 0/305** ⇒ BLOCKER FS không tái phát ở `MAX_IO=128`.
+
+Lỗi của chính bộ phân loại (đã sửa): chết sớm bị dán nhãn T-FS vì thiếu
+`FS V2 OK`; nay xét chữ ký SCHED trước, và chỉ coi là T-FS khi guest đã tới
+`SHELL READY`.
+
+## r294.4 — gốc lớp "chết sớm": halt khi đang giữ BKL
+
+`registers.txt` của artifact: CPU#0 `CPL=0 IF=0 HLT=0`, CPU#1 `CPL=0 IF=0 HLT=1`.
+`fault::suspend` chạy trong trap handler đang giữ BKL (IF=0); gặp
+`pick_on == None` thì `A::halt()` = `loop { hlt }` ⇒ BKL không bao giờ được nhả ⇒
+hart còn lại quay BKL mãi ⇒ cả máy chết.
+
+Sửa (`c2a8968`): `fault::suspend -> bool`, bốn call site nhả `bkl` rồi mới halt,
+thêm `SMP PARK (hart, cause)`.
+
+Đo: 60 boot sau vá ⇒ `RETRY 1/61 (T-FS=0, T-SCHED=1, T-KHAC=0)`; lần hỏng duy
+nhất là flake boot sớm (thiếu `SELFTEST PASS`); **0** lần `tcb=None`.
