@@ -74,6 +74,10 @@ struct SuperInfo {
     direct_blocks: usize,
     max_file_blocks: usize,
     max_file_size: usize,
+    /// P1-1 (r290): số block của FS theo SUPERBLOCK, không theo thiết bị.
+    /// Đĩa lớn hơn vùng đã format là hợp lệ; dùng `dev.block_count()` ở đây
+    /// từng làm `load_metadata` quét quá biên bitmap (panic out of bounds).
+    total: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -443,7 +447,6 @@ fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<SuperInfo, 
     if crc32(&copy[..56]) != expected {
         return Err(FsError::Corrupt);
     }
-    let _ = total;
     Ok(SuperInfo {
         version,
         inode_limit,
@@ -451,6 +454,7 @@ fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<SuperInfo, 
         direct_blocks,
         max_file_blocks,
         max_file_size: size_limit,
+        total,
     })
 }
 
@@ -547,6 +551,10 @@ pub struct Fs<D: BlockDev> {
     /// Maintained by `mark_used`/`mark_free` (bit flips only) and rebuilt by
     /// `load_metadata`, so `usage()` is O(1) instead of scanning the bitmap.
     used_blocks: u32,
+    /// P1-1 (r290): số block của FS theo superblock — biên THẬT của bitmap và
+    /// của vùng cấp phát. Thiết bị có thể lớn hơn (đĩa gắn thêm) nhưng FS
+    /// không được quét/ghi ra ngoài `capacity`.
+    capacity: u32,
     /// Hint where the next `alloc_block()` scan starts.  Freed blocks below
     /// the cursor pull it back, so steady-state allocation is O(1) instead
     /// of re-scanning from `DATA_START` every time.
@@ -582,6 +590,7 @@ impl<D: BlockDev> Fs<D> {
             max_file_blocks: MAX_FILE_BLOCKS,
             max_file_size: MAX_FILE_SIZE,
             used_blocks: 0,
+            capacity: 0,
             next_free: DATA_START,
         }
     }
@@ -606,6 +615,7 @@ impl<D: BlockDev> Fs<D> {
         self.used_blocks = 0;
         self.next_free = DATA_START;
         let capacity = self.dev.block_count();
+        self.capacity = capacity;
         let mut superblock = zero_block();
         self.dev.read(1, &mut superblock)?;
         let mut legacy = zero_block();
@@ -620,6 +630,7 @@ impl<D: BlockDev> Fs<D> {
             self.dev.read(1, &mut superblock)?;
         }
         let info = validate_super(&superblock, capacity)?;
+        self.capacity = info.total;
         self.inode_limit = info.inode_limit;
         self.dir_block_limit = info.dir_block_limit;
         self.version = info.version;
@@ -672,7 +683,8 @@ impl<D: BlockDev> Fs<D> {
         block: u32,
         block_used: &mut [u8; (BITMAP_BLOCKS as usize) * BLOCK_SIZE],
     ) -> Result<(), FsError> {
-        if block < DATA_START || block >= self.dev.block_count() {
+        // P1-1/291.6: biên là FS (capacity), không phải dung lượng thiết bị.
+        if block < DATA_START || block >= self.capacity {
             return Err(FsError::Corrupt);
         }
         let byte = block as usize / 8;
@@ -892,6 +904,12 @@ impl<D: BlockDev> Fs<D> {
                 }
                 for block_index in 0..used_blocks {
                     let block = self.file_block(&inode, block_index)?;
+                    // 291.3 (r291): block 0 trong phạm vi `size` là LỖ của file
+                    // thưa — hợp lệ, không có gì để đánh dấu. Bản cũ gọi
+                    // `fsck_mark_block(0)` ⇒ `0 < DATA_START` ⇒ Corrupt.
+                    if block == 0 {
+                        continue;
+                    }
                     self.fsck_mark_block(block, &mut block_used)?;
                 }
                 self.fsck_file_tables(&inode, used_blocks, &mut block_used)?;
@@ -912,7 +930,9 @@ impl<D: BlockDev> Fs<D> {
                 }
             }
         }
-        for block in DATA_START..self.dev.block_count() {
+        // P1-1: chỉ kiểm trong vùng FS; ngoài `capacity` là đĩa thừa, không
+        // phải lỗi của FS.
+        for block in DATA_START..self.capacity {
             let bit = self.bitmap[block as usize / 8] & (1 << (block as usize % 8)) != 0;
             let expected = block_used[block as usize / 8] & (1 << (block as usize % 8)) != 0;
             if bit != expected {
@@ -937,7 +957,8 @@ impl<D: BlockDev> Fs<D> {
         // on-disk bitmap (mount / replay path).  `used_blocks` only counts
         // the DATA region, matching `alloc_block`'s domain; `next_free`
         // points at the first hole so the first allocation is cheap.
-        let capacity = self.dev.block_count();
+        // P1-1: quét theo biên của FS, không theo dung lượng thiết bị.
+        let capacity = self.capacity;
         self.used_blocks = 0;
         self.next_free = capacity;
         for block_no in DATA_START..capacity {
@@ -1139,12 +1160,14 @@ impl<D: BlockDev> Fs<D> {
     }
 
     fn block_is_used(&self, block: u32) -> bool {
-        block < self.dev.block_count()
+        // P1-1: chặn theo CẢ capacity của FS và độ dài bitmap (phòng thủ).
+        block < self.capacity
+            && (block as usize) / 8 < self.bitmap.len()
             && self.bitmap[block as usize / 8] & (1 << (block as usize % 8)) != 0
     }
 
     fn mark_used(&mut self, block: u32) {
-        if block >= self.dev.block_count() || block as usize / 8 >= self.bitmap.len() {
+        if block >= self.capacity || block as usize / 8 >= self.bitmap.len() {
             return;
         }
         let byte = block as usize / 8;
@@ -1161,7 +1184,7 @@ impl<D: BlockDev> Fs<D> {
     fn mark_free(&mut self, block: u32) {
         // Vòng 83: block number đọc từ đĩa (free_inode_blocks) có thể rác.
         // Không kiểm tra biên thì bitmap[block/8] ghi ra ngoài mảng.
-        if block >= self.dev.block_count() || block as usize / 8 >= self.bitmap.len() {
+        if block >= self.capacity || block as usize / 8 >= self.bitmap.len() {
             return;
         }
         let byte = block as usize / 8;
@@ -1179,7 +1202,8 @@ impl<D: BlockDev> Fs<D> {
     }
 
     fn alloc_block(&mut self) -> Result<u32, FsError> {
-        let capacity = self.dev.block_count();
+        // P1-1: cấp phát trong biên FS, không trong biên thiết bị.
+        let capacity = self.capacity;
         // Scan from the cursor, wrapping once, instead of always restarting
         // at DATA_START.  The common case (cursor at a free block) is O(1).
         let start = self.next_free.clamp(DATA_START, capacity);
@@ -1213,10 +1237,20 @@ impl<D: BlockDev> Fs<D> {
         if block_index < self.direct_blocks {
             return Ok(inode.blocks[block_index]);
         }
+        // P1-2 (r290): chỉ số block đến từ `inode.size` trên đĩa, tức dữ liệu
+        // không tin được. Vượt sức chứa tối đa của FS ⇒ `Corrupt`, KHÔNG được
+        // để `get_u32` đọc ngoài mảng (bản cũ panic và giết kernel).
+        if block_index >= self.max_file_blocks {
+            return Err(FsError::Corrupt);
+        }
         let relative = block_index - self.direct_blocks;
         let indirect = inode.blocks[self.direct_blocks];
         if indirect == 0 {
             return Ok(0);
+        }
+        if self.version < 4 && relative >= INDIRECT_ENTRIES {
+            // Không có double-indirect ở định dạng cũ ⇒ chỉ số này bịa.
+            return Err(FsError::Corrupt);
         }
         if self.version >= 4 && relative >= INDIRECT_ENTRIES {
             let double_index = self.direct_blocks + 1;
@@ -1226,6 +1260,10 @@ impl<D: BlockDev> Fs<D> {
             }
             let double_relative = relative - INDIRECT_ENTRIES;
             let slot = double_relative / INDIRECT_ENTRIES;
+            // P1-2: bảng double-indirect chỉ có `INDIRECT_ENTRIES` ô.
+            if slot >= INDIRECT_ENTRIES {
+                return Err(FsError::Corrupt);
+            }
             let double_table = self.read_staged(double)?;
             let table = get_u32(&double_table, slot * 4);
             if table == 0 {
@@ -1703,7 +1741,7 @@ impl<D: BlockDev> Fs<D> {
     /// O(1): `used_blocks` được duy trì bởi `mark_used`/`mark_free` và dựng
     /// lại trong `load_metadata`, nên không cần quét bitmap 8162 bit nữa.
     pub fn usage(&self) -> (u32, u32) {
-        let total = self.dev.block_count().saturating_sub(DATA_START);
+        let total = self.capacity.saturating_sub(DATA_START);
         (core::cmp::min(self.used_blocks, total), total)
     }
 
@@ -1747,12 +1785,17 @@ impl<D: BlockDev> Fs<D> {
             let block_index = (offset + done) / BLOCK_SIZE;
             let in_block = (offset + done) % BLOCK_SIZE;
             let block_no = self.file_block(&inode, block_index)?;
-            if block_index >= inode.blocks_used() || block_no == 0 {
-                return Err(FsError::Corrupt);
+            let chunk = core::cmp::min(BLOCK_SIZE - in_block, count - done);
+            // 291.3 (r291): block 0 trong phạm vi `size` là LỖ của file thưa
+            // (ghi quá EOF tạo lỗ) — đọc ra 0, KHÔNG phải Corrupt. Bản cũ trả
+            // Corrupt nên ghi ở offset 1 MiB làm cả file không đọc được.
+            if block_no == 0 {
+                out[done..done + chunk].fill(0);
+                done += chunk;
+                continue;
             }
             let mut block = zero_block();
             self.dev.read(block_no, &mut block)?;
-            let chunk = core::cmp::min(BLOCK_SIZE - in_block, count - done);
             out[done..done + chunk].copy_from_slice(&block[in_block..in_block + chunk]);
             done += chunk;
         }
@@ -1785,7 +1828,7 @@ impl<D: BlockDev> Fs<D> {
         // TẠM REVERT batch (#8) để bisect x86 EIO: quay về 1 commit mỗi
         // 512B chunk như trước, giữ nguyên mọi cải tiến khác (CRC bảng,
         // cache 32, counter, cursor, fsync barrier).
-        let mut staged: usize = 0;
+        let staged: usize = 0;
         while done < data.len() {
             self.tx_count = 0;
             let mut current = *self.inodes.get(ino as usize - 1).ok_or(FsError::BadFd)?;
@@ -2425,6 +2468,81 @@ mod tests {
     }
     fn reopen(fs: &Fs<MemDev>) -> Fs<MemDev> {
         Fs::mount(fs.dev.clone()).unwrap()
+    }
+
+    /// P1-2 (r290, đỏ-trước): chỉ số block bịa trong inode phải trả `Corrupt`,
+    /// không được panic. Bản cũ tính chỉ số từ `inode.size` (dữ liệu trên đĩa)
+    /// rồi đọc thẳng bảng indirect ⇒ `index out of bounds`.
+    #[test]
+    fn read_with_a_forged_size_returns_corrupt_instead_of_panicking() {
+        let mut fs = fresh();
+        let ino = fs.create(b"/forged", 0, INODE_FILE).unwrap();
+        // Đủ block để inode có bảng indirect thật (vượt vùng direct).
+        let direct = fs.direct_blocks;
+        let payload = vec![0xa5u8; BLOCK_SIZE * (direct + 2)];
+        fs.write(ino, 0, &payload, 0).unwrap();
+        assert_ne!(
+            fs.inodes[ino as usize - 1].blocks[direct],
+            0,
+            "phải có indirect"
+        );
+        // Bịa: size khổng lồ + con trỏ double-indirect rác (đĩa hỏng/độc).
+        fs.inodes[ino as usize - 1].size = u32::MAX;
+        fs.inodes[ino as usize - 1].blocks[direct + 1] = 7;
+        let mut out = [0u8; 32];
+        let err = fs.read(ino, 0x3fff_f000, &mut out, 0);
+        assert!(
+            matches!(err, Err(FsError::Corrupt) | Err(FsError::Invalid)),
+            "phải trả lỗi, không panic; nhận {:?}",
+            err
+        );
+    }
+
+    /// 291.3 (r291, đỏ-trước): ghi quá EOF tạo LỖ; đọc phần lỗ phải ra 0 và
+    /// cả file vẫn đọc được. Bản cũ: `read` thấy block 0 ⇒ `Corrupt` ⇒ ghi xa
+    /// EOF làm hỏng toàn bộ file.
+    #[test]
+    fn writing_past_eof_leaves_a_readable_zero_filled_hole() {
+        let mut fs = fresh();
+        let ino = fs.create(b"/sparse", 0, INODE_FILE).unwrap();
+        let payload = [0x7au8; 16];
+        // 64 KiB = block 128 ⇒ nằm trong vùng single-indirect.
+        let offset = 64 * 1024;
+        assert_eq!(fs.write(ino, offset, &payload, 0).unwrap(), payload.len());
+
+        let mut out = [0u8; 16];
+        assert_eq!(fs.read(ino, offset, &mut out, 0).unwrap(), 16);
+        assert_eq!(out, payload, "phần đã ghi phải đúng");
+
+        let mut hole = [0xffu8; 64];
+        assert_eq!(fs.read(ino, 0, &mut hole, 0).unwrap(), 64);
+        assert!(hole.iter().all(|b| *b == 0), "phần lỗ phải đọc ra 0");
+        fs.fsck().unwrap();
+    }
+
+    /// P1-1 (r290, đỏ-trước): đĩa LỚN HƠN vùng đã format phải mount được.
+    ///
+    /// Kịch bản thật (bản soát 2026-11-10): `dd` 4 MiB → `mkfs` → `truncate -s
+    /// 8M` → mount. Bản cũ lấy `dev.block_count()` làm biên nên quét bitmap
+    /// quá vùng FS và panic `index out of bounds` (8 MiB = 16 384 block, bitmap
+    /// chỉ phủ 8 192 block).
+    #[test]
+    fn mount_accepts_a_device_larger_than_the_formatted_area() {
+        let mut small = MemDev::with_blocks(4_096);
+        format(&mut small).unwrap();
+        // "truncate -s 8M": cùng nội dung, thiết bị dài gấp bốn.
+        let mut data = small.data;
+        data.resize(16_384 * BLOCK_SIZE, 0);
+        let big = MemDev { data };
+
+        let mut fs = Fs::mount(big).expect("mount phải chấp nhận đĩa lớn hơn");
+        // Biên cấp phát là vùng đã format (4 096), không phải 16 384.
+        let (_, total) = fs.usage();
+        assert_eq!(total, 4_096 - DATA_START);
+        // Và FS vẫn dùng được bình thường.
+        let ino = fs.create(b"/big", 0, INODE_FILE).unwrap();
+        fs.write(ino, 0, &[0x5au8; BLOCK_SIZE], 0).unwrap();
+        fs.fsck().unwrap();
     }
 
     #[test]

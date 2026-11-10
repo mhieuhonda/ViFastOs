@@ -557,6 +557,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 77abe21 r290 docs: báo cáo Agent 2 (r289–r290) + soak 299/300 + nhật ký quyết định
 - f5c28b4 r290: 290.3 (invariant cap.parent mọi nhánh) + 290.4 (reply_epoch tăng mỗi lần call)
 - 77e8db5 r290 docs: cập nhật báo cáo Agent 2 (290.3, 290.4 xong) + nhật ký
+- 75ffb6e r290: 290.2 XONG — kịch bản 5 bước P0-3 có test đỏ-trước
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -611,7 +612,7 @@ Test hiện tại:
 - `cargo test -p vifast-runtime`: 0/0 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
-- `cargo test -p vifast-fs`: 40/40 PASS
+- `cargo test -p vifast-fs`: 43/43 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status

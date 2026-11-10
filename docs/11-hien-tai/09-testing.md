@@ -68,10 +68,10 @@ build complete (0 warning)
 | `vifast-pte` | **12/12** |  |
 | `vifast-elf` | **19/19** |  |
 | `vifast-acpi` | **8/8** |  |
-| `vifast-fs` | **40/40** | định dạng đĩa, biên block, fsck; nằm trong cổng từ vòng 166 |
+| `vifast-fs` | **43/43** | định dạng đĩa, biên block, fsck; nằm trong cổng từ vòng 166 |
 | `vifast-virtio` | **7/7** | checksum TCP/IP; nằm trong cổng từ vòng 167 |
 | `vifast-runtime`, `vifast-user`, `vifast-fsutil` | 0 | kiểm qua QEMU/build |
-| **Tổng duy nhất** | **352** | |
+| **Tổng duy nhất** | **355** | |
 
 Phạm vi chính của `vifast-kernel`:
 
