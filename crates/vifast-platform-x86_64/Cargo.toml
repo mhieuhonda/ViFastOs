@@ -8,6 +8,9 @@ license.workspace = true
 [features]
 test-ap-stall = []
 test-skip-tlb-ipi = []
+# r293/294.1: đèn chẩn đoán flake scheduler. MẶC ĐỊNH TẮT — bản phát hành
+# không được chứa marker `BKL STUCK`.
+diag-stall = []
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }

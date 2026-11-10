@@ -1443,6 +1443,7 @@ pub mod fault {
         // và quay lại vòng idle. Nếu là lỗi kernel thật thì nó sẽ lặp lại và
         // hiện thành `KERNEL FAULT` dày đặc trong serial.
         if old.is_none() {
+            #[cfg(feature = "test-exit")]
             vifast_kernel::klog!(
                 A,
                 "KERNEL FAULT (hart={}, cause={:#x}, addr={:#x}) — hart idle, bỏ qua",
@@ -1791,6 +1792,8 @@ pub mod timer {
             // T33a (r293): chẩn đoán KHÔNG-phải-marker. Thoát im lặng ở đây
             // là "hart 0 không còn TCB nào chạy được"; nếu lúc đó bài test
             // chưa xong thì đó chính là lần hỏng "thiếu PREEMPT OK".
+            // 294.1: chỉ tồn tại trong build test-exit.
+            #[cfg(feature = "test-exit")]
             vifast_kernel::klog!(
                 A,
                 "SMP NO READY (hart={}, ticks={}, exitted_current={}, alive={})",

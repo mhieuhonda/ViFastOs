@@ -129,6 +129,22 @@ impl BigKernelLock {
         self.lock_with(|| {})
     }
 
+    /// Hart đang giữ vé phục vụ, nếu có. Dùng cho chẩn đoán "kẹt BKL"
+    /// (T33a): biết ai giữ để khỏi đoán.
+    pub fn owner_hart(&self) -> Option<usize> {
+        let owner = self.owner.load(Ordering::Acquire);
+        if owner == NO_OWNER {
+            None
+        } else {
+            Some(owner)
+        }
+    }
+
+    /// Số hart đã lấy vé mà chưa nhả (kể cả đang xếp hàng).
+    pub fn holders(&self) -> usize {
+        self.holders.load(Ordering::Acquire)
+    }
+
     /// Whether this exact hart currently owns the lock.
     pub fn held_by(&self, hart: usize) -> bool {
         hart < MAX_HARTS && self.owner.load(Ordering::Acquire) == hart
