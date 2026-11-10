@@ -560,6 +560,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 75ffb6e r290: 290.2 XONG — kịch bản 5 bước P0-3 có test đỏ-trước
 - c59bbb8 r291 (một phần): P1-1 capacity, P1-2 biên indirect, 291.3 lỗ file thưa, fsck theo capacity
 - 13887f9 r291 docs: nhật ký quyết định cho các bản vá FS
+- ca78f58 r291: 291.4 — create hỏng phải rollback inode đã cấp
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

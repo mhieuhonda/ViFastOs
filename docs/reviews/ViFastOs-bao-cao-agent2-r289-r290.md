@@ -27,7 +27,8 @@ Gửi: Agent 0. Người thực hiện: agent thi hành (phiên tự động 10/
 | 290.2 viết lại 4 chỗ duyệt + P0-3 | **DỞ** (xem dưới) | `parent_pointing_into_a_dying_tcb_is_repaired_inside_a_cnode` | fc6aec4 |
 | 290.3 check_invariants parent mọi nhánh | **xong** | `check_invariants_rejects_a_parent_pointing_at_a_dead_table` | f5c28b4 |
 | 290.4 P1-10 reply_epoch tăng mỗi lần call | **xong** | `every_call_issues_a_fresh_reply_epoch` | f5c28b4 |
-| 290.6 fuzz 100k × 3 định dạng | chưa | — | — |
+| 290.5 trùng lặp đếm | không phát sinh (không có gì để sửa) | — | — |
+| 290.6 fuzz 100k × 3 định dạng | **xong** (bước `fuzz` của gate: `syscall_fuzz_long_100k_keeps_invariants`, 3 `PteFormat`) | — | — |
 
 ## Số đo
 
@@ -41,6 +42,20 @@ Gửi: Agent 0. Người thực hiện: agent thi hành (phiên tự động 10/
 | Gate | **10/10 PASS** (thêm bước `tests-present` mới: so sàn thay hằng số 138) |
 | QEMU | 3 arch × 3 = 9/9 PASS |
 | Soak 100 × 3 (sau r290, chạy sạch, không build song song) | **299/300 = 99,67%** — riscv 99, aarch64 100, x86_64 100 |
+
+## r291 — FS (một phần, commit `c59bbb8`, `ca78f58`)
+
+| Mục | Trạng thái | Test đỏ-trước |
+|---|---|---|
+| 291.1 P1-1 capacity theo superblock | **xong** | `mount_accepts_a_device_larger_than_the_formatted_area` |
+| 291.2 P1-2 biên chỉ số indirect | **xong** | `read_with_a_forged_size_returns_corrupt_instead_of_panicking` |
+| 291.3 lỗ file thưa | **xong** | `writing_past_eof_leaves_a_readable_zero_filled_hole` |
+| 291.4 rollback khi create lỗi | **xong** | `failed_create_rolls_back_the_allocated_inode` |
+| 291.5 unlink inode đang mở | **chưa** — cần bảng fd ở phía FS server (vifast-fs không giữ fd) | — |
+| 291.6 fsck đọc dữ liệu đĩa | **một phần** (`fsck_mark_block` theo capacity); phần "đọc lại từ đĩa" chưa | — |
+| 291.7 bền vững 7 pha | chưa (bước `persist` của gate vẫn xanh) | — |
+
+`vifast-fs`: **44 test**.
 
 ## BLOCKER FS V2 OK
 

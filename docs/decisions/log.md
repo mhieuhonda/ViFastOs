@@ -87,3 +87,4 @@
 | r290 | Soak 100×3 = 299/300; lần hỏng duy nhất là T33b riscv (fault + no runnable thread), không liên quan TLB/IPI | Tiêu chí 289.6 | — |
 | r290 | 290.3 invariant cap.parent ở mọi nhánh qua `for_each_cap`; 290.4 `reply_epoch` tăng mỗi lần call (guard K49 hết rỗng) | Bản soát: parent chỉ kiểm khi badge!=0; epoch không bao giờ tăng | f5c28b4 |
 | r291 | FS: biên theo superblock (`capacity`), chặn chỉ số indirect bịa, lỗ file thưa hợp lệ (read trả 0, fsck bỏ qua), `fsck_mark_block` theo capacity | Bản soát P1-1/P1-2 + 291.3; ba test đỏ-trước | (commit r291) |
+| r291 | 291.4 `create` hỏng rollback inode đã cấp (`release_inode`) | Thư mục đầy giữa `create` để lại inode mồ côi; test đỏ-trước chứng minh rò rỉ đúng 1 inode | ca78f58 |
