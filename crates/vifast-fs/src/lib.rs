@@ -173,6 +173,9 @@ pub struct CachedDev<D> {
     hits: u64,
     misses: u64,
     writes: u64,
+    /// Số lần "ghi xong mà đọc lại thấy khác" — bằng chứng trực tiếp của việc
+    /// mất lệnh ghi (T26).
+    lost_writes: u64,
 }
 
 impl<D: BlockDev> CachedDev<D> {
@@ -184,6 +187,7 @@ impl<D: BlockDev> CachedDev<D> {
             hits: 0,
             misses: 0,
             writes: 0,
+            lost_writes: 0,
         }
     }
 
@@ -193,6 +197,11 @@ impl<D: BlockDev> CachedDev<D> {
             misses: self.misses,
             writes: self.writes,
         }
+    }
+
+    /// Số lần ghi-xong-mà-đọc-lại-khác (T26). Chỉ dùng cho chẩn đoán.
+    pub fn lost_writes(&self) -> u64 {
+        self.lost_writes
     }
 
     pub fn inner(&self) -> &D {
@@ -274,10 +283,18 @@ impl<D: BlockDev> BlockDev for CachedDev<D> {
     }
 
     fn flush(&mut self) -> Result<(), FsError> {
+        // T26 (đèn quyết định): ghi xong thì ĐỌC LẠI và so. Nếu lệnh ghi bị
+        // thiết bị bỏ im lặng (giả thuyết "burst flush bị QEMU đánh rơi" ghi
+        // trong chú thích `CACHE_SLOTS` ở đầu tệp), thì đọc lại sẽ thấy ảnh
+        // cũ — đây là cách chứng minh trực tiếp thay vì suy từ status.
         for slot in self.slots.iter_mut().flatten() {
             if slot.dirty {
                 self.inner.write(slot.lba, &slot.data)?;
                 slot.dirty = false;
+                let mut verify = [0u8; BLOCK_SIZE];
+                if self.inner.read(slot.lba, &mut verify).is_ok() && verify != slot.data {
+                    self.lost_writes = self.lost_writes.wrapping_add(1);
+                }
             }
         }
         self.inner.flush()

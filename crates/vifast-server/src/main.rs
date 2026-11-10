@@ -733,6 +733,23 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             // `FS FSCK OK` chỉ in lần đầu nên không dùng được để suy "server
             // không trả lời".
             write(if ok { b"FSV ok\n" } else { b"FSV err\n" });
+            // T26: bằng chứng TRỰC TIẾP của mất lệnh ghi (ghi xong đọc lại khác).
+            let lost = fs().dev().lost_writes();
+            if lost > 0 {
+                let mut line = [0u8; 16];
+                line[0] = b'F';
+                line[1] = b'S';
+                line[2] = b' ';
+                line[3] = b'L';
+                line[4] = b'O';
+                line[5] = b'S';
+                line[6] = b'T';
+                line[7] = b' ';
+                line[8] = b'0' + ((lost % 100) / 10) as u8;
+                line[9] = b'0' + (lost % 10) as u8;
+                line[10] = b'\n';
+                write(&line[..11]);
+            }
             if let Err(error) = outcome {
                 let mut line = [0u8; 24];
                 line[0] = b'F';

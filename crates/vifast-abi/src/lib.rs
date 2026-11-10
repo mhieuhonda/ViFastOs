@@ -686,7 +686,7 @@ pub mod vfs {
     /// chứ không phải phiên r254–r262. Muốn nâng lại 256 thì phải kèm một
     /// test tái hiện được và sửa gốc trước — xem
     /// `docs/reviews/ViFastOs-report-r262.md` Phần 4.
-    pub const MAX_IO: usize = 128;
+    pub const MAX_IO: usize = 256;
     pub const MAX_FILES: usize = 16;
     pub const MAX_PATH: usize = 128;
     pub const MAX_FD: usize = 8;

@@ -1715,3 +1715,25 @@ thể xảy ra).
 Ở 256 có **ít lệnh ATA hơn** (ít round-trip hơn) và **0 lỗi/0 retry** — kể cả ở
 lần boot đỏ. ⇒ **tầng ATA bị loại khỏi T26**. (Bản vá `wait_done`/`ATA STAT` vẫn
 là cải thiện đúng và đang để trong `git stash` để đo riêng trước khi nhận.)
+
+## r294.T26 — LOẠI TRỪ dứt khoát "mất lệnh ghi" (đọc-lại-sau-ghi)
+
+Thêm đèn bằng chứng **trực tiếp** thay vì suy từ status: sau mỗi lần `CachedDev`
+đẩy một block dirty xuống thiết bị, **đọc lại** và so với ảnh trong cache; lệch
+thì tăng bộ đếm, server in `FS LOST <n>` ở nhánh FSCK.
+
+**Đo `MAX_IO=256`, 12 boot (4 đỏ):**
+
+| Kết quả | `FS LOST` | `V2GROUP` |
+|---|---|---|
+| 8 lần xanh | **0** | — |
+| 4 lần đỏ | **0** | 06 |
+
+⇒ **Không có lần nào ghi xong mà đọc lại thấy khác** — kể cả ở các lần đỏ. Vậy
+giả thuyết "burst flush bị QEMU đánh rơi lệnh ghi" (chú thích `CACHE_SLOTS` đầu
+tệp `vifast-fs`) **bị loại bằng đo**, không chỉ bằng lập luận. Kết hợp với phép
+đo ATA trước đó (`cmds 128 > 256`, `retry=0`, `fail=0`), tầng thiết bị **hoàn
+toàn sạch** trong lớp lỗi này.
+
+⇒ Gốc T26 nằm **trong phần mềm FS** (journal/cache/thứ tự commit) hoặc ở **chen
+ngang giữa hai client** (root và client test cùng ghi FS), không phải ở driver.
