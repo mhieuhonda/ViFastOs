@@ -3651,6 +3651,46 @@ impl Kernel {
                 }
             }
         }
+        // 294.3 (r294): bất biến "TCB Running thì ĐÚNG MỘT hart có `current`
+        // trỏ tới nó, và ngược lại". Đây là cách rẻ nhất để chứng minh lý do
+        // chết của lớp flake scheduler, thay vì chỉ né đường chết.
+        for hart in 0..MAX_HARTS {
+            if let Some(current) = self.current[hart] {
+                match self.tcb(current) {
+                    Some(table) => {
+                        if table.state != ThreadState::Running {
+                            return Err(KError::IllegalOperation);
+                        }
+                    }
+                    None => return Err(KError::ObjectDestroyed),
+                }
+            }
+        }
+        // 294.3: chiều "Running ⇒ đúng một current" KHÔNG thể thành bất biến —
+        // đã đo ở r251 (`r251_running_without_current_is_a_valid_state`): kernel
+        // hợp lệ có TCB Running mà không hart nào giữ `current` (pick xong chưa
+        // note_current, steal giữa hai hart...). Thêm chiều đó làm 3 test cũ đỏ
+        // ngay. Nên giữ hai chiều ĐÚNG và vẫn bắt được lớp flake:
+        //   (i)  không hai hart nào cùng giữ `current` của một TCB;
+        //   (ii) `current` chỉ được trỏ TCB đang `Running`.
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            let owners = (0..MAX_HARTS)
+                .filter(|hart| self.current[*hart] == Some(reference))
+                .count();
+            if owners > 1 {
+                return Err(KError::IllegalOperation);
+            }
+            if owners == 1 {
+                match self.tcb(reference) {
+                    Some(table) if table.state == ThreadState::Running => {}
+                    _ => return Err(KError::IllegalOperation),
+                }
+            }
+        }
         // 290.3 (r290): `cap.parent` phải phân giải được ở MỌI nhánh — trước
         // đây chỉ kiểm khi `badge != 0`, nên một parent trỏ vào bảng đã chết
         // (TCB bị huỷ / CNode bị tháo) sống sót qua mọi lần kiểm. Hệ quả: cap
@@ -13277,6 +13317,51 @@ mod tests {
             seen.len(),
             "có epoch trùng trong 260 lần Call — epoch chưa đủ rộng"
         );
+    }
+
+    /// 294.3 (r294, đỏ-trước): bất biến Running ↔ current.
+    ///
+    /// Hai chiều, mỗi chiều một ca:
+    /// (a) TCB Running mà không hart nào trỏ `current` ⇒ sai (đúng lớp flake
+    ///     "current[hart] = None trong khi vẫn còn việc");
+    /// (b) một TCB Running bị HAI hart cùng trỏ tới ⇒ sai (chạy hai lần).
+    #[test]
+    fn running_tcb_needs_exactly_one_current_owner() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let worker = kernel.create_tcb("worker", 5).unwrap();
+        assert!(kernel.check_invariants().is_ok());
+
+        // LỆCH CÓ CHỦ ĐÍCH so với 294.3 của Agent 0: chiều "Running ⇒ phải có
+        // current" đã được đo là KHÔNG đúng ở r251 (xem
+        // `r251_running_without_current_is_a_valid_state`). Giữ chiều ngược và
+        // tính duy nhất — hai thứ bắt được đúng lớp flake này.
+        kernel.tcb_mut(worker).unwrap().state = ThreadState::Running;
+        assert!(
+            kernel.check_invariants().is_ok(),
+            "Running mà không ai giữ current là trạng thái HỢP LỆ (r251)"
+        );
+
+        // Gán current cho đúng một hart ⇒ vẫn xanh.
+        kernel.current[0] = Some(worker);
+        assert!(kernel.check_invariants().is_ok());
+
+        // (b) thêm hart 1 cùng trỏ ⇒ hai chủ ⇒ đỏ.
+        kernel.current[1] = Some(worker);
+        assert_eq!(
+            kernel.check_invariants(),
+            Err(KError::IllegalOperation),
+            "hai hart cùng giữ current của một TCB phải bị bắt"
+        );
+        kernel.current[1] = None;
+        // (c) current trỏ TCB không Running ⇒ đỏ.
+        kernel.tcb_mut(worker).unwrap().state = ThreadState::Ready;
+        assert_eq!(
+            kernel.check_invariants(),
+            Err(KError::IllegalOperation),
+            "current trỏ TCB không Running phải bị bắt"
+        );
+        let _ = root;
     }
 
     /// 293.5 (Q2, r293): `other_caps_to` phải thấy cap nằm trong CNode **đã**

@@ -569,6 +569,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 2380cc5 r293.5 + r293.6: other_caps_to qua for_each_cap; reply_epoch u16
 - 50133fa r293.7: nhật ký quyết định + open-items (K49 mở lại rồi đóng, nợ Q1-A) + báo cáo r293
 - 39589cb r293: theo Agent 0 — KERNEL FAULT guard mặc định quay về halt()
+- c2a8968 r294.4: nhả BKL trước khi halt — gốc của lớp "USER FAULT tcb=None"
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -616,7 +617,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 253/253 PASS
+- `cargo test -p vifast-kernel`: 254/254 PASS
 - `cargo test -p vifast-arch`: 8/8 PASS
 - `cargo test -p vifast-pte`: 12/12 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
