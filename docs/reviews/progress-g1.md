@@ -1381,3 +1381,43 @@ có `RING DUMP` (bản đo không đèn) ⇒ lượt sau phải chạy có đèn
 
 **T31**: không tái hiện trong 200 boot; đã có (1 lần) trong lượt 300 boot trước.
 Chưa sửa được ⇒ giữ mở, cần lượt có đèn để chụp chuỗi `PAGER2_LABEL`.
+
+## r294.T31 — ghi LẠI context sau `apply_resume` (việc song song với subagent)
+
+**Phân tích (subagent, chỉ đọc mã, không build/QEMU):** hai dòng
+`PAGER EVICT OK` ⇒ thân nhánh PAGER2 chạy **≥3 lần** dù client chỉ có hai lệnh
+`send`. Cơ chế khả dĩ nhất (~60 %): `apply_resume()` vá context SỐNG nhưng
+**không ghi lại** `contexts[slot]`; lần nạp slot sau đó chạy lại **snapshot cũ**,
+mà snapshot đó có thể mang đúng bộ thanh ghi message ⇒ thân nhánh chạy lại
+nguyên vẹn. Hai cơ chế còn lại: (a) cùng TCB trên hai hart (~5 %, `pick_on`
+không kiểm `current` của hart khác), (b) hai TCB chung slot (~20 %, lỗ
+`.unwrap_or(0)`).
+
+**Đã sửa:**
+1. **5 điểm nạp context**: sau `apply_resume(...)` ghi lại `contexts[slot] = *context`.
+2. **Thiếu slot**: tách hàm thuần `slot_choice(Option<u8>) -> (usize, bool)` +
+   test host; `slot_or_report` in MỘT lần `CTX SLOT NONE hart=… tcb=…` thay vì
+   lặng lẽ dùng slot 0.
+3. **Gỡ feature chết `diag-pick`** (khai báo ở 2 Cargo.toml nhưng không dòng mã nào
+   dùng — tài liệu cũ ghi sai rằng nó đã được nối).
+
+**Phép đo thay thế để chốt T31 (chưa chạy — hết giờ):** trên serial của lần hỏng
+T31, đếm `USER FAULT … addr=0x1001001000`: **2** ⇒ replay phía server (cơ chế c);
+**3** ⇒ client chạy lại ở frame fault. `scripts/test-qemu.py` đã có
+`fault_addresses()` dùng được ngay, **không cần sửa mã**.
+
+Test: `vifast-runtime` 4 test; sàn **375 test / 11 crate**; gate **10/10**.
+
+## T33a — trạng thái chốt cuối ngày 10/11
+
+| Bản vá | Đo | Kết quả |
+|---|---|---|
+| (nền) | 305 boot | 2,6 % |
+| LINT0 (AP không mask LINT0 của BSP) | 301 boot | **0,66 %** |
+| + `KERNEL_READY` (AP không chạy task trước khi kernel init xong) | 301 boot | 1,0 % (3/301) |
+| + ghi lại context (T31) | *chưa đo* | — |
+
+Còn mở, đã ghi rõ cách làm tiếp: T-ROOT `main.rs:480` 1/200 (cần lượt có đèn để
+xem `RING` còn `tick=2`), T-SCHED 1/301 (cần đèn xem `lvt0`), T31 (dùng phép đo
+`USER FAULT` ở trên), `BIN EXEC FAIL`/`DESTROY DIAG stuck=4` (TCB kẹt `Busy` —
+nghi TCB còn `Running` trên hart phụ nên không huỷ được), T26/T33b/294.5 chưa làm.
