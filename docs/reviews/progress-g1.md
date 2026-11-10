@@ -1791,3 +1791,30 @@ Bản đánh giá còn nêu rủi ro quan trọng khác: `vfs_reply` gộp `EIO`
 nên retry không phân biệt được lỗi thoáng qua với block hỏng, và việc "xanh ở
 256" không được quy công cho retry khi `MAX_IO` cũng vừa đổi — hai thay đổi phải
 đo **tách rời**.
+
+## r294.T26 — ĐÈN `V2RD`: vòng liệt kê dừng ở **index 6** với ENOENT
+
+Đèn mới in **lý do dừng** của vòng readdir trong khối V2.
+
+**Đo `MAX_IO=256`, 8/20 boot đỏ — TẤT CẢ cùng một dạng:**
+
+```
+V2RD end n=06        (dừng ở index 6, lý do Ok(None) ⇒ server trả ENOENT)
+V2GROUP 06
+```
+
+Kết hợp với `V2CHK open=1 rd=2` trước đó ⇒ **cùng một hệ thống tệp, cùng thời
+điểm**: một chuỗi `readdir` liên tiếp (index 0,1,2,…) bị server tuyên bố "hết"
+tại index 6, nhưng một lần `readdir` **mới từ index 0** ngay sau đó lại thấy entry
+`d`, và `open("/d")` cũng thành công.
+
+⇒ Lỗi nằm ở **`read_dir_entry_full`** (`crates/vifast-fs/src/lib.rs:2092-2105`):
+nó lấy inode từ `self.inodes` (bản trong RAM) và đếm `seen` theo số entry **không
+rỗng** của block đọc qua cache. Nếu ảnh block/dir-inode trong RAM lệch với đĩa
+đúng trong chuỗi đó thì `seen` không bao giờ chạm index 6 ⇒ trả `Ok(None)` ⇒
+client dừng ⇒ mất `d`. Đây là chỗ hẹp nhất và đã có file:dòng cụ thể.
+
+**Việc tiếp (đúng một chỗ):** đèn so **ảnh cache vs ảnh đĩa** của block thư mục
+gốc ngay trong `read_dir_entry_full` khi trả `Ok(None)` mà `index` còn nhỏ hơn số
+entry đếm được bằng đường khác; nếu lệch ⇒ vá cache/inode-refresh (nghi
+`self.inodes`/slot cache không được cập nhật sau `commit`).

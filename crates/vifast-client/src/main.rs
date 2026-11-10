@@ -1177,11 +1177,58 @@ pub extern "C" fn client_main() -> ! {
     let mut group4 = 0u8;
     if let Some((root_fd, _)) = vfs_open(b"/", 0) {
         let mut entry = 0u64;
-        while let Ok(Some((_, name, len))) = vfs_readdir(root_fd, entry) {
-            if len == 1 && name[0] == b'd' {
-                found_d = true;
+        // T26: in LÝ DO DỪNG (đèn) — retry 2 lần không cứu được ⇒ lỗi nằm ở
+        // nhánh `Ok(None)`/ENOENT chứ không phải `Err`, nên phải biết vòng lặp
+        // dừng ở index nào và vì lý do gì.
+        loop {
+            match vfs_readdir(root_fd, entry) {
+                Ok(Some((_, name, len))) => {
+                    if len == 1 && name[0] == b'd' {
+                        found_d = true;
+                    }
+                    entry += 1;
+                }
+                Ok(None) => {
+                    if !found_d {
+                        let mut line = [0u8; 20];
+                        line[0] = b'V';
+                        line[1] = b'2';
+                        line[2] = b'R';
+                        line[3] = b'D';
+                        line[4] = b' ';
+                        line[5] = b'e';
+                        line[6] = b'n';
+                        line[7] = b'd';
+                        line[8] = b' ';
+                        line[9] = b'n';
+                        line[10] = b'=';
+                        line[11] = b'0' + ((entry / 10) % 10) as u8;
+                        line[12] = b'0' + (entry % 10) as u8;
+                        line[13] = b'\n';
+                        let _ = vifast_user::debug_write(line.as_ptr() as u64, 14);
+                    }
+                    break;
+                }
+                Err(code) => {
+                    if !found_d {
+                        let mut line = [0u8; 20];
+                        line[0] = b'V';
+                        line[1] = b'2';
+                        line[2] = b'R';
+                        line[3] = b'D';
+                        line[4] = b' ';
+                        line[5] = b'e';
+                        line[6] = b'r';
+                        line[7] = b'r';
+                        line[8] = b' ';
+                        line[9] = b'0' + ((code % 100) / 10) as u8;
+                        line[10] = b'0' + (code % 10) as u8;
+                        line[11] = b'\n';
+                        let _ = vifast_user::debug_write(line.as_ptr() as u64, 12);
+                    }
+                    break;
+                }
             }
-            entry += 1;
         }
         // T26: tách nhóm 04 thành 04a (open "/"), 04b (close), 04c (không thấy
         // entry "d") — bản cũ gộp cả ba nên đọc ra "04" KHÔNG đủ khẳng định.
