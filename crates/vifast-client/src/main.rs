@@ -387,6 +387,24 @@ fn vfs_fsck() -> bool {
         line[10] = b'0' + code % 10;
         line[11] = b'\n';
         let _ = vifast_user::debug_write(line.as_ptr() as u64, 12);
+        // T26 đèn L1: in cả `error` và `label` — `FSCKERR` một mình KHÔNG phân
+        // biệt được "kernel trả WouldBlock/OOM" với "server trả ERR/EIO".
+        let mut detail = [0u8; 24];
+        detail[0] = b'F';
+        detail[1] = b'K';
+        detail[2] = b'E';
+        detail[3] = b' ';
+        let error_code = reply.error as u32 % 100;
+        detail[4] = b'0' + ((error_code / 10) % 10) as u8;
+        detail[5] = b'0' + (error_code % 10) as u8;
+        detail[6] = b' ';
+        detail[7] = b'l';
+        detail[8] = b'=';
+        let label_code = (reply.label % 100) as u32;
+        detail[9] = b'0' + ((label_code / 10) % 10) as u8;
+        detail[10] = b'0' + (label_code % 10) as u8;
+        detail[11] = b'\n';
+        let _ = vifast_user::debug_write(detail.as_ptr() as u64, 12);
     }
     outcome.is_ok()
 }
@@ -1081,6 +1099,7 @@ pub extern "C" fn client_main() -> ! {
     });
 
     let mut v2 = true;
+    let mut v2_failed: u8 = 0;
     v2_step(1);
     v2 &= vfs_mkdir(b"/d").is_ok();
     v2_step(2);
@@ -1131,6 +1150,9 @@ pub extern "C" fn client_main() -> ! {
             done += count;
         }
         v2 &= done == pattern.len() && readback == pattern;
+        if !v2 && v2_failed == 0 {
+            v2_failed = 3;
+        }
         v2 &= vfs_close(fd).is_some();
     } else {
         v2 = false;
@@ -1151,6 +1173,9 @@ pub extern "C" fn client_main() -> ! {
         v2 = false;
     }
     v2 &= found_d;
+    if !v2 && v2_failed == 0 {
+        v2_failed = 4;
+    }
     v2_step(5);
     let mut found_a = false;
     if let Some((dir_fd, _)) = vfs_open(b"/d", 0) {
@@ -1166,10 +1191,16 @@ pub extern "C" fn client_main() -> ! {
         v2 = false;
     }
     v2 &= found_a;
+    if !v2 && v2_failed == 0 {
+        v2_failed = 5;
+    }
     v2_step(6);
     v2 &= vfs_rename(b"/d/a", b"/d/b").is_ok();
     v2_step(7);
     v2 &= vfs_open_error(b"/d/a", 0) == vfs::ENOENT;
+    if !v2 && v2_failed == 0 {
+        v2_failed = 6;
+    }
     if let Some((fd, _)) = vfs_open(b"/d/b", 0) {
         v2 &= vfs_stat(fd) == Some(600);
         v2 &= vfs_truncate(fd, 100).is_ok();
@@ -1180,11 +1211,17 @@ pub extern "C" fn client_main() -> ! {
     }
     v2_step(8);
     v2 &= vfs_unlink(b"/d/b").is_ok();
+    if !v2 && v2_failed == 0 {
+        v2_failed = 8;
+    }
     v2 &= vfs_open_error(b"/d/b", 0) == vfs::ENOENT;
     v2_step(9);
     v2 &= vfs_mkdir(b"/d/x").is_ok();
     v2 &= vfs_unlink(b"/d").is_err(); // ENOTEMPTY
     v2 &= vfs_unlink(b"/d/x").is_ok();
+    if !v2 && v2_failed == 0 {
+        v2_failed = 9;
+    }
     v2 &= vfs_unlink(b"/d").is_ok();
     v2 &= vfs_mkdir(b"/d").is_ok();
     v2 &= vfs_mkdir(b"/d").is_err(); // EEXIST
@@ -1207,6 +1244,8 @@ pub extern "C" fn client_main() -> ! {
         reason[7] = b'v';
         reason[8] = b'2';
         reason[9] = b'=';
+        // NHÃN KHÔNG NHẬP NHẰNG (bản trước in `u8::from(!x)` nên đọc thành
+        // "v2=1" lại là "v2 SAI" — chính tôi đã đọc ngược và kết luận sai).
         reason[10] = b'0' + u8::from(!v2);
         reason[11] = b' ';
         reason[12] = b'f';
@@ -1217,6 +1256,19 @@ pub extern "C" fn client_main() -> ! {
         reason[17] = b'0' + u8::from(!fsck);
         reason[18] = b'\n';
         let _ = vifast_user::debug_write(reason.as_ptr() as u64, 19);
+        let mut which = [0u8; 16];
+        which[0] = b'V';
+        which[1] = b'2';
+        which[2] = b'G';
+        which[3] = b'R';
+        which[4] = b'O';
+        which[5] = b'U';
+        which[6] = b'P';
+        which[7] = b' ';
+        which[8] = b'0' + (v2_failed / 10) % 10;
+        which[9] = b'0' + v2_failed % 10;
+        which[10] = b'\n';
+        let _ = vifast_user::debug_write(which.as_ptr() as u64, 11);
     }
     write(if v2 && fsck {
         b"FS V2 OK\n"

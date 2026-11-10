@@ -729,6 +729,10 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             // T26: in MÃ LỖI fsck (trước đây chỉ "FS CORRUPT", không biết vì sao).
             let outcome = fs().fsck();
             let ok = outcome.is_ok();
+            // T26 đèn L3: in PHÁN QUYẾT VÔ ĐIỀU KIỆN (bỏ cổng `FSCK_PRINTED`) —
+            // `FS FSCK OK` chỉ in lần đầu nên không dùng được để suy "server
+            // không trả lời".
+            write(if ok { b"FSV ok\n" } else { b"FSV err\n" });
             if let Err(error) = outcome {
                 let mut line = [0u8; 24];
                 line[0] = b'F';

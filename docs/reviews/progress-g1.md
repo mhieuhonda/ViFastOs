@@ -1548,9 +1548,19 @@ Ba đèn được thêm và **giữ lại lâu dài** (output ngắn, không n�
 2. `V2FAIL v2=<0|1> fsck=<0|1>` — in lý do trước khi in `FS V2 BAD`.
 3. Mã lỗi fsck hai phía: server `FS ERR <mã>`, client `FSCKERR <mã>`.
 
-**Kết quả (MAX_IO=256, 12/40 đỏ):** lần đỏ QUAN SÁT ĐƯỢC (n=1, xem đính chính
-bên dưới) tới `V2S11` và in **`V2FAIL v2=1 fsck=0`** ⇒ mọi kiểm tra V2 khác ĐẠT,
-chỉ `vfs_fsck()` trả false.
+**KẾT QUẢ ĐÚNG (đo lại có đèn nhóm, 3/3 lần đỏ):** `V2GROUP 04` ⇒ nhóm kiểm tra
+SAI ĐẦU TIÊN là `v2 &= found_d` — **readdir("/") KHÔNG thấy thư mục `d` vừa tạo**.
+Và `fsck` **đạt**.
+
+> **ĐÍNH CHÍNH KÉP (quan trọng, ghi để không lặp lại):**
+> (1) Đèn cũ in `u8::from(!v2)`/`u8::from(!fsck)` nên `V2FAIL v2=1 fsck=0` thực
+> nghĩa là **v2 SAI, fsck ĐÚNG** — tôi đã đọc ngược thành "mọi thứ đạt, chỉ fsck
+> sai" và ghi vào báo cáo r262. Nay đèn in thêm `V2GROUP <nhóm>` để khỏi nhập
+> nhằng.
+> (2) Bản thân bản phân tích của subagent (dựa trên kết luận sai của tôi) cũng
+> đã cảnh báo đúng rằng phải kiểm lại — và nó đúng.
+> Kết luận sai "lỗi ở `vfs_fsck`" đã được gỡ khỏi mọi tài liệu; **cách giải
+> thích cũ trong r262 (readdir đọc ảnh cũ) là ĐÚNG**.
 
 **ĐÍNH CHÍNH (subagent phát hiện, quan trọng):** con số "12/40 đỏ" là đúng, nhưng
 câu "100 % lần đỏ đều in V2FAIL" chỉ có **n=1** — ba lần đỏ còn lại là build CŨ
@@ -1591,3 +1601,12 @@ Bản vá cho H1 (nếu đèn xác nhận): `Call` **không bao giờ** được
 park trong `ep.send`; kèm `ep.recv.remove(receiver)` trước `push` (`ipc.rs:335`).
 Rủi ro phải đo: nếu trạng thái "giữ caller + còn trong hàng recv" là vĩnh viễn
 thì đỏ sẽ biến thành **treo** (mất `V2S11`) — phải chạy lại 40 boot để so.
+
+### Đèn `V2GROUP` (giữ lại) — nhóm kiểm tra V2 sai đầu tiên
+
+Nhóm: 3 = đọc lại 600 B, **4 = readdir("/") thấy `d`**, 5 = readdir("/d") thấy
+`a`, 6 = rename/ENOENT sau rename, 8 = unlink `/d/b`, 9 = unlink `/d/x`.
+
+Đo `MAX_IO=256`, 3/3 lần đỏ đều `V2GROUP 04` ⇒ **read-your-own-write hỏng ngay ở
+bước đọc thư mục gốc sau `mkdir("/d")`**. Đây là dữ liệu để vòng sau soi
+`vfs_readdir`/cache block thư mục ở FS server.
