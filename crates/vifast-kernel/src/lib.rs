@@ -1466,6 +1466,7 @@ impl Kernel {
                 slot: source_slot,
             },
             id: source.id,
+            cnode: self.table_of(caller),
         });
         derived.id = self.next_cap_id;
         self.next_cap_id = self.next_cap_id.wrapping_add(1);
@@ -2156,7 +2157,7 @@ impl Kernel {
         let creator = match creator {
             Some(addr) => {
                 let cap = self.cap_at(addr).ok_or(KError::InvalidCap)?;
-                Some(CapRef { addr, id: cap.id })
+                Some(self.cap_ref(addr, cap.id))
             }
             None => None,
         };
@@ -2343,7 +2344,7 @@ impl Kernel {
                 if cap.obj != untyped || cap.ty != ObjType::Untyped {
                     return Err(KError::InvalidCap);
                 }
-                Some(CapRef { addr, id: cap.id })
+                Some(self.cap_ref(addr, cap.id))
             }
             None => None,
         };
@@ -3704,6 +3705,122 @@ impl Kernel {
         Ok(cap)
     }
 
+    /// 290.1 (r290): bảng VẬT LÝ chứa một slot của `tcb` — `Some(cnode)` khi
+    /// TCB dùng CNode, `None` khi cap nằm trong bảng nhúng của TCB.
+    pub(crate) fn table_of(&self, tcb: ObjRef) -> Option<ObjRef> {
+        if self.root == Some(tcb) {
+            None
+        } else {
+            self.tcb(tcb).and_then(|table| table.cnode)
+        }
+    }
+
+    /// Dựng `CapRef` cho một slot, ghi kèm bảng vật lý (290.1).
+    pub(crate) fn cap_ref(&self, addr: SlotAddr, id: u64) -> CapRef {
+        CapRef {
+            addr,
+            id,
+            cnode: self.table_of(addr.tcb),
+        }
+    }
+
+    /// Phân giải `CapRef` về cap thật, đi qua bảng vật lý đã ghi.
+    ///
+    /// 290.1: nhờ `cnode`, cap trong CNode **đã tháo khỏi TCB** vẫn phân giải
+    /// được — trước đây chỉ có `SlotAddr{tcb, slot}` nên mọi bước nhảy qua
+    /// CNode mồ côi đều thất bại và `revoke` trả `Ok(0)` (P0-3).
+    /// 290.1 (r290): bộ duyệt MỘT bảng chìa vật lý dùng chung.
+    ///
+    /// Đi qua **mọi** bảng đang tồn tại: `root_cspace`, bảng nhúng của từng
+    /// TCB, và `slots` của **mọi** CNode — kể cả CNode đã tháo khỏi TCB (đó
+    /// là chỗ bốn bộ duyệt cũ bỏ sót, gốc của P0-3). Không cấp phát.
+    ///
+    /// `f(nhãn bảng, chỉ số slot, &cap)`; slot trống không gọi.
+    pub fn for_each_cap<F: FnMut(TableId, usize, &Cap)>(&self, mut f: F) {
+        if self.root.is_some() {
+            for (slot, cap) in self.root_cspace.iter().enumerate() {
+                if let Some(cap) = cap {
+                    f(TableId::Root, slot, cap);
+                }
+            }
+        }
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self.root == Some(reference) {
+                continue;
+            }
+            match self.get(reference).map(|object| object.kind) {
+                Some(Kind::Tcb(_)) => {
+                    let Some(table) = self.tcb(reference) else {
+                        continue;
+                    };
+                    if table.cnode.is_none() {
+                        for (slot, cap) in table.cspace.iter().enumerate() {
+                            if let Some(cap) = cap {
+                                f(TableId::Tcb(reference), slot, cap);
+                            }
+                        }
+                    }
+                }
+                Some(Kind::CNode(_)) => {
+                    let Some(node) = self.cnode(reference) else {
+                        continue;
+                    };
+                    for (slot, cap) in node.slots.iter().enumerate() {
+                        if let Some(cap) = cap {
+                            f(TableId::CNode(reference), slot, cap);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Số slot mà `for_each_cap` sẽ đi qua — dùng cho test "đếm bằng tổng
+    /// dung lượng các bảng đang tồn tại".
+    pub fn cap_slot_capacity(&self) -> usize {
+        let mut total = 0usize;
+        if self.root.is_some() {
+            total += self.root_cspace.len();
+        }
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if self.root == Some(reference) {
+                continue;
+            }
+            match self.get(reference).map(|object| object.kind) {
+                Some(Kind::Tcb(_)) => {
+                    if self
+                        .tcb(reference)
+                        .is_some_and(|table| table.cnode.is_none())
+                    {
+                        total += MAX_CAPS_TASK;
+                    }
+                }
+                Some(Kind::CNode(_)) => total += MAX_CAPS_TASK,
+                _ => {}
+            }
+        }
+        total
+    }
+
+    pub fn resolve_cap_ref(&self, reference: CapRef) -> Option<Cap> {
+        let slot = reference.addr.slot as usize;
+        match reference.cnode {
+            Some(cnode) => self
+                .cnode(cnode)
+                .and_then(|node| node.slots.get(slot).copied().flatten()),
+            None => self.cap_at(reference.addr),
+        }
+    }
+
     pub fn cap_at(&self, addr: SlotAddr) -> Option<Cap> {
         self.cspace(addr.tcb)?
             .get(addr.slot as usize)
@@ -3724,7 +3841,7 @@ impl Kernel {
         // A deletion that would orphan a live object or a child capability is
         // refused for every cap type, not just Untyped.  The object itself is
         // not destroyed: deleting a cap only removes the slot.
-        let target = CapRef { addr, id: cap.id };
+        let target = self.cap_ref(addr, cap.id);
         // Vòng 101 (K69): build_task_space retype VSpace/PageTable/Frame
         // với creator=None — sống, tốn byte, 0 vé. Xóa vé Untyped cuối thì
         // mất mọi đường retype/revoke chạm tới (collect chỉ lấy
@@ -3795,6 +3912,7 @@ impl Kernel {
                 slot: src_slot,
             },
             id: source.id,
+            cnode: self.table_of(src_tcb),
         });
         self.install_cap(dst_tcb, dst_slot, derived)
     }
@@ -3839,7 +3957,10 @@ impl Kernel {
         if creator == target {
             return true;
         }
-        let Some(cap) = self.cap_at(creator.addr) else {
+        // 290.2: phân giải qua BẢNG VẬT LÝ mà `CapRef` ghi (CNode đã tháo
+        // khỏi TCB vẫn phân giải được) — trước đây chỉ có `SlotAddr` nên bước
+        // nhảy qua CNode mồ côi luôn thất bại (P0-3).
+        let Some(cap) = self.resolve_cap_ref(creator) else {
             return false;
         };
         if cap.id != creator.id {
@@ -3855,7 +3976,7 @@ impl Kernel {
             if parent_ref == target {
                 return true;
             }
-            let Some(parent_cap) = self.cap_at(parent_ref.addr) else {
+            let Some(parent_cap) = self.resolve_cap_ref(parent_ref) else {
                 return false;
             };
             if parent_cap.id != parent_ref.id {
@@ -3912,7 +4033,7 @@ impl Kernel {
     }
 
     fn survivor_for(&self, cap_ref: CapRef, dying: &[CapRef]) -> Option<CapRef> {
-        let cap = self.cap_at(cap_ref.addr)?;
+        let cap = self.resolve_cap_ref(cap_ref)?;
         if cap.id != cap_ref.id {
             return None;
         }
@@ -3921,11 +4042,11 @@ impl Kernel {
         while let Some(parent_ref) = parent {
             if !dying.contains(&parent_ref) {
                 return self
-                    .cap_at(parent_ref.addr)
+                    .resolve_cap_ref(parent_ref)
                     .is_some_and(|candidate| candidate.id == parent_ref.id)
                     .then_some(parent_ref);
             }
-            let parent_cap = self.cap_at(parent_ref.addr)?;
+            let parent_cap = self.resolve_cap_ref(parent_ref)?;
             depth += 1;
             if depth > MAX_OBJECTS * MAX_CAPS {
                 return None;
@@ -3940,11 +4061,14 @@ impl Kernel {
     /// surviving ancestor.  A cap whose root dies with no ancestor leaves
     /// creator/parent as None; only a root cap can collect those objects.
     fn reparent_tcb_caps(&mut self, obj: ObjRef) {
-        if self.tcb(obj).is_some_and(|table| table.cnode.is_some()) {
-            // A CNode is an independent object; its slots are not owned by
-            // the TCB that happens to use it as its current cspace.
-            return;
-        }
+        // 290.2 (r290): KHÔNG return sớm khi TCB dùng CNode. Bản cũ bỏ qua
+        // đường này vì "CNode là object độc lập", nhưng vòng lặp sửa
+        // `cap.parent` chỉ đi qua `cspace_mut`, mà `cspace_mut` chỉ với tới
+        // CNode THÔNG QUA TCB đang dùng nó. CNode đã tháo khỏi TCB thì không
+        // ai sửa `parent` của nó ⇒ cap mồ côi ⇒ `revoke` không tới ⇒ object
+        // thành bất tử (P0-3). Nay `CapRef.cnode` cho biết bảng vật lý nên
+        // đường này đi được cả CNode.
+        let table_is_cnode = self.table_of(obj);
         let Some(slots) = self.cspace(obj) else {
             return;
         };
@@ -3953,12 +4077,15 @@ impl Kernel {
         let mut count = 0usize;
         for (slot, cap) in slots.iter().enumerate() {
             if let Some(cap) = cap {
+                // 290.1: `slots` ở đây là bảng VẬT LÝ của `obj` — có thể là
+                // CNode (khi TCB dùng CNode) nên phải ghi kèm `cnode`.
                 dying[count] = CapRef {
                     addr: SlotAddr {
                         tcb: obj,
                         slot: slot as u8,
                     },
                     id: cap.id,
+                    cnode: table_is_cnode,
                 };
                 count += 1;
             }
@@ -3976,21 +4103,48 @@ impl Kernel {
             }
         }
 
+        // 290.2: sửa `parent` trong MỌI bảng vật lý — root_cspace, bảng nhúng
+        // của từng TCB, và slots của MỌI CNode (kể cả CNode đã tháo khỏi TCB).
+        // Bản cũ chỉ đi qua `cspace_mut(r)`, mà hàm đó chỉ với tới CNode thông
+        // qua TCB đang dùng nó ⇒ CNode đã tháo không bao giờ được sửa (P0-3).
+        let fix = |cap: &mut Cap| {
+            let Some(parent) = cap.parent else {
+                return;
+            };
+            if let Some(index) = dying[..count].iter().position(|c| *c == parent) {
+                cap.parent = survivors[index];
+            }
+        };
+        for cap in self.root_cspace.iter_mut().flatten() {
+            fix(cap);
+        }
         for i in 0..MAX_OBJECTS {
             let r = ObjRef {
                 index: i as u8,
                 gen: self.objs[i].gen,
             };
-            let Some(slots) = self.cspace_mut(r) else {
-                continue;
-            };
-            for cap in slots.iter_mut().flatten() {
-                let Some(parent) = cap.parent else {
-                    continue;
-                };
-                if let Some(index) = dying[..count].iter().position(|c| *c == parent) {
-                    cap.parent = survivors[index];
+            match self.get(r).map(|object| object.kind) {
+                Some(Kind::Tcb(_)) => {
+                    if self.root == Some(r) {
+                        continue;
+                    }
+                    let uses_cnode = self.tcb(r).is_some_and(|table| table.cnode.is_some());
+                    if !uses_cnode {
+                        if let Some(table) = self.tcb_mut(r) {
+                            for cap in table.cspace.iter_mut().flatten() {
+                                fix(cap);
+                            }
+                        }
+                    }
                 }
+                Some(Kind::CNode(_)) => {
+                    if let Some(node) = self.cnode_mut(r) {
+                        for cap in node.slots.iter_mut().flatten() {
+                            fix(cap);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -5198,10 +5352,7 @@ impl Kernel {
     pub fn revoke_cap(&mut self, tcb: ObjRef, slot: u8) -> KResult<usize> {
         let target = SlotAddr { tcb, slot };
         let target_cap = self.cap_at(target).ok_or(KError::InvalidCap)?;
-        let target_ref = CapRef {
-            addr: target,
-            id: target_cap.id,
-        };
+        let target_ref = self.cap_ref(target, target_cap.id);
         let mut objects = [ObjRef::invalid(); MAX_OBJECTS];
         let mut object_count = 0usize;
 
@@ -6603,6 +6754,7 @@ impl Kernel {
                         slot: untyped_slot,
                     },
                     id: untyped.id,
+                    cnode: self.table_of(tcb),
                 });
                 match self.install_cap(tcb, dest, cap) {
                     Ok(()) => UserAction::Return {
@@ -6977,6 +7129,7 @@ impl Kernel {
                             slot: fault_slot,
                         },
                         id: victim_cap.id,
+                        cnode: self.table_of(cap.obj),
                     })
                 } else {
                     None
@@ -12804,6 +12957,7 @@ mod tests {
             Some(CapRef {
                 addr: SlotAddr { tcb: root, slot: 2 },
                 id: child_cap.id,
+                cnode: None,
             })
         );
         assert!(kernel.check_invariants().is_ok());
@@ -12985,6 +13139,7 @@ mod tests {
                         slot: 1,
                     },
                     id: cap.id,
+                    cnode: None,
                 }),
             )
             .unwrap();
@@ -13056,6 +13211,7 @@ mod tests {
                         slot: 1,
                     },
                     id: cap.id,
+                    cnode: None,
                 }),
             )
             .unwrap();
@@ -15805,6 +15961,224 @@ mod tests {
         // Không ai chờ: bit giữ lại, trả false.
         assert_eq!(kernel.signal_one(ntfn, 0b100), Ok(false));
         assert_eq!(kernel.notification(ntfn).unwrap().word, 0b100);
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    #[test]
+    /// P0-3 (r290, đỏ-trước): `cap.parent` trỏ vào slot của một TCB sắp chết
+    /// phải được SỬA khi TCB đó bị huỷ — kể cả khi TCB đang dùng CNode.
+    ///
+    /// Bản cũ `return` sớm trong `reparent_tcb_caps` khi thấy TCB dùng CNode,
+    /// nên `cap.parent` trong CNode giữ nguyên con trỏ chết ⇒ `revoke` không
+    /// phân giải được ⇒ object thành bất tử (`HasDependents` mãi mãi).
+    #[test]
+    fn parent_pointing_into_a_dying_tcb_is_repaired_inside_a_cnode() {
+        let mut kernel = Kernel::new();
+        let dying = kernel.create_tcb("dying", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let untyped = kernel.create_untyped(0x5000_0000, 4096).unwrap();
+        let cnode = kernel.retype(untyped, ObjType::CNode).unwrap();
+        // `dying` dùng CNode làm cspace.
+        kernel.tcb_mut(dying).unwrap().cnode = Some(cnode);
+
+        // CNode slot 0 = "tổ tiên" (cap gốc); slot 1 = cap phái sinh trỏ parent
+        // vào slot 0. Cả hai nằm trong CNode sẽ bị tháo khi `dying` chết.
+        let mut ancestor = Cap::new(endpoint, ObjType::Endpoint, Rights::ALL);
+        ancestor.id = 10;
+        kernel.cnode_mut(cnode).unwrap().slots[0] = Some(ancestor);
+        let mut child = Cap::new(endpoint, ObjType::Endpoint, Rights::READ);
+        child.id = 11;
+        child.parent = Some(CapRef {
+            addr: SlotAddr {
+                tcb: dying,
+                slot: 0,
+            },
+            id: 10,
+            cnode: Some(cnode),
+        });
+        kernel.cnode_mut(cnode).unwrap().slots[1] = Some(child);
+
+        kernel.destroy_object(dying).unwrap();
+
+        let after =
+            kernel.cnode(cnode).unwrap().slots[1].expect("cap phái sinh vẫn còn trong CNode");
+        match after.parent {
+            None => {}
+            Some(parent) => assert!(
+                kernel.resolve_cap_ref(parent).is_some(),
+                "parent còn trỏ bảng đã chết — revoke sẽ không tới được (P0-3)"
+            ),
+        }
+    }
+
+    /// 290.1 (r290): bộ duyệt bảng chìa dùng chung phải đi qua ĐÚNG tổng dung
+    /// lượng các bảng đang tồn tại — kể cả CNode đã tháo khỏi TCB (bốn bộ duyệt
+    /// cũ bỏ sót chính chỗ này).
+    #[test]
+    fn for_each_cap_visits_every_slot_of_every_live_table() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let plain = kernel.create_tcb("plain", 5).unwrap();
+        let with_cnode = kernel.create_tcb("with-cnode", 5).unwrap();
+        let scratch = kernel.create_tcb("scratch", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let untyped = kernel.create_untyped(0x3000_0000, 4096).unwrap();
+        let cnode = kernel.retype(untyped, ObjType::CNode).unwrap();
+        let untyped2 = kernel.create_untyped(0x4000_0000, 4096).unwrap();
+        let detached = kernel.retype(untyped2, ObjType::CNode).unwrap();
+
+        // Root: cap CNode (1) + cap TCB (2,3,4) để gọi CNodeInstall.
+        kernel
+            .install_cap(root, 1, Cap::new(cnode, ObjType::CNode, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(with_cnode, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(detached, ObjType::CNode, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 4, Cap::new(scratch, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+        // TCB thường: cap nằm trong bảng NHÚNG của nó.
+        kernel
+            .install_cap(
+                plain,
+                1,
+                Cap::new(endpoint, ObjType::Endpoint, Rights::READ),
+            )
+            .unwrap();
+        // `with_cnode` dùng CNode ⇒ cap cài qua nó nằm trong CNode.
+        kernel.tcb_mut(with_cnode).unwrap().cnode = Some(cnode);
+        kernel
+            .install_cap(
+                with_cnode,
+                1,
+                Cap::new(endpoint, ObjType::Endpoint, Rights::READ),
+            )
+            .unwrap();
+        // `scratch` dùng CNode khác, cài cap rồi THÁO CNode khỏi TCB.
+        kernel.tcb_mut(scratch).unwrap().cnode = Some(detached);
+        kernel
+            .install_cap(
+                scratch,
+                1,
+                Cap::new(endpoint, ObjType::Endpoint, Rights::READ),
+            )
+            .unwrap();
+        assert!(kernel.tcb(scratch).unwrap().cnode == Some(detached));
+        kernel.tcb_mut(scratch).unwrap().cnode = None;
+
+        let mut seen = 0usize;
+        let mut tables: [Option<TableId>; 8] = [None; 8];
+        let mut table_count = 0usize;
+        kernel.for_each_cap(|table, _slot, _cap| {
+            seen += 1;
+            if !tables[..table_count].iter().flatten().any(|t| *t == table) {
+                tables[table_count] = Some(table);
+                table_count += 1;
+            }
+        });
+        assert_eq!(
+            seen, 7,
+            "root 4 cap + plain 1 + CNode gắn 1 + CNode ĐÃ THÁO 1 = 7"
+        );
+        assert_eq!(table_count, 4, "root, TCB nhúng, CNode gắn, CNode đã tháo");
+        assert!(
+            (0..table_count)
+                .filter_map(|i| tables[i])
+                .any(|t| matches!(t, TableId::CNode(_))),
+            "CNode phải xuất hiện trong bộ duyệt"
+        );
+        // root + bảng nhúng của `plain` + bảng nhúng (rỗng) của `scratch` sau
+        // khi tháo CNode + 2 CNode = 4 bảng cỡ TASK.
+        assert_eq!(
+            kernel.cap_slot_capacity(),
+            MAX_CAPS_ROOT + 4 * MAX_CAPS_TASK,
+            "root + 2 bảng nhúng + 2 CNode"
+        );
+    }
+
+    /// P0-3 (r290, đỏ-trước): cap phái sinh nằm trong một CNode **đã tháo**
+    /// khỏi TCB phải bị `revoke` thu hồi được, nếu không object thành bất tử.
+    ///
+    /// Kịch bản 5 bước của bản soát:
+    /// 1. mint một cap endpoint vào CNode C từ slot 2 của TCB A;
+    /// 2. gắn C làm cspace của A rồi huỷ A (C bị tháo khỏi A);
+    /// 3. revoke cap gốc ở TCB còn sống phải thu hồi cap phái sinh đó;
+    /// 4. sau đó `destroy_cap_object` trên object phải THÀNH CÔNG;
+    /// 5. (không có bước 5.)
+    ///
+    /// Bản cũ: bước 3 trả `Ok(0)` (không phân giải được parent qua CNode mồ
+    /// côi) ⇒ bước 4 trả `HasDependents` ⇒ object sống mãi.
+    #[test]
+    fn revoked_cap_inside_a_detached_cnode_still_collects_and_destroys() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let holder = kernel.create_tcb("holder", 5).unwrap();
+        let untyped = kernel.create_untyped(0x2000_0000, 4096).unwrap();
+        let cnode = kernel.retype(untyped, ObjType::CNode).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+
+        // Root giữ: cap CNode (1), cap endpoint gốc (2), cap TCB `holder` (3).
+        kernel
+            .install_cap(root, 1, Cap::new(cnode, ObjType::CNode, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 2, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        kernel
+            .install_cap(root, 3, Cap::new(holder, ObjType::Tcb, Rights::ALL))
+            .unwrap();
+
+        // (1) mint cap endpoint vào C.slots[1], parent = root slot 2.
+        assert_eq!(
+            kernel.user_syscall(
+                root,
+                SyscallId::CNodeMint as u64,
+                1,
+                1,
+                2,
+                Rights::READ.0 as u64,
+                0,
+                0
+            ),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        // (2) gắn C làm cspace của `holder`, rồi huỷ `holder`.
+        assert_eq!(
+            kernel.user_syscall(root, SyscallId::CNodeInstall as u64, 3, 1, 0, 0, 0, 0),
+            UserAction::Return {
+                value: 0,
+                error: KError::Ok
+            }
+        );
+        assert!(kernel.tcb(holder).unwrap().cnode == Some(cnode));
+        assert_eq!(kernel.destroy_object(holder), Ok(()));
+        // C đã tháo khỏi TCB nhưng cap phái sinh vẫn nằm trong C.
+        assert!(kernel.cnode(cnode).unwrap().slots[1].is_some());
+
+        // (3) revoke cap gốc: phải thu hồi được cap phái sinh trong C.
+        let collected = kernel.revoke_cap(root, 2).unwrap();
+        assert_eq!(
+            collected, 1,
+            "phải thu hồi được cap phái sinh trong CNode đã tháo"
+        );
+        assert!(kernel.cnode(cnode).unwrap().slots[1].is_none());
+
+        // (4) object không còn ai tham chiếu ⇒ huỷ được. Dùng `other_caps_to`
+        // làm phép kiểm "không còn tham chiếu" (đúng điều kiện mà
+        // `destroy_cap_object` dùng để trả HasDependents).
+        let root_cap = kernel.cap_at(SlotAddr { tcb: root, slot: 2 }).unwrap();
+        assert_eq!(
+            kernel.other_caps_to(endpoint, root_cap.id),
+            0,
+            "cap phái sinh trong CNode đã bị thu hồi nên không còn tham chiếu"
+        );
+        assert_eq!(kernel.destroy_object(endpoint), Ok(()));
         assert!(kernel.check_invariants().is_ok());
     }
 

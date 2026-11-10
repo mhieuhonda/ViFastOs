@@ -73,10 +73,31 @@ pub struct SlotAddr {
 /// Exact capability identity.  The slot part is only a lookup location; the
 /// monotonically increasing id prevents a reused slot from inheriting the
 /// old capability's children or creator relationships.
+/// 290.1 (r290): nhãn của một BẢNG CHÌA vật lý. `SlotAddr` chỉ có `{tcb, slot}`
+/// nên không biểu diễn được cap nằm trong CNode đã tháo — dùng nhãn này để mọi
+/// bộ duyệt đi chung một đường.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TableId {
+    Root,
+    Tcb(ObjRef),
+    CNode(ObjRef),
+}
+
+impl Default for TableId {
+    fn default() -> Self {
+        TableId::Root
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct CapRef {
     pub addr: SlotAddr,
     pub id: u64,
+    /// 290.1 (r290): bảng VẬT LÝ chứa cap này, khi nó không nằm trong bảng của
+    /// một TCB sống. CNode tháo khỏi TCB vẫn giữ cap, và `SlotAddr` chỉ có
+    /// `{tcb, slot}` nên không biểu diễn được — đó là gốc của P0-3 (cap mồ côi
+    /// ⇒ revoke không tới ⇒ object thành bất tử).
+    pub cnode: Option<ObjRef>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
