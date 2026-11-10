@@ -100,6 +100,29 @@ static mut SMAP_ENABLED: bool = false;
 static mut PCID_ENABLED: bool = false;
 static BKL: BigKernelLock = BigKernelLock::new();
 
+// 294.B (r294): đèn chẩn đoán T33a — "tick BSP ngừng phát". CHỈ bật sau
+// feature `diag-tick` (mặc định TẮT); bản phát hành không có các marker này.
+#[cfg(feature = "diag-tick")]
+static DIAG_LAST_TICKS0: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "diag-tick")]
+static DIAG_STALE: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "diag-tick")]
+static DIAG_REPORTED: AtomicBool = AtomicBool::new(false);
+/// Số lần đã gửi EOI cho PIC (chỉ BSP) — so với số tick nhận được để biết
+/// nhánh nào nhận IRQ0 mà không EOI.
+static PIC_EOI_SENT: AtomicU32 = AtomicU32::new(0);
+
+/// Đọc ISR/IMR của PIC 8259 (OCW3 = 0x0B để chọn thanh ghi ISR).
+#[cfg(feature = "diag-tick")]
+unsafe fn pic_isr_imr() -> (u8, u8, u8) {
+    outb(0x20, 0x0B); // OCW3: đọc ISR
+    let isr = inb(0x20);
+    outb(0x20, 0x0A); // OCW3: đọc IRR
+    let irr = inb(0x20);
+    let imr = inb(0x21);
+    (isr, irr, imr)
+}
+
 fn bkl_lock() -> vifast_arch::bkl::BigKernelGuard {
     BKL.lock_with_hart(X86Platform::hart_id(), poll_maintenance)
 }
@@ -2794,6 +2817,7 @@ impl Platform for X86Platform {
         unsafe {
             outb(0x20, 0x20);
         }
+        PIC_EOI_SENT.fetch_add(1, Ordering::Relaxed);
     }
 
     fn block_read(lba: u64, out: &mut [u8; 512]) -> bool {
@@ -3330,7 +3354,16 @@ extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
     let bkl = bkl_lock();
     assert_current_tcb("irq0");
     if cpu_state() == unsafe { core::ptr::addr_of!(CPU_STATES[0]) as *mut _ } {
-        BSP_PIT_TICKS.fetch_add(1, Ordering::Relaxed);
+        let ticks = BSP_PIT_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+        #[cfg(feature = "diag-tick")]
+        if ticks % 16 == 0 {
+            vifast_kernel::klog!(
+                X86Platform,
+                "TICK {} (eoi={})",
+                ticks,
+                PIC_EOI_SENT.load(Ordering::Relaxed)
+            );
+        }
     }
     let frame = unsafe { &mut *frame };
     vifast_runtime::timer::on_timer::<X86Platform>(frame);
@@ -3340,6 +3373,48 @@ extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
 
 #[no_mangle]
 extern "efiapi" fn x86_ap_irq_handler(frame: *mut TrapFrame, vector: u64) {
+    // 294.B: watchdog T33a — hart 1 tự kiểm xem tick của BSP có tiến không.
+    #[cfg(feature = "diag-tick")]
+    {
+        let ticks0 = BSP_PIT_TICKS.load(Ordering::Relaxed);
+        if ticks0 == DIAG_LAST_TICKS0.load(Ordering::Relaxed) {
+            let stale = DIAG_STALE.fetch_add(1, Ordering::Relaxed) + 1;
+            // Chỉ báo khi ĐANG KHÔNG ở trong handler IRQ0 (ISR bit0 = 0) — nếu
+            // không sẽ báo nhầm lúc CPU đang xử lý một tick bình thường (đã
+            // gặp: isr=0x01, ticks0=19 mà lần chạy vẫn xanh).
+            let (isr, irr, imr) = unsafe { pic_isr_imr() };
+            if stale >= 8 && (isr & 1) == 0 && !DIAG_REPORTED.swap(true, Ordering::Relaxed) {
+                // LAPIC: TPR (0x80) quyết định có nhận ExtINT hay không; LVT0
+                // (0x350) là cửa ExtINT từ PIC; SVR (0xF0) là bit bật APIC;
+                // ISR (0x100..) cho biết vector đang phục vụ.
+                let base = unsafe { lapic_base() };
+                let tpr = unsafe { core::ptr::read_volatile((base + 0x80) as *const u32) };
+                let svr = unsafe { core::ptr::read_volatile((base + 0xF0) as *const u32) };
+                let lvt0 = unsafe { core::ptr::read_volatile((base + 0x350) as *const u32) };
+                let isr_vec = unsafe { core::ptr::read_volatile((base + 0x100) as *const u32) };
+                vifast_kernel::klog!(
+                    X86Platform,
+                    "PIC STALL (isr={:#04x}, irr={:#04x}, imr={:#04x}, ticks0={}, eoi={})",
+                    isr,
+                    irr,
+                    imr,
+                    ticks0,
+                    PIC_EOI_SENT.load(Ordering::Relaxed)
+                );
+                vifast_kernel::klog!(
+                    X86Platform,
+                    "LAPIC STALL (tpr={:#x}, svr={:#x}, lvt0={:#x}, isr={:#x})",
+                    tpr,
+                    svr,
+                    lvt0,
+                    isr_vec
+                );
+            }
+        } else {
+            DIAG_LAST_TICKS0.store(ticks0, Ordering::Relaxed);
+            DIAG_STALE.store(0, Ordering::Relaxed);
+        }
+    }
     if vifast_arch::panic::is_panicking() {
         X86_64::halt();
     }

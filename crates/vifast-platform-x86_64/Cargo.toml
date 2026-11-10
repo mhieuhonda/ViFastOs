@@ -11,6 +11,8 @@ test-skip-tlb-ipi = []
 # r293/294.1: đèn chẩn đoán flake scheduler. MẶC ĐỊNH TẮT — bản phát hành
 # không được chứa marker `BKL STUCK`.
 diag-stall = []
+# 294.B (r294): đèn T33a (`TICK n` mỗi 16 tick, `PIC STALL isr/imr`). TẮT mặc định.
+diag-tick = []
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
