@@ -1173,6 +1173,24 @@ pub extern "C" fn client_main() -> ! {
     }
 
     v2_step(4);
+    // T26: ngay sau `mkdir("/d")` trả Ok, hỏi THẲNG `open("/d")` trước khi
+    // readdir. Nếu open Ok mà readdir thiếu ⇒ lỗi ở tầng liệt kê; nếu open cũng
+    // hỏng ⇒ `mkdir` trả Ok khi entry chưa tồn tại.
+    let immediate_open = vfs_open(b"/d", 0).is_some();
+    let mut line_mk = [0u8; 16];
+    line_mk[0] = b'V';
+    line_mk[1] = b'2';
+    line_mk[2] = b'M';
+    line_mk[3] = b'K';
+    line_mk[4] = b' ';
+    line_mk[5] = b'o';
+    line_mk[6] = b'p';
+    line_mk[7] = b'e';
+    line_mk[8] = b'n';
+    line_mk[9] = b'=';
+    line_mk[10] = if immediate_open { b'1' } else { b'0' };
+    line_mk[11] = b'\n';
+    let _ = vifast_user::debug_write(line_mk.as_ptr() as u64, 12);
     let mut found_d = false;
     let mut group4 = 0u8;
     if let Some((root_fd, _)) = vfs_open(b"/", 0) {

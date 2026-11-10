@@ -1997,3 +1997,35 @@ reply/lệnh bị lẫn). Phép đo chốt: in **thứ tự yêu cầu** ở ser
 lúc mkdir/readdir, và in seq của reply mà client nhận.
 
 Đây là chỗ duy nhất còn lại sau khi đã loại 10 giả thuyết bằng đo.
+
+## r294.T26 — `open("/d")` ĐÚNG NGAY SAU mkdir, readdir kế tiếp vẫn thiếu
+
+Đèn mới: ngay sau `mkdir("/d")` trả `Ok`, gọi `open("/d")` **trước** readdir.
+
+**Đo `MAX_IO=256` (2 boot đỏ trong 12):**
+
+```
+V2MK open=1        ← open("/d") THÀNH CÔNG ngay sau mkdir
+V2RD end n=06      ← readdir("/") NGAY SAU ĐÓ chỉ thấy 6 entry
+V2GROUP 06
+```
+
+Đây là nghịch lý **trong cùng một thời điểm**: `lookup_child` (dùng bởi `open`)
+và `read_dir_entry_full` (dùng bởi readdir) đọc **cùng inode RAM, cùng
+`blocks_used()`, cùng `dev.read`** (`vifast-fs/src/lib.rs:1535-1545` và
+`2114-2125`) — vậy mà một bên thấy entry, một bên không.
+
+Đã kiểm: **không có** cache đường dẫn/dentry trong server hay FS (`grep` sạch), nên
+`open` không thể trả kết quả từ cache.
+
+⇒ Hai khả năng còn lại, đều đo được:
+1. `read_dir_entry_full` **bỏ qua** entry vì một điều kiện khác trong vòng (ví dụ
+   `corrupt` ⇒ `continue`/index lệch) — chứ không phải "hết".
+2. `lookup_child` và `read_dir_entry_full` chạy ở **hai thời điểm khác nhau của
+   inode** (giữa hai lệnh có một lệnh khác làm mới `self.inodes`) — cần in
+   `inode.size`/`blocks[0]` ở **cả hai** chỗ để so.
+
+**Đèn chốt kế tiếp:** in `size`, `blocks_used()`, `blocks[0]` ở **cả**
+`lookup_child` (khi tìm thấy) và `read_dir_entry_full` (khi trả `Ok(None)`) kèm
+`index` — nếu hai bên khác nhau thì lỗi ở inode; nếu giống nhau thì lỗi ở logic
+đếm `seen`/`corrupt` bên trong vòng của `read_dir_entry_full`.
