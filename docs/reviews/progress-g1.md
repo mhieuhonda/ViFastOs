@@ -1264,3 +1264,23 @@ chạy ~120 boot, xem lần treo kế tiếp có `NO TICK` với `lvt0=0x10000` 
 
 Ghi chú: bản **không đèn** không có `NO TICK` nên sự vắng mặt của nó trong
 artifact lượt này **không** chứng minh được gì.
+
+### Số chốt: 300 boot KHÔNG ĐÈN sau bản vá LINT0
+
+Sha `3699fe7` (bản vá LINT0 + bỏ nhánh GetTime), `MAX_IO=128`, guard TẮT, đèn TẮT.
+
+```
+RETRY 2/301 (T-FS=0, T-SCHED=1, T-KHAC=1)
+```
+
+| Lớp | Số lần | Artifact | Ghi chú |
+|---|---:|---|---|
+| T-SCHED — treo sau `shell>`, thiếu `PREEMPT OK` | **1** | `artifacts/flake-x86_64-16-a0` | còn lại sau bản vá LINT0 ⇒ phải soi bằng lượt có đèn |
+| **T-DUP** `PREEMPT OK` in **hai lần** trong một lần boot | **1** | `artifacts/flake-x86_64-276-a0` | chữ ký MỚI, đặt tên ngay: `T-DUP PREEMPT OK`. Nghi hai hart cùng thoả điều kiện in |
+| T-FS | 0 | — | BLOCKER vẫn "ngủ" ở 128 |
+| T-ROOT `main.rs:480` | **0** (trước: 6/305) | — | hết sau khi bỏ nhánh GetTime + vá LINT0 |
+| T-BOOT | 0 (trước: 1/305) | — | mẫu nhỏ, chưa kết luận |
+
+So với mốc nền `c2a8968`: 8/305 = **2,6 %** → nay 2/301 = **0,66 %**.
+Theo luật thống kê: 2/301 viết là "≈0,66 %, KTC 95 % khoảng 0,1–2,4 %" — **chưa**
+được nói đã đạt mức tạm ≤1 %/boot một cách chắc chắn; cần thêm mẫu.
