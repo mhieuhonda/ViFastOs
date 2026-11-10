@@ -1737,3 +1737,36 @@ toàn sạch** trong lớp lỗi này.
 
 ⇒ Gốc T26 nằm **trong phần mềm FS** (journal/cache/thứ tự commit) hoặc ở **chen
 ngang giữa hai client** (root và client test cùng ghi FS), không phải ở driver.
+
+## r294.T26 — ĐỘT PHÁ: KHÔNG mất dữ liệu; lỗi ở TẦNG LIỆT KÊ
+
+Đèn phân biệt (theo gợi ý "đèn rẻ nhất" của subagent) chạy **ngay trong client**
+khi readdir("/") thiếu `d`: hỏi thẳng `open("/d")` rồi lặp readdir 2 lần nữa.
+
+**Kết quả `MAX_IO=256` (2/2 lần đỏ):**
+
+```
+V2GROUP 06  V2CHK open=1 rd=2
+```
+
+- `open=1` ⇒ `open("/d")` **THÀNH CÔNG** ⇒ ảnh FS **CÓ** entry `d`.
+- `rd=2` ⇒ **cả hai** lần readdir lặp lại đều **thấy** `d`.
+
+⇒ **Không hề mất dữ liệu** và **không phải race giữa hai hart ghi**: entry tồn tại,
+chỉ **lần liệt kê đầu tiên** bỏ sót nó — các lần sau đọc được.
+
+Ba hệ quả:
+
+1. **Loại** cơ chế "RMW đọc ảnh cũ rồi ghi đè làm mất entry".
+2. **Loại** cơ chế "hai hart cùng thực thi một `Fs`" (nếu đua thì lần lặp lại cũng
+   hỏng, và `open` cũng hỏng).
+3. Còn lại **đúng tầng liệt kê**: gói nhiều record vào khung IPC 256 B
+   (`READDIR_REC=32` ⇒ 8 record = 256 B = **đầy khung, không slack**), client giải
+   mã lười từng record, và cả hai phía đều `break` im lặng khi gặp `Err`
+   (`vifast-client/src/main.rs:575-581`, `vifast-server/src/main.rs:648-652`).
+
+Đây là bước hẹp nhất từ đầu tới nay, và nó **đổi hẳn hướng sửa**: không phải sửa
+journal/cache, mà sửa **đường readdir** (trang hoá + xử lý lỗi không được cắt
+danh sách trong im lặng).
+
+Đo lại ở `MAX_IO=128`: 40/40 xanh (đèn mới chỉ in khi lỗi nên không ảnh hưởng).

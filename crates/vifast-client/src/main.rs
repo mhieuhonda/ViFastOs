@@ -1185,6 +1185,51 @@ pub extern "C" fn client_main() -> ! {
     if group4 != 0 && v2_failed == 0 {
         v2_failed = 3 + group4;
     }
+    // T26 (đèn phân biệt rẻ nhất, theo bản phân tích subagent): ngay sau khi
+    // readdir("/") thiếu `d`, hỏi THẲNG bằng `open("/d")` và lặp readdir 2 lần:
+    //   open Ok  ⇒ ảnh FS CÓ `d` ⇒ lỗi ở tầng liệt kê (không phải mất dữ liệu);
+    //   open Err ⇒ entry mất thật.
+    //   readdir lặp lại thấy `d` ⇒ nhấp nháy (race), không thấy ⇒ ổn định.
+    if group4 == 3 {
+        let direct = vfs_open(b"/d", 0).is_some();
+        let mut repeated = 0u8;
+        for _ in 0..2 {
+            if let Some((fd, _)) = vfs_open(b"/", 0) {
+                let mut hit = false;
+                let mut index = 0u64;
+                while let Ok(Some((_, name, len))) = vfs_readdir(fd, index) {
+                    if len == 1 && name[0] == b'd' {
+                        hit = true;
+                    }
+                    index += 1;
+                }
+                let _ = vfs_close(fd);
+                if hit {
+                    repeated += 1;
+                }
+            }
+        }
+        let mut line = [0u8; 24];
+        line[0] = b'V';
+        line[1] = b'2';
+        line[2] = b'C';
+        line[3] = b'H';
+        line[4] = b'K';
+        line[5] = b' ';
+        line[6] = b'o';
+        line[7] = b'p';
+        line[8] = b'e';
+        line[9] = b'n';
+        line[10] = b'=';
+        line[11] = if direct { b'1' } else { b'0' };
+        line[12] = b' ';
+        line[13] = b'r';
+        line[14] = b'd';
+        line[15] = b'=';
+        line[16] = b'0' + repeated;
+        line[17] = b'\n';
+        let _ = vifast_user::debug_write(line.as_ptr() as u64, 18);
+    }
     v2 &= found_d;
     if !v2 && v2_failed == 0 {
         v2_failed = 4;
