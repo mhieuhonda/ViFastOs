@@ -838,6 +838,33 @@ lệch 12–18/40 — retry là sửa bug thật nhưng **không phải** sửa 
 **Số đo sau revert (128, song song 2 máy):** local 40/40; `ps` 39/40 ⇒ chưa đủ
 kết luận 128 tuyệt đối xanh trên `ps`; cần ≥120 boot nữa.
 
+### r294.T26 — PHÉP ĐO QUYẾT ĐỊNH: race có ở CẢ `MAX_IO=128` trên máy thứ hai
+
+Revert **toàn bộ** về HEAD (cây sạch, không đèn, không bản vá ATA) rồi chạy
+**80 boot** trên `ps`: **3/80 đỏ** (~3,75 %).
+
+⇒ `MAX_IO=128` **không** tuyệt đối xanh trên `ps`; lượt "40/40 xanh" trước đó chỉ
+là may (P(0/40) ≈ 22 % khi p ≈ 0,0375). Ba hệ quả:
+
+1. Các bản vá của tôi không phải nguyên nhân của 1–2/40 ở 128 — nằm trong tỉ lệ
+   nền có sẵn.
+2. **Race read-your-own-write của FS server KHÔNG phụ thuộc `MAX_IO`**: có ở cả
+   128 (~3,75 % trên `ps`) lẫn 256 (10–45 % tuỳ máy). `MAX_IO` chỉ **khuếch đại**
+   tần suất — khớp giả thuyết "khác nhau ở thời điểm, không ở bộ đếm".
+3. Không được dùng câu "128 xanh nên an toàn"; phải nói "128 có ~1–4 % tuỳ máy" và
+   định nghĩa mức chấp nhận bằng số.
+
+**Loại trừ dứt khoát tầng ATA bằng số:**
+
+| `MAX_IO` | cmds | writes | flushes | retry | fail |
+|---|---:|---:|---:|---:|---:|
+| 128 | 2303 | 2304 | 2568 | 0 | 0 |
+| 256 | 1535 | 1536 | 1694 | 0 | 0 |
+
+Ở 256 có **ít** lệnh ATA hơn và **0** lỗi/retry, kể cả ở lần boot đỏ ⇒ ATA không
+phải gốc T26. (Bản vá `wait_done` + `ATA STAT` vẫn đúng và đang để trong
+`git stash` để đo riêng.)
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -865,7 +892,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-ebe1a33fc3828fc792145e5e7cf03203d716af6159938a7668ad1aaec37b6222  docs/reviews/ViFastOs-report-r262.md
+02202b6c9ed20d5214127b9bf0913b984cd2cc21b45ebca700ad67519ad6ae9c  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
