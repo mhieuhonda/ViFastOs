@@ -570,6 +570,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 50133fa r293.7: nhật ký quyết định + open-items (K49 mở lại rồi đóng, nợ Q1-A) + báo cáo r293
 - 39589cb r293: theo Agent 0 — KERNEL FAULT guard mặc định quay về halt()
 - c2a8968 r294.4: nhả BKL trước khi halt — gốc của lớp "USER FAULT tcb=None"
+- fc87374 r294.3: bất biến current ↔ TCB (hai chiều ĐÚNG), có ghi "lệch có chủ đích"
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
