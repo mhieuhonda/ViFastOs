@@ -563,6 +563,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - ca78f58 r291: 291.4 — create hỏng phải rollback inode đã cấp
 - 91ab198 r291 docs: báo cáo + nhật ký cho 291.4; ghi rõ phần FS còn lại
 - 927ca70 r292: ghi bằng chứng tái hiện race FS ở MAX_IO=256 (3/20) vào báo cáo; giữ MAX_IO=128
+- 9c6d29f r293: chẩn đoán T33a/T33b + guard "hart idle gặp ngoại lệ"
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
