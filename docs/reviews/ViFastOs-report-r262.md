@@ -703,6 +703,35 @@ hỏng đó là **T-ROOT `main.rs:480`** — nghĩa là cờ `KERNEL_READY` mớ
 một phần lớp này. T31 (`PAGER2_LABEL` xử lý hai lần) **không** tái hiện trong
 200 boot; lần duy nhất bắt được vẫn là ở lượt 300 boot trước.
 
+### r294.T31 — nghi vấn gốc: context không được ghi lại sau `apply_resume`
+
+Phân tích độc lập (subagent, chỉ đọc mã) kết luận: hai dòng `PAGER EVICT OK`
+nghĩa là thân nhánh PAGER2 chạy **≥3 lần** trong khi client chỉ có hai `send`;
+cơ chế khả dĩ nhất là `apply_resume()` vá **context sống** mà **không ghi lại**
+`contexts[slot]`, nên lần nạp slot sau chạy lại **snapshot cũ** (mang đúng bộ
+thanh ghi message).
+
+Bản vá (`79e0f13`): ghi lại `contexts[slot]` sau `apply_resume` ở **cả 5 điểm
+nạp**; tách hàm thuần `slot_choice(Option<u8>)` + test host cho ca "TCB thiếu
+slot" (trước đây lặng lẽ `unwrap_or(0)` — ghi nhầm context của root); gỡ feature
+chết `diag-pick` (khai báo nhưng không dùng, tài liệu cũ ghi sai).
+
+Phép đo để chốt T31 (chưa chạy vì hết giờ): đếm `USER FAULT addr=0x1001001000`
+trong serial của lần hỏng — 2 ⇒ replay phía server, 3 ⇒ replay phía client.
+
+### T33a — chốt cuối ngày 10/11
+
+| Bản vá | N | Tỉ lệ |
+|---|---:|---|
+| (nền `c2a8968`) | 305 | 2,6 % |
+| LINT0 (`28aefcd`) | 301 | **0,66 %** |
+| + `KERNEL_READY` (`8cd767f`) | 301 | 1,0 % |
+| + ghi lại context (`79e0f13`) | *chưa đo* | — |
+
+Còn mở (đã ghi việc tiếp trong `progress-g1.md`): T-ROOT `main.rs:480` 1/200,
+T-SCHED 1/301, T31 (phép đo ở trên), `BIN EXEC FAIL`/`DESTROY DIAG stuck=4`,
+T26, T33b, 294.5.
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -730,7 +759,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-2bada0e7e651335c025a2a6d52b4cfe2c4a7d51803a6a05e63cc843e8978debb  docs/reviews/ViFastOs-report-r262.md
+ab4061933ca2694a739c9c811959c219fadb801999e31d880f701abb6dd6ff1e  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
