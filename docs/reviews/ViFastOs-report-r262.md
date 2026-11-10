@@ -755,6 +755,28 @@ Triệu chứng "TCP echo đỏ" hoá ra chỉ là **hệ quả** của panic (g
 khi in marker). Sau khi vá, TCP echo không còn là nguyên nhân duy nhất; việc
 tiếp là đo riêng "thiếu marker `IPC RIGHTS OK`".
 
+### r294.T26 — hai phép đo quyết định về race FS ở `MAX_IO=256`
+
+| Cấu hình | N | Kết quả |
+|---|---:|---|
+| `MAX_IO=128`, đệm IPC 256 B (sản phẩm) | 40 | **40/40 xanh** |
+| `MAX_IO=256`, đệm IPC 256 B | 40 | **12/40 đỏ** (tái hiện đúng 12/49 của r262) |
+| `MAX_IO=256`, **đệm IPC 512 B** | 40 | **8/40 đỏ** |
+
+**Kết quả âm tính có giá trị:** nới đệm IPC 256 → 512 B **không** diệt được lỗi
+(12/40 → 8/40, trong nhiễu) ⇒ **không** phải "payload 256 B đụng trần đệm IPC";
+đây là race thật của đường FS khi ≥2 hart, đúng như ghi chú r262. Đã trả nguyên
+trạng `IPC_BUFFER_WORDS=32`, `MAX_IO=128`.
+
+**Đính chính:** artifact `flake-x86_64-1-a0` đọc lúc đầu **có `FS V2 BAD`** (kết
+luận "treo không in OK lẫn BAD" là sai); ba artifact thật sự thiếu `FS V2` lại
+có `serial.txt` **0 byte** ⇒ muốn biết treo ở đâu phải thêm đèn, không suy từ log
+rỗng.
+
+Việc tiếp: đèn một marker mỗi bước trong khối V2 + in mã lỗi thay vì `EIO`; vá
+`ipc.rs::reply()` (không bỏ rơi client `BlockedReply` khi `valid==false`) và
+`reply_recv()` (không `?` trước `recv`).
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -782,7 +804,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-0f4dfd02e187b844c75833ee9b399755bc201509b51001528ca0be68d428d750  docs/reviews/ViFastOs-report-r262.md
+9661174f5ca85e7e8ce4880427cccd8e9afc2fa32ac2183f5499ebf96bcec1ab  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
