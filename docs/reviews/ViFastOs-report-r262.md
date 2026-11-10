@@ -602,6 +602,36 @@ duy nhất còn giá trị — phân tích T18 vì sao aarch64 dư 1 trang — �
 `progress-g1.md`) và xoá bốn nhánh đã merge/hết giá trị (`g1`, `r261`, `r268`,
 `t13x`). Còn đúng một worktree: `main`.
 
+### r289 – r293 — tầng đáy, capability, FS, và hai chẩn đoán T33
+
+**r289** (commit `1e5c051`): payload (va, pages, asid) vào TRONG hộp thư
+maintenance và hợp nhất chỉ-nới-rộng; x86 shootdown đối xứng (bỏ `target != 1`,
+mỗi hart một hộp thư, đếm theo cặp nguồn→đích); `BKL.is_held()` → `held_by`
+ở 8 chỗ 3 port; sàn test đổi từ hằng số `-ge 138` sang số ĐO ĐƯỢC
+(`scripts/test-floor.py`), mutation xoá 1 test ⇒ ĐỎ.
+
+**r290** (`fc6aec4`, `f5c28b4`, `75ffb6e`): `CapRef.cnode` + `TableId` +
+`Kernel::for_each_cap` (đi qua cả CNode đã tháo khỏi TCB) + `resolve_cap_ref`;
+kịch bản 5 bước của **P0-3** có test đỏ-trước
+`orphan_cap_in_a_detached_cnode_is_reparented_and_revoked` (ĐỎ đúng chỗ "parent
+phải trỏ cap gốc của root" khi dùng vòng duyệt cũ); `check_invariants` kiểm
+`cap.parent` ở MỌI nhánh; `reply_epoch` tăng mỗi lần call (guard K49 hết rỗng).
+
+**r291** (`c59bbb8`, `ca78f58`): FS — biên theo superblock (`capacity`), chặn
+chỉ số indirect bịa, lỗ file thưa hợp lệ (`read` trả 0, `fsck` bỏ qua), rollback
+inode khi `create` hỏng. Bốn test đỏ-trước, đã kiểm chứng ngược từng cái.
+
+**r292**: tái hiện race FS — `MAX_IO=256` ⇒ **3/20** lần đỏ (`FS V2 OK` thiếu);
+giữ `MAX_IO=128`, ghi ba nghi phạm điều tra tiếp.
+
+**r293** (`9c6d29f`): T33a thêm `SMP NO READY` + `live_tcb_count()` (đo 80 lần
+x86: 80/80, **0** lần in) ⇒ nhánh thoát im lặng không phải gốc; T33b: hart idle
+gặp ngoại lệ nay KHÔNG `halt()` cả máy mà ack + quay lại idle (đo riscv 60/60,
+0 `KERNEL FAULT`).
+
+Số đo tổng: gate **10/10** ở mỗi mốc; soak 100×3 (sau r290) = **299/300**;
+`vifast-kernel` 250 test, `vifast-fs` 44; sàn **365 test / 11 crate**.
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -629,7 +659,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-00bb4cd63ba2a8fd4f7d91295c911da770d223a45cfd65306e8820371d1c5d65  docs/reviews/ViFastOs-report-r262.md
+2bcc0dbe645a2962699f3a0a909375cd881c4f9407c87d5e497b3d4b43e165ec  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
