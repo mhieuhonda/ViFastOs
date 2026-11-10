@@ -552,6 +552,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - cc37c90 r287 docs: ghi chú bảng tổng hợp kiến trúc luôn chậm một commit (vòng lặp tự tham chiếu)
 - 1355f01 r288 fix: (T33a/T33b) hai lỗi "hart phụ hết việc ⇒ giết cả máy" + giữ serial đúng lần thử
 - c74ed59 r289 fix: (P0-1) aarch64 nG + flush_va gắn ASID; (P0-2) hộp thư maintenance dùng chung
+- 1e5c051 r289: P0-2 payload-trong-hộp-thư + P1-6 đối xứng + 289.4 BKL + 289.5 sàn test
+- fc6aec4 r290 (một phần): bộ duyệt bảng chìa dùng chung + sửa parent qua CNode đã tháo
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -599,7 +601,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 243/243 PASS
+- `cargo test -p vifast-kernel`: 247/247 PASS
 - `cargo test -p vifast-arch`: 8/8 PASS
 - `cargo test -p vifast-pte`: 12/12 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS
@@ -610,7 +612,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 2283888 byte (`kernel_end=0x803d2690`)
+- RISC-V headroom: 2279792 byte (`kernel_end=0x803d3690`)
 - `Kernel = 552120`, `Object = 3192`, `Tcb = 1648`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status

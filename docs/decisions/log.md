@@ -83,3 +83,5 @@
 | r289 | Vá P0-1 (nG + flush_va gắn ASID), P0-2 (payload trong hộp thư + hợp nhất phạm vi), P1-6 (x86 shootdown đối xứng), 289.4 (`held_by` thay `is_held`) | Bản soát tầng đáy 2026-11-10; ba lỗi cách ly nằm ở tầng duy nhất chưa có test host | c74ed59 + commit r289 đầy đủ |
 | r289 | Sàn test thay hằng số 138 bằng `scripts/test-floor.json` (11 crate, 354 test), mutation chứng minh ĐỎ khi xoá 1 test | 138 → 245 mà gate vẫn xanh: lưới an toàn có lỗ | cùng commit |
 | r289 | riscv64 CHƯA nối hộp thư dùng chung: nối vào boot hỏng 0/5, revert thì 3/3 | Không hy sinh mạng xanh cho đối xứng hình thức; giữ mã cũ + ghi việc | cùng commit |
+| r290 | 290.1 xong: `CapRef.cnode` + `TableId` + `for_each_cap` + `resolve_cap_ref` + `cap_slot_capacity`; 290.2 dở (parent qua CNode đã tháo nay được sửa) | Bốn bộ duyệt cũ bỏ sót CNode đã tháo — gốc P0-3 | fc6aec4 |
+| r290 | Soak 100×3 = 299/300; lần hỏng duy nhất là T33b riscv (fault + no runnable thread), không liên quan TLB/IPI | Tiêu chí 289.6 | — |

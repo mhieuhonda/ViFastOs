@@ -1033,3 +1033,32 @@ Test host của crate (chạy được vì không asm):
 - `concurrent_publish_never_loses_a_flush` (20 000 lần, hai luồng).
 
 Đo sau khi sửa: build PASS, QEMU 3 arch × 3 = 9/9 PASS, gate 10/10.
+
+## Agent 0 chốt r289–r294 (2026-11-10) — thực thi theo tệp quyết định
+
+Tệp: `ViFastOs-quyet-dinh-agent2-r289-r294.md` (Agent 0). Thứ tự vòng: r289
+(tầng đáy) → r290 (capability) → r291 (FS) → r292 (gốc race FS) → r293 →
+r294 (tách lib.rs).
+
+### r289 — xong (commit `1e5c051`)
+
+| Mục | Nội dung | Test đỏ-trước |
+|---|---|---|
+| 289.2 | Payload (va, pages, asid) nằm TRONG hộp thư `vifast-maint`, hợp nhất chỉ nới rộng (Range→Asid→All), không ghi đè | `two_publishers_both_get_covered`, `publishers_with_different_asids_cover_both`, `scope_merge_never_narrows` |
+| 289.3 | x86 shootdown đối xứng (bỏ `target != 1`), mỗi hart một hộp thư, `APIC_IDS`, đếm theo cặp `SHOOTDOWN_SENT[nguồn][đích]` | `ap_can_publish_to_the_bsp_mailbox` |
+| 289.4 | `BKL.is_held()` → `held_by(current_hart())` ở 8 chỗ 3 port | `held_by_is_owner_only_while_a_waiter_sees_is_held` |
+| 289.5 | Sàn test theo số đo (`scripts/test-floor.py` + `test-floor.json`), gate đỏ nếu giảm | mutation: xoá 1 test ⇒ `vifast-maint: 6 < 7` ⇒ ĐỎ |
+
+riscv64 **chưa** nối hộp thư dùng chung: nối vào thì boot 0/5, revert thì 3/3 —
+giữ mã cũ, ghi thành việc của vòng sau.
+
+### r290 — 290.1 xong, 290.2 dở (commit `fc6aec4`)
+
+- 290.1: `CapRef.cnode`, `TableId`, `Kernel::for_each_cap` (root + TCB nhúng +
+  **mọi** CNode kể cả đã tháo), `resolve_cap_ref`, `cap_slot_capacity`; test
+  `for_each_cap_visits_every_slot_of_every_live_table` (7 cap / 4 bảng).
+- 290.2 (dở): `is_descendant`/`survivor_for` phân giải qua bảng vật lý; bỏ
+  `return` sớm trong `reparent_tcb_caps`; vòng sửa `cap.parent` đi qua mọi bảng
+  vật lý. Test đỏ-trước `parent_pointing_into_a_dying_tcb_is_repaired_inside_a_cnode`.
+  **Chưa** dựng được kịch bản 5 bước đầy đủ (revoke + destroy) ⇒ **không** tuyên
+  bố đóng P0-3.
