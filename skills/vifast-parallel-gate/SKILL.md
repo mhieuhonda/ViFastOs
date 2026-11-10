@@ -62,6 +62,16 @@ Kết quả: `par-gate: PASS` / `FAIL (local=<rc> remote=<rc>)`; log local ở
 | Tuần tự | `test-qemu.py --repeat 1` (3 arch) + `test-persist.py` | **107 s** |
 | Song song | `par-gate.sh --repeat 1 --full` | **129 s** |
 
+### Đo lại 2026-11-11 — soak là chỗ song song THẮNG rõ
+
+| Cách chạy | Số boot | Thời gian |
+|---|---:|---:|
+| Tuần tự (một máy, riscv64) | 40 | **149 s** |
+| **Song song** (local riscv64 ×40 + `ps` x86_64 ×40) | **80** | **148 s** |
+
+⇒ **2× thông lượng**, đúng mục tiêu. (Đo bằng `par`/`wait`, hai bên chạy arch
+khác nhau, `ps` đã có sẵn bản build nên không tốn `build.sh`.)
+
 Kết luận trung thực: ở `--repeat 1`, chế độ song song **chậm hơn ~20%** vì chi
 phí cố định (rsync + `build.sh` đầy đủ trên `ps` ≈ 50-60 s) lớn hơn phần tiết
 kiệm từ việc đẩy x86_64 sang máy khác. Chỉ nên dùng khi:
