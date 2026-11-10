@@ -596,6 +596,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - e957703 r294.T26 ĐỘT PHÁ: open(/d)=Ok và readdir lặp lại thấy d ⇒ KHÔNG mất dữ liệu, lỗi ở tầng liệt kê
 - bf143fa r294.T26: retry readdir không cứu (9/30 như cũ) ⇒ revert; lỗi ở nhánh Ok(None)/ENOENT
 - 13f31f9 r294.T26: đèn V2RD — vòng readdir dừng ở index 6 (ENOENT) dù entry tồn tại; chỉ đúng chỗ hẹp
+- 11c94b1 r294.T26: cache khớp đĩa (không in DIR) ⇒ nghi inode RAM thiếu block; đèn DIR + V2RD
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
