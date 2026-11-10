@@ -1,0 +1,13 @@
+{
+  "vifast-abi": 8,
+  "vifast-acpi": 8,
+  "vifast-arch": 8,
+  "vifast-elf": 19,
+  "vifast-fs": 40,
+  "vifast-kernel": 245,
+  "vifast-maint": 7,
+  "vifast-pte": 12,
+  "vifast-runtime": 0,
+  "vifast-user": 0,
+  "vifast-virtio": 7
+}

@@ -120,7 +120,51 @@ static mut AP_STARTED: bool = false;
 static mut AP_LONG_ONLINE: bool = false;
 static AP_ONLINE: AtomicBool = AtomicBool::new(false);
 /// P0-2 (r289): hộp thư maintenance dùng chung (xem `vifast-maint`).
-static AP_MAINT: vifast_maint::Mailbox = vifast_maint::Mailbox::new();
+/// 289.3: MỘT hộp thư cho MỖI hart — hart phụ phải báo được hart chính, nên
+/// không thể chỉ có hộp thư của AP như bản cũ.
+static MAINT: [vifast_maint::Mailbox; MAX_HARTS] = [
+    vifast_maint::Mailbox::new(),
+    vifast_maint::Mailbox::new(),
+    vifast_maint::Mailbox::new(),
+    vifast_maint::Mailbox::new(),
+];
+/// APIC id của từng hart (0 = chưa biết). BSP tự đọc LAPIC của mình lúc init.
+static APIC_IDS: [AtomicU32; MAX_HARTS] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
+/// 289.3: số yêu cầu shootdown đã gửi theo CẶP (nguồn, đích) — để log chẩn
+/// đoán chứng minh chiều AP→BSP có thật, không chỉ BSP→AP.
+static SHOOTDOWN_SENT: [[AtomicUsize; MAX_HARTS]; MAX_HARTS] = [
+    [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ],
+    [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ],
+    [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ],
+    [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ],
+];
+static SHOOTDOWN_AP_TO_BSP: AtomicUsize = AtomicUsize::new(0);
+static SHOOTDOWN_BSP_TO_AP: AtomicUsize = AtomicUsize::new(0);
 const APIC_MAINT_VECTOR: u32 = 0x30;
 const APIC_TIMER_VECTOR: u32 = 0x31;
 const APIC_HALT_VECTOR: u32 = 0x32;
@@ -248,9 +292,12 @@ unsafe fn init_acpi(rsdp: u64) {
             ACPI_BSP = parsed.bsp;
             ACPI_LAPIC_BASE = parsed.lapic_base;
             AP_APIC_ID = 0;
+            // 289.3: lưu APIC id theo hart để shootdown đi được CẢ HAI chiều.
+            APIC_IDS[0].store(parsed.bsp, Ordering::Release);
             for cpu in parsed.cpus[..parsed.cpu_count].iter() {
                 if cpu.enabled && cpu.apic_id != parsed.bsp {
                     AP_APIC_ID = cpu.apic_id;
+                    APIC_IDS[1].store(cpu.apic_id, Ordering::Release);
                     break;
                 }
             }
@@ -1160,23 +1207,66 @@ unsafe fn flush_tagged_va(asid: u16, va: u64, pages: usize) {
 }
 
 unsafe fn process_maintenance() {
-    let Some((seq, kind)) = AP_MAINT.take() else {
+    let me = X86Platform::hart_id();
+    let Some((seq, kind, scope)) = MAINT[me].take() else {
         return;
     };
-    if kind & AP_MAINT_TLB_VA != 0 {
-        flush_tagged_va(
-            AP_MAINT_TLB_ASID.load(Ordering::Acquire) as u16,
-            AP_MAINT_TLB_ADDR.load(Ordering::Acquire),
-            AP_MAINT_TLB_PAGES.load(Ordering::Acquire),
-        );
-    }
-    if kind & AP_MAINT_TLB != 0 {
-        reload_cr3();
+    if kind & (AP_MAINT_TLB | AP_MAINT_TLB_VA) != 0 {
+        match scope {
+            vifast_maint::Scope::All => reload_cr3(),
+            vifast_maint::Scope::Asid(_) => reload_cr3(),
+            vifast_maint::Scope::Range { va, pages, asid } => {
+                flush_tagged_va(asid, va, pages);
+            }
+            vifast_maint::Scope::Free => {}
+        }
     }
     if kind & AP_MAINT_ICACHE != 0 {
         core::arch::asm!("wbinvd");
     }
-    AP_MAINT.ack(seq);
+    MAINT[me].ack(seq);
+}
+
+/// 289.3: gửi maintenance tới MỘT hart bất kỳ (kể cả hart chính khi ta là hart
+/// phụ). Trả `seq` để chờ ACK, 0 nếu không gửi được.
+unsafe fn send_maintenance_to(target: usize, kind: u32, scope: vifast_maint::Scope) -> usize {
+    let me = X86Platform::hart_id();
+    if target >= MAX_HARTS || target == me {
+        return 0;
+    }
+    if target != 0 && !unsafe { AP_STARTED } {
+        return 0;
+    }
+    let apic = APIC_IDS[target].load(Ordering::Acquire);
+    if apic == 0 {
+        return 0;
+    }
+    let base = lapic_base();
+    let seq = MAINT[target].publish(kind, scope);
+    core::sync::atomic::fence(Ordering::SeqCst);
+    AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
+    SHOOTDOWN_SENT[me][target].fetch_add(1, Ordering::Relaxed);
+    if me == 1 && target == 0 {
+        SHOOTDOWN_AP_TO_BSP.fetch_add(1, Ordering::Relaxed);
+    } else if me == 0 && target == 1 {
+        SHOOTDOWN_BSP_TO_AP.fetch_add(1, Ordering::Relaxed);
+    }
+    core::ptr::write_volatile((base + 0x310) as *mut u32, apic << 24);
+    send_icr(base, APIC_MAINT_VECTOR);
+    seq
+}
+
+unsafe fn wait_maintenance(target: usize, seq: usize) -> bool {
+    if seq == 0 || target >= MAX_HARTS {
+        return false;
+    }
+    for _ in 0..5_000_000 {
+        if MAINT[target].acked(seq) {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    MAINT[target].acked(seq)
 }
 
 #[cfg_attr(feature = "test-skip-tlb-ipi", allow(dead_code))]
@@ -1185,20 +1275,13 @@ unsafe fn process_maintenance() {
 /// there is a single AP, so the split mainly documents the contract and
 /// keeps the wait-polling (`pause` loop) reusable; returns 0 when no AP.
 unsafe fn publish_tlb_va_ap(asid: u16, va: u64, pages: usize) -> usize {
-    if !unsafe { AP_STARTED } || AP_APIC_ID == 0 {
-        return 0;
+    unsafe {
+        send_maintenance_to(
+            1,
+            AP_MAINT_TLB_VA,
+            vifast_maint::Scope::Range { va, pages, asid },
+        )
     }
-    let base = lapic_base();
-    AP_MAINT_TLB_ASID.store(asid as u32, Ordering::Release);
-    AP_MAINT_TLB_ADDR.store(va, Ordering::Release);
-    AP_MAINT_TLB_PAGES.store(pages, Ordering::Release);
-    let seq = AP_MAINT.publish(AP_MAINT_TLB_VA);
-    // rào chắn: ghi mailbox phải tới trước doorbell (P0-2).
-    core::sync::atomic::fence(Ordering::SeqCst);
-    AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
-    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
-    send_icr(base, APIC_MAINT_VECTOR);
-    seq
 }
 
 /// Wait until the AP acknowledges `seq`.  Safe without the BKL: publication
@@ -1208,7 +1291,7 @@ unsafe fn wait_ap(seq: usize) -> bool {
         return false;
     }
     for _ in 0..100_000 {
-        if AP_MAINT.acked(seq) {
+        if MAINT[1].acked(seq) {
             return true;
         }
         core::arch::asm!("pause");
@@ -1227,16 +1310,7 @@ unsafe fn send_tlb_va_ap(asid: u16, va: u64, pages: usize) -> bool {
 /// Publish a full-AP TLB flush without waiting (issue #4 — pairs with
 /// [`wait_ap`]).
 unsafe fn publish_full_tlb_ap() -> usize {
-    if !unsafe { AP_STARTED } || AP_APIC_ID == 0 {
-        return 0;
-    }
-    let base = lapic_base();
-    let seq = AP_MAINT.publish(AP_MAINT_TLB);
-    core::sync::atomic::fence(Ordering::SeqCst);
-    AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
-    core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
-    send_icr(base, APIC_MAINT_VECTOR);
-    seq
+    unsafe { send_maintenance_to(1, AP_MAINT_TLB, vifast_maint::Scope::All) }
 }
 
 unsafe fn send_full_tlb_ap() -> bool {
@@ -1677,13 +1751,13 @@ unsafe fn start_ap_real() {
         return;
     }
     vifast_kernel::klog!(X86Platform, "AP LONG MODE OK (cpu=1)");
-    let seq = AP_MAINT.publish(AP_MAINT_TLB | AP_MAINT_ICACHE);
+    let seq = MAINT[1].publish(AP_MAINT_TLB | AP_MAINT_ICACHE, vifast_maint::Scope::All);
     core::sync::atomic::fence(Ordering::SeqCst);
     AP_IPI_SENT.fetch_add(1, Ordering::AcqRel);
     core::ptr::write_volatile((base + 0x310) as *mut u32, AP_APIC_ID << 24);
     send_icr(base, APIC_MAINT_VECTOR);
     for _ in 0..100_000 {
-        if AP_MAINT.acked(seq) && AP_IPI_SEEN.load(Ordering::Acquire) > 0 {
+        if MAINT[1].acked(seq) && AP_IPI_SEEN.load(Ordering::Acquire) > 0 {
             BSP_RATE_BASE.store(BSP_PIT_TICKS.load(Ordering::Acquire), Ordering::Release);
             vifast_kernel::klog!(X86Platform, "SMP OK (harts=2, ipi=1)");
             return;
@@ -2045,7 +2119,8 @@ impl vifast_kernel::PageTableOps for PageOps {
         unsafe {
             flush_tagged_va(asid, va, pages);
         }
-        if !BKL.is_held() {
+        // 289.4: chỉ shootdown khi CHÍNH hart này giữ BKL.
+        if !BKL.held_by(X86Platform::hart_id()) {
             return;
         }
         let me = X86Platform::hart_id();
@@ -2054,13 +2129,27 @@ impl vifast_kernel::PageTableOps for PageOps {
             if target == me {
                 continue;
             }
-            if target != 1 || !unsafe { AP_STARTED } {
+            // 289.3: đối xứng — hart phụ cũng phải báo được hart chính.
+            // Hart 0 luôn online; hart > 0 cần AP đã lên.
+            if target != 0 && !unsafe { AP_STARTED } {
+                continue;
+            }
+            if APIC_IDS[target].load(Ordering::Acquire) == 0 {
                 continue;
             }
             if targets & (1 << target) == 0 {
                 TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
-            } else if unsafe { send_tlb_va_ap(asid, va, pages) } {
-                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            } else {
+                let seq = unsafe {
+                    send_maintenance_to(
+                        target,
+                        AP_MAINT_TLB_VA,
+                        vifast_maint::Scope::Range { va, pages, asid },
+                    )
+                };
+                if seq != 0 && unsafe { wait_maintenance(target, seq) } {
+                    TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
         #[cfg(feature = "test-skip-tlb-ipi")]
@@ -2072,15 +2161,30 @@ impl vifast_kernel::PageTableOps for PageOps {
         unsafe {
             reload_cr3();
         }
-        if !BKL.is_held() {
+        // 289.4: chỉ shootdown khi CHÍNH hart này giữ BKL.
+        if !BKL.held_by(X86Platform::hart_id()) {
             return;
         }
         let me = X86Platform::hart_id();
-        if me == 0 && unsafe { AP_STARTED } {
-            if targets & 0b10 == 0 {
+        // 289.3: đối xứng như `flush_va_asid`.
+        for target in 0..MAX_HARTS {
+            if target == me {
+                continue;
+            }
+            if target != 0 && !unsafe { AP_STARTED } {
+                continue;
+            }
+            if APIC_IDS[target].load(Ordering::Acquire) == 0 {
+                continue;
+            }
+            if targets & (1 << target) == 0 {
                 TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
-            } else if unsafe { send_full_tlb_ap() } {
-                TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+            } else {
+                let seq =
+                    unsafe { send_maintenance_to(target, AP_MAINT_TLB, vifast_maint::Scope::All) };
+                if seq != 0 && unsafe { wait_maintenance(target, seq) } {
+                    TLB_IPI_SENT.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     }

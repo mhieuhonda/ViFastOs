@@ -312,7 +312,9 @@ fn send_tlb_va(target: usize, asid: u16, va: u64, pages: usize) -> bool {
     if state.is_null() || unsafe { (*state).hart_id } == target {
         return false;
     }
-    if !BKL.is_held() {
+    // 289.4: `held_by` chứ không `is_held` — hart đang xếp hàng không được
+    // publish maintenance (nó chưa thấy trạng thái bảng trang mới nhất).
+    if !BKL.held_by(current_hart()) {
         return false;
     }
     MAINT_TLB_ADDR[target].store(va as usize, Ordering::Release);
@@ -750,7 +752,9 @@ struct PageOps;
 /// target's mailbox + IPI while the BKL guard is held, then wait all ACKs.
 /// Hold time drops from the sum to the max of target latencies.
 fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
-    if !BKL.is_held() {
+    // 289.4: chỉ publish khi CHÍNH hart này giữ BKL — `is_held()` còn
+    // đúng cho cả hart đang xếp hàng (ticket đã lấy, chưa được phục vụ).
+    if !BKL.held_by(current_hart()) {
         return;
     }
     let me = current_hart();
@@ -785,7 +789,9 @@ fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
 
 /// Same publish-first pattern for full-ASID flushes (MAINT_TLB).
 fn shootdown_all(targets: u32) {
-    if !BKL.is_held() {
+    // 289.4: chỉ publish khi CHÍNH hart này giữ BKL — `is_held()` còn
+    // đúng cho cả hart đang xếp hàng (ticket đã lấy, chưa được phục vụ).
+    if !BKL.held_by(current_hart()) {
         return;
     }
     let me = current_hart();
@@ -891,7 +897,7 @@ impl vifast_kernel::PageTableOps for PageOps {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
         }
-        if BKL.is_held() {
+        if BKL.held_by(current_hart()) {
             let _ = request_ipi();
         }
     }
@@ -924,7 +930,7 @@ impl vifast_kernel::PageTableOps for PageOps {
         // fence.i is local; when called from a kernel mapping path under BKL,
         // the symmetric mailbox fences every other online hart.  Early boot
         // mapping runs before hart 1 can execute user code, so stay local.
-        if BKL.is_held() {
+        if BKL.held_by(current_hart()) {
             let _ = request_ipi();
         }
     }

@@ -103,24 +103,9 @@ const MAINT_TLB_VA: u32 = 8;
 static TLB_VA_FLUSH: AtomicUsize = AtomicUsize::new(0);
 static TLB_IPI_SENT: AtomicUsize = AtomicUsize::new(0);
 static TLB_IPI_SKIPPED: AtomicUsize = AtomicUsize::new(0);
-static MAINT_TLB_ADDR: [AtomicUsize; MAX_HARTS] = [
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-];
-static MAINT_TLB_PAGES: [AtomicUsize; MAX_HARTS] = [
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-];
-static MAINT_TLB_ASID: [AtomicU32; MAX_HARTS] = [
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-];
+// 289.2 (r289): payload (va, pages, asid) nay nằm TRONG hộp thư `vifast-maint`
+// và được hợp nhất khi chồng nhau — trước đây là ba mảng riêng, publisher thứ
+// hai ghi đè publisher thứ nhất ⇒ mất một lần invalidate.
 /// P0-2 (r289): hộp thư maintenance dùng chung `vifast-maint` — một cài đặt
 /// đúng cho cả ba kiến trúc (publish `kind` TRƯỚC `seq`, consumer không ACK
 /// khi chưa có việc). Trước đây mỗi port tự cài và cả ba đều sai cùng kiểu.
@@ -234,35 +219,44 @@ fn poll_maintenance() {
     if hart >= MAX_HARTS {
         return;
     }
-    let Some((seq, kind)) = MAINT[hart].take() else {
+    let Some((seq, kind, scope)) = MAINT[hart].take() else {
         return;
     };
-    if kind & MAINT_TLB != 0 {
-        // Full stage-1 invalidate for EL1 (remote side of flush_all_asid /
-        // request_ipi); previously only `dsb ish`, so the handler was dead.
-        unsafe {
-            core::arch::asm!("tlbi vmalle1is");
-            core::arch::asm!("dsb ish");
-            core::arch::asm!("isb");
-        }
-    }
-    if kind & MAINT_TLB_VA != 0 {
-        // Remote side of flush_va_asid: per-page VAE1IS with the sender's
-        // tagged operand (Xt[63:48]=ASID, Xt[43:12]=VA).
-        let va = MAINT_TLB_ADDR[hart].load(Ordering::Acquire) as u64;
-        let pages = MAINT_TLB_PAGES[hart].load(Ordering::Acquire);
-        let asid = MAINT_TLB_ASID[hart].load(Ordering::Acquire);
-        let asid_tag = (asid as u64) << 48;
-        let mut page = 0;
-        while page < pages {
-            unsafe {
-                core::arch::asm!("tlbi vae1is, {}", in(reg) (va + (page as u64) * 4096) | asid_tag);
+    // 289.2: làm theo PHẠM VI mà hộp thư trả về (đã hợp nhất các yêu cầu
+    // chồng nhau), không đọc mảng payload riêng nữa.
+    if kind & (MAINT_TLB | MAINT_TLB_VA) != 0 {
+        let mut flushed = false;
+        match scope {
+            vifast_maint::Scope::All => {
+                unsafe {
+                    core::arch::asm!("tlbi vmalle1is");
+                }
+                flushed = true;
             }
-            page += 1;
+            vifast_maint::Scope::Asid(asid) => {
+                unsafe {
+                    core::arch::asm!("tlbi aside1is, {}", in(reg) asid as u64);
+                }
+                flushed = true;
+            }
+            vifast_maint::Scope::Range { va, pages, asid } => {
+                let asid_tag = (asid as u64) << 48;
+                let mut page = 0;
+                while page < pages {
+                    unsafe {
+                        core::arch::asm!("tlbi vae1is, {}", in(reg) (va + (page as u64) * 4096) | asid_tag);
+                    }
+                    page += 1;
+                }
+                flushed = true;
+            }
+            vifast_maint::Scope::Free => {}
         }
-        unsafe {
-            core::arch::asm!("dsb ish");
-            core::arch::asm!("isb");
+        if flushed {
+            unsafe {
+                core::arch::asm!("dsb ish");
+                core::arch::asm!("isb");
+            }
         }
     }
     if kind & MAINT_ICACHE != 0 {
@@ -287,7 +281,7 @@ fn maintenance_target_online(target: usize) -> bool {
 /// waiting (issue #4 — same split as the RISC-V port: only the publish runs
 /// under BKL so a slow target does not serialize the whole machine behind
 /// the lock).  Returns 0 when the target cannot receive maintenance.
-fn publish_maintenance(target: usize, kind: u32) -> usize {
+fn publish_maintenance(target: usize, kind: u32, scope: vifast_maint::Scope) -> usize {
     if target >= MAX_HARTS || !maintenance_target_online(target) {
         return 0;
     }
@@ -299,7 +293,7 @@ fn publish_maintenance(target: usize, kind: u32) -> usize {
         BKL.held_by(current_hart()),
         "maintenance IPI sender must hold BKL"
     );
-    let seq = MAINT[target].publish(kind);
+    let seq = MAINT[target].publish(kind, scope);
     // rào chắn để việc ghi mailbox tới trước doorbell (P0-2).
     unsafe {
         core::arch::asm!("dsb ish");
@@ -326,7 +320,8 @@ fn wait_maintenance(target: usize, seq: usize) -> bool {
 }
 
 fn send_maintenance(target: usize, kind: u32) -> bool {
-    let seq = publish_maintenance(target, kind);
+    // Không có payload ⇒ nới lên "xoá tất cả" (bao trùm mọi yêu cầu TLB).
+    let seq = publish_maintenance(target, kind, vifast_maint::Scope::All);
     if seq == 0 {
         return false;
     }
@@ -336,7 +331,9 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
 /// Publish-first TLB-shootdown helpers (issue #4, module-level): queue every
 /// target's mailbox + SGI while the BKL guard is held, then wait all ACKs.
 fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
-    if !BKL.is_held() {
+    // 289.4: chỉ publish khi CHÍNH hart này giữ BKL — `is_held()` còn
+    // đúng cho cả hart đang xếp hàng (ticket đã lấy, chưa được phục vụ).
+    if !BKL.held_by(current_hart()) {
         return;
     }
     let me = current_hart();
@@ -350,10 +347,8 @@ fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
             TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
             continue;
         }
-        MAINT_TLB_ADDR[target].store(va as usize, Ordering::Release);
-        MAINT_TLB_PAGES[target].store(pages, Ordering::Release);
-        MAINT_TLB_ASID[target].store(asid as u32, Ordering::Release);
-        let seq = publish_maintenance(target, MAINT_TLB_VA);
+        let scope = vifast_maint::Scope::Range { va, pages, asid };
+        let seq = publish_maintenance(target, MAINT_TLB_VA, scope);
         if seq != 0 {
             pending[count] = (target, seq);
             count += 1;
@@ -367,7 +362,9 @@ fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
 
 /// Same publish-first pattern for full-ASID flushes (MAINT_TLB).
 fn shootdown_all(targets: u32) {
-    if !BKL.is_held() {
+    // 289.4: chỉ publish khi CHÍNH hart này giữ BKL — `is_held()` còn
+    // đúng cho cả hart đang xếp hàng (ticket đã lấy, chưa được phục vụ).
+    if !BKL.held_by(current_hart()) {
         return;
     }
     let me = current_hart();
@@ -380,7 +377,7 @@ fn shootdown_all(targets: u32) {
         if targets & (1 << target) == 0 {
             TLB_IPI_SKIPPED.fetch_add(1, Ordering::Relaxed);
         } else {
-            let seq = publish_maintenance(target, MAINT_TLB);
+            let seq = publish_maintenance(target, MAINT_TLB, vifast_maint::Scope::All);
             if seq != 0 {
                 pending[count] = (target, seq);
                 count += 1;

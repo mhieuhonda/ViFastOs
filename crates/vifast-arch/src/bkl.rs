@@ -181,6 +181,52 @@ impl Drop for BigKernelGuard {
 #[cfg(test)]
 mod tests {
     use super::BigKernelLock;
+    /// 289.4 (r289, đỏ-trước): `is_held()` nghĩa là "CÓ ai giữ hoặc đang CHỜ"
+    /// — nó đếm từ lúc lấy vé, không phải lúc được phục vụ (đó là cách vá race
+    /// #13). Vì vậy `is_held()` KHÔNG được dùng thay cho "hart này đang giữ":
+    /// một hart đang xếp hàng vẫn thấy `is_held() == true` nhưng
+    /// `held_by(hart)` phải là `false`. Shootdown TLB phải kiểm `held_by`.
+    #[test]
+    fn held_by_is_owner_only_while_a_waiter_sees_is_held() {
+        static LOCK: BigKernelLock = BigKernelLock::new();
+        let holder_ready = std::sync::Arc::new(AtomicBool::new(false));
+        let release = std::sync::Arc::new(AtomicBool::new(false));
+        let ready = std::sync::Arc::clone(&holder_ready);
+        let release_holder = std::sync::Arc::clone(&release);
+        let holder = std::thread::spawn(move || {
+            let _guard = LOCK.lock_with_hart(0, || {});
+            ready.store(true, Ordering::SeqCst);
+            while !release_holder.load(Ordering::SeqCst) {
+                core::hint::spin_loop();
+            }
+        });
+        while !holder_ready.load(Ordering::SeqCst) {
+            core::hint::spin_loop();
+        }
+        let saw_held = AtomicBool::new(false);
+        let saw_not_mine = AtomicBool::new(false);
+        let guard = LOCK.lock_with_hart(1, || {
+            if LOCK.is_held() {
+                saw_held.store(true, Ordering::SeqCst);
+            }
+            if !LOCK.held_by(1) {
+                saw_not_mine.store(true, Ordering::SeqCst);
+            }
+            release.store(true, Ordering::SeqCst);
+        });
+        holder.join().expect("holder panic");
+        drop(guard);
+        assert!(
+            saw_held.load(Ordering::SeqCst),
+            "người xếp hàng phải thấy is_held() == true"
+        );
+        assert!(
+            saw_not_mine.load(Ordering::SeqCst),
+            "nhưng held_by(hart đang chờ) phải là false — nếu không shootdown sẽ publish sai"
+        );
+        assert!(!LOCK.is_held(), "nhả hết thì is_held() phải false");
+    }
+
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;

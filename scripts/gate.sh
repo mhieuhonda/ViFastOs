@@ -44,7 +44,10 @@ step "build" ./scripts/build.sh
 step "kernel-test" cargo test -p vifast-kernel
 # Fuzz chỉ có nghĩa khi đúng 2 test #[ignore] còn tồn tại; đổi tên chúng thì
 # "0 passed" vẫn xanh, nên chặn bằng cách đếm số test liệt kê được.
-step "tests-present" sh -c 'test "$(cargo test -p vifast-kernel -- --list 2>/dev/null | grep -c ": test$")" -ge 138'
+# 289.5: sàn test là số ĐO ĐƯỢC (scripts/test-floor.json), không phải hằng số
+# viết tay. Trước đây chốt cứng `-ge 138` trong khi thực tế 245 — xoá 107 test
+# vẫn xanh. Nay giảm bất kỳ crate nào là ĐỎ.
+step "tests-present" python3 scripts/test-floor.py --check
 step "fuzz" cargo test -p vifast-kernel --release -- --ignored
 
 if [ "$QUICK" -eq 0 ]; then

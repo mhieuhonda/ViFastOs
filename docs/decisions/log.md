@@ -80,3 +80,6 @@
 | 96 | UEFI ghi image range; siết load bound 1 GiB; DNS retry 8 lần | Check `KERNEL IMAGE OUTSIDE` chạy thật; hết flake soak | fb5081f |
 | 97 | NX toàn ảnh trừ text (PE) + reload_cr3 + wx hai chiều; K1/K3/N1 | Audit #9 chỉ ra TLB và OOB region; soi chay chỉ ra wake_error/enqueue/frame clamp | c1d953a |
 | 98 | Bàn phím PS/2 cho x86 + `input_check_x86`; `make_ready` chỉ đánh thức task đang chờ | Audit #10: 6 lỗi i8042; K4 từ review; K6 là false positive | c1cd90b |
+| r289 | Vá P0-1 (nG + flush_va gắn ASID), P0-2 (payload trong hộp thư + hợp nhất phạm vi), P1-6 (x86 shootdown đối xứng), 289.4 (`held_by` thay `is_held`) | Bản soát tầng đáy 2026-11-10; ba lỗi cách ly nằm ở tầng duy nhất chưa có test host | c74ed59 + commit r289 đầy đủ |
+| r289 | Sàn test thay hằng số 138 bằng `scripts/test-floor.json` (11 crate, 354 test), mutation chứng minh ĐỎ khi xoá 1 test | 138 → 245 mà gate vẫn xanh: lưới an toàn có lỗ | cùng commit |
+| r289 | riscv64 CHƯA nối hộp thư dùng chung: nối vào boot hỏng 0/5, revert thì 3/3 | Không hy sinh mạng xanh cho đối xứng hình thức; giữ mã cũ + ghi việc | cùng commit |
