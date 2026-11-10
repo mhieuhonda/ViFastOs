@@ -98,8 +98,45 @@ PIT bị nạp lại hỏng. Đèn kế tiếp cho r294: in `TICK n` mỗi 16 ti
 
 Commit thi hành: `39589cb`.
 
-## Trạng thái phép đo nền 293.8 (đo lại)
+## Phép đo nền 293.8 (ĐÃ XONG)
 
-- Guard `KERNEL FAULT`: **TẮT** (mặc định `halt()`), đúng chốt của Agent 0.
-- `MAX_IO = 128`, cùng một sha binary, x86_64, 300 lần boot.
-- Kết quả RETRY theo loại: xem mục "Số đo" (cập nhật sau khi chạy xong).
+Điều kiện: guard `KERNEL FAULT` **TẮT** (mặc định `halt()`), `MAX_IO = 128`,
+x86_64, một sha binary (`crates/` tại `39589cb`).
+
+```
+RETRY 8/305 (T-FS=0, T-SCHED=7, T-KHAC=1)
+x86_64   297/300 PASS
+```
+
+8 sự kiện hỏng trên 305 lần boot thật (2,6%), phân loại **thủ công** lại từ
+serial (vì bộ phân loại tự động có lỗi — xem dưới):
+
+| Nhóm | Số lần | Run | Chữ ký |
+|---|---:|---|---|
+| T-SCHED "T33a" (treo sau `shell>`) | 3 | 36, 192, 287 | serial dừng ngay sau `shell>`, thiếu `PREEMPT OK` |
+| T-SCHED "chết sớm" | 4 | 102, 108, 212, 217 | `USER FAULT tcb=None` + `no runnable thread after fault` |
+| T-KHAC (race debug-exit) | 1 | 122 | guest in đủ marker, QEMU thoát mã lạ; harness retry cứu |
+
+⇒ **T-FS = 0/305** ở MAX_IO = 128 — BLOCKER FS **không** tái phát trong phép đo
+này (đúng như kỳ vọng, `MAX_IO=128` chỉ thu hẹp cửa sổ race).
+
+### Lỗi phát hiện trong chính bộ phân loại (đã sửa)
+
+Lượt chạy đầu in `T-FS=4` — **sai**: mọi lần **chết sớm** đều thiếu marker
+`FS V2 OK` (guest chết trước khi tới đó) nên bị dán nhãn T-FS. Đã sửa thứ tự
+xét: chữ ký SCHED trước, và "thiếu `FS V2 OK`" chỉ tính T-FS khi guest đã tới
+`SHELL READY`. Thêm 3 case vào `test-harness-spec.py` (647 case), gồm case
+"chết sớm có chữ ký scheduler ⇒ T-SCHED".
+
+## r294.4 — gốc của lớp "chết sớm" (ĐÃ SỬA)
+
+Từ `registers.txt` của artifact (run 102/108): **CPU#0 CPL=0 IF=0 HLT=0**,
+**CPU#1 CPL=0 IF=0 HLT=1**. Nghĩa là hart vào `fault::suspend` (đang giữ BKL,
+IF=0) gặp `pick_on(hart) == None` ⇒ `A::halt()` = `loop { hlt }` ⇒ guard BKL
+**không bao giờ được nhả** ⇒ hart còn lại quay BKL mãi với IF=0 ⇒ máy chết.
+
+Sửa: `fault::suspend -> bool`; bốn call site nhả `bkl` rồi mới `halt()`, kèm
+`SMP PARK (hart, cause)`. Hành vi vẫn là halt (chốt của Agent 0), chỉ đổi thứ tự.
+
+Đo sau vá: 60 boot ⇒ `RETRY 1/61 (T-FS=0, T-SCHED=1, T-KHAC=0)`, lần hỏng duy
+nhất là flake **boot sớm** (thiếu `SELFTEST PASS`), **0** lần `tcb=None`.
