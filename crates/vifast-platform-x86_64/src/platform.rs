@@ -1682,8 +1682,16 @@ pub extern "C" fn ap_entry() -> ! {
         );
         let _ = configure_lapic();
         let base = lapic_base();
-        core::ptr::write_volatile((base + 0x350) as *mut u32, 1 << 16);
+        // T33a (r294.B, bằng chứng `NO TICK`): LINT0 của **BSP** bị mask
+        // (`lvt0=0x10000`) ngay từ tick 2 ⇒ PIC không đẩy được IRQ0 ⇒ tick
+        // ngừng. Đúng hai chỗ trong toàn bộ mã ghi vào LVT0 (0x350): BSP đặt
+        // 0x700 (ExtINT, không mask) và AP mask 1<<16. Vì MMIO LAPIC định
+        // tuyến theo CPU ĐANG CHẠY, một dòng lệnh trên AP không được phép đổi
+        // LINT0 của BSP. Nay AP chỉ mask LINT1; LINT0 để nguyên.
         core::ptr::write_volatile((base + 0x360) as *mut u32, 1 << 16);
+        // Đèn xác nhận: đọc lại chính LVT0 mà AP vừa thấy.
+        let ap_lvt0 = core::ptr::read_volatile((base + 0x350) as *const u32);
+        vifast_kernel::klog!(X86Platform, "AP LVT0={:#x}", ap_lvt0);
         enable_smep_smap();
 
         disable_sse();
@@ -3142,6 +3150,47 @@ extern "efiapi" fn x86_page_fault(_frame: *const u64, error: u64) -> ! {
     <X86Platform as Platform>::enter_user(&context);
 }
 
+/// Đèn cho ca TREO CÂM: tick ngừng nhưng hart 0 vẫn chạy vòng syscall. Đếm số
+/// lần vào trap mà `fast_time()` không đổi; vượt ngưỡng thì in trạng thái
+/// LAPIC/PIC MỘT lần. Chỉ bật sau `diag-tick`.
+#[cfg(feature = "diag-tick")]
+static NO_TICK_LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
+#[cfg(feature = "diag-tick")]
+static NO_TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "diag-tick")]
+static NO_TICK_REPORTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "diag-tick")]
+#[inline]
+fn note_no_tick() {
+    let now = X86Platform::kernel().fast_time() as usize;
+    if NO_TICK_LAST.swap(now, Ordering::Relaxed) == now {
+        let count = NO_TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if count >= 4096 && !NO_TICK_REPORTED.swap(true, Ordering::Relaxed) {
+            let base = unsafe { lapic_base() };
+            let tpr = unsafe { core::ptr::read_volatile((base + 0x80) as *const u32) };
+            let svr = unsafe { core::ptr::read_volatile((base + 0xF0) as *const u32) };
+            let lvt0 = unsafe { core::ptr::read_volatile((base + 0x350) as *const u32) };
+            let (isr, irr, imr) = unsafe { pic_isr_imr() };
+            vifast_kernel::klog!(
+                X86Platform,
+                "NO TICK (ticks={}, traps={}, tpr={:#x}, svr={:#x}, lvt0={:#x}, pic_isr={:#04x}, pic_irr={:#04x}, pic_imr={:#04x}, eoi={})",
+                now,
+                count,
+                tpr,
+                svr,
+                lvt0,
+                isr,
+                irr,
+                imr,
+                PIC_EOI_SENT.load(Ordering::Relaxed)
+            );
+        }
+    } else {
+        NO_TICK_COUNT.store(0, Ordering::Relaxed);
+    }
+}
+
 #[no_mangle]
 extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
     if vifast_arch::panic::is_panicking() {
@@ -3149,6 +3198,8 @@ extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
     }
     assert_irqs_disabled();
     let frame = unsafe { &mut *frame };
+    #[cfg(feature = "diag-tick")]
+    note_no_tick();
     if frame.rax == vifast_abi::SyscallId::GetTime as u64 {
         frame.rax = 0;
         frame.rdi = X86Platform::kernel().fast_time();
