@@ -328,6 +328,80 @@ def main() -> int:
         if label == "fail" and not message.startswith("FAIL"):
             failures.append(f"tcp-echo: {desc} -> thông điệp không phải FAIL: {message}")
 
+    # r293.1 (tệp quyết định r293-r298 mục 2): harness phải ĐẾM retry và PHÂN
+    # LOẠI lần hỏng. Case dương: một log giả có retry phải ra đúng dòng
+    # `RETRY 1/N` kèm đúng loại. Case âm: nếu bỏ bộ đếm (hàm/khóa không còn)
+    # thì phần này đỏ ngay — đúng yêu cầu "bỏ đếm thì test đỏ".
+    import importlib.util
+
+    qemu_path = Path(__file__).resolve().parent / "test-qemu.py"
+    spec_qemu = importlib.util.spec_from_file_location("vifast_qemu", qemu_path)
+    qemu = importlib.util.module_from_spec(spec_qemu)
+    try:
+        spec_qemu.loader.exec_module(qemu)
+    except Exception as error:  # pragma: no cover - chỉ để báo lỗi rõ ràng
+        failures.append(f"retry-count: không import được test-qemu.py: {error}")
+        qemu = None
+
+    if qemu is not None:
+        # Phân loại: thiếu FS V2 OK ⇒ T-FS; thiếu PREEMPT OK ⇒ T-SCHED;
+        # thiếu cả hai ⇒ T-FS (ưu tiên đúng thứ tự mục 2.5); lỗi lạ ⇒ T-KHAC.
+        classify_cases = [
+            ("FS V2 OK\nPREEMPT OK\n", "T-KHAC", "đủ marker nhưng gọi phân loại"),
+            ("PREEMPT OK\n", "T-FS", "thiếu FS V2 OK"),
+            ("FS V2 OK\n", "T-SCHED", "thiếu PREEMPT OK"),
+            ("FS V2 OK\nPREEMPT OK\nROOT PANIC\n", "T-SCHED", "có ROOT PANIC"),
+            ("FS V2 OK\nPREEMPT OK\nUSER FAULT tcb=None \n", "T-SCHED", "USER FAULT tcb=None"),
+            ("FS V2 OK\nPREEMPT OK\nSMP NO READY (hart=0)\n", "T-SCHED", "SMP NO READY"),
+            ("FS V2 OK\nPREEMPT OK\nchuyện lạ\n", "T-KHAC", "không khớp chữ ký nào"),
+        ]
+        for output, want, desc in classify_cases:
+            cases += 1
+            got = qemu.classify_failure(output)
+            if got != want:
+                failures.append(f"retry-count: classify {desc} -> {got}, cần {want}")
+
+        # Dòng tổng kết: 1 retry trên 3 lần boot phải in đúng `RETRY 1/3`.
+        cases += 1
+        stats = {"retries": 1, "boots": 3, "classes": {"T-FS": 0, "T-SCHED": 1, "T-KHAC": 0}}
+        line = qemu.format_retry_line(stats)
+        if not line.startswith("RETRY 1/3 ") or "T-SCHED=1" not in line:
+            failures.append(f"retry-count: dòng tổng kết sai: {line!r}")
+
+        # 0 retry phải in `RETRY 0/N` (trung tính, không che flake bằng im lặng).
+        cases += 1
+        zero = qemu.format_retry_line(
+            {"retries": 0, "boots": 7, "classes": {"T-FS": 0, "T-SCHED": 0, "T-KHAC": 0}}
+        )
+        if not zero.startswith("RETRY 0/7 "):
+            failures.append(f"retry-count: dòng 0 retry sai: {zero!r}")
+
+        # Artifact: mọi lần hỏng phải để lại serial/status/tail (r293.2).
+        cases += 1
+        for name in ("save_flake_artifacts", "classify_failure", "format_retry_line"):
+            if not hasattr(qemu, name):
+                failures.append(f"retry-count: thiếu {name} (đã bị gỡ?)")
+
+        # --strict phải là cờ của harness (r293.3).
+        cases += 1
+        source = qemu_path.read_text()
+        if '"--strict"' not in source:
+            failures.append("retry-count: thiếu cờ --strict")
+
+        # CASE ÂM (điều kiện nghiệm thu 293.1): bỏ chỗ ĐẾM trong `run_qemu` thì
+        # phải đỏ. Chỉ kiểm hàm thuần là chưa đủ — gỡ lời gọi đếm vẫn để hàm
+        # sống, nên phải soi thân hàm `run_qemu` có thật sự cộng bộ đếm không.
+        cases += 1
+        run_qemu_body = source.split("def run_qemu(", 1)[1].split("\ndef ", 1)[0]
+        if 'RUN_STATS["retries"] += 1' not in run_qemu_body:
+            failures.append(
+                "retry-count: `run_qemu` không cộng RUN_STATS['retries'] (bỏ đếm là che flake)"
+            )
+        if "classify_failure(" not in run_qemu_body:
+            failures.append("retry-count: `run_qemu` không phân loại lần hỏng")
+        if "save_flake_artifacts(" not in source.split("def save_flake_artifacts", 1)[0]:
+            failures.append("retry-count: không có chỗ GỌI save_flake_artifacts (r293.2)")
+
     if failures:
         print("harness negative tests FAILED:")
         for failure in failures:

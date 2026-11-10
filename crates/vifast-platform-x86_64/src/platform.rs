@@ -318,8 +318,7 @@ unsafe fn init_acpi(rsdp: u64) {
 /// T33a (r294): đèn báo "hart này đang quay BKL quá lâu". Chỉ in MỘT lần cho
 /// mỗi hart, KHÔNG phải marker của gate.
 static BKL_SPIN_TICKS: [AtomicUsize; MAX_HARTS] = [const { AtomicUsize::new(0) }; MAX_HARTS];
-static BKL_STUCK_REPORTED: [AtomicBool; MAX_HARTS] =
-    [const { AtomicBool::new(false) }; MAX_HARTS];
+static BKL_STUCK_REPORTED: [AtomicBool; MAX_HARTS] = [const { AtomicBool::new(false) }; MAX_HARTS];
 
 fn note_bkl_spin() {
     #[cfg(not(feature = "diag-stall"))]
@@ -328,25 +327,25 @@ fn note_bkl_spin() {
     }
     #[cfg(feature = "diag-stall")]
     {
-    let me = X86Platform::hart_id();
-    if me >= MAX_HARTS {
-        return;
-    }
-    let spins = BKL_SPIN_TICKS[me].fetch_add(1, Ordering::Relaxed);
-    // ~2 triệu vòng là hàng trăm ms ở QEMU: gần như chắc chắn là kẹt thật.
-    if spins < 2_000_000 || BKL_STUCK_REPORTED[me].swap(true, Ordering::Relaxed) {
-        return;
-    }
-    let owner = BKL.owner_hart();
-    vifast_kernel::klog!(
-        X86Platform,
-        "BKL STUCK (hart={}, owner={:?}, held={}, holders={}, spins={})",
-        me,
-        owner,
-        BKL.is_held(),
-        BKL.holders(),
-        spins
-    );
+        let me = X86Platform::hart_id();
+        if me >= MAX_HARTS {
+            return;
+        }
+        let spins = BKL_SPIN_TICKS[me].fetch_add(1, Ordering::Relaxed);
+        // ~2 triệu vòng là hàng trăm ms ở QEMU: gần như chắc chắn là kẹt thật.
+        if spins < 2_000_000 || BKL_STUCK_REPORTED[me].swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let owner = BKL.owner_hart();
+        vifast_kernel::klog!(
+            X86Platform,
+            "BKL STUCK (hart={}, owner={:?}, held={}, holders={}, spins={})",
+            me,
+            owner,
+            BKL.is_held(),
+            BKL.holders(),
+            spins
+        );
     }
 }
 

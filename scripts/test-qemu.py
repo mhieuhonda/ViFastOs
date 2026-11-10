@@ -426,27 +426,124 @@ def run_qemu(
             not timed_out and MARKERS_OK["flag"] and bonus > 0 and not retry_boot
         )
         retry_shell = (not SHELL_READY["flag"] and bonus > 0 and not retry_boot)
+        # r293.1: mọi lần hỏng đều được đếm + phân loại + lưu artifact, kể cả
+        # lần sẽ được retry che.
+        kind = classify_failure(LAST_OUTPUT["text"])
+        RUN_STATS["retries"] += 1
+        RUN_STATS["classes"][kind] += 1
+        RUN_STATS["events"].append(
+            {"arch": name, "run": index, "attempt": attempt, "class": kind}
+        )
         if not (retry_timeout or retry_boot or retry_exit or retry_shell):
             return False
         if retry_boot and not retry_timeout:
             bonus -= 1
-            print(f"RETRY {name}: guest không boot (nghi flake UEFI/QEMU), chạy lại MỘT lần")
+            print(f"RETRY {name}: [{kind}] guest không boot (nghi flake UEFI/QEMU), chạy lại MỘT lần")
         elif retry_shell:
             bonus -= 1
             print(
-                f"RETRY {name}: guest dừng trước SHELL READY — nghi flake boot,"
+                f"RETRY {name}: [{kind}] guest dừng trước SHELL READY — nghi flake boot,"
                 " chạy lại MỘT lần"
             )
         elif retry_exit:
             bonus -= 1
             print(
-                f"RETRY {name}: guest in đủ marker nhưng QEMU thoát mã lạ "
+                f"RETRY {name}: [{kind}] guest in đủ marker nhưng QEMU thoát mã lạ "
                 "— nghi race debug-exit, chạy lại MỘT lần"
             )
         else:
-            print(f"RETRY {name}: timeout, chạy lại (lần {attempt + 2}/{attempts})")
+            print(f"RETRY {name}: [{kind}] timeout, chạy lại (lần {attempt + 2}/{attempts})")
         attempt += 1
     return False
+
+
+# r293.1 (tệp quyết định r293-r298, mục 2): đếm RETRY và PHÂN LOẠI lần hỏng.
+# Lý do: harness có retry nên "PASS" đang che flake — mọi phép đo FS/scheduler
+# trước r293 đều bị nhiễu. Ba loại, đếm riêng:
+#   T-FS    — thiếu marker `FS V2 OK` hoặc readdir đọc ảnh cũ;
+#   T-SCHED — ROOT PANIC, thiếu PREEMPT OK, `USER FAULT tcb=None`,
+#             "no runnable thread", `SMP NO READY`;
+#   T-KHAC  — mọi thứ khác (phải phân loại bằng tay trong log).
+# r293.1: serial của lần chạy vừa rồi, để `run_qemu` phân loại được lần hỏng
+# mà không phải đổi chữ ký hàm `run_qemu_once`.
+LAST_OUTPUT = {"text": ""}
+
+RUN_STATS = {
+    "boots": 0,
+    "retries": 0,
+    "classes": {"T-FS": 0, "T-SCHED": 0, "T-KHAC": 0},
+    "events": [],
+}
+
+
+def format_retry_line(stats: dict) -> str:
+    """Dòng `RETRY n/N (T-FS=.., T-SCHED=.., T-KHAC=..)` (r293.1).
+
+    Tách thành hàm thuần để test-harness-spec kiểm được mà không phải chạy
+    QEMU: case âm (bỏ đếm) làm test đỏ vì hàm/khóa không còn.
+    """
+    classes = stats["classes"]
+    return (
+        f"RETRY {stats['retries']}/{max(1, stats['boots'])} "
+        f"(T-FS={classes['T-FS']}, T-SCHED={classes['T-SCHED']}, "
+        f"T-KHAC={classes['T-KHAC']})"
+    )
+
+
+def classify_failure(output: str) -> str:
+    """Phân loại một lần boot hỏng theo mục 2.5 của tệp quyết định."""
+    if "FS V2 OK" not in output or "FS V2 BAD" in output:
+        return "T-FS"
+    sched_signatures = (
+        "ROOT PANIC",
+        "PREEMPT OK",
+        "USER FAULT tcb=None",
+        "no runnable thread",
+        "SMP NO READY",
+    )
+    for signature in sched_signatures:
+        if signature == "PREEMPT OK":
+            if signature not in output:
+                return "T-SCHED"
+        elif signature in output:
+            return "T-SCHED"
+    return "T-KHAC"
+
+
+def record_failure(name: str, index: int, attempt: int, output: str, reason: str) -> str:
+    """Ghi nhận một lần hỏng + lưu artifact đầy đủ (r293.1, r293.2)."""
+    kind = classify_failure(output)
+    RUN_STATS["classes"][kind] += 1
+    RUN_STATS["events"].append(
+        {
+            "arch": name,
+            "run": index,
+            "attempt": attempt,
+            "class": kind,
+            "reason": reason,
+        }
+    )
+    save_flake_artifacts(name, index, attempt, output, reason)
+    return kind
+
+
+def save_flake_artifacts(
+    name: str, index: int, attempt: int, output: str, reason: str
+) -> str:
+    """Lưu serial + status + tail + registers cho MỌI lần boot hỏng (r293.2).
+
+    Trước đây chỉ lưu khi timeout có monitor — lần hỏng "guest in thiếu marker"
+    không để lại dấu vết nào, nên mọi cuộc điều tra flake phải đoán.
+    """
+    target = os.path.join(ROOT, "artifacts", f"flake-{name}-{index}-a{attempt}")
+    os.makedirs(target, exist_ok=True)
+    with open(os.path.join(target, "serial.txt"), "w") as handle:
+        handle.write(output)
+    with open(os.path.join(target, "status.txt"), "w") as handle:
+        handle.write(reason + "\n")
+    with open(os.path.join(target, "tail.txt"), "w") as handle:
+        handle.write("\n".join(output.splitlines()[-80:]) + "\n")
+    return target
 
 
 # Vòng 162: đánh dấu lần chạy vừa rồi có "guest chưa hề boot" hay không.
@@ -475,6 +572,9 @@ def run_qemu_once(
     feature_mode: str | None = None,
     attempt: int = 0,
 ) -> tuple[bool, bool]:
+    # r293.1: N = số lần BOOT THẬT (kể cả lần phải chạy lại), nên đếm ở đây
+    # chứ không ở `run_qemu` (một lần gọi có thể boot nhiều lần).
+    RUN_STATS["boots"] += 1
     if os.path.exists(serial):
         os.unlink(serial)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -509,6 +609,7 @@ def run_qemu_once(
             serial,
             f"{tempfile.gettempdir()}/vifast-keep-{name}-{index}-a{attempt}.serial",
         )
+    LAST_OUTPUT["text"] = output
     NEVER_BOOTED["flag"] = len(output.splitlines()) < 20
     print(f"\n--- {name} (rc={rc}, {elapsed:.1f}s) ---")
     print(output[-1800:])
@@ -1568,6 +1669,12 @@ def main() -> int:
         help="run a test-only feature build",
     )
     parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="RETRY > 0 là ĐỎ (chế độ nghiêm, theo tệp quyết định r293-r298 mục 2.4; "
+        "gate chỉ bật từ r296)",
+    )
+    parser.add_argument(
         "--tcp-check",
         action="store_true",
         help="also run a TCP echo round trip through hostfwd (vòng 77; default off)",
@@ -1662,6 +1769,17 @@ def main() -> int:
         # coi là hợp lệ; sửa mã mà không chạy lại thì bị phát hiện).
         "source_sha256": source_fingerprint(),
     }
+    retry_total = RUN_STATS["retries"]
+    boots_total = max(1, RUN_STATS["boots"])
+    classes = RUN_STATS["classes"]
+    print(format_retry_line(RUN_STATS))
+    payload["retry"] = {
+        "count": retry_total,
+        "boots": boots_total,
+        "classes": dict(classes),
+        "events": list(RUN_STATS["events"]),
+    }
+    payload["strict"] = bool(getattr(args, "strict", False))
     result_path = os.path.join(ROOT, "target", "vifast-qemu-last.json")
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
     with open(result_path, "w") as handle:
@@ -1681,6 +1799,15 @@ def main() -> int:
         print(f"{name:8} {passed}/{len(runs)} PASS")
         if passed != len(runs):
             failed = True
+    # r293.3: chế độ NGHIÊM — chưa bật trong gate (bật từ r296 theo tệp quyết
+    # định). Ở chế độ này RETRY > 0 là ĐỎ, vì mọi phép đo "xanh" nhờ retry đều
+    # là xanh giả.
+    if getattr(args, "strict", False) and retry_total > 0:
+        print(
+            f"STRICT: ĐỎ — {retry_total}/{boots_total} lần boot phải chạy lại "
+            f"(T-FS={classes['T-FS']}, T-SCHED={classes['T-SCHED']}, T-KHAC={classes['T-KHAC']})"
+        )
+        failed = True
     # r248 (D11): trước đây `--interactive` chạy nhưng kết quả bị bỏ — cổng
     # xanh dù input/flake hỏng. Giờ mọi lần interactive thất bại đều làm đỏ.
     for name, runs in interactive_results.items():
