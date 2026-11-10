@@ -1507,3 +1507,34 @@ lỗi (12/40 → 8/40, chênh lệch nằm trong nhiễu). Vậy **không** ph�
    `ipc.rs` `reply()` khi `valid==false` phải `wake_error(client, ObjectDestroyed)`
    thay vì bỏ rơi client `BlockedReply`; `reply_recv()` không được `?` trước `recv`.
 3. Chỉ sau khi hết đỏ ở 256 mới đổi `MAX_IO` về 256 (luật D19, N≥40).
+
+## r294.T26 — giả thuyết H1 (reply-orphan) BỊ BÁC bằng đo, đã revert
+
+**Bản vá đã thử** (theo bản phân tích subagent):
+1. `ipc.rs::reply()` — khi caller STALE mà client còn `BlockedReply` thì
+   `wake_error(client, ObjectDestroyed)` thay vì bỏ rơi;
+2. `ipc.rs::reply_recv()` — reply lỗi KHÔNG được bỏ lượt `recv`.
+
+Kèm test đỏ-trước `stale_reply_does_not_orphan_a_waiting_client` (đã chứng minh
+ĐỎ khi tắt bản vá: `left: BlockedReply`, XANH khi bật — đúng D18).
+
+**Đo (x86_64, cùng máy):**
+
+| Cấu hình | N | Đỏ |
+|---|---:|---:|
+| `MAX_IO=256` **trước** vá (nền) | 40 | 12 |
+| `MAX_IO=256` **sau** vá | 40 | **9** |
+| `MAX_IO=128` **sau** vá | 40 | **1** ← hồi quy ở cấu hình sản phẩm |
+| `MAX_IO=128` sau khi **revert** | 40 | **0** |
+
+**Kết luận:** 12 → 9 nằm trong nhiễu (p ≈ 0,4) ⇒ H1 **không** phải gốc; tệ hơn,
+bản vá làm cấu hình sản phẩm (128) đỏ 1/40 — đúng điều kiện cấm. Theo luật D18
+("bản vá làm đỏ cấu hình đang xanh thì revert"), đã **revert cả hai bản vá và
+test**; cây về 40/40 xanh.
+
+Bài học ghi lại: `wake_error` cho caller "stale" là thay đổi **hành vi** ở đường
+IPC nóng, không phải sửa lỗi cục bộ — muốn thử lại phải đo riêng từng bản vá
+(1 rồi 2), không gộp.
+
+**Việc tiếp (giữ nguyên thứ tự):** đèn một marker mỗi bước trong khối V2 để biết
+lần đỏ dừng ở đâu; chỉ sau đó mới suy tiếp cơ chế.
