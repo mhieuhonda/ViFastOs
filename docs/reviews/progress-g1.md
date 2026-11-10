@@ -1442,3 +1442,33 @@ Việc tiếp theo, theo thứ tự đã phân tích:
    trên hart phụ (`can_destroy` từ chối TCB không `Exited` đang là `current`).
 3. T26: dựng lại phép đo `--repeat 40` ở `MAX_IO=256` để có số nền trước khi sửa.
 4. T33b: chạy 200 boot riscv64 có đèn để bắt "thoát sớm".
+
+## r294.T33b — riscv64: panic `assert_current_tcb` (hart phụ) và vị trí panic
+
+**Đo nền (200 boot riscv64):** `RETRY 2/202 (T-SCHED=2)`, cả hai là
+`PANIC (hart=1)` — **không có manh mối** vì handler panic của riscv/aarch64 nuốt
+`PanicInfo`. Triệu chứng bề mặt: "guest không nhận được dữ liệu TCP echo" và
+"QEMU exit code 1" (hệ quả, không phải nguyên nhân).
+
+**Bước 1:** in `PANIC AT <file>:<dòng>` trên riscv64 + aarch64; harness đọc được
+(`panic_site`), phân loại `T-ROOT <file:dòng>`; spec **653 case**.
+⇒ Chụp ngay `crates/vifast-platform-riscv64/src/platform.rs:671` =
+`assert_current_tcb()` "per-CPU current_tcb mismatch".
+
+**Bước 2 (gốc):** `assert_current_tcb` là **bất biến chẩn đoán**. Đường
+`fault_to_endpoint` xoá `current` của MỌI hart khi task bị park vì fault, còn
+cache per-CPU không được cập nhật ⇒ lần trap sau lệch ⇒ bản cũ **giết máy**.
+Sửa: lệch thì **sửa cache theo kernel** + in MỘT lần
+`CURRENT MISMATCH (hart=…, cache=…, kernel=…)`.
+
+**Đo sau sửa:** 201 boot ⇒ `RETRY 1/201 (T-KHAC=1)`, **0 `PANIC`**, 0
+`CURRENT MISMATCH`; lần hỏng còn lại là "thiếu marker `IPC RIGHTS OK`" (khác lớp).
+
+| Lượt riscv64 | N | Kết quả |
+|---|---:|---|
+| Trước | 200 | 2 hỏng — **2 × PANIC (hart=1)** |
+| Sau | 201 | 1 hỏng — 0 panic; 1 lần thiếu marker `IPC RIGHTS OK` |
+
+Việc tiếp cho T33b: (a) "thiếu marker `IPC RIGHTS OK`" 1/201 — cần đèn/artifact
+để xem guest dừng ở đâu; (b) bước TCP echo giờ tách khỏi panic, cần đo riêng
+(listener của harness mở sau khi guest đã in marker?).
