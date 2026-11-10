@@ -688,6 +688,21 @@ Hai mốc sau chênh nhau 3/301 so với 2/301 ⇒ trong nhiễu; **không** k�
 vá thứ hai làm tệ đi, cũng **không** nói đã hết lớp T-ROOT. Việc tiếp đã ghi ở
 `progress-g1.md`.
 
+### r294.C — mốc khởi động và định nghĩa T-BOOT
+
+- Kernel in `KERNEL ENTRY` ngay đầu `boot()` (trước `init_platform`) ⇒ mốc sớm
+  nhất chắc chắn có; `classify_failure` dùng đúng định nghĩa của phiếu soát
+  §1.5: **T-BOOT ⇔ không có `KERNEL ENTRY`**, xét trước mọi lớp.
+- Harness: artifact đọc **lại** serial đã settled từ file. Vá lỗi khiến artifact
+  của lần hỏng T31 (`dup=PAGER EVICT OK`) không chứa chính marker gây hỏng.
+- Spec harness: **652 case**, gồm ca âm "đã vào kernel mà thiếu `PREEMPT OK` ⇒
+  T-SCHED, không phải T-BOOT".
+
+**Số đo vòng này (x86_64, bản không đèn):** 200 boot ⇒ `RETRY 1/200`, và lần
+hỏng đó là **T-ROOT `main.rs:480`** — nghĩa là cờ `KERNEL_READY` mới chặn được
+một phần lớp này. T31 (`PAGER2_LABEL` xử lý hai lần) **không** tái hiện trong
+200 boot; lần duy nhất bắt được vẫn là ở lượt 300 boot trước.
+
 ### Trạng thái cuối phiên (r254 → r283)
 
 | Chỉ số | Giá trị |
@@ -715,7 +730,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-3012089b82d0d12d01d4ad9f7c766e21d1aee6df6d72ba2045d4f8f49d0baa63  docs/reviews/ViFastOs-report-r262.md
+2bada0e7e651335c025a2a6d52b4cfe2c4a7d51803a6a05e63cc843e8978debb  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
