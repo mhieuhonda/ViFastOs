@@ -170,8 +170,20 @@ impl Kernel {
             }
             self.make_ready(receiver);
             if is_call {
+                // 290.4 (r290): cấp epoch MỚI cho mỗi lần call. Trước đây
+                // `reply_epoch` không bao giờ tăng nên guard K49 luôn là
+                // `0 == 0` (rỗng): record `caller` cũ vẫn "khớp" và `reply`
+                // giao nhầm cho client đã gọi lần khác.
+                let _ = epoch;
+                let fresh_epoch = match self.tcb_mut(sender) {
+                    Some(table) => {
+                        table.reply_epoch = table.reply_epoch.wrapping_add(1);
+                        table.reply_epoch
+                    }
+                    None => 0,
+                };
                 if let Some(table) = self.tcb_mut(receiver) {
-                    table.caller = Some((sender, epoch));
+                    table.caller = Some((sender, fresh_epoch));
                 }
                 if let Some(table) = self.tcb_mut(sender) {
                     table.state = ThreadState::BlockedReply;
@@ -293,7 +305,15 @@ impl Kernel {
             }
             self.copy_ipc_buffers(sender, receiver);
             if pending.is_call {
-                let epoch = self.tcb(sender).ok_or(KError::ObjectDestroyed)?.reply_epoch;
+                // 290.4: cấp epoch MỚI cho mỗi lần call (xem chú thích ở nhánh
+                // giao ngay phía trên).
+                let epoch = match self.tcb_mut(sender) {
+                    Some(table) => {
+                        table.reply_epoch = table.reply_epoch.wrapping_add(1);
+                        table.reply_epoch
+                    }
+                    None => return Err(KError::ObjectDestroyed),
+                };
                 let table = self.tcb_mut(receiver).ok_or(KError::InvalidCap)?;
                 table.caller = Some((sender, epoch));
                 let sender_table = self.tcb_mut(sender).ok_or(KError::ObjectDestroyed)?;

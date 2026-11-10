@@ -3651,6 +3651,24 @@ impl Kernel {
                 }
             }
         }
+        // 290.3 (r290): `cap.parent` phải phân giải được ở MỌI nhánh — trước
+        // đây chỉ kiểm khi `badge != 0`, nên một parent trỏ vào bảng đã chết
+        // (TCB bị huỷ / CNode bị tháo) sống sót qua mọi lần kiểm. Hệ quả: cap
+        // mồ côi ⇒ `revoke` không tới ⇒ object thành bất tử (P0-3).
+        let mut broken_parent = false;
+        self.for_each_cap(|_table, _slot, cap| {
+            if let Some(parent) = cap.parent {
+                let resolves = self
+                    .resolve_cap_ref(parent)
+                    .is_some_and(|source| source.id == parent.id);
+                if !resolves {
+                    broken_parent = true;
+                }
+            }
+        });
+        if broken_parent {
+            return Err(KError::IllegalOperation);
+        }
         Ok(())
     }
 
@@ -13089,6 +13107,72 @@ mod tests {
     }
 
     #[test]
+    /// 290.4 (r290, đỏ-trước): mỗi lần call phải cấp epoch MỚI.
+    ///
+    /// Bản cũ `reply_epoch` không bao giờ tăng ⇒ mọi record `caller` đều mang
+    /// epoch 0 và guard K49 (`reply_epoch == epoch`) thành `0 == 0`, tức rỗng.
+    /// Test này khoá đúng điều đó: hai lần call liên tiếp phải khác epoch.
+    #[test]
+    /// 290.3 (r290, đỏ-trước): `check_invariants` phải bắt được `cap.parent`
+    /// trỏ vào bảng ĐÃ CHẾT ở **mọi** nhánh (không chỉ khi `badge != 0`).
+    #[test]
+    fn check_invariants_rejects_a_parent_pointing_at_a_dead_table() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let dead = kernel.create_tcb("dead", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let mut cap = Cap::new(endpoint, ObjType::Endpoint, Rights::READ);
+        cap.badge = 0;
+        cap.parent = Some(CapRef {
+            addr: SlotAddr { tcb: dead, slot: 3 },
+            id: 99,
+            cnode: None,
+        });
+        kernel
+            .install_cap(
+                root,
+                1,
+                Cap::new(cnode_dummy(), ObjType::Endpoint, Rights::READ),
+            )
+            .ok();
+        kernel.root_cspace[1] = Some(cap);
+        kernel.destroy_object(dead).unwrap();
+        assert!(
+            kernel.check_invariants().is_err(),
+            "parent trỏ bảng đã chết phải bị bắt"
+        );
+    }
+
+    fn cnode_dummy() -> ObjRef {
+        ObjRef { index: 0, gen: 0 }
+    }
+
+    fn every_call_issues_a_fresh_reply_epoch() {
+        let mut kernel = Kernel::new();
+        let server = kernel.create_tcb("server", 1).unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        assert_eq!(kernel.recv(server, endpoint, 4), Ok(None));
+        assert_eq!(
+            kernel.send(client, endpoint, 0, Message::new(0x11, &[1]).unwrap(), true),
+            Ok(true)
+        );
+        let (_, first) = kernel.tcb(server).unwrap().caller.unwrap();
+        kernel.reply(server, Message::empty(0x12)).unwrap();
+        assert_eq!(kernel.tcb(client).unwrap().state, ThreadState::Ready);
+        // Lần gọi thứ hai.
+        assert_eq!(kernel.recv(server, endpoint, 4), Ok(None));
+        assert_eq!(
+            kernel.send(client, endpoint, 0, Message::new(0x13, &[1]).unwrap(), true),
+            Ok(true)
+        );
+        let (_, second) = kernel.tcb(server).unwrap().caller.unwrap();
+        assert_ne!(
+            first, second,
+            "call thứ hai phải mang epoch khác — nếu không guard K49 là 0 == 0"
+        );
+    }
+
     fn reply_recv_rejects_stale_caller_epoch() {
         let mut kernel = Kernel::new();
         let server = kernel.create_tcb("server", 1).unwrap();
@@ -13102,8 +13186,10 @@ mod tests {
         assert_eq!(kernel.send(client, endpoint, 0, call, true), Ok(true));
         assert_eq!(kernel.take_resume(server).unwrap().label, 0xAB);
         let (server_caller, _) = kernel.tcb(server).unwrap().caller.unwrap();
-        let stale_epoch = kernel.tcb(server).unwrap().reply_epoch;
-        kernel.tcb_mut(server).unwrap().caller = Some((server_caller, stale_epoch.wrapping_add(1)));
+        // 290.4: epoch nằm ở phía CLIENT (cấp mới mỗi lần call), nên "stale"
+        // phải là một giá trị KHÁC epoch hiện tại của client.
+        let live_epoch = kernel.tcb(server_caller).unwrap().reply_epoch;
+        kernel.tcb_mut(server).unwrap().caller = Some((server_caller, live_epoch.wrapping_add(1)));
         assert_eq!(
             kernel.reply_recv(server, endpoint, 4, Message::empty(0)),
             Err(KError::NoCaller)
