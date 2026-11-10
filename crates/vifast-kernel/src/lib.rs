@@ -5384,15 +5384,41 @@ impl Kernel {
         self.runq_len[hart] += 1;
     }
 
+    /// Có TCB nào `pick_on(hart)` THẬT SỰ nhặt được không.
+    ///
+    /// T33a (r288): phải kiểm cả `state == Ready`, không chỉ affinity. Bản cũ
+    /// bỏ sót điều kiện này nên một TCB còn trong hàng chờ nhưng đã chuyển
+    /// trạng thái (Running/Blocked/Exited) vẫn làm hàm trả `true`; hart phụ
+    /// thức dậy, `pick_on` trả `None`, và runtime gọi `A::exit(1)` — hart phụ
+    /// CHẾT, boot treo trước `PREEMPT OK` (đo ~1% trên x86_64).
     pub fn has_ready_on(&self, hart: usize) -> bool {
         if hart >= MAX_HARTS {
             return false;
         }
         for owner in 0..MAX_HARTS {
             for queued in self.runq[owner][..self.runq_len[owner]].iter().flatten() {
+                if self.tcb(*queued).is_some_and(|tcb| {
+                    tcb.affinity & (1u8 << hart) != 0 && tcb.state == ThreadState::Ready
+                }) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Có TCB `Ready` nào cho BẤT KỲ hart nào không (T33b, r288).
+    ///
+    /// Dùng ở đường `Exit`: khi hart hiện tại không còn task kế tiếp, chỉ được
+    /// kết thúc cả máy nếu KHÔNG còn task nào ở bất kỳ hart nào — nếu không thì
+    /// một worker thoát trên hart phụ sẽ giết cả hệ thống (triệu chứng: guest
+    /// in `USER EXIT` ngay sau `TCB REAP OK`, boot dừng giữa đường).
+    pub fn has_any_ready(&self) -> bool {
+        for owner in 0..MAX_HARTS {
+            for queued in self.runq[owner][..self.runq_len[owner]].iter().flatten() {
                 if self
                     .tcb(*queued)
-                    .is_some_and(|tcb| tcb.affinity & (1u8 << hart) != 0)
+                    .is_some_and(|tcb| tcb.state == ThreadState::Ready)
                 {
                     return true;
                 }
@@ -13477,6 +13503,26 @@ mod tests {
         assert!(kernel
             .lookup_cap(root, 1, Some(ObjType::BlockDevice), Rights::WRITE)
             .is_ok());
+    }
+
+    #[test]
+    fn has_ready_on_ignores_a_queued_tcb_that_is_not_ready() {
+        // T33a (red-first, D18): `has_ready_on` từng KHÔNG kiểm `state`, nên
+        // một TCB còn trong hàng chờ nhưng đã chuyển sang Running/Blocked vẫn
+        // làm nó trả `true`. Hart phụ thấy "có việc" ⇒ thức dậy; nhưng
+        // `pick_on` (chỉ nhận `Ready`) trả `None` ⇒ runtime gọi `exit(1)` và
+        // hart phụ CHẾT ⇒ boot treo trước `PREEMPT OK` (đo ~1% trên x86_64).
+        let mut kernel = Kernel::new();
+        let tcb = kernel.create_tcb("worker", 5).unwrap();
+        // Cho phép hart 1 nhặt — nếu chỉ affinity hart 0 thì test vô nghĩa.
+        kernel.tcb_mut(tcb).unwrap().affinity = 0b11;
+        kernel.enqueue(tcb);
+        kernel.tcb_mut(tcb).unwrap().state = ThreadState::Running;
+        assert_eq!(kernel.pick_on(1), None, "pick_on chỉ nhận TCB Ready");
+        assert!(
+            !kernel.has_ready_on(1),
+            "has_ready_on phải đồng ý với pick_on, nếu không hart phụ sẽ chết"
+        );
     }
 
     #[test]

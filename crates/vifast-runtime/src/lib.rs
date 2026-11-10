@@ -28,6 +28,9 @@ static TEST_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 /// Vòng 151: chỉ in chẩn đoán SMP IDLE STALL một lần.
 static POST_IDLE_STALLED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
+/// T33a (r288): đã in chẩn đoán bộ cờ `SMP WAIT` chưa (chỉ in một lần).
+#[cfg(feature = "test-exit")]
+static WAIT_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
 static TEST_FS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 #[cfg(feature = "test-exit")]
@@ -1306,9 +1309,17 @@ pub mod syscall {
             UserAction::Sleep => {
                 if !switch_blocked::<A>(context) {
                     if A::can_wait_for_work() {
-                        A::wait_for_work(hart);
-                        if !switch_blocked::<A>(context) {
-                            A::exit(1);
+                        // T33a (r288): thức dậy mà vẫn không có task KHÔNG phải
+                        // lỗi chí tử — trước đây chỗ này `exit(1)` làm hart phụ
+                        // chết và boot treo (`PREEMPT OK` không bao giờ in).
+                        // Chờ lại, có chặn trên để không treo vô hạn nếu sai thật.
+                        let mut spurious = 0u32;
+                        while !switch_blocked::<A>(context) {
+                            spurious += 1;
+                            if spurious > 64 {
+                                A::exit(1);
+                            }
+                            A::wait_for_work(hart);
                         }
                     } else {
                         A::exit(1);
@@ -1338,8 +1349,20 @@ pub mod syscall {
                     }
                     return waiting;
                 }
-                A::write_str("\r\nUSER EXIT\r\n");
-                A::exit(0);
+                // T33b (r288): hart này hết task KHÔNG có nghĩa cả máy hết
+                // việc. Trước đây rơi thẳng xuống `USER EXIT` ⇒ một worker
+                // thoát trên hart phụ giết cả hệ thống (đo được: guest in
+                // `USER EXIT` ngay sau `TCB REAP OK`, boot dừng giữa đường,
+                // tần suất ~1–2% trên cả riscv64 và x86_64). Chỉ kết thúc khi
+                // thật sự không còn TCB `Ready`/`Running` nào.
+                let others_busy = (0..vifast_kernel::MAX_HARTS)
+                    .any(|other| other != hart && kernel.current_on(other).is_some());
+                if (others_busy || kernel.has_any_ready()) && A::can_wait_for_work() {
+                    waiting = true;
+                } else {
+                    A::write_str("\r\nUSER EXIT\r\n");
+                    A::exit(0);
+                }
             }
         }
         if ensure_current_root::<A>().is_err() {
@@ -1503,6 +1526,41 @@ pub mod timer {
         #[cfg(feature = "test-panic-hart1")]
         if hart == 1 {
             panic!("test-panic-hart1");
+        }
+        // T33a (r288): chẩn đoán BẬT ĐÈN — in MỘT lần bộ cờ mà `PREEMPT OK`
+        // đang chờ, kèm trạng thái tiến trình, để biết nó kẹt ở điều kiện nào.
+        // KHÔNG phải marker của gate (không nằm trong harness_spec).
+        #[cfg(feature = "test-exit")]
+        if hart == 0
+            && kernel.ticks_on(0) >= TIMER_TICKS
+            && !WAIT_DIAG.load(core::sync::atomic::Ordering::SeqCst)
+        {
+            let ready_now = TEST_DONE.load(core::sync::atomic::Ordering::SeqCst)
+                && TEST_FS_DONE.load(core::sync::atomic::Ordering::SeqCst)
+                && TEST_FS_LARGE_DONE.load(core::sync::atomic::Ordering::SeqCst)
+                && TEST_HARD_LINK_DONE.load(core::sync::atomic::Ordering::SeqCst)
+                && TEST_SYMLINK_DONE.load(core::sync::atomic::Ordering::SeqCst)
+                && TEST_TLB_DONE.load(core::sync::atomic::Ordering::SeqCst)
+                && A::post_idle_ready();
+            if !ready_now {
+                WAIT_DIAG.store(true, core::sync::atomic::Ordering::SeqCst);
+                vifast_kernel::klog!(
+                    A,
+                    "SMP WAIT (ticks={}, done={} fs={} fsl={} link={} sym={} tlb={} post={} cur0={} cur1={} rq0={} rq1={})",
+                    kernel.ticks_on(0),
+                    TEST_DONE.load(core::sync::atomic::Ordering::SeqCst),
+                    TEST_FS_DONE.load(core::sync::atomic::Ordering::SeqCst),
+                    TEST_FS_LARGE_DONE.load(core::sync::atomic::Ordering::SeqCst),
+                    TEST_HARD_LINK_DONE.load(core::sync::atomic::Ordering::SeqCst),
+                    TEST_SYMLINK_DONE.load(core::sync::atomic::Ordering::SeqCst),
+                    TEST_TLB_DONE.load(core::sync::atomic::Ordering::SeqCst),
+                    A::post_idle_ready(),
+                    kernel.current_on(0).is_some(),
+                    kernel.current_on(1).is_some(),
+                    kernel.runq_depth(0),
+                    kernel.runq_depth(1)
+                );
+            }
         }
         #[cfg(feature = "test-exit")]
         if hart == 0

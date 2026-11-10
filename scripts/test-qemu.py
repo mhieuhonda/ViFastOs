@@ -412,6 +412,7 @@ def run_qemu(
             monitor,
             index,
             feature_mode,
+            attempt,
         )
         if ok:
             if attempt:
@@ -472,6 +473,7 @@ def run_qemu_once(
     monitor: str | None = None,
     index: int = 0,
     feature_mode: str | None = None,
+    attempt: int = 0,
 ) -> tuple[bool, bool]:
     if os.path.exists(serial):
         os.unlink(serial)
@@ -500,8 +502,12 @@ def run_qemu_once(
             output = open(serial, "rb").read().decode("utf-8", errors="replace")
     if os.environ.get("VIFAST_KEEP_SERIAL") == "1" and os.path.exists(serial):
         # Giữ lại serial của từng lần chạy để điều tra flake (vòng 67).
+        # r288: thêm số LẦN THỬ vào tên — trước đây mọi lần thử lại ghi đè cùng
+        # một file nên serial của lần HỎNG bị lần thử lại (thường xanh) xoá mất,
+        # làm mọi cuộc điều tra flake đọc nhầm serial.
         shutil.copyfile(
-            serial, f"{tempfile.gettempdir()}/vifast-keep-{name}-{index}.serial"
+            serial,
+            f"{tempfile.gettempdir()}/vifast-keep-{name}-{index}-a{attempt}.serial",
         )
     NEVER_BOOTED["flag"] = len(output.splitlines()) < 20
     print(f"\n--- {name} (rc={rc}, {elapsed:.1f}s) ---")

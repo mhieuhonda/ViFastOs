@@ -548,6 +548,8 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - f0ef3f6 r283 docs: hợp nhất phân tích T18 từ nhánh r254 rồi xoá nhánh
 - ed81338 r284 test: (T26) bài test hồi quy D18 cho BLOCKER `FS V2 OK` + dọn kho nhánh
 - 07f831b r285 docs: ghi nhận T33a đã bắt được cả gate (x86_64 2/3, timeout PREEMPT OK) + ký lại báo cáo
+- b791b5e r286 docs: đồng bộ bảng tổng hợp kiến trúc (gen-docs) sau lần gate cuối
+- cc37c90 r287 docs: ghi chú bảng tổng hợp kiến trúc luôn chậm một commit (vòng lặp tự tham chiếu)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -595,7 +597,7 @@ hardening và vifast-user.
 Test hiện tại:
 ### BEGIN GENERATED tests
 - `cargo test -p vifast-abi`: 8/8 PASS
-- `cargo test -p vifast-kernel`: 242/242 PASS
+- `cargo test -p vifast-kernel`: 243/243 PASS
 - `cargo test -p vifast-arch`: 7/7 PASS
 - `cargo test -p vifast-pte`: 11/11 PASS
 - `cargo test -p vifast-elf`: 19/19 PASS

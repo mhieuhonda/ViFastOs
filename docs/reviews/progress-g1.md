@@ -968,3 +968,35 @@ mỗi lần commit là một lần file đó "cũ" đi — `check-docs.py` sẽ 
 `summary generated sections are stale` ngay sau khi commit. Đó là vòng lặp tự
 tham chiếu, không phải lỗi: cổng xử lý bằng cách chạy `gen-docs.py` TRƯỚC bước
 docs, nên gate vẫn xanh. Đừng cố "sửa" bằng cách commit lại file này từng lần.
+
+## T33a/T33b (r288) — hai lỗi thật, cả hai đều "hart phụ hết việc ⇒ giết cả máy"
+
+Điều tra bằng serial của **đúng lần chạy hỏng** (trước đây file bị lần thử lại
+ghi đè — đã sửa: tên file giữ serial nay có thêm số lần thử `-aN`).
+
+### Lỗi 1 — `has_ready_on` không kiểm `state`
+
+`has_ready_on(hart)` chỉ lọc theo affinity, còn `pick_on(hart)` chỉ nhận TCB
+`Ready`. Một TCB còn trong hàng chờ nhưng đã đổi trạng thái làm `has_ready_on`
+trả `true` ⇒ hart phụ thức dậy, `pick_on` trả `None`, runtime gọi `A::exit(1)`
+⇒ **hart phụ chết**. Test đỏ-trước:
+`has_ready_on_ignores_a_queued_tcb_that_is_not_ready` (đỏ trước bản vá, xanh sau).
+
+### Lỗi 2 — `UserAction::Exit` giết cả máy khi hart phụ hết task
+
+Serial của lần hỏng (x86_64) kết thúc bằng `TCB REAP OK` rồi `USER EXIT` giữa
+đường. Đọc mã: khi task hiện tại exit mà **hart đó** không còn task kế tiếp,
+runtime in `USER EXIT` và `exit(0)` — dù hart khác vẫn đang chạy root. Một
+worker demo thoát trên hart 1 là đủ giết cả hệ thống (~1–2%).
+
+Sửa: chỉ kết thúc khi **không còn TCB `Ready` nào ở bất kỳ hart nào** và không
+hart nào còn `current` (`Kernel::has_any_ready` mới); nếu còn thì hart này ngủ
+chờ như đường `Blocked`.
+
+### Chẩn đoán thêm
+
+`SMP WAIT (ticks, done, fs, fsl, link, sym, tlb, post, cur0, cur1, rq0, rq1)`
+in MỘT lần khi `PREEMPT OK` chưa đủ điều kiện — để lần sau biết kẹt ở cờ nào.
+Đo được ở lần treo còn lại: `done=false … post=false cur0=true cur1=true rq0=4`,
+guest dừng NGAY SAU `shell>` (hart 0 không tiến nữa) ⇒ nghi bộ đếm LAPIC của
+hart 0 ngừng phát; đây vẫn là phần **mở** của T33a.
