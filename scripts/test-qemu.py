@@ -506,8 +506,18 @@ def run_qemu(
         # r293.1 + B1': mọi lần hỏng đều được đếm + phân loại + lưu artifact
         # (kể cả lần sẽ được retry che), qua MỘT hàm ghi duy nhất.
         RUN_STATS["retries"] += 1
+        # Đọc LẠI serial từ file: bản trong bộ nhớ có thể thiếu dòng cuối
+        # (guest còn đang flush), và chính vì thế artifact cũ mất dòng marker.
+        path = LAST_SERIAL_PATH["path"]
+        settled = ""
+        if path and os.path.exists(path):
+            settled = read_settled_serial(path)
         kind = record_failure(
-            name, index, attempt, LAST_OUTPUT["text"], f"attempt {attempt} hỏng"
+            name,
+            index,
+            attempt,
+            settled or LAST_OUTPUT["text"],
+            f"attempt {attempt} hỏng",
         )
         if not (retry_timeout or retry_boot or retry_exit or retry_shell):
             return False
@@ -542,6 +552,11 @@ def run_qemu(
 # r293.1: serial của lần chạy vừa rồi, để `run_qemu` phân loại được lần hỏng
 # mà không phải đổi chữ ký hàm `run_qemu_once`.
 LAST_OUTPUT = {"text": ""}
+# r294.B: đường dẫn serial của lần chạy vừa rồi. Khi ghi artifact, ĐỌC LẠI từ
+# file (settled) thay vì dùng bản trong bộ nhớ — bản trong bộ nhớ có thể là ảnh
+# chụp trước khi guest flush nốt, và đó là lý do artifact của lần hỏng T31
+# (`dup=PAGER EVICT OK`) lại KHÔNG chứa marker gây hỏng.
+LAST_SERIAL_PATH = {"path": ""}
 
 RUN_STATS = {
     "boots": 0,
@@ -667,6 +682,7 @@ def run_qemu_once(
     # r293.1: N = số lần BOOT THẬT (kể cả lần phải chạy lại), nên đếm ở đây
     # chứ không ở `run_qemu` (một lần gọi có thể boot nhiều lần).
     RUN_STATS["boots"] += 1
+    LAST_SERIAL_PATH["path"] = serial
     if os.path.exists(serial):
         os.unlink(serial)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
