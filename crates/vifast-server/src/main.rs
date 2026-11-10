@@ -736,6 +736,40 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
             // T26: bằng chứng TRỰC TIẾP của mất lệnh ghi (ghi xong đọc lại khác).
             // T26: index / entry-đếm-qua-cache / entry-đếm-qua-RAW của lần
             // `read_dir_entry_full` trả "hết" gần nhất. Lệch ⇒ cache khác đĩa.
+            // T26: hình dạng thư mục tại lần "hết" gần nhất.
+            let (shape_size, shape_blocks, shape_e0, shape_e1) = vifast_fs::dir_shape();
+            if shape_blocks > 0 {
+                let mut line = [0u8; 40];
+                line[0] = b'D';
+                line[1] = b'I';
+                line[2] = b'R';
+                line[3] = b'P';
+                line[4] = b' ';
+                line[5] = b's';
+                line[6] = b'=';
+                line[7] = b'0' + ((shape_size / 1000) % 10) as u8;
+                line[8] = b'0' + ((shape_size / 100) % 10) as u8;
+                line[9] = b'0' + ((shape_size / 10) % 10) as u8;
+                line[10] = b'0' + (shape_size % 10) as u8;
+                line[11] = b' ';
+                line[12] = b'b';
+                line[13] = b'=';
+                line[14] = b'0' + (shape_blocks % 10) as u8;
+                line[15] = b' ';
+                line[16] = b'e';
+                line[17] = b'0';
+                line[18] = b'=';
+                line[19] = b'0' + ((shape_e0 / 10) % 10) as u8;
+                line[20] = b'0' + (shape_e0 % 10) as u8;
+                line[21] = b' ';
+                line[22] = b'e';
+                line[23] = b'1';
+                line[24] = b'=';
+                line[25] = b'0' + ((shape_e1 / 10) % 10) as u8;
+                line[26] = b'0' + (shape_e1 % 10) as u8;
+                line[27] = b'\n';
+                write(&line[..28]);
+            }
             let (probe_index, probe_cached, probe_raw) = vifast_fs::dir_probe();
             if probe_cached != probe_raw {
                 let mut line = [0u8; 32];

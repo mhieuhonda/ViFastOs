@@ -1887,3 +1887,32 @@ RAM** — nó chỉ chứng minh cache khớp đĩa, không chứng minh dải q
 
 **Phép đo chốt (vòng sau):** in `size`, `blocks_used()`, `blocks[0..n]` và **số
 entry không rỗng theo TỪNG block** ngay tại chỗ trả `Ok(None)`.
+
+## r294.T26 — HÌNH DẠNG thư mục tại lúc "hết": 6 entry, thiếu đúng entry vừa tạo
+
+Đèn `DIRP` in `size / blocks_used / số entry khối 0 / khối 1` ngay tại chỗ
+`read_dir_entry_full` trả `Ok(None)`.
+
+**Đo `MAX_IO=256`, 6/14 boot đỏ — 6/6 cùng một hình dạng:**
+
+```
+V2RD end n=06
+DIRP s=0512 b=1 e0=06 e1=00      ← thư mục gốc: 1 block, CHỈ 6 entry, KHÔNG có `d`
+```
+
+⇒ Tại đúng thời điểm đó, block 0 của thư mục gốc trên **đường đọc** chỉ chứa 6
+entry; `d` (entry thứ 7) **chưa xuất hiện**. Nhưng `open("/d")` ngay sau đó
+thành công và readdir lặp lại thấy `d` ⇒ entry **xuất hiện muộn hơn** lần đọc
+đầu, dù `mkdir` đã trả `Ok` trước đó.
+
+Đây là dạng **đọc thấy ảnh cũ ngay sau khi ghi** — khớp giả thuyết "bất đối xứng
+ghi/đọc" mà subagent nêu: đường **ghi** thư mục dùng `read_staged` (journal),
+đường **đọc** dùng `dev.read` (cache→đĩa).
+
+**Cảnh báo phương pháp (subagent nêu, đã xác nhận đúng):** đèn `DIR` trước đó
+**không** chứng minh được cache khớp đĩa, vì "đường RAW" tôi dùng vẫn là
+`self.dev.read` = **cùng cache**. Muốn so thật phải đọc qua `self.dev.inner()`.
+
+**Phép đo chốt còn lại:** tại `Ok(None)`, đọc block 0 của thư mục gốc qua
+`dev.inner()` (bỏ hẳn cache) và so với `dev.read`; nếu khác ⇒ vá chỗ làm mới
+cache sau `commit`/`stage`, không phải vá `read_staged`.

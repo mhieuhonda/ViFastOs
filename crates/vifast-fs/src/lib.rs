@@ -154,6 +154,24 @@ static DIR_PROBE: [core::sync::atomic::AtomicU32; 3] = [
     core::sync::atomic::AtomicU32::new(0),
 ];
 
+/// T26: hình dạng thư mục tại lần `Ok(None)` gần nhất:
+/// `(size, blocks_used, số entry khối 0, số entry khối 1)`.
+static DIR_SHAPE: [core::sync::atomic::AtomicU32; 4] = [
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+];
+
+pub fn dir_shape() -> (u32, u32, u32, u32) {
+    (
+        DIR_SHAPE[0].load(core::sync::atomic::Ordering::Relaxed),
+        DIR_SHAPE[1].load(core::sync::atomic::Ordering::Relaxed),
+        DIR_SHAPE[2].load(core::sync::atomic::Ordering::Relaxed),
+        DIR_SHAPE[3].load(core::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 pub fn dir_probe() -> (u32, u32, u32) {
     (
         DIR_PROBE[0].load(core::sync::atomic::Ordering::Relaxed),
@@ -2160,6 +2178,26 @@ impl<D: BlockDev> Fs<D> {
                 }
             }
         }
+        // Hình dạng thư mục tại đúng thời điểm "hết" (T26): size, blocks_used,
+        // và số entry không rỗng của từng block.
+        let mut per_block = [0u32; 2];
+        for block_index in 0..inode.blocks_used().min(2) {
+            let mut raw = zero_block();
+            if self.dev.read(inode.blocks[block_index], &mut raw).is_ok() {
+                for slot in 0..DIR_ENTRIES_PER_BLOCK {
+                    if get_u16(&raw, slot * DIR_ENTRY_SIZE) != 0 {
+                        per_block[block_index] += 1;
+                    }
+                }
+            }
+        }
+        DIR_SHAPE[0].store(inode.size, core::sync::atomic::Ordering::Relaxed);
+        DIR_SHAPE[1].store(
+            inode.blocks_used() as u32,
+            core::sync::atomic::Ordering::Relaxed,
+        );
+        DIR_SHAPE[2].store(per_block[0], core::sync::atomic::Ordering::Relaxed);
+        DIR_SHAPE[3].store(per_block[1], core::sync::atomic::Ordering::Relaxed);
         DIR_PROBE[0].store(index as u32, core::sync::atomic::Ordering::Relaxed);
         DIR_PROBE[1].store(seen as u32, core::sync::atomic::Ordering::Relaxed);
         DIR_PROBE[2].store(raw_seen, core::sync::atomic::Ordering::Relaxed);
