@@ -10,6 +10,49 @@ from __future__ import annotations
 
 import re
 
+# r295 (bước 0): nhận dạng BUILD.
+#
+# Mỗi thành phần in đúng một dòng lúc khởi động:
+#     BUILD <name>=<git sha ngắn>-<8 ký tự hash của git diff> feats=<feature>
+# Một lần boot chỉ hợp lệ khi MỌI dòng BUILD mang cùng một id, và id đó bằng
+# trạng thái nguồn mà harness vừa build. Lệch ⇒ lần đo KHÔNG hợp lệ (T-BUILD),
+# không được tính vào tỉ lệ flake của sản phẩm: đã có ít nhất một vòng bị mất
+# vì đo nhầm ảnh cũ.
+#
+# `feats` CỐ Ý không nằm trong id so khớp: kernel/root bản `test-destroy-smp`
+# đi với server/client bản thường là hợp lệ, nếu gộp vào id sẽ sinh T-BUILD giả.
+BUILD_RE = re.compile(r"^BUILD ([a-z0-9_]+)=(\S+)(?: feats=(\S+))?$", re.MULTILINE)
+
+#: Id mong đợi của lần đo hiện tại. `test-qemu.py` nạp từ
+#: `target/vifast-build-id.txt` (do `build.sh` ghi). `None` = không kiểm
+#: (dùng cho test âm và cho các công cụ chỉ đọc serial cũ).
+EXPECTED_BUILD = {"id": None}
+
+
+def build_lines(output: str) -> list[tuple[str, str, str]]:
+    """Trả về [(tên thành phần, id, feats)] cho mọi dòng BUILD trong serial."""
+    return [
+        (match.group(1), match.group(2), match.group(3) or "?")
+        for match in BUILD_RE.finditer(output)
+    ]
+
+
+def build_mismatch(output: str, expected: str | None) -> str | None:
+    """`None` nếu mọi dòng BUILD khớp `expected`; ngược lại là lý do (chuỗi)."""
+    if not expected:
+        return None
+    lines = build_lines(output)
+    if not lines:
+        return "không có dòng BUILD nào (ảnh build trước r295 hoặc build tay)"
+    distinct = sorted({ident for _, ident, _ in lines})
+    if len(distinct) > 1:
+        shown = ", ".join(f"{name}={ident}" for name, ident, _ in lines[:6])
+        return f"các thành phần mang id khác nhau: {shown}"
+    if distinct[0] != expected:
+        return f"id={distinct[0]} khác id mong đợi {expected}"
+    return None
+
+
 COMMON = [
     ("SELFTEST PASS", "kernel host self-test passed in guest"),
     ("booting on", "architecture banner printed"),
@@ -446,7 +489,14 @@ def accept(
     require_block: bool = True,
     require_disk: bool = True,
     feature_mode: str | None = None,
+    expected_build: str | None = None,
 ) -> bool:
+    # r295 (bước 0): T-BUILD đứng TRƯỚC mọi điều kiện khác. Không có nó, một
+    # lần đo ảnh cũ sẽ được đọc thành "flake sản phẩm" và mọi so sánh sau đó vô
+    # nghĩa. `expected_build` để trống ⇒ dùng id đã nạp cho lần đo hiện tại.
+    wanted = expected_build if expected_build is not None else EXPECTED_BUILD["id"]
+    if build_mismatch(output, wanted) is not None:
+        return False
     if feature_mode == "test-check-boundary":
         # D19: bản biến thể bật phép kiểm ở ranh giới user — phải xanh.
         if output.count("BOUNDARY OK (") != 1 or "BOUNDARY BAD" in output:

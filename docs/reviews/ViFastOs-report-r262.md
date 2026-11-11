@@ -1039,6 +1039,74 @@ một sự kiện; nếu vẫn thiếu ino 08 thì soi nhánh **tái dùng slot 
 | Việc tiếp theo | T26 (gốc race FS — có bài test hồi quy), T28 (`-smp 4`), T29 (`!!`), T30 (aarch64), T31, T33a/T33b |
 | Worktree/nhánh | còn đúng `main`; `r254`, `g1`, `r261`, `r268`, `t13x` đã xoá |
 
+
+## TỔNG KẾT r295 — T26: trả lời "FS hay IPC" (bảng 2.3 dòng 4.D)
+
+Vòng r295 chỉ có **một** câu hỏi (tệp quyết định r295 §0): lỗi T26 nằm ở **FS**
+hay ở **IPC/context** (reply cũ)? Cấm vá sản phẩm; chỉ thêm đèn, bộ đếm, feature
+chẩn đoán, harness. **Trả lời: FS.**
+
+### Đã thêm (đều nằm trong cây, gate 10/10)
+
+| Thứ | Nội dung |
+|---|---|
+| `BUILD` id | `build.sh` sinh `<git sha ngắn>-<8 hex git diff>`, truyền cho mọi crate; kernel/root/server/client/bin in một dòng `BUILD <tên>=<id> feats=<f>`; harness báo `T-BUILD` và **dừng lượt đo** (exit 2) thay vì cộng vào flake |
+| `req_seq` + hash | `seq` ở 32 bit cao của label; reply trả `(seq<<32)|hash`; client in `VSEQ/VARG/VHASH/VEND`; server ghi ring 16 bản ghi `(srv_seq, req_seq, op, index, result, h)` và in khi có BAD hoặc khi khối V2 đỏ |
+| `stress-fs` | Feature client: K=1000 vòng `mkdir → readdir → open → unlink` trong MỘT boot; `FS LOOP k= miss_rd= miss_open= err=` + `VSTAT` + fsck |
+| `stress-fs-measure.py` | Chạy N boot, đọc/ghi serial, tổng hợp theo vòng (không theo boot) |
+
+### Số đo (máy `ps`, x86_64, `VIFAST_NO_RETRY=1`, 1 lần gọi = 1 boot)
+
+| Lượt | Cấu hình | boot | `FS V2 BAD` | vòng | miss_rd | VSEQ/VARG/VHASH |
+|---|---|---:|---:|---:|---:|---|
+| S1 | 256 / smp2 | 5 | 1 | 5 000 | 0 | 0/0/0 |
+| S1 lặp | 256 / smp2 | 5 | 0 | 5 000 | 0 | 0/0/0 |
+| S1n | 256 / smp2 | 20 | 7 | 20 000 | 0 | 0/0/0 |
+| S1r | 256 / smp2 (ring sát chỗ hỏng) | 20 | 2 | 20 000 | 0 | 0/0/0 |
+| S2 | **128** / smp2 (`mps`, TCG) | 5 | 0 | 5 000 | 0 | 0/0/0 |
+| S3b | 256 / **smp1** | 3 | 0 | 3 000 | 0 | 0/0/0 |
+| S4 | 256 / smp2 + `-accel tcg,thread=single` | 3 | **1** | 3 000 | 0 | 0/0/0 |
+
+Ở 256/smp2: **10/50 boot đỏ = 20 %** (nền cũ 12/40 = 30 %, cùng bậc);
+**0 miss / 61 000 vòng**; **0/0/0 đèn** trên toàn bộ 61 lượt gọi VFS được kiểm.
+
+### Dòng 2.3 khớp: 4.D — "FS thật sự trả 6 entry ở thời điểm đó"
+
+```
+V2MK open=1
+VEND seq=50 idx=6
+V2CHK open=1 rd=2
+VRING srv=111 req=50 op=8199 idx=6 res=1 h=0     ← chính server trả ENOENT cho req_seq 50
+V2GROUP 06                                        ← = 3 + group4 (readdir('/') không thấy 'd')
+```
+`open("/d")` **được** ngay trước và **hai lần** ngay sau; `req_seq` trong ring khớp
+đúng `VEND` của client ⇒ ENOENT do server FS tạo, **không** phải reply bị ghép
+lệch. `S4 > 0` ⇒ **race logic** (không phải race bộ nhớ host); `S3b = 0/3` phù hợp
+"cần ≥2 hart" (mẫu nhỏ).
+
+### Hệ quả
+- **IPC/context bị loại** với 61 000 lời gọi có kiểm: 0 reply lệch, 0 tham số lệch,
+  0 payload bị đè. Thước đo đã được kiểm bằng hai mutation (seq-1 ⇒ `VSEQ BAD`;
+  lật 1 byte payload ⇒ `VHASH BAD`), cả hai đều in đúng một đèn và không lan.
+- Vòng lặp **không** tái hiện (0/61 000) trong khi khối V2 lúc boot đỏ 20 % ⇒ lỗi
+  cần hoạt động đồng thời của root lúc boot — đúng dự đoán §3.3.
+- **`MAX_IO` vẫn 128.** §5 chưa cho phép nâng: chưa có bản vá + test xanh N≥40.
+- Nghi vấn dẫn cho r296: **vi phạm read-your-own-write ở mức entry thư mục**
+  (`mkdir` trả OK, `open` thấy, readdir không thấy). **Chưa** chứng minh — đèn
+  `SLO`/`LOOK` là "lần gần nhất", không có `seq`, nên không dùng để kết luận.
+
+### Bài học đọc số (ghi để lần sau không sai lại)
+- `V2GROUP 06` **không** phải "nhóm 6": `v2_failed = 3 + group4` ⇒ 06 = nhóm 4c.
+- Ring 16 bản ghi phải chụp **sát chỗ hỏng**; chụp ở cuối khối thì đã trôi qua
+  (lượt S1n: 7 boot đỏ mà ring không có bản ghi liên quan).
+- Lượt mutation đầu tiên bắt lỗi của **chính thước đo**: `RINGDUMP` lồng nhau ghi
+  đè "echo gần nhất" ⇒ `VHASH BAD` giả. Đã sửa bằng cách kiểm payload bên trong
+  `vfs_send`, dùng chung `vfs::payload_len()` với server.
+- Quên `STATFS` trong nhóm echo `d1` ⇒ `FS USAGE BAD` ngay lần boot đầu (d2 = 512
+  bị ghi đè). Khi thêm đèn phải soi **hết** nhánh trả về, không chỉ nhánh đang điều tra.
+- Máy `ps` đã được nâng lên **rustc 1.99.1 (58cf8f9c3)** — trùng `mps`; trước đó
+  1.93.1 **không build được** (`rust-version` 1.99.1).
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1047,7 +1115,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-d91bf9a9427cfceab647f37dd7ab16e906de87175fa0501b7fa018d0ebb23269  docs/reviews/ViFastOs-report-r262.md
+78b66d625d9d54e26627177cd352211369830a6984912f60da5672c0b3593c55  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

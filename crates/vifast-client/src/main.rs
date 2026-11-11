@@ -120,7 +120,327 @@ fn copy_path(path: &[u8]) -> usize {
 /// đỏ DỪNG Ở BƯỚC NÀO (trước đây chỉ biết "thiếu FS V2 OK", không biết dừng ở
 /// đâu). Mười một dòng ngắn, chỉ in trên đường V2; không nằm trong hợp đồng
 /// marker nên không ảnh hưởng gate.
-fn v2_step(number: u8) {
+// ---------------------------------------------------------------------------
+// r295 (bước 1): `req_seq` + hash cho MỌI lời gọi VFS.
+//
+// Câu hỏi của vòng: lỗi T26 nằm ở FS hay ở IPC/context (reply cũ, tham số cũ,
+// payload bị đè)? Bốn đèn dưới đây trả lời trực tiếp, mỗi đèn ứng với đúng
+// một dòng của bảng phân loại đã viết TRƯỚC khi đo:
+//
+//   VSEQ BAD  ⇒ nhận được reply của MỘT yêu cầu khác (reply/context cũ).
+//   VARG BAD  ⇒ seq khớp nhưng server thấy `index` khác ⇒ tham số cũ.
+//   VHASH BAD ⇒ payload bị ghi đè giữa lúc server ghi và client đọc.
+//   VEND      ⇒ readdir trả ENOENT; đối chiếu `seq` với ring của server
+//               (`VRING ...`) để biết server có thật sự trả "hết" hay không.
+//
+// Đèn chỉ in MỘT lần cho mỗi loại (kèm toàn bộ số của lần đầu) để không làm
+// nhiễu chính phép đo; bộ đếm vẫn cộng đủ và in ở `VSTAT` cuối khối V2.
+// ---------------------------------------------------------------------------
+static mut REQ_SEQ: u32 = 0;
+static mut VSEQ_COUNT: u32 = 0;
+static mut VARG_COUNT: u32 = 0;
+static mut VHASH_COUNT: u32 = 0;
+static mut VEND_COUNT: u32 = 0;
+static mut RING_DUMPED: bool = false;
+
+fn push_bytes(line: &mut [u8], at: &mut usize, bytes: &[u8]) {
+    for &byte in bytes {
+        if *at < line.len() {
+            line[*at] = byte;
+            *at += 1;
+        }
+    }
+}
+
+fn push_dec(line: &mut [u8], at: &mut usize, mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut count = 0usize;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        value /= 10;
+        count += 1;
+        if value == 0 {
+            break;
+        }
+    }
+    while count > 0 {
+        count -= 1;
+        push_bytes(line, at, &digits[count..count + 1]);
+    }
+}
+
+fn emit(line: &[u8]) {
+    let _ = vifast_user::debug_write(line.as_ptr() as u64, line.len() as u64);
+}
+
+/// Xin server in 16 bản ghi ring — CHỈ một lần cho cả lần boot, và gọi thẳng
+/// (không qua `vfs_send`) để không tiêu thêm seq, không tự kiểm chính mình.
+fn dump_ring_once() {
+    unsafe {
+        if RING_DUMPED {
+            return;
+        }
+        RING_DUMPED = true;
+    }
+    let _ = vfs_send(1, vfs::RINGDUMP, 0, 0, 0);
+}
+
+fn emit_vseq(sent: u32, got: u32, op: u64) {
+    let mut line = [0u8; 64];
+    let mut at = 0usize;
+    push_bytes(&mut line, &mut at, b"VSEQ BAD sent=");
+    push_dec(&mut line, &mut at, sent as u64);
+    push_bytes(&mut line, &mut at, b" got=");
+    push_dec(&mut line, &mut at, got as u64);
+    push_bytes(&mut line, &mut at, b" op=");
+    push_dec(&mut line, &mut at, op);
+    push_bytes(&mut line, &mut at, b"\n");
+    emit(&line[..at]);
+}
+
+fn emit_varg(seq: u32, op: u64, sent: u64, got: u64) {
+    let mut line = [0u8; 80];
+    let mut at = 0usize;
+    push_bytes(&mut line, &mut at, b"VARG BAD seq=");
+    push_dec(&mut line, &mut at, seq as u64);
+    push_bytes(&mut line, &mut at, b" op=");
+    push_dec(&mut line, &mut at, op);
+    push_bytes(&mut line, &mut at, b" idx=");
+    push_dec(&mut line, &mut at, sent);
+    push_bytes(&mut line, &mut at, b"/");
+    push_dec(&mut line, &mut at, got);
+    push_bytes(&mut line, &mut at, b"\n");
+    emit(&line[..at]);
+}
+
+fn emit_vhash(seq: u32, server: u32, client: u32) {
+    let mut line = [0u8; 80];
+    let mut at = 0usize;
+    push_bytes(&mut line, &mut at, b"VHASH BAD seq=");
+    push_dec(&mut line, &mut at, seq as u64);
+    push_bytes(&mut line, &mut at, b" srv=");
+    push_dec(&mut line, &mut at, server as u64);
+    push_bytes(&mut line, &mut at, b" cli=");
+    push_dec(&mut line, &mut at, client as u64);
+    push_bytes(&mut line, &mut at, b"\n");
+    emit(&line[..at]);
+}
+
+fn emit_vend(seq: u32, index: u64) {
+    let mut line = [0u8; 64];
+    let mut at = 0usize;
+    push_bytes(&mut line, &mut at, b"VEND seq=");
+    push_dec(&mut line, &mut at, seq as u64);
+    push_bytes(&mut line, &mut at, b" idx=");
+    push_dec(&mut line, &mut at, index);
+    push_bytes(&mut line, &mut at, b"\n");
+    emit(&line[..at]);
+}
+
+/// Một lời gọi VFS có seq: gửi `op | seq<<32`, rồi ĐỐI CHIẾU echo của reply.
+fn vfs_send(slot: u8, op: u64, data0: u64, data1: u64, data2: u64) -> vifast_user::MessageResult {
+    let seq = unsafe {
+        REQ_SEQ = REQ_SEQ.wrapping_add(1);
+        REQ_SEQ
+    };
+    let reply = unsafe {
+        vifast_user::call_message(slot, vfs::request_label(op, seq), data0, data1, data2)
+    };
+    if reply.error != KError::Ok {
+        return reply;
+    }
+    let word_index = vfs::echo_word(op);
+    let word = reply.data[word_index];
+    let got_seq = if word_index == 1 {
+        (word >> 32) as u32
+    } else {
+        vfs::echo_seq(word)
+    };
+    if got_seq != seq {
+        unsafe { VSEQ_COUNT += 1 };
+        emit_vseq(seq, got_seq, op);
+        dump_ring_once();
+        return reply;
+    }
+    if vfs::d1_carries_index(op) {
+        let got_index = reply.data[1] >> 32;
+        if got_index != data1 {
+            unsafe { VARG_COUNT += 1 };
+            emit_varg(seq, op, data1, got_index);
+            dump_ring_once();
+        }
+    }
+    if word_index == 2 {
+        // Kiểm payload NGAY TẠI ĐÂY, không để hàm gọi làm sau: `dump_ring_once`
+        // ở trên có thể phát sinh một lời gọi LỒNG NHAU và ghi đè trạng thái
+        // "reply gần nhất" ⇒ `VHASH BAD` giả (đã đo được đúng lỗi này ở lượt
+        // kiểm thước đo đầu tiên).
+        let len = vfs::payload_len(op, reply.label, reply.data[0], reply.data[1]);
+        if len > 0 {
+            let bytes = unsafe { core::slice::from_raw_parts(IPC_BUF_CLIENT_VA as *const u8, len) };
+            let client = vfs::fnv1a(bytes);
+            let server = vfs::echo_hash(word);
+            if client != server {
+                unsafe { VHASH_COUNT += 1 };
+                emit_vhash(seq, server, client);
+                dump_ring_once();
+            }
+        }
+    }
+    // `VEND`: server nói "hết thư mục" ở đúng index này. In kèm `seq` để đối
+    // chiếu với ring (`VRING ... req=<seq>`) — không có bản ghi nghĩa là reply
+    // này KHÔNG do server tạo cho yêu cầu đó.
+    if matches!(op, vfs::READDIR | vfs::READDIR_BULK)
+        && reply.label == vfs::ERR
+        && reply.data[0] == vfs::ENOENT
+    {
+        unsafe { VEND_COUNT += 1 };
+        emit_vend(seq, data1);
+    }
+    reply
+}
+
+/// Số đèn đã bật (dùng cho dòng `VSTAT` và cho feature `stress-fs`).
+fn vfs_bad_counts() -> (u32, u32, u32, u32) {
+    unsafe { (VSEQ_COUNT, VARG_COUNT, VHASH_COUNT, VEND_COUNT) }
+}
+
+// ---------------------------------------------------------------------------
+// r295 (bước 2): vòng lặp trong MỘT lần boot (feature `stress-fs`).
+//
+// Vì sao cần: lỗi T26 ở cấu hình MAX_IO=256 tái hiện 12/40 lần BOOT, tức là
+// mỗi lần đo chỉ có MỘT phép thử. K=1000 vòng `mkdir → readdir → open →
+// unlink` cho hàng nghìn phép thử mỗi boot, nên 5 boot đủ để kết luận.
+//
+// KHÔNG bật ở gate và ở bản phát hành: chỉ dựng khi build với feature này.
+// ---------------------------------------------------------------------------
+#[cfg(feature = "stress-fs")]
+fn stress_dir_contains(name: &[u8]) -> bool {
+    let fd = match vfs_open_via(1, b"/", vifast_abi::O_DIRECTORY) {
+        Some((fd, _)) => fd,
+        None => return false,
+    };
+    let mut index = 0u64;
+    let mut found = false;
+    let mut guard = 0u32;
+    loop {
+        guard += 1;
+        if guard > 64 {
+            break;
+        }
+        match vfs_readdir_bulk(fd, index) {
+            Ok((0, _)) => break,
+            Ok((packed, next)) => {
+                for slot in 0..packed {
+                    let (_, _, entry, len) = vfs_readdir_bulk_entry(slot);
+                    if len == name.len() && &entry[..len] == name {
+                        found = true;
+                    }
+                }
+                if next <= index {
+                    break;
+                }
+                index = next;
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = vfs_close(fd);
+    found
+}
+
+#[cfg(feature = "stress-fs")]
+fn stress_fs() {
+    const LOOPS: u32 = 1000;
+    let names: [&[u8]; 4] = [b"/s0", b"/s1", b"/s2", b"/s3"];
+    let bare: [&[u8]; 4] = [b"s0", b"s1", b"s2", b"s3"];
+    let mut miss_readdir = 0u32;
+    let mut miss_open = 0u32;
+    let mut err_other = 0u32;
+    let mut first_miss = false;
+    let mut k = 0u32;
+    while k < LOOPS {
+        let which = (k % 4) as usize;
+        let path = names[which];
+        let base = bare[which];
+        // 1) mkdir. Vòng trước hỏng có thể để lại entry ⇒ dọn rồi làm lại.
+        if vfs_mkdir(path).is_err() {
+            let _ = vfs_unlink(path);
+            if vfs_mkdir(path).is_err() {
+                err_other += 1;
+            }
+        }
+        // 2) readdir("/") đầy đủ — đúng phép thử đã đỏ trong khối V2.
+        if !stress_dir_contains(base) {
+            miss_readdir += 1;
+            if !first_miss {
+                first_miss = true;
+                // Lần miss ĐẦU TIÊN: kéo ring của server in ra (16 bản ghi),
+                // để đối chiếu "server có thật sự trả ENOENT ở index này không".
+                dump_ring_once();
+                emit(b"VFIRST miss_readdir\n");
+            }
+        }
+        // 3) open entry vừa tạo.
+        match vfs_open(path, 0) {
+            Some((fd, _)) => {
+                let _ = vfs_close(fd);
+            }
+            None => {
+                miss_open += 1;
+                if !first_miss {
+                    first_miss = true;
+                    dump_ring_once();
+                    emit(b"VFIRST miss_open\n");
+                }
+            }
+        }
+        // 4) dọn.
+        if vfs_unlink(path).is_err() {
+            err_other += 1;
+        }
+        k += 1;
+    }
+    let mut line = [0u8; 96];
+    let mut at = 0usize;
+    push_bytes(&mut line, &mut at, b"FS LOOP k=");
+    push_dec(&mut line, &mut at, LOOPS as u64);
+    push_bytes(&mut line, &mut at, b" miss_rd=");
+    push_dec(&mut line, &mut at, miss_readdir as u64);
+    push_bytes(&mut line, &mut at, b" miss_open=");
+    push_dec(&mut line, &mut at, miss_open as u64);
+    push_bytes(&mut line, &mut at, b" err=");
+    push_dec(&mut line, &mut at, err_other as u64);
+    push_bytes(&mut line, &mut at, b"\n");
+    emit(&line[..at]);
+    let (vseq, varg, vhash, vend) = vfs_bad_counts();
+    let mut lights = [0u8; 96];
+    let mut at = 0usize;
+    push_bytes(&mut lights, &mut at, b"VSTAT vseq=");
+    push_dec(&mut lights, &mut at, vseq as u64);
+    push_bytes(&mut lights, &mut at, b" varg=");
+    push_dec(&mut lights, &mut at, varg as u64);
+    push_bytes(&mut lights, &mut at, b" vhash=");
+    push_dec(&mut lights, &mut at, vhash as u64);
+    push_bytes(&mut lights, &mut at, b" vend=");
+    push_dec(&mut lights, &mut at, vend as u64);
+    push_bytes(&mut lights, &mut at, b"\n");
+    emit(&lights[..at]);
+    // fsck một lần sau toàn bộ vòng lặp.
+    write(if vfs_fsck() {
+        b"FS LOOP FSCK OK\n"
+    } else {
+        b"FS LOOP FSCK BAD\n"
+    });
+}
+
+fn v2_step(number: u8, v2: bool) {
+    // r295: ring của server chỉ giữ 16 request. Đo được: nếu chụp ở CUỐI khối
+    // V2 thì ring đã trôi qua chỗ hỏng (lượt đo đầu mất trắng). Nên chụp ngay
+    // ở ranh giới bước ĐẦU TIÊN thấy `v2` sai.
+    if !v2 {
+        dump_ring_once();
+    }
     let mut buffer = [0u8; 8];
     buffer[0] = b'V';
     buffer[1] = b'2';
@@ -143,10 +463,11 @@ fn vfs_reply(reply: vifast_user::MessageResult) -> Result<vifast_user::MessageRe
 
 fn vfs_open_via(slot: u8, name: &[u8], flags: u64) -> Option<(u64, u64)> {
     let len = copy_path(name);
-    let reply = unsafe { vifast_user::call_message(slot, vfs::OPEN, flags, len as u64, 0) };
+    let reply = vfs_send(slot, vfs::OPEN, flags, len as u64, 0);
     let reply = vfs_reply(reply).ok()?;
     if reply.label == vfs::OK {
-        Some((reply.data[0], reply.data[1]))
+        // r295: nửa cao của d1 là `seq` (echo) ⇒ chỉ lấy 32 bit thấp.
+        Some((reply.data[0], reply.data[1] & 0xffff_ffff))
     } else {
         None
     }
@@ -158,7 +479,7 @@ fn vfs_open(name: &[u8], flags: u64) -> Option<(u64, u64)> {
 
 fn vfs_open_error(name: &[u8], flags: u64) -> u64 {
     let len = copy_path(name);
-    let reply = unsafe { vifast_user::call_message(1, vfs::OPEN, flags, len as u64, 0) };
+    let reply = vfs_send(1, vfs::OPEN, flags, len as u64, 0);
     match vfs_reply(reply) {
         Ok(_) => 0,
         Err(code) => code,
@@ -172,7 +493,7 @@ fn vfs_read_via(
     len: usize,
     out: &mut [u8; vfs::MAX_IO],
 ) -> Option<usize> {
-    let reply = unsafe { vifast_user::call_message(slot, vfs::READ, fd, offset, len as u64) };
+    let reply = vfs_send(slot, vfs::READ, fd, offset, len as u64);
     let reply = vfs_reply(reply).ok()?;
     let count = core::cmp::min(reply.label as usize, out.len());
     unsafe {
@@ -191,7 +512,7 @@ fn vfs_write_via(slot: u8, fd: u64, offset: u64, bytes: &[u8]) -> Option<usize> 
         let dst = IPC_BUF_CLIENT_VA as *mut u8;
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, len);
     }
-    let reply = unsafe { vifast_user::call_message(slot, vfs::WRITE, fd, offset, len as u64) };
+    let reply = vfs_send(slot, vfs::WRITE, fd, offset, len as u64);
     let reply = vfs_reply(reply).ok()?;
     Some(reply.label as usize)
 }
@@ -202,17 +523,18 @@ fn vfs_write(fd: u64, offset: u64, bytes: &[u8]) -> Option<usize> {
 
 fn vfs_stat_path(name: &[u8]) -> Option<(u64, u64, u64)> {
     let len = copy_path(name);
-    let reply = unsafe { vifast_user::call_message(1, vfs::STAT_PATH, len as u64, 0, 0) };
+    let reply = vfs_send(1, vfs::STAT_PATH, len as u64, 0, 0);
     let reply = vfs_reply(reply).ok()?;
     if reply.label == vfs::OK {
-        Some((reply.data[0], reply.data[1], reply.data[2]))
+        // r295: nửa cao của d1 là `seq` (echo) ⇒ ino = 32 bit thấp.
+        Some((reply.data[0], reply.data[1] & 0xffff_ffff, reply.data[2]))
     } else {
         None
     }
 }
 
 fn vfs_stat(fd: u64) -> Option<u64> {
-    let reply = unsafe { vifast_user::call_message(1, vfs::STAT, fd, 0, 0) };
+    let reply = vfs_send(1, vfs::STAT, fd, 0, 0);
     let reply = vfs_reply(reply).ok()?;
     if reply.label == vfs::OK {
         Some(reply.data[0])
@@ -222,12 +544,12 @@ fn vfs_stat(fd: u64) -> Option<u64> {
 }
 
 fn vfs_close(fd: u64) -> Option<()> {
-    let reply = unsafe { vifast_user::call_message(1, vfs::CLOSE, fd, 0, 0) };
+    let reply = vfs_send(1, vfs::CLOSE, fd, 0, 0);
     vfs_reply(reply).ok().map(|_| ())
 }
 
 fn vfs_fsync(fd: u64) -> Option<()> {
-    let reply = unsafe { vifast_user::call_message(1, vfs::FSYNC, fd, 0, 0) };
+    let reply = vfs_send(1, vfs::FSYNC, fd, 0, 0);
     vfs_reply(reply).ok().map(|_| ())
 }
 
@@ -237,12 +559,13 @@ fn vfs_fsync(fd: u64) -> Option<()> {
 /// predates READDIR_BULK (reply ERR).
 fn vfs_readdir_bulk(fd: u64, index: u64) -> Result<(usize, u64), u64> {
     let max = (vfs::MAX_IO / vfs::READDIR_REC) as u64;
-    let reply = unsafe { vifast_user::call_message(1, vfs::READDIR_BULK, fd, index, max) };
+    let reply = vfs_send(1, vfs::READDIR_BULK, fd, index, max);
     let reply = vfs_reply(reply)?;
     if reply.label != vfs::OK {
         return Err(vfs::EINVAL);
     }
-    Ok((reply.data[0] as usize, reply.data[1]))
+    // r295: nửa cao của d1 là `index` client đã gửi (echo) ⇒ next = 32 bit thấp.
+    Ok((reply.data[0] as usize, reply.data[1] & 0xffff_ffff))
 }
 
 fn vfs_readdir_bulk_entry(slot: usize) -> (u64, u8, [u8; 28], usize) {
@@ -260,7 +583,7 @@ fn vfs_readdir_bulk_entry(slot: usize) -> (u64, u8, [u8; 28], usize) {
 
 fn vfs_mkdir_via(slot: u8, path: &[u8]) -> Result<u64, u64> {
     let len = copy_path(path);
-    let reply = unsafe { vifast_user::call_message(slot, vfs::MKDIR, len as u64, 0, 0) };
+    let reply = vfs_send(slot, vfs::MKDIR, len as u64, 0, 0);
     vfs_reply(reply).map(|reply| reply.data[0])
 }
 
@@ -270,7 +593,7 @@ fn vfs_mkdir(path: &[u8]) -> Result<u64, u64> {
 
 fn vfs_unlink_via(slot: u8, path: &[u8]) -> Result<(), u64> {
     let len = copy_path(path);
-    let reply = unsafe { vifast_user::call_message(slot, vfs::UNLINK, len as u64, 0, 0) };
+    let reply = vfs_send(slot, vfs::UNLINK, len as u64, 0, 0);
     vfs_reply(reply).map(|_| ())
 }
 
@@ -289,15 +612,13 @@ fn vfs_symlink(target: &[u8], path: &[u8]) -> Result<u64, u64> {
             path_len,
         );
     }
-    let reply = unsafe {
-        vifast_user::call_message(1, vfs::SYMLINK, target_len as u64, path_len as u64, 0)
-    };
+    let reply = vfs_send(1, vfs::SYMLINK, target_len as u64, path_len as u64, 0);
     vfs_reply(reply).map(|reply| reply.data[0])
 }
 
 fn vfs_readlink(path: &[u8], out: &mut [u8; vfs::MAX_PATH]) -> Option<usize> {
     let len = copy_path(path);
-    let reply = unsafe { vifast_user::call_message(1, vfs::READLINK, len as u64, 0, 0) };
+    let reply = vfs_send(1, vfs::READLINK, len as u64, 0, 0);
     let reply = vfs_reply(reply).ok()?;
     let count = core::cmp::min(reply.label as usize, out.len());
     unsafe {
@@ -316,8 +637,7 @@ fn vfs_link(old: &[u8], new: &[u8]) -> Result<(), u64> {
             new_len,
         );
     }
-    let reply =
-        unsafe { vifast_user::call_message(1, vfs::LINK, old_len as u64, new_len as u64, 0) };
+    let reply = vfs_send(1, vfs::LINK, old_len as u64, new_len as u64, 0);
     vfs_reply(reply).map(|_| ())
 }
 
@@ -331,13 +651,33 @@ fn vfs_rename(old: &[u8], new: &[u8]) -> Result<(), u64> {
             new_len,
         );
     }
-    let reply =
-        unsafe { vifast_user::call_message(1, vfs::RENAME, old_len as u64, new_len as u64, 0) };
-    vfs_reply(reply).map(|_| ())
+    let reply = vfs_send(1, vfs::RENAME, old_len as u64, new_len as u64, 0);
+    let outcome = vfs_reply(reply).map(|_| ());
+    // r295: nhóm V2 số 6 chỉ kiểm `is_ok()`, nên "rename hỏng" từng không cho
+    // biết VÌ SAO (ENOENT? EEXIST? EINVAL?). In mã lỗi MỘT lần.
+    if let Err(code) = outcome {
+        static mut VREN_PRINTED: bool = false;
+        unsafe {
+            if !VREN_PRINTED {
+                VREN_PRINTED = true;
+                let mut line = [0u8; 32];
+                let mut at = 0usize;
+                push_bytes(&mut line, &mut at, b"VREN ERR ");
+                push_dec(&mut line, &mut at, code);
+                push_bytes(&mut line, &mut at, b" old=");
+                push_dec(&mut line, &mut at, old_len as u64);
+                push_bytes(&mut line, &mut at, b" new=");
+                push_dec(&mut line, &mut at, new_len as u64);
+                push_bytes(&mut line, &mut at, b"\n");
+                emit(&line[..at]);
+            }
+        }
+    }
+    outcome
 }
 
 fn vfs_truncate(fd: u64, size: u64) -> Result<(), u64> {
-    let reply = unsafe { vifast_user::call_message(1, vfs::TRUNCATE, fd, size, 0) };
+    let reply = vfs_send(1, vfs::TRUNCATE, fd, size, 0);
     vfs_reply(reply).map(|_| ())
 }
 
@@ -349,7 +689,7 @@ fn vfs_readdir(fd: u64, index: u64) -> Result<Option<(u64, [u8; 28], usize)>, u6
     // chỗ, đúng bằng số lần đã đo là đủ; lỗi thật vẫn trả về.
     let mut attempt = 0u32;
     loop {
-        let reply = unsafe { vifast_user::call_message(1, vfs::READDIR, fd, index, 0) };
+        let reply = vfs_send(1, vfs::READDIR, fd, index, 0);
         match vfs_reply(reply) {
             Ok(reply) => {
                 if reply.label != vfs::OK {
@@ -357,7 +697,8 @@ fn vfs_readdir(fd: u64, index: u64) -> Result<Option<(u64, [u8; 28], usize)>, u6
                 }
                 // Vòng 83 (audit #2): server trả về độ dài; phải kẹp theo buffer
                 // đích trước khi copy, nếu không một reply sai làm ghi quá biên.
-                let len = core::cmp::min(reply.data[1] as usize, 28);
+                // r295: nửa cao của d1 là `index` client đã gửi (echo).
+                let len = core::cmp::min((reply.data[1] & 0xffff_ffff) as usize, 28);
                 let mut name = [0u8; 28];
                 unsafe {
                     core::ptr::copy_nonoverlapping(
@@ -381,7 +722,7 @@ fn vfs_readdir(fd: u64, index: u64) -> Result<Option<(u64, [u8; 28], usize)>, u6
 }
 
 fn vfs_fsck() -> bool {
-    let reply = unsafe { vifast_user::call_message(1, vfs::FSCK, 0, 0, 0) };
+    let reply = vfs_send(1, vfs::FSCK, 0, 0, 0);
     let outcome = vfs_reply(reply);
     // T26: in MÃ LỖI của chính lời gọi fsck (trước đây chỉ trả bool nên không
     // phân biệt được "fsck nói hỏng" với "mất phản hồi IPC").
@@ -1006,8 +1347,17 @@ fn shell() -> ! {
     }
 }
 
+/// r295 (bước 0): in `BUILD <name>=<id> feats=<feats>` một lần lúc khởi động.
+/// Id do `scripts/build.sh` truyền qua môi trường; `unknown` = build tay.
+fn write_build(name: &[u8]) {
+    let mut line = [0u8; 96];
+    let count = vifast_abi::build::line(name, &mut line);
+    write(&line[..count]);
+}
+
 #[no_mangle]
 pub extern "C" fn client_main() -> ! {
+    write_build(b"client");
     let _ = vifast_user::retype(3, ObjType::Frame as u64, 4);
     let first_mapping =
         vifast_user::frame_map(2, 4, DATA_VA as u64, (Rights::READ | Rights::WRITE).0);
@@ -1119,9 +1469,9 @@ pub extern "C" fn client_main() -> ! {
 
     let mut v2 = true;
     let mut v2_failed: u8 = 0;
-    v2_step(1);
+    v2_step(1, v2);
     v2 &= vfs_mkdir(b"/d").is_ok();
-    v2_step(2);
+    v2_step(2, v2);
     let fd = match vfs_open(b"/d/a", vifast_abi::O_CREATE | vifast_abi::O_RDWR) {
         Some((fd, _)) => fd,
         None => {
@@ -1129,7 +1479,7 @@ pub extern "C" fn client_main() -> ! {
             0
         }
     };
-    v2_step(3);
+    v2_step(3, v2);
     let mut pattern = [0u8; 600];
     let mut index = 0usize;
     while index < pattern.len() {
@@ -1177,7 +1527,7 @@ pub extern "C" fn client_main() -> ! {
         v2 = false;
     }
 
-    v2_step(4);
+    v2_step(4, v2);
     // T26: ngay sau `mkdir("/d")` trả Ok, hỏi THẲNG `open("/d")` trước khi
     // readdir. Nếu open Ok mà readdir thiếu ⇒ lỗi ở tầng liệt kê; nếu open cũng
     // hỏng ⇒ `mkdir` trả Ok khi entry chưa tồn tại.
@@ -1318,7 +1668,7 @@ pub extern "C" fn client_main() -> ! {
     if !v2 && v2_failed == 0 {
         v2_failed = 4;
     }
-    v2_step(5);
+    v2_step(5, v2);
     let mut found_a = false;
     if let Some((dir_fd, _)) = vfs_open(b"/d", 0) {
         let mut entry = 0u64;
@@ -1336,9 +1686,9 @@ pub extern "C" fn client_main() -> ! {
     if !v2 && v2_failed == 0 {
         v2_failed = 5;
     }
-    v2_step(6);
+    v2_step(6, v2);
     v2 &= vfs_rename(b"/d/a", b"/d/b").is_ok();
-    v2_step(7);
+    v2_step(7, v2);
     v2 &= vfs_open_error(b"/d/a", 0) == vfs::ENOENT;
     if !v2 && v2_failed == 0 {
         v2_failed = 6;
@@ -1351,13 +1701,13 @@ pub extern "C" fn client_main() -> ! {
     } else {
         v2 = false;
     }
-    v2_step(8);
+    v2_step(8, v2);
     v2 &= vfs_unlink(b"/d/b").is_ok();
     if !v2 && v2_failed == 0 {
         v2_failed = 8;
     }
     v2 &= vfs_open_error(b"/d/b", 0) == vfs::ENOENT;
-    v2_step(9);
+    v2_step(9, v2);
     v2 &= vfs_mkdir(b"/d/x").is_ok();
     v2 &= vfs_unlink(b"/d").is_err(); // ENOTEMPTY
     v2 &= vfs_unlink(b"/d/x").is_ok();
@@ -1369,12 +1719,15 @@ pub extern "C" fn client_main() -> ! {
     v2 &= vfs_mkdir(b"/d").is_err(); // EEXIST
     v2 &= vfs_unlink(b"/d").is_ok();
     v2 &= vfs_open_error(b"/does-not-exist", 0) == vfs::ENOENT;
-    v2_step(10);
+    v2_step(10, v2);
     let fsck = vfs_fsck();
-    v2_step(11);
+    v2_step(11, v2);
     // T26: in LÝ DO — nhóm kiểm tra nào làm `v2` sai và `fsck` đúng/sai. Không
     // có dòng này thì chỉ biết "FS V2 BAD", không biết vì sao.
     if !(v2 && fsck) {
+        // r295: khối V2 đỏ ⇒ kéo ring của server NGAY (16 request cuối) để
+        // đối chiếu: server có thật sự trả ENOENT cho index đó không?
+        dump_ring_once();
         let mut reason = [0u8; 24];
         reason[0] = b'V';
         reason[1] = b'2';
@@ -1417,6 +1770,8 @@ pub extern "C" fn client_main() -> ! {
     } else {
         b"FS V2 BAD\n"
     });
+    #[cfg(feature = "stress-fs")]
+    stress_fs();
 
     let mut perm = vfs_mkdir_via(1, b"/priv").is_ok();
     if !perm {

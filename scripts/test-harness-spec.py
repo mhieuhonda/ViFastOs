@@ -328,6 +328,59 @@ def main() -> int:
         if label == "fail" and not message.startswith("FAIL"):
             failures.append(f"tcp-echo: {desc} -> thông điệp không phải FAIL: {message}")
 
+    # r295 (bước 0): T-BUILD — phép kiểm nhận dạng build.
+    # Case dương: mọi thành phần in CÙNG id khớp id mong đợi ⇒ xanh.
+    # Case âm: hai id khác nhau, hoặc id khác id mong đợi, hoặc KHÔNG có dòng
+    # BUILD nào ⇒ đỏ. Thiếu case âm thì phép kiểm chỉ là trang trí.
+    for arch in ("riscv64", "aarch64", "x86_64"):
+        base = fixture(arch)
+        rc = next(iter(spec.EXIT_CODES[arch]))
+        ident = "4efdbcd-1234abcd"
+        matching = base + (
+            f"BUILD kernel={ident} feats=none\n"
+            f"BUILD root={ident} feats=none\n"
+            f"BUILD server={ident} feats=none\n"
+            f"BUILD client={ident} feats=none\n"
+        )
+        cases += 1
+        if not spec.accept(arch, matching, rc, expected_build=ident):
+            failures.append(f"{arch}: T-BUILD dương — id khớp lại bị đỏ")
+        # Biến thể hợp lệ: kernel mang feature khác server/client (ca THẬT của
+        # bản destroy-smp) — `feats` không được làm đỏ.
+        cases += 1
+        mixed_feats = base + (
+            f"BUILD kernel={ident} feats=test-destroy-smp\n"
+            f"BUILD server={ident} feats=none\n"
+        )
+        if not spec.accept(arch, mixed_feats, rc, expected_build=ident):
+            failures.append(f"{arch}: T-BUILD dương — feats khác nhau lại bị đỏ")
+        cases += 1
+        if spec.accept(
+            arch,
+            base
+            + f"BUILD kernel={ident} feats=none\n"
+            + "BUILD root=4efdbcd-99999999 feats=none\n",
+            rc,
+            expected_build=ident,
+        ):
+            failures.append(f"{arch}: T-BUILD âm — hai id khác nhau vẫn xanh")
+        cases += 1
+        if spec.accept(arch, matching, rc, expected_build="4efdbcd-00000000"):
+            failures.append(f"{arch}: T-BUILD âm — id khác id mong đợi vẫn xanh")
+        cases += 1
+        if spec.accept(arch, base, rc, expected_build=ident):
+            failures.append(f"{arch}: T-BUILD âm — không có dòng BUILD vẫn xanh")
+        cases += 1
+        if not spec.accept(arch, matching, rc):
+            failures.append(f"{arch}: T-BUILD — không có id mong đợi thì phải BỎ QUA phép kiểm")
+        # Lý do phải nêu được id cụ thể, không chỉ "False".
+        cases += 1
+        reason = spec.build_mismatch(
+            base + f"BUILD kernel={ident} feats=none\nBUILD root=x-0 feats=none\n", ident
+        )
+        if not reason or ident not in reason:
+            failures.append(f"{arch}: T-BUILD — lý do không nêu id thực tế: {reason!r}")
+
     # r293.1 (tệp quyết định r293-r298 mục 2): harness phải ĐẾM retry và PHÂN
     # LOẠI lần hỏng. Case dương: một log giả có retry phải ra đúng dòng
     # `RETRY 1/N` kèm đúng loại. Case âm: nếu bỏ bộ đếm (hàm/khóa không còn)
@@ -342,6 +395,10 @@ def main() -> int:
     except Exception as error:  # pragma: no cover - chỉ để báo lỗi rõ ràng
         failures.append(f"retry-count: không import được test-qemu.py: {error}")
         qemu = None
+    # r295 (bước 0): `test-qemu.py` nạp id build THẬT từ target/ lúc import.
+    # Các serial giả bên dưới không có dòng BUILD, nên phải trả lại trạng thái
+    # "không kiểm" — nếu không, mọi case phân loại sẽ ra T-BUILD (đã xảy ra).
+    spec.EXPECTED_BUILD["id"] = None
 
     if qemu is not None:
         # Phân loại: thiếu FS V2 OK ⇒ T-FS; thiếu PREEMPT OK ⇒ T-SCHED;
@@ -355,6 +412,15 @@ def main() -> int:
                 "KERNEL ENTRY\nbooting on\nFS V2 OK\nSHELL READY\nPREEMPT OK\n",
                 "T-IPC",
                 "vào shell nhưng dừng trước IPC RIGHTS OK ⇒ T-IPC",
+            ),
+            # r295 (bước 0): có id mong đợi mà serial không có dòng BUILD ⇒
+            # T-BUILD, và nó phải THẮNG cả các lớp khác (đây là case âm thật
+            # của bước 0: đo ảnh cũ/build tay không được đọc thành flake).
+            (
+                "KERNEL ENTRY\nbooting on\nFS V2 OK\nPREEMPT OK\n",
+                "T-BUILD",
+                "có id mong đợi nhưng serial không có dòng BUILD",
+                "deadbee-12345678",
             ),
             (
                 "KERNEL ENTRY\nbooting on\nFS V2 OK\nSHELL READY\nIPC RIGHTS BAD err=8\nPREEMPT OK\n",
@@ -406,9 +472,13 @@ def main() -> int:
             ),
             ("KERNEL ENTRY\nbooting on\nFS V2 OK\nPREEMPT OK\nchuyện lạ\n", "T-KHAC", "không khớp chữ ký nào"),
         ]
-        for output, want, desc in classify_cases:
+        for case in classify_cases:
             cases += 1
+            output, want, desc = case[0], case[1], case[2]
+            # Case thứ tư (không bắt buộc): id build mong đợi cho lần phân loại.
+            spec.EXPECTED_BUILD["id"] = case[3] if len(case) > 3 else None
             got = qemu.classify_failure(output)
+            spec.EXPECTED_BUILD["id"] = None
             if got != want:
                 failures.append(f"retry-count: classify {desc} -> {got}, cần {want}")
 

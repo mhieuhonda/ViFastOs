@@ -7,6 +7,29 @@ mkdir -p "$(dirname "$BUILD_LOG")"
 : > "$BUILD_LOG"
 exec > >(tee "$BUILD_LOG") 2>&1
 
+# r295 (bước 0): BUILD_ID — chặn đo nhầm binary cũ.
+# Lý do: đã mất ít nhất một vòng vì đo một ELF build từ trạng thái nguồn cũ.
+# Định dạng: <git sha ngắn>-<8 ký tự hash của git diff>. Phần đặc tả feature
+# KHÔNG nằm trong id so sánh được (xem VIFAST_BUILD_FEATS) vì mỗi thành phần
+# có thể được build với bộ feature khác nhau một cách hợp lệ (kernel/root bản
+# `test-destroy-smp` đi với server/client bản thường) — nếu nhét vào id thì
+# sẽ sinh T-BUILD GIẢ. Feature được in kèm ở trường `feats=` để vẫn chứng
+# minh được "đang chạy đúng biến thể nào".
+hash8() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | cut -c1-8
+    else
+        shasum -a 256 | cut -c1-8
+    fi
+}
+BUILD_SHA="$(git rev-parse --short HEAD 2>/dev/null || printf 'nogit0')"
+BUILD_DIFF="$(git diff HEAD 2>/dev/null | hash8 || printf '00000000')"
+VIFAST_BUILD_ID="${BUILD_SHA}-${BUILD_DIFF}"
+export VIFAST_BUILD_ID
+export VIFAST_BUILD_FEATS="none"
+echo "$VIFAST_BUILD_ID" > target/vifast-build-id.txt
+echo "BUILD_ID=${VIFAST_BUILD_ID}"
+
 echo "== host portable-kernel tests =="
 cargo test -p vifast-kernel
 cargo test -p vifast-abi
@@ -60,7 +83,15 @@ build_modules() {
             vifast-client) module_linker=crates/vifast-root/linkers/module.ld ;;
             *) module_linker="$linker" ;;
         esac
-        cargo rustc -p "$pkg" --profile root-task --target "$target" -- \
+        # r295 (bước 2): feature CHẨN ĐOÁN cho client (`stress-fs`), mặc định
+        # KHÔNG bật — gate và bản phát hành dùng client thường.
+        client_feats=""
+        if [ "$pkg" = "vifast-client" ]; then
+            client_feats="${VIFAST_CLIENT_FEATURES:-}"
+        fi
+        VIFAST_BUILD_FEATS="${client_feats:-none}" \
+        cargo rustc -p "$pkg" --profile root-task --target "$target" \
+            ${client_feats:+--features "$client_feats"} -- \
             "$@" \
             -C link-arg=-T -C link-arg="$module_linker" \
             -C link-arg=--defsym=ROOT_ELF_BASE=0x1000010000 \
@@ -169,7 +200,7 @@ scripts/check-root-elf.sh "$ROOT_X86.stripped" x86_64-unknown-none 62
 check_client_budget x86_64 "${CLIENT_X86}.stripped" 9
 
 echo "== destroy-smp root variants =="
-cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf --features test-destroy-smp -- \
+VIFAST_BUILD_FEATS=test-destroy-smp cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf --features test-destroy-smp -- \
     -C code-model=medium -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/riscv64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
@@ -186,7 +217,7 @@ cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none
     -C link-arg=-z -C link-arg=separate-code
 "$OBJCOPY" --strip-all "$ROOT_RV" "$ROOT_RV.stripped"
 
-cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat --features test-destroy-smp -- \
+VIFAST_BUILD_FEATS=test-destroy-smp cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat --features test-destroy-smp -- \
     -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/aarch64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
@@ -203,7 +234,7 @@ cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-sof
     -C link-arg=-z -C link-arg=separate-code
 "$OBJCOPY" --strip-all "$ROOT_ARM" "$ROOT_ARM.stripped"
 
-cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none --features test-destroy-smp -- \
+VIFAST_BUILD_FEATS=test-destroy-smp cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none --features test-destroy-smp -- \
     -C relocation-model=pic \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/x86_64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
@@ -228,7 +259,7 @@ NM="$(rustc --print sysroot)/lib/rustlib/${HOST}/bin/llvm-nm"
 KERNEL_RV=target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64
 # r254 (T17): bản kernel "shell linger" — TIMER_TICKS lớn để `--interactive`
 # kịp gõ kịch bản. Gate và soak KHÔNG dùng bản này.
-VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-shell-linger
+VIFAST_BUILD_FEATS=test-shell-linger VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-shell-linger
 cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-shell
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 KERNEL_END="$("$NM" "$KERNEL_RV" | awk '$3 == "__kernel_end" { print "0x" $1; exit }')"
@@ -246,7 +277,7 @@ fi
 
 
 echo "== riscv64 destroy-smp feature build =="
-VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-destroy-smp
+VIFAST_BUILD_FEATS=test-destroy-smp VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-destroy-smp
 KERNEL_VAR=target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-destroy-smp
 cp "$KERNEL_RV" "$KERNEL_VAR"
 KERNEL_END="$("$NM" "$KERNEL_VAR" | awk '$3 == "__kernel_end" { print "0x" $1; exit }')"
@@ -259,26 +290,26 @@ fi
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 
 echo "== riscv64 boot-handoff test build =="
-VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-boot-handoff
+VIFAST_BUILD_FEATS=test-boot-handoff VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-boot-handoff
 cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-handoff
 # Restore the normal artifact for all regular QEMU runs.
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 
 echo "== riscv64 panic-halt feature build =="
-VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-panic-hart1
+VIFAST_BUILD_FEATS=test-panic-hart1 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-panic-hart1
 cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-panic
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 # TLB mutation build: expected to print TLB REMAP BAD and exit.
-VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-skip-tlb-ipi
+VIFAST_BUILD_FEATS=test-skip-tlb-ipi VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features test-skip-tlb-ipi
 cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-skip-tlb
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 
 # r259 (T21/D19): biến thể kiểm bất biến sched ở RANH GIỚI trả về user.
 # Bản `boundary` phải in BOUNDARY OK; bản `boundary-mut` cố ý làm hỏng bất
 # biến đúng một lần (D18) nên phải in BOUNDARY BAD.
-VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features check-boundary
+VIFAST_BUILD_FEATS=check-boundary VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features check-boundary
 cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-boundary
-VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features check-boundary-mutation
+VIFAST_BUILD_FEATS=check-boundary-mutation VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release --features check-boundary-mutation
 cp "$KERNEL_RV" target/riscv64gc-unknown-none-elf/release/vifast-kernel-riscv64-boundary-mut
 VIFAST_ROOT_ELF="$PWD/${ROOT_RV}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_RV}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_RV}.stripped" cargo build -p vifast-kernel-riscv64 --target riscv64gc-unknown-none-elf --release
 
@@ -286,7 +317,7 @@ echo "== aarch64 bare metal =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
 KERNEL_ARM=target/aarch64-unknown-none/release/vifast-kernel-aarch64
 # r254 (T17): biến thể shell-linger cho aarch64 (xem chú thích ở riscv64).
-VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-shell-linger
+VIFAST_BUILD_FEATS=test-shell-linger VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-shell-linger
 cp "$KERNEL_ARM" target/aarch64-unknown-none/release/vifast-kernel-aarch64-shell
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
 # KERNEL_STORAGE is a ~560 KiB static in .data placed just before BKL.
@@ -317,12 +348,12 @@ if (( KS_ADDR + KS_SIZE >= BKL_ADDR )); then
 fi
 
 echo "== aarch64 destroy-smp feature build =="
-VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-destroy-smp
+VIFAST_BUILD_FEATS=test-destroy-smp VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-destroy-smp
 cp target/aarch64-unknown-none/release/vifast-kernel-aarch64 target/aarch64-unknown-none/release/vifast-kernel-aarch64-destroy-smp
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
 
 echo "== aarch64 panic-halt feature build =="
-VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-panic-hart1
+VIFAST_BUILD_FEATS=test-panic-hart1 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release --features test-panic-hart1
 cp target/aarch64-unknown-none/release/vifast-kernel-aarch64 target/aarch64-unknown-none/release/vifast-kernel-aarch64-panic
 VIFAST_ROOT_ELF="$PWD/${ROOT_ARM}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_ARM}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_ARM}.stripped" cargo build -p vifast-kernel-aarch64 --target aarch64-unknown-none --release
 
@@ -330,22 +361,22 @@ echo "== x86_64 UEFI =="
 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
 
 echo "== x86_64 destroy-smp feature build =="
-VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-destroy-smp
+VIFAST_BUILD_FEATS=test-destroy-smp VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.smp.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-destroy-smp
 cp target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi-destroy-smp.efi
 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
 
 echo "== x86_64 panic-halt feature build =="
-VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-panic-hart1
+VIFAST_BUILD_FEATS=test-panic-hart1 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-panic-hart1
 cp target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi-panic.efi
 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
-VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-skip-tlb-ipi
+VIFAST_BUILD_FEATS=test-skip-tlb-ipi VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features test-skip-tlb-ipi
 cp target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi-skip-tlb.efi
 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
 
 # r259 (T21/D19): biến thể kiểm bất biến sched ở ranh giới user (x86_64).
-VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features check-boundary
+VIFAST_BUILD_FEATS=check-boundary VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features check-boundary
 cp target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi-boundary.efi
-VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features check-boundary-mutation
+VIFAST_BUILD_FEATS=check-boundary-mutation VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release --features check-boundary-mutation
 cp target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi.efi target/x86_64-unknown-uefi/release/vifast-kernel-x86_64-uefi-boundary-mut.efi
 VIFAST_ROOT_ELF="$PWD/${ROOT_X86}.stripped" VIFAST_SERVER_ELF="$PWD/${SERVER_X86}.stripped" VIFAST_CLIENT_ELF="$PWD/${CLIENT_X86}.stripped" cargo build -p vifast-kernel-x86_64-uefi --target x86_64-unknown-uefi --release
 

@@ -22,9 +22,35 @@ import time
 import glob
 import hashlib
 
-from harness_spec import ARCH, COMMON, accept, tcp_echo_verdict
+from harness_spec import ARCH, COMMON, accept, build_mismatch, tcp_echo_verdict
+import harness_spec as spec
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def load_expected_build() -> str | None:
+    """r295 (bước 0): id mà `build.sh` vừa sinh, đọc từ `target/vifast-build-id.txt`.
+
+    Thiếu file ⇒ trả `None` (tắt phép kiểm) và in cảnh báo MỘT lần: chạy
+    `./scripts/build.sh` trước khi đo. Không im lặng bỏ qua, vì bỏ qua đúng là
+    lỗi mà bước 0 sinh ra để chặn.
+    """
+    path = os.path.join(ROOT, "target", "vifast-build-id.txt")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = handle.read().strip()
+    except OSError:
+        print(
+            "CẢNH BÁO: không thấy target/vifast-build-id.txt — TẮT phép kiểm "
+            "BUILD (chạy ./scripts/build.sh để bật lại)"
+        )
+        return None
+    if not value:
+        return None
+    return value
+
+
+spec.EXPECTED_BUILD["id"] = load_expected_build()
 QEMU_RV = "qemu-system-riscv64"
 QEMU_ARM = "qemu-system-aarch64"
 QEMU_X86 = "qemu-system-x86_64"
@@ -479,9 +505,14 @@ def run_qemu(
     """Chạy một lần; nếu timeout và `VIFAST_RETRY_TIMEOUT` > 0 thì thử lại
     (chỉ dùng cho vòng phát triển — cổng chuẩn để mặc định 0)."""
     attempts = 1 + max(0, int(os.environ.get("VIFAST_RETRY_TIMEOUT", "0")))
+    # r295: `VIFAST_NO_RETRY=1` ⇒ ĐÚNG một lần boot cho mỗi lần gọi. Dùng cho
+    # các lượt đo (S1–S4) vì "số lần boot" là mẫu số, không được để retry che.
+    no_retry = os.environ.get("VIFAST_NO_RETRY") == "1"
+    if no_retry:
+        attempts = 1
     # Vòng 162: cộng thêm 1 lần thử nếu lần trước guest KHÔNG boot chút nào
     # (flake UEFI/QEMU đã gặp ở x86_64) — không áp dụng cho lỗi marker.
-    bonus = 1
+    bonus = 0 if no_retry else 1
     attempt = 0
     while attempt < attempts + 1:
         ok, timed_out = run_qemu_once(
@@ -624,6 +655,11 @@ def classify_failure(output: str) -> str:
     # trước marker khác thì không phải T-BOOT.
     if "KERNEL ENTRY" not in output:
         return "T-BOOT"
+    # (0b) T-BUILD: ảnh đang chạy không khớp trạng thái nguồn (hoặc các thành
+    # phần lệch id). Đứng ngay sau T-BOOT: nếu lần đo này không đo đúng binary
+    # thì mọi lớp phía dưới đều vô nghĩa.
+    if build_mismatch(output, spec.EXPECTED_BUILD["id"]) is not None:
+        return "T-BUILD"
     # (1) Mất current — chữ ký riêng, xét trước panic.
     if "SMP NO CURRENT" in output:
         return "T-SCHED"
@@ -786,6 +822,17 @@ def run_qemu_once(
     MARKERS_OK["flag"] = all(text in output for text, _ in _COMMON) and all(
         output.count(text) == 1 for text in _EXACT
     )
+    build_reason = build_mismatch(output, spec.EXPECTED_BUILD["id"])
+    if build_reason is not None:
+        # KHÔNG trả False: một lần đo ảnh lệch id không phải "flake của sản
+        # phẩm" (D-r295 §1). Dừng cả lượt đo với thông điệp rõ, để không ai
+        # cộng nó vào tỉ lệ hỏng.
+        print(f"\nT-BUILD: {build_reason}")
+        print(
+            "SỐ ĐO KHÔNG HỢP LỆ — binary trong ảnh không khớp trạng thái nguồn.\n"
+            "Chạy lại ./scripts/build.sh rồi đo lại (đừng cộng lần này vào flake)."
+        )
+        raise SystemExit(2)
     ok = accept(name, output, rc, require_block, require_disk, feature_mode)
     if timed_out:
         # Phân biệt flake do tải máy với hỏng thật: nếu guest đã in ĐỦ hợp
@@ -1195,11 +1242,14 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
     serial = os.path.join(tmp, "serial.txt")
     disk = make_disk("x86_64")
     monitor = make_monitor("x86_64", index)
+    # r295 (mục 3.2): S3 cần `-smp 1`, S4 cần `-accel tcg,thread=single`.
+    # Đổi được từ môi trường để KHÔNG phải sửa harness cho từng lượt đo.
+    smp = os.environ.get("VIFAST_SMP", "2")
     cmd = [
         QEMU_X86,
         "-machine", "q35",
         "-cpu", "max",
-        "-smp", "2",
+        "-smp", smp,
         "-m", "256M",
         "-display", "none",
         "-monitor", f"unix:{monitor},server,nowait",
@@ -1212,6 +1262,9 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
         "-device", "ide-hd,drive=vd1,bus=ide.6,unit=0",
         "-device", "isa-debug-exit,iobase=0x501,iosize=0x03",
     ]
+    accel = os.environ.get("VIFAST_ACCEL", "")
+    if accel:
+        cmd += ["-accel", accel]
     # T-IPC/r294: VIFAST_TRACE=1 ⇒ bật trace `serial_write` của QEMU để có
     # NHÂN CHỨNG từng byte thực ghi ra cổng serial (không sửa kernel, dùng được
     # cả cho lần treo vì không phụ thuộc đường exit).
@@ -1223,7 +1276,7 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
         "x86_64",
         cmd,
         serial,
-        80,
+        int(os.environ.get("VIFAST_TIMEOUT", "80")),
         {7} if feature == "test-panic-hart1" else {3},
         require_block=True,
         require_disk=True,

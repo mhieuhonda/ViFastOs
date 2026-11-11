@@ -690,6 +690,114 @@ pub mod vfs {
     pub const MAX_FILES: usize = 16;
     pub const MAX_PATH: usize = 128;
     pub const MAX_FD: usize = 8;
+
+    /// r295 (bước 1): xin server in 16 bản ghi cuối của ring request.
+    /// Là op CHẨN ĐOÁN: chỉ client gọi khi đã thấy một đèn `V* BAD` đầu tiên.
+    pub const RINGDUMP: u64 = 0x2014;
+
+    // ------------------------------------------------------------------
+    // r295 (bước 1): hợp đồng `req_seq` + hash cho MỌI lời gọi VFS.
+    //
+    // Vấn đề: syscall `Call` chỉ mang 1 label + 3 data word, mà READ/WRITE đã
+    // dùng hết 3 word (fd, offset, len) ⇒ KHÔNG còn thanh ghi trống. Vì vậy
+    // seq được nhét vào 32 bit cao của **label** (op chỉ dùng 16 bit thấp).
+    // Label là message word đúng nghĩa: nó đi qua thanh ghi, không nằm trong
+    // đệm IPC — đúng yêu cầu của tệp quyết định.
+    //
+    // Reply chỉ có 1 label + 3 data word, trong đó data đã có nghĩa riêng
+    // từng op, nên chỗ đặt `echo = (seq << 32) | hash` phụ thuộc op:
+    //   * OPEN/STAT/STAT_PATH: d1 cả word chỉ chứa số nhỏ ⇒ nửa THẤP giữ
+    //     nguyên nghĩa cũ (size/ino), nửa CAO là seq (các op này không có
+    //     payload nên hash luôn 0).
+    //   * mọi op còn lại: d2.
+    // READ/WRITE trả số byte đã đọc/ghi ở LABEL và để d0/d1/d2 = 0, nên d2
+    // trống kể cả trên đường lỗi (đường lỗi trả (ERR, mã_lỗi, 0, 0)).
+    // ------------------------------------------------------------------
+
+    /// Vị trí word mang `echo` trong reply.
+    ///
+    /// Nhóm `d1` = mọi op mà reply ĐÃ dùng d2 cho một giá trị thật:
+    ///   OPEN/STAT/STAT_PATH trả `kind` ở d2; STATFS trả `block_size` (512) ở
+    ///   d2. Quên STATFS ở đây từng làm `FS USAGE BAD` ngay lần boot đầu
+    ///   (d2 bị ghi đè bằng 0) — bài học: khi thêm chỗ đặt đèn, phải soi HẾT
+    ///   các nhánh trả về, không chỉ nhánh đang điều tra.
+    /// Với nhóm này, d1 chỉ chứa số nhỏ (fd/size/ino/total) nên nửa CAO của
+    /// d1 dùng được cho `seq`; nửa thấp giữ nguyên nghĩa cũ.
+    pub const fn echo_word(op: u64) -> usize {
+        match op {
+            OPEN | STAT | STAT_PATH | STATFS => 1,
+            _ => 2,
+        }
+    }
+
+    /// Op có echo `index` (đã gửi) ở nửa cao của d1 không.
+    pub const fn d1_carries_index(op: u64) -> bool {
+        matches!(op, READDIR | READDIR_BULK)
+    }
+
+    /// Đóng gói `(op, seq)` thành label của request.
+    pub const fn request_label(op: u64, seq: u32) -> u64 {
+        (op & 0xffff_ffff) | ((seq as u64) << 32)
+    }
+
+    pub const fn request_op(label: u64) -> u64 {
+        label & 0xffff_ffff
+    }
+
+    pub const fn request_seq(label: u64) -> u32 {
+        (label >> 32) as u32
+    }
+
+    /// Đóng gói `(seq, hash)` thành một word 64 bit để đặt vào word echo.
+    pub const fn echo_pack(seq: u32, hash: u32) -> u64 {
+        ((seq as u64) << 32) | hash as u64
+    }
+
+    pub const fn echo_seq(word: u64) -> u32 {
+        (word >> 32) as u32
+    }
+
+    pub const fn echo_hash(word: u64) -> u32 {
+        word as u32
+    }
+
+    /// Số byte payload mà server ĐÃ GHI vào đệm IPC cho một reply
+    /// (0 = op này không có payload, hoặc reply là lỗi).
+    ///
+    /// Dùng CHUNG cho server (để băm) và client (để kiểm) — nếu mỗi bên tự
+    /// tính thì hai bên có thể lệch nhau và đèn `VHASH BAD` sẽ bắn giả.
+    ///   * READ trả số byte ở LABEL;
+    ///   * READDIR/READLINK trả độ dài ở nửa thấp d1;
+    ///   * READDIR_BULK trả SỐ RECORD ở d0 (mỗi record `READDIR_REC` byte).
+    pub fn payload_len(op: u64, label: u64, d0: u64, d1: u64) -> usize {
+        if label == ERR {
+            return 0;
+        }
+        let len = match op {
+            READ => label as usize,
+            READDIR | READLINK => (d1 & 0xffff_ffff) as usize,
+            READDIR_BULK => (d0 as usize).saturating_mul(READDIR_REC),
+            _ => 0,
+        };
+        if len > MAX_IO {
+            return 0;
+        }
+        len
+    }
+
+    /// FNV-1a 32 bit — băm payload đã ghi vào / đã đọc ra đệm IPC.
+    ///
+    /// Chọn FNV-1a vì: thuần, không cấp phát, một vòng lặp, và đủ nhạy để
+    /// phát hiện MỘT byte bị ghi đè (điều cần phân biệt ở mục 2.3 của tệp
+    /// quyết định: payload bị đè giữa lúc server ghi và client đọc).
+    pub fn fnv1a(bytes: &[u8]) -> u32 {
+        let mut hash: u32 = 0x811c_9dc5;
+        for &byte in bytes {
+            hash ^= byte as u32;
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+        hash
+    }
 }
 
 /// Kernel error codes.  These values are part of the ABI and must never be
@@ -1157,5 +1265,155 @@ impl SyscallArgs {
             a4: 0,
             a5: 0,
         }
+    }
+}
+
+/// r295 (bước 0): nhận dạng build cho các thành phần user.
+///
+/// Mục đích: một lần boot chỉ hợp lệ khi kernel/root/server/client/bin đều
+/// in CÙNG một id, và id đó khớp với trạng thái nguồn mà harness vừa build.
+/// Id do `scripts/build.sh` sinh và truyền qua biến môi trường lúc biên dịch.
+pub mod build {
+    /// Id của lần build (`<git sha ngắn>-<8 ký tự hash của git diff>`).
+    /// `unknown` = build bằng tay, không qua `build.sh`.
+    pub const ID: &str = match option_env!("VIFAST_BUILD_ID") {
+        Some(id) => id,
+        None => "unknown",
+    };
+
+    /// Bộ feature của CHÍNH thành phần này. Chỉ để chứng minh biến thể đang
+    /// chạy; KHÔNG dùng để so khớp giữa các thành phần (kernel bản
+    /// `test-destroy-smp` đi với server bản thường là hợp lệ).
+    pub const FEATS: &str = match option_env!("VIFAST_BUILD_FEATS") {
+        Some(feats) => feats,
+        None => "none",
+    };
+
+    fn push(out: &mut [u8], at: &mut usize, bytes: &[u8]) {
+        for &byte in bytes {
+            if *at < out.len() {
+                out[*at] = byte;
+                *at += 1;
+            }
+        }
+    }
+
+    /// Ghi `BUILD <name>=<id> feats=<feats>\n` vào `out`; trả về số byte đã
+    /// ghi. Không bao giờ panic: `out` nhỏ thì cắt bớt.
+    pub fn line(name: &[u8], out: &mut [u8]) -> usize {
+        let mut at = 0usize;
+        push(out, &mut at, b"BUILD ");
+        push(out, &mut at, name);
+        push(out, &mut at, b"=");
+        push(out, &mut at, ID.as_bytes());
+        push(out, &mut at, b" feats=");
+        push(out, &mut at, FEATS.as_bytes());
+        push(out, &mut at, b"\n");
+        at
+    }
+}
+
+#[cfg(test)]
+mod vfs_seq_tests {
+    use super::vfs;
+
+    #[test]
+    fn fnv1a_matches_the_reference_vectors() {
+        // Vector chuẩn của FNV-1a 32 bit (dùng để phát hiện "sửa công thức").
+        assert_eq!(vfs::fnv1a(b""), 0x811c_9dc5);
+        assert_eq!(vfs::fnv1a(b"a"), 0xe40c_292c);
+        assert_eq!(vfs::fnv1a(b"foobar"), 0xbf9c_f968);
+    }
+
+    #[test]
+    fn fnv1a_detects_a_single_flipped_byte() {
+        let one = vfs::fnv1a(b"hello world");
+        let two = vfs::fnv1a(b"hello worle");
+        assert_ne!(one, two, "băm không phân biệt được một byte đổi");
+    }
+
+    #[test]
+    fn request_label_round_trips_every_op() {
+        for op in [
+            vfs::OPEN,
+            vfs::READ,
+            vfs::WRITE,
+            vfs::READDIR,
+            vfs::READDIR_BULK,
+            vfs::STAT_PATH,
+            vfs::FSCK,
+            vfs::RINGDUMP,
+        ] {
+            for seq in [0u32, 1, 7, u32::MAX] {
+                let label = vfs::request_label(op, seq);
+                assert_eq!(vfs::request_op(label), op);
+                assert_eq!(vfs::request_seq(label), seq);
+            }
+        }
+    }
+
+    #[test]
+    fn payload_len_covers_every_shape() {
+        // READ trả số byte ở label.
+        assert_eq!(vfs::payload_len(vfs::READ, 40, 0, 0), 40);
+        // READDIR trả độ dài ở nửa thấp d1 (nửa cao là index echo).
+        assert_eq!(
+            vfs::payload_len(vfs::READDIR, vfs::OK, 0, 0x0000_0007_0000_000c),
+            12
+        );
+        // READDIR_BULK trả số record ở d0.
+        assert_eq!(
+            vfs::payload_len(vfs::READDIR_BULK, vfs::OK, 3, 0x0000_0009_0000_0003),
+            3 * vfs::READDIR_REC
+        );
+        // Đường lỗi không có payload; op không payload luôn là 0.
+        assert_eq!(vfs::payload_len(vfs::READ, vfs::ERR, 40, 0), 0);
+        assert_eq!(vfs::payload_len(vfs::OPEN, vfs::OK, 3, 0), 0);
+        // Quá MAX_IO thì coi như không có payload (không đọc tràn đệm).
+        assert_eq!(vfs::payload_len(vfs::READ, vfs::MAX_IO as u64 + 1, 0, 0), 0);
+    }
+
+    #[test]
+    fn echo_pack_round_trips() {
+        let word = vfs::echo_pack(1234, 0xdead_beef);
+        assert_eq!(vfs::echo_seq(word), 1234);
+        assert_eq!(vfs::echo_hash(word), 0xdead_beef);
+    }
+
+    #[test]
+    fn echo_word_never_collides_with_the_payload_words() {
+        // OPEN trả size ở d1 và kind ở d2; READ/WRITE trả count ở LABEL.
+        // Nếu echo_word trả 0 cho READ thì sẽ đè lên mã lỗi ở d0.
+        assert_eq!(vfs::echo_word(vfs::OPEN), 1);
+        assert_eq!(vfs::echo_word(vfs::STAT), 1);
+        assert_eq!(vfs::echo_word(vfs::STAT_PATH), 1);
+        // STATFS trả block_size ở d2 — nếu rơi vào nhóm d2 thì client/root đọc
+        // block_size = 0 và in `FS USAGE BAD` (đã xảy ra ở lần boot đầu r295).
+        assert_eq!(vfs::echo_word(vfs::STATFS), 1);
+        for op in [vfs::READ, vfs::WRITE, vfs::READDIR, vfs::CLOSE, vfs::FSCK] {
+            assert_eq!(vfs::echo_word(op), 2, "op {op:#x} phải dùng d2");
+        }
+    }
+}
+
+mod build_tests {
+    use super::build;
+
+    #[test]
+    fn line_has_the_documented_shape() {
+        let mut out = [0u8; 96];
+        let n = build::line(b"root", &mut out);
+        let text = core::str::from_utf8(&out[..n]).expect("utf8");
+        assert!(text.starts_with("BUILD root="), "thực tế: {text}");
+        assert!(text.ends_with(" feats=none\n"), "thực tế: {text}");
+        assert!(text.contains(build::ID), "thực tế: {text}");
+    }
+
+    #[test]
+    fn line_never_overflows_a_small_buffer() {
+        let mut out = [0u8; 4];
+        let n = build::line(b"kernel", &mut out);
+        assert_eq!(n, 4);
+        assert_eq!(&out[..], b"BUIL");
     }
 }

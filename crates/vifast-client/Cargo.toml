@@ -8,3 +8,8 @@ license.workspace = true
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
 vifast-user = { path = "../vifast-user" }
+
+[features]
+# r295 (bước 2): vòng lặp FS trong MỘT lần boot — chỉ dùng để ĐO, không bật ở
+# gate và không bật ở bản phát hành.
+stress-fs = []

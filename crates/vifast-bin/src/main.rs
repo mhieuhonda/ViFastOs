@@ -201,8 +201,17 @@ fn run_args(argc: usize, argv: *const *const u8) {
     write(b"\n");
 }
 
+/// r295 (bước 0): in `BUILD <name>=<id> feats=<feats>` một lần lúc khởi động.
+/// Id do `scripts/build.sh` truyền qua môi trường; `unknown` = build tay.
+fn write_build(name: &[u8]) {
+    let mut line = [0u8; 96];
+    let count = vifast_abi::build::line(name, &mut line);
+    write(&line[..count]);
+}
+
 #[no_mangle]
 pub extern "C" fn bin_main(argc: usize, argv: *const *const u8) -> ! {
+    write_build(b"bin");
     // D14: chọn mode theo basename(argv[0]) — cùng một ảnh, nhiều tên lệnh.
     let mut argv0: &[u8] = b"";
     if argc > 0 && !argv.is_null() {

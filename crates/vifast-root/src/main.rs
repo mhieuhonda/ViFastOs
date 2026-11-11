@@ -2393,8 +2393,17 @@ fn spawn_worker(
     tcb
 }
 
+/// r295 (bước 0): in `BUILD <name>=<id> feats=<feats>` một lần lúc khởi động.
+/// Id do `scripts/build.sh` truyền qua môi trường; `unknown` = build tay.
+fn write_build(name: &[u8]) {
+    let mut line = [0u8; 96];
+    let count = vifast_abi::build::line(name, &mut line);
+    write(&line[..count]);
+}
+
 #[no_mangle]
 pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
+    write_build(b"root");
     write(ROOT_RUST);
 
     if bootinfo_ptr == 0 {

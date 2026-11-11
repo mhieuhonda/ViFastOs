@@ -2517,3 +2517,109 @@ Từ nay chỉ được nói: **`LINT0` có bằng chứng; `KERNEL_READY` là g
 **Cổng không tất định:** đã có 2 lần "gate 10/10" phải chạy lại mới xanh (lớp
 `T-INFRA`: guest đủ marker, QEMU thoát mã lạ) ⇒ trạng thái xanh **không** là bảo
 đảm tất định.
+
+## r295 — T26: câu hỏi "FS hay IPC" ĐÃ CÓ ĐÁP ÁN (bảng 2.3 dòng 4.D)
+
+Tệp quyết định r295 đặt **một** câu hỏi: lỗi T26 nằm ở FS hay ở IPC/context
+(reply cũ)? Vòng này chỉ thêm đèn/bộ đếm/harness, **không vá sản phẩm** (§0).
+
+### Bước 0 — BUILD id (chặn đo nhầm binary)
+`scripts/build.sh` sinh `BUILD_ID = <git sha ngắn>-<8 hex của git diff>`, truyền
+qua `VIFAST_BUILD_ID`/`VIFAST_BUILD_FEATS` cho **mọi** crate. Mỗi thành phần in
+đúng một dòng `BUILD <tên>=<id> feats=<feature>`. Harness (`harness_spec.build_mismatch`)
+đặt `T-BUILD` **trước mọi lớp khác**; `test-qemu.py` **dừng cả lượt đo** (exit 2)
+thay vì cộng vào flake — đúng §1. Đo được ở mọi lần boot r295:
+`kernel=root=server=client=bin=4efdbcd-…`, và `feats=stress-fs` chỉ ở client ⇒
+trường `feats` chứng minh được biến thể đang chạy.
+Vì sao `feats` **không** nằm trong id so khớp: kernel/root bản `test-destroy-smp`
+đi với server/client bản thường là hợp lệ; gộp vào id sẽ sinh `T-BUILD` giả.
+
+### Bước 1 — `req_seq` + hash cho mọi lời gọi VFS
+Không còn thanh ghi trống (`Call` mang 1 label + 3 data word; READ/WRITE dùng hết
+3), nên `seq` được nhét vào **32 bit cao của label**. Reply trả `echo=(seq<<32)|hash`
+ở `d2`, riêng `OPEN/STAT/STAT_PATH/STATFS` đặt ở nửa cao `d1` (d2 của chúng đã
+mang `kind`/`block_size`). Server ghi ring 16 bản ghi `(srv_seq, req_seq, op,
+index, result, h)`; client in `VSEQ/VARG/VHASH/VEND`, và **kéo ring ngay tại ranh
+giới V2 ĐẦU TIÊN đỏ** (chụp ở cuối khối thì ring đã trôi qua — đã mất trắng một
+lượt đo vì lỗi này).
+
+**Kiểm thước đo (mục 2.4) — đã làm, có số:**
+| Mutation (tạm, đã gỡ) | Kết quả |
+|---|---|
+| server trả `seq-1` cho READDIR đầu | `VSEQ BAD sent=25 got=24 op=8199`, `VSTAT vseq=1 varg=0 vhash=0 vend=2` |
+| server lật 1 byte payload READDIR | `VHASH BAD seq=25 srv=1523243198 cli=3218173022`, `VSTAT vhash=1` |
+| không mutation, MAX_IO=128, 5 boot | 0 dòng BAD (đèn không tự gây nhiễu) |
+
+Lượt mutation **đầu tiên** bắt được một lỗi của chính thước đo: lời gọi `RINGDUMP`
+lồng bên trong `dump_ring_once` ghi đè trạng thái "echo gần nhất" ⇒ sinh `VHASH
+BAD` GIẢ ngay sau `VSEQ BAD`. Đã sửa: kiểm payload **bên trong** `vfs_send`, dùng
+chung `vfs::payload_len()` với server.
+Bài học phụ: quên `STATFS` trong nhóm `d1` làm `FS USAGE BAD` ngay lần boot đầu
+(d2 = 512 bị ghi đè) — khi thêm chỗ đặt đèn phải soi **hết** các nhánh trả về.
+
+### Bước 2 — vòng lặp trong một boot (`stress-fs`)
+Feature client `stress-fs` (không bật ở gate/phát hành; build bằng
+`VIFAST_CLIENT_FEATURES=stress-fs`): K=1000 vòng `mkdir → readdir("/") → open →
+unlink` với 4 tên luân phiên, in `FS LOOP k= miss_rd= miss_open= err=` + `VSTAT`
++ fsck một lần; miss đầu tiên kéo ring. Script đo: `scripts/stress-fs-measure.py`.
+
+### S1–S4 (máy `ps`, x86_64, `VIFAST_NO_RETRY=1`, mỗi lần gọi = ĐÚNG 1 boot)
+| Lượt | Cấu hình | boot | `FS V2 BAD` | vòng | miss_rd | VSEQ/VARG/VHASH |
+|---|---|---:|---:|---:|---:|---|
+| S1 | 256 / smp2 | 5 | 1 | 5 000 | 0 | 0/0/0 |
+| S1 lặp | 256 / smp2 | 5 | 0 | 5 000 | 0 | 0/0/0 |
+| S1n | 256 / smp2 | 20 | 7 | 20 000 | 0 | 0/0/0 |
+| S1r | 256 / smp2 (ring sát chỗ hỏng) | 20 | 2 | 20 000 | 0 | 0/0/0 |
+| S2 | **128** / smp2 (máy `mps`, TCG) | 5 | 0 | 5 000 | 0 | 0/0/0 |
+| S3b | 256 / **smp1** | 3 | 0 | 3 000 | 0 | 0/0/0 |
+| S4 | 256 / smp2 + `-accel tcg,thread=single` | 3 | **1** | 3 000 | 0 | 0/0/0 |
+
+Cộng ở 256/smp2: **10/50 boot đỏ (20 %)**; **0 miss / 61 000 vòng**;
+**0/0/0 đèn** trên toàn bộ. (Số boot ở 256 gộp S1+S1 lặp+S1n+S1r.)
+
+### Bảng 2.3 — dòng khớp: **4.D (FS thật sự trả 6 entry)**
+Nguyên văn đèn ở lần miss đầu tiên (boot5 của S1r, `artifacts/ps-r295-S1r/`):
+```
+V2MK open=1
+VEND seq=50 idx=6
+V2CHK open=1 rd=2
+VRING srv=109 req=49 op=8199 idx=5 res=0 h=3775669363
+VRING srv=111 req=50 op=8199 idx=6 res=1 h=0
+V2FAIL v2=1 fsck=0
+V2GROUP 06      ← v2_failed = 3 + group4 = "readdir('/') không thấy entry d"
+```
+`op=8199` = READDIR. **Ring của CHÍNH server có bản ghi `req=50 … idx=6 res=1`
+(ENOENT), khớp đúng `req_seq` mà client báo (`VEND seq=50 idx=6`)** ⇒ ENOENT do
+server FS tạo ra, **không** phải reply bị ghép lệch. Cùng lúc `V2CHK open=1 rd=2`:
+`open("/d")` **được** ngay trước và **hai lần** ngay sau đều thấy `d` ⇒ entry có
+thật, chỉ lần liệt kê ở giữa không thấy.
+
+**Kết luận (đủ theo §8):** lỗi **ở FS**, không ở IPC/context. Bằng chứng phụ:
+`S4 > 0` (§3.3) ⇒ **race logic**, không phải race bộ nhớ host ⇒ có thể làm tất
+định; `S3b = 0/3` phù hợp "cần ≥2 hart" (mẫu nhỏ, chỉ là dữ kiện).
+
+### Vì sao vòng lặp KHÔNG tái hiện (đúng như §3.3 dự đoán)
+0/61 000 vòng trong khi khối V2 lúc boot đỏ 20 % ⇒ lỗi cần **hoạt động đồng thời
+của root lúc boot**. Đây là dữ kiện, không phải thất bại. Lượt **S1b** (vòng lặp
+song song với worker exec của root) **chưa làm** — xem "còn treo".
+
+### Còn treo sau r295
+1. **Cơ chế trong FS**: `V2MK open=1` (mkdir xong `open` thấy) nhưng readdir không
+   thấy ⇒ nghi **vi phạm read-your-own-write ở mức entry thư mục**. Chưa chứng
+   minh: `SLO`/`LOOK` là đèn "lần gần nhất", **không có `seq`**, nên không được
+   dùng để khẳng định hai lần đọc cùng thời điểm (bản rà soát đã cảnh báo đúng).
+   Việc của r296: đèn `WRITE_THEN_READ` **bên trong** `write_dir_entry`/
+   `remove_dir_entry` (ghi xong đọc lại RAW ngay), có `seq`.
+2. **S1b** (vòng lặp + exec song song) chưa chạy.
+3. `MAX_IO` **vẫn 128**; chưa có test xanh nào cho phép nâng (đúng §5).
+4. `T-BUILD` chưa bắt được ca thật nào (chưa ai build sai trong vòng này).
+5. `-smp 1` không thoát được boot ⇒ mỗi lần đo tốn hết timeout (ghi lại để lần sau
+   đặt `VIFAST_TIMEOUT` thấp).
+
+### Bài học đọc số của vòng này
+- `V2GROUP 06` **không** phải "nhóm 6 hỏng": `v2_failed = 3 + group4`, nên 06 =
+  nhóm 4c (readdir thiếu `d`). Đọc nhãn phải tra công thức, không đoán.
+- Ring 16 bản ghi chỉ đủ nếu chụp **sát chỗ hỏng**; chụp ở cuối khối V2 là mất
+  trắng (đã xảy ra ở lượt S1n: 7 boot đỏ mà ring không có bản ghi nào liên quan).
+- Nâng toolchain máy `ps` lên **rustc 1.99.1 (58cf8f9c3)** — trùng đúng bản của
+  `mps`; trước đó `ps` là 1.93.1 và **không build được** (`rust-version` 1.99.1).

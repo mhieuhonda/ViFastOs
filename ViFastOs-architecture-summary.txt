@@ -661,7 +661,7 @@ hardening và vifast-user.
 
 Test hiện tại:
 ### BEGIN GENERATED tests
-- `cargo test -p vifast-abi`: 8/8 PASS
+- `cargo test -p vifast-abi`: 16/16 PASS
 - `cargo test -p vifast-kernel`: 256/256 PASS
 - `cargo test -p vifast-arch`: 8/8 PASS
 - `cargo test -p vifast-pte`: 12/12 PASS

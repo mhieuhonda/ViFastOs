@@ -657,7 +657,7 @@ fn readdir_bulk_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
     (vfs::OK, packed as u64, index as u64, 0)
 }
 
-fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
+fn dispatch(request: &vifast_user::MessageResult, op: u64) -> (u64, u64, u64, u64) {
     if request.error != KError::Ok {
         return (vfs::ERR, vfs::EIO, 0, 0);
     }
@@ -665,7 +665,7 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
     if badge == 0 {
         return (vfs::ERR, vfs::EACCES, 0, 0);
     }
-    if request.label == vfs::BADGE_PROBE {
+    if op == vfs::BADGE_PROBE {
         return (vfs::OK, badge, 0, 0);
     }
     let uid = if badge == vifast_abi::BADGE_SUPERUSER {
@@ -675,7 +675,7 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
     } else {
         return (vfs::ERR, vfs::EACCES, 0, 0);
     };
-    match request.label {
+    match op {
         0x1234 => {
             let _ = vifast_user::debug_write(IPC_BUF_SERVER_VA as u64, 11);
             let _ = vifast_user::signal(4);
@@ -916,12 +916,177 @@ fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
                 (vfs::ERR, vfs::EIO, 0, 0)
             }
         }
+        vfs::RINGDUMP => {
+            // r295: op CHẨN ĐOÁN — chỉ để client kéo 16 bản ghi cuối của ring.
+            vring_dump();
+            (vfs::OK, 0, 0, 0)
+        }
         _ => (vfs::ERR, vfs::EINVAL, 0, 0),
     }
 }
 
+/// r295 (bước 1): một bản ghi ring của server.
+/// Toàn bộ trường là u32/u64 để không cần `unsafe` khi in.
+#[derive(Clone, Copy)]
+struct VRec {
+    used: bool,
+    srv_seq: u32,
+    req_seq: u32,
+    op: u64,
+    index: u64,
+    result: u64,
+    hash: u32,
+}
+
+const VREC_EMPTY: VRec = VRec {
+    used: false,
+    srv_seq: 0,
+    req_seq: 0,
+    op: 0,
+    index: 0,
+    result: 0,
+    hash: 0,
+};
+
+const VRING_LEN: usize = 16;
+
+/// 16 request gần nhất. `srv_seq` là bộ đếm của server, `req_seq` là của
+/// client — cặp này mới cho phép đọc ring ĐÚNG THỨ TỰ (không phải "giá trị
+/// gần nhất", bài học từ các đèn T26 cũ).
+static mut VRING: [VRec; VRING_LEN] = [VREC_EMPTY; VRING_LEN];
+static mut VRING_NEXT: usize = 0;
+static mut VRING_COUNT: usize = 0;
+static mut SRV_SEQ: u32 = 0;
+
+fn vring_push(req_seq: u32, op: u64, index: u64, result: u64, hash: u32) {
+    unsafe {
+        SRV_SEQ = SRV_SEQ.wrapping_add(1);
+        let slot = VRING_NEXT % VRING_LEN;
+        VRING_NEXT = (slot + 1) % VRING_LEN;
+        if VRING_COUNT < VRING_LEN {
+            VRING_COUNT += 1;
+        }
+        let base = core::ptr::addr_of_mut!(VRING).cast::<VRec>();
+        let rec = base.add(slot);
+        (*rec).used = true;
+        (*rec).srv_seq = SRV_SEQ;
+        (*rec).req_seq = req_seq;
+        (*rec).op = op;
+        (*rec).index = index;
+        (*rec).result = result;
+        (*rec).hash = hash;
+    }
+}
+
+fn push_bytes(line: &mut [u8], at: &mut usize, bytes: &[u8]) {
+    for &byte in bytes {
+        if *at < line.len() {
+            line[*at] = byte;
+            *at += 1;
+        }
+    }
+}
+
+fn push_dec(line: &mut [u8], at: &mut usize, mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut count = 0usize;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        value /= 10;
+        count += 1;
+        if value == 0 {
+            break;
+        }
+    }
+    while count > 0 {
+        count -= 1;
+        push_bytes(line, at, &digits[count..count + 1]);
+    }
+}
+
+/// In 16 bản ghi cuối, từ CŨ NHẤT tới MỚI NHẤT.
+/// Định dạng: `VRING srv=<> req=<> op=<> idx=<> res=<> h=<>`.
+fn vring_dump() {
+    let base = core::ptr::addr_of!(VRING).cast::<VRec>();
+    let (next, count) = unsafe { (VRING_NEXT, VRING_COUNT) };
+    let first = (next + VRING_LEN - count) % VRING_LEN;
+    for step in 0..count {
+        let slot = (first + step) % VRING_LEN;
+        let rec = unsafe { core::ptr::read(base.add(slot)) };
+        if !rec.used {
+            continue;
+        }
+        let mut line = [0u8; 96];
+        let mut at = 0usize;
+        push_bytes(&mut line, &mut at, b"VRING srv=");
+        push_dec(&mut line, &mut at, rec.srv_seq as u64);
+        push_bytes(&mut line, &mut at, b" req=");
+        push_dec(&mut line, &mut at, rec.req_seq as u64);
+        push_bytes(&mut line, &mut at, b" op=");
+        push_dec(&mut line, &mut at, rec.op);
+        push_bytes(&mut line, &mut at, b" idx=");
+        push_dec(&mut line, &mut at, rec.index);
+        push_bytes(&mut line, &mut at, b" res=");
+        push_dec(&mut line, &mut at, rec.result);
+        push_bytes(&mut line, &mut at, b" h=");
+        push_dec(&mut line, &mut at, rec.hash as u64);
+        push_bytes(&mut line, &mut at, b"\n");
+        write(&line[..at]);
+    }
+}
+
+/// Số byte payload server ĐÃ GHI vào đệm IPC cho op này (0 = không có).
+/// `READ` trả số byte ở LABEL, `READDIR`/`READLINK` ở nửa thấp d1,
+/// `READDIR_BULK` là `packed`. Đường lỗi không ghi payload nào.
+fn payload_hash(op: u64, label: u64, d0: u64, d1: u64) -> u32 {
+    let len = vfs::payload_len(op, label, d0, d1);
+    if len == 0 {
+        return 0;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(IPC_BUF_SERVER_VA as *const u8, len) };
+    vfs::fnv1a(bytes)
+}
+
+fn handle(request: &vifast_user::MessageResult) -> (u64, u64, u64, u64) {
+    let op = vfs::request_op(request.label);
+    let seq = vfs::request_seq(request.label);
+    let index = if vfs::d1_carries_index(op) {
+        request.data[1]
+    } else {
+        0
+    };
+    let (label, d0, d1, mut d2) = dispatch(request, op);
+    let hash = payload_hash(op, label, d0, d1);
+    let result = if label == vfs::ERR { d0 } else { 0 };
+    vring_push(seq, op, index, result, hash);
+    let echo = vfs::echo_pack(seq, hash);
+    let word = vfs::echo_word(op);
+    if vfs::d1_carries_index(op) {
+        // d1 = (index client đã gửi) << 32 | (độ dài/ next index như cũ).
+        d2 = echo;
+        let low = d1 & 0xffff_ffff;
+        return (label, d0, (index << 32) | low, d2);
+    }
+    if word == 1 {
+        // OPEN/STAT/STAT_PATH: nửa cao d1 là seq, nửa thấp giữ nghĩa cũ.
+        let low = d1 & 0xffff_ffff;
+        return (label, d0, ((seq as u64) << 32) | low, d2);
+    }
+    d2 = echo;
+    (label, d0, d1, d2)
+}
+
+/// r295 (bước 0): in `BUILD <name>=<id> feats=<feats>` một lần lúc khởi động.
+/// Id do `scripts/build.sh` truyền qua môi trường; `unknown` = build tay.
+fn write_build(name: &[u8]) {
+    let mut line = [0u8; 96];
+    let count = vifast_abi::build::line(name, &mut line);
+    write(&line[..count]);
+}
+
 #[no_mangle]
 pub extern "C" fn server_main() -> ! {
+    write_build(b"server");
     write(SERVER);
     init_fs();
     write(VFS_READY);

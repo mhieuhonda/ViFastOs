@@ -488,6 +488,21 @@ fn note_current_tcb<A: Platform>(kernel: &Kernel) {
     A::set_current_tcb(kernel.current_on(hart).map(|tcb| tcb.index as usize));
 }
 
+/// r295 (bước 0): id của lần build, do `scripts/build.sh` truyền qua biến môi
+/// trường cho MỌI crate. `unknown` chỉ xuất hiện khi ai đó build bằng tay
+/// (không qua build.sh) — khi đó harness báo `T-BUILD` vì id không khớp.
+pub const BUILD_ID: &str = match option_env!("VIFAST_BUILD_ID") {
+    Some(id) => id,
+    None => "unknown",
+};
+
+/// Bộ feature của thành phần này (chỉ để chứng minh biến thể, không dùng để
+/// so khớp giữa các thành phần).
+pub const BUILD_FEATS: &str = match option_env!("VIFAST_BUILD_FEATS") {
+    Some(feats) => feats,
+    None => "none",
+};
+
 /// Shared boot sequence: kernel self-test, capability setup, user image copy
 /// and the first user context.
 pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
@@ -497,6 +512,9 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     // T-BOOT (chết trước khi kernel chạy) với các lớp khác. In trước cả
     // `init_platform` để nếu platform chết thì vẫn biết kernel đã vào.
     vifast_kernel::klog!(A, "KERNEL ENTRY");
+    // r295 (bước 0): dòng BUILD — chứng minh lần đo này chạy ĐÚNG binary vừa
+    // build từ trạng thái nguồn hiện tại, không phải ảnh cũ còn sót.
+    vifast_kernel::klog!(A, "BUILD kernel={} feats={}", BUILD_ID, BUILD_FEATS);
     A::init_platform(info);
     vifast_kernel::klog!(
         A,
