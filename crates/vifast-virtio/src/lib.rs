@@ -218,7 +218,12 @@ pub fn net_init_rx() -> bool {
         0xa0,
         qbase + core::mem::offset_of!(NetQueue, used) as u64,
     );
-    write_at(base, 0x44, 0);
+    // r299: QueueReady phải là 1 (ghi 0 khiến RX không bao giờ ready — chính
+    // bài học vòng 63 đã ghi trong `attach`), và buffer vừa treo phải được
+    // kick thì device mới ghi gói vào RX. Bản cũ ghi 0 và không kick: nếu ai
+    // gọi hàm này thì RX chết lặng.
+    write_at(base, 0x44, 1);
+    write_at(base, 0x50, 0);
     true
 }
 
@@ -389,8 +394,12 @@ fn net_tx_frame_bounded(frame: &[u8], bound: u64) -> Option<u32> {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         core::ptr::write_volatile(&mut q.avail.idx, next_avail);
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        write_at(base, 0x50, 1);
+        // r299: chụp target TRƯỚC kick — device xong ngay giữa hai lệnh này
+        // thì used.idx đã +1 trước lúc chụp, target thành actual+1 và vòng
+        // chờ timeout dù request đã thành công (block rồi re-init ring lệch
+        // trạng thái device).
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        write_at(base, 0x50, 1);
         let mut spins = 0u64;
         while core::ptr::read_volatile(&q.used.idx) != target && spins < bound {
             core::hint::spin_loop();
@@ -535,7 +544,10 @@ pub fn net_recv_dns_a(src_ip: [u8; 4]) -> Option<[u8; 4]> {
             let ip_total = u16::from_be_bytes([q.buf[16], q.buf[17]]) as usize;
             let ethertype = u16::from_be_bytes([q.buf[12], q.buf[13]]);
             let ok = ethertype == 0x0800
-                && frame_len >= 14 + 20
+                // r299: cần trọn header UDP (14+20+8) — bản cũ chỉ yêu cầu
+                // 14+20 nên frame 34-39 byte làm cổng/độ dài UDP đọc phải byte
+                // cũ của gói trước.
+                && frame_len >= 14 + 20 + 8
                 && ip_total >= 20
                 && ip_total <= frame_len - 14
                 && q.buf[14 + 9] == 17
@@ -712,8 +724,9 @@ pub fn net_ping(dst_ip: [u8; 4]) -> Option<u32> {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         core::ptr::write_volatile(&mut q.avail.idx, next_avail);
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        write_at(base, 0x50, 1);
+        // r299: chụp target TRƯỚC kick (xem net_send_udp).
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        write_at(base, 0x50, 1);
         let mut spins = 0u64;
         while core::ptr::read_volatile(&q.used.idx) != target && spins < 2_000_000 {
             core::hint::spin_loop();
@@ -755,15 +768,25 @@ pub fn net_init_both(base: u64) -> Option<u64> {
     fn write_at(base: u64, offset: u64, value: u32) {
         unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
     }
-    fn attach(base: u64, index: u32, qbase: u64) {
+    fn attach(base: u64, index: u32, qbase: u64) -> bool {
         fn write_at(base: u64, offset: u64, value: u32) {
             unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) }
+        }
+        fn read_at(base: u64, offset: u64) -> u32 {
+            unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
         }
         fn write64_at(base: u64, offset: u64, value: u64) {
             write_at(base, offset, value as u32);
             write_at(base, offset + 4, (value >> 32) as u32);
         }
         write_at(base, 0x30, index);
+        // r299: hỏi QueueNumMax thay vì ghi cứng — thiết bị có max < QUEUE_SIZE
+        // sẽ có queue không hợp lệ theo spec (QEMU khoan dung, phần cứng thì
+        // không). Cùng phép kiểm input/rng đã dùng từ trước.
+        let max = read_at(base, 0x34);
+        if max < QUEUE_SIZE as u32 || !max.is_power_of_two() {
+            return false;
+        }
         write_at(base, 0x38, QUEUE_SIZE as u32);
         write64_at(
             base,
@@ -783,6 +806,7 @@ pub fn net_init_both(base: u64) -> Option<u64> {
         // QueueReady luôn ghi 1 (không phải index): ghi 0 cho queue 0 khiến
         // RX không bao giờ ready — nguyên nhân RX im lặng ở vòng 63.
         write_at(base, 0x44, 1);
+        true
     }
     let magic = read_at(base, 0);
     let version = read_at(base, 4);
@@ -793,10 +817,21 @@ pub fn net_init_both(base: u64) -> Option<u64> {
     const WANT: u64 = (1 << 5) | (1 << 16) | (1 << 32);
     write_at(base, 0x70, 0);
     write_at(base, 0x70, 1 | 2);
-    let offered = read_at(base, 0x10) as u64 | ((read_at(base, 0x14) as u64) << 32);
+    // r299: đọc DeviceFeatures phải chọn word bằng device_features_sel (0x14)
+    // RỒI đọc 0x10 — bản cũ đọc thẳng 0x14 (thanh ghi chọn, đọc về 0) nên word
+    // cao luôn 0 và VERSION_1 (bit 32) không bao giờ được đàm phán. Ghi driver
+    // features cũng phải chọn word qua driver_features_sel (0x24) rồi ghi
+    // 0x20 — bản cũ ghi word cao vào 0x24, tức ghi vào... thanh ghi chọn.
+    write_at(base, 0x14, 0);
+    let offered_low = read_at(base, 0x10) as u64;
+    write_at(base, 0x14, 1);
+    let offered_high = read_at(base, 0x10) as u64;
+    let offered = offered_low | (offered_high << 32);
     let accepted = offered & WANT;
+    write_at(base, 0x24, 0);
     write_at(base, 0x20, accepted as u32);
-    write_at(base, 0x24, (accepted >> 32) as u32);
+    write_at(base, 0x24, 1);
+    write_at(base, 0x20, (accepted >> 32) as u32);
     write_at(base, 0x70, 1 | 2 | 8);
     if read_at(base, 0x70) & 8 == 0 {
         return None;
@@ -831,7 +866,9 @@ pub fn net_init_both(base: u64) -> Option<u64> {
         RX_SEEN = 0;
         RX_OUTSTANDING = 1;
     }
-    attach(base, 0, rx as u64);
+    if !attach(base, 0, rx as u64) {
+        return None;
+    }
     // Kick queue 0: VirtIO yêu cầu notify sau khi thêm buffer RX, nếu không
     // device không ghi gói nào vào RX (vòng 63).
     write_at(base, 0x50, 0);
@@ -842,7 +879,9 @@ pub fn net_init_both(base: u64) -> Option<u64> {
         (*tx).used.idx = 0;
         (*tx).hdr = [0; NET_HDR_SIZE];
     }
-    attach(base, 1, tx as u64);
+    if !attach(base, 1, tx as u64) {
+        return None;
+    }
     write_at(base, 0x70, 1 | 2 | 8 | 4);
     if read_at(base, 0x70) & 4 == 0 {
         return None;
@@ -928,8 +967,9 @@ pub fn net_send_arp_to(tpa: [u8; 4]) -> Option<u32> {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         core::ptr::write_volatile(&mut q.avail.idx, next_avail);
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        write_at(base, 0x50, 1);
+        // r299: chụp target TRƯỚC kick (xem net_send_udp).
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        write_at(base, 0x50, 1);
         let mut spins = 0u64;
         // Bound ngắn như RX (vòng 49): 20M spins mô phỏng vượt timeout QEMU.
         while core::ptr::read_volatile(&q.used.idx) != target && spins < 2_000_000 {
@@ -1047,6 +1087,12 @@ fn init_at(candidate: u64) -> bool {
         (*queue).status = 0xff;
     }
     write_at(candidate, 0x30, 0);
+    // r299: kiểm QueueNumMax (0x34) trước khi ghi QueueNum — thiết bị max < 8
+    // sẽ có queue không hợp lệ theo spec.
+    let queue_max = read_at(candidate, 0x34);
+    if queue_max < QUEUE_SIZE as u32 || !queue_max.is_power_of_two() {
+        return false;
+    }
     write_at(candidate, 0x38, QUEUE_SIZE as u32);
     let base = queue as u64;
     write64_at(
@@ -1171,8 +1217,11 @@ fn request(write: bool, sector: u64, buffer: &mut [u8; SECTOR_SIZE]) -> bool {
         let next_avail = core::ptr::read_volatile(&q.avail.idx).wrapping_add(1);
         core::ptr::write_volatile(&mut q.avail.idx, next_avail);
         fence(Ordering::SeqCst);
-        write32(0x50, 0);
+        // r299: chụp target TRƯỚC kick (xem net_send_udp) — block I/O là
+        // đường nặng nhất: false-timeout ở đây kéo theo re-init ring lệch
+        // trạng thái device và wedge cả đĩa.
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        write32(0x50, 0);
         let mut spins = 0u64;
         while core::ptr::read_volatile(&q.used.idx) != target && spins < 20_000_000 {
             core::hint::spin_loop();
@@ -1244,8 +1293,11 @@ fn request_flush() -> bool {
         let next_avail = core::ptr::read_volatile(&q.avail.idx).wrapping_add(1);
         core::ptr::write_volatile(&mut q.avail.idx, next_avail);
         fence(Ordering::SeqCst);
-        write32(0x50, 0);
+        // r299: chụp target TRƯỚC kick (xem net_send_udp) — block I/O là
+        // đường nặng nhất: false-timeout ở đây kéo theo re-init ring lệch
+        // trạng thái device và wedge cả đĩa.
         let target = core::ptr::read_volatile(&q.used.idx).wrapping_add(1);
+        write32(0x50, 0);
         let mut spins = 0u64;
         while core::ptr::read_volatile(&q.used.idx) != target && spins < 20_000_000 {
             core::hint::spin_loop();
@@ -1575,14 +1627,25 @@ pub fn gpu_init(base: u64) -> bool {
     gpu_write32(base, 0x70, 1); // ACK
     gpu_write32(base, 0x70, 3); // ACK | DRIVER
                                 // Không cần feature nào (không virgl, không resource uuid).
-    gpu_write32(base, 0x14, 0);
-    gpu_write32(base, 0x10, 0);
+                                // r299: ghi driver features = 0 qua đúng cặp thanh ghi 0x24 (sel) + 0x20
+                                // (giá trị) — bản cũ ghi vào 0x10 là DeviceFeatures READ-ONLY. Word 1
+                                // không ghi (mặc định 0) cũng là 0.
+    gpu_write32(base, 0x24, 0);
+    gpu_write32(base, 0x20, 0);
     gpu_write32(base, 0x70, 11); // ACK|DRIVER|FEATURES_OK
+    if unsafe { core::ptr::read_volatile((base + 0x70) as *const u32) } & 8 == 0 {
+        return false; // thiết bị không chấp nhận tập feature rỗng
+    }
     gpu_write32(base, 0x30, 0); // control queue
     let qb = core::ptr::addr_of_mut!(GPU_QUEUE) as u64;
     let desc_addr = qb + core::mem::offset_of!(GpuQueue, desc) as u64;
     let avail_addr = qb + core::mem::offset_of!(GpuQueue, avail) as u64;
     let used_addr = qb + core::mem::offset_of!(GpuQueue, used) as u64;
+    // r299: kiểm QueueNumMax trước khi ghi QueueNum (0x34/0x38) như input/rng.
+    let queue_max = unsafe { core::ptr::read_volatile((base + 0x34) as *const u32) };
+    if queue_max < GPU_MAX_DESC as u32 || !queue_max.is_power_of_two() {
+        return false;
+    }
     gpu_write32(base, 0x38, GPU_MAX_DESC as u32);
     gpu_write32(base, 0x80, desc_addr as u32);
     gpu_write32(base, 0x84, (desc_addr >> 32) as u32);
@@ -1653,8 +1716,9 @@ fn gpu_command_bounded(cmd_type: u32, payload: &[u8], bound: u64) -> bool {
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     unsafe { core::ptr::write_volatile(&mut q.avail.idx, next) };
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    gpu_write32(base, 0x50, 0);
+    // r299: chụp target TRƯỚC kick (xem net_send_udp).
     let target = unsafe { core::ptr::read_volatile(&q.used.idx) }.wrapping_add(1);
+    gpu_write32(base, 0x50, 0);
     let mut spins = 0u64;
     while unsafe { core::ptr::read_volatile(&q.used.idx) } != target && spins < bound {
         core::hint::spin_loop();
@@ -2055,9 +2119,11 @@ pub fn input_init(base: u64) -> bool {
     input_write32(base, 0x70, 0);
     input_write32(base, 0x70, 1);
     input_write32(base, 0x70, 3);
-    // Chỉ cần VERSION_1 (bit 32) nằm ở word cao của features.
-    input_write32(base, 0x14, 1);
-    input_write32(base, 0x10, 1);
+    // Chỉ cần VERSION_1 (bit 32) nằm ở word cao của features. r299: bản cũ
+    // ghi vào 0x10 (DeviceFeatures — READ-ONLY) nên driver features không
+    // bao giờ được set. Đúng spec: chọn word qua 0x24 rồi ghi 0x20.
+    input_write32(base, 0x24, 1);
+    input_write32(base, 0x20, 1);
     input_write32(base, 0x70, 11);
     if input_read32(base, 0x70) & 8 == 0 {
         return false;
@@ -2408,8 +2474,10 @@ pub fn rng_init(base: u64) -> bool {
     rng_write32(base, 0x70, 0);
     rng_write32(base, 0x70, 1);
     rng_write32(base, 0x70, 3);
-    rng_write32(base, 0x14, 1); // VERSION_1 ở word cao
-    rng_write32(base, 0x10, 1);
+    // r299: như input — ghi driver features qua 0x24 (sel) + 0x20 (giá trị),
+    // không phải vào 0x10 chỉ đọc.
+    rng_write32(base, 0x24, 1); // VERSION_1 ở word cao
+    rng_write32(base, 0x20, 1);
     rng_write32(base, 0x70, 11);
     if unsafe { core::ptr::read_volatile((base + 0x70) as *const u32) } & 8 == 0 {
         return false;
