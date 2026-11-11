@@ -720,6 +720,11 @@ fn readdir_bulk_request(data: [u64; 4], uid: u16, seq: u32) -> (u64, u64, u64, u
     let mut cursor = IPC_BUF_SERVER_VA as *mut u8;
     for _ in 0..max {
         match fs().read_dir_entry_full(fd.ino, index) {
+            // r296b: slot trống (ino == 0) KHÔNG được đóng gói — nếu không `ls`
+            // sẽ thấy một entry tên rỗng. Vẫn phải tăng `index` để đi tiếp.
+            Ok(Some((0, _, _, _))) => {
+                index += 1;
+            }
             Ok(Some((ino, name, len, kind))) => {
                 unsafe {
                     let dst = cursor;

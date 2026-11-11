@@ -2716,3 +2716,62 @@ lỗi của đường đọc (ba đường đọc khớp nhau tại mọi thời
   tự request (không phải theo thời điểm), tức là **replay trên host** như tệp bổ
   sung §3 đề nghị (chưa làm).
 - `S1b` (vòng lặp + exec song song) đã chạy ở r295: 0/5 000 vòng ⇒ chưa tái hiện.
+
+## r296b — T26: GỐC ĐÃ TÌM RA + ĐÃ VÁ (readdir theo SLOT), có test đỏ-trước trên host
+
+### Cơ chế (đã sửa lại cách kể sau bản rà soát)
+`write_dir_entry` ghi vào **slot trống ĐẦU TIÊN**. Trong boot đỏ, `DIRNAME` cho
+`slot5 = trống`, `d` ở `slot6` ⇒ lúc `mkdir("/d")` slot 5 **đang bị chiếm** bởi
+`/rm-test` (root tạo ra để kiểm `FS RM OK`), nên `d` vào slot 6 = **entry thứ 7**.
+Root xoá `/rm-test` **giữa lúc client đang liệt kê** ⇒ với cách đánh chỉ số theo
+**entry**, `d` tụt từ index 6 xuống 5, mà con trỏ client đã ở 6 ⇒ **bỏ sót `d`**.
+Không phải "d hiện ra"; không phải mất dữ liệu; không phải lỗi đường đọc.
+(Bản rà soát chỉ đúng chỗ này: mô tả "entry hiện lại" ở mục r296 là SAI.)
+
+### Test đỏ-trước trên host (D18) — `crates/vifast-fs`
+`readdir_must_not_skip_a_later_entry_when_an_earlier_one_is_removed`:
+tạo `/e0../e4, /rm-test, /d` trong thư mục gốc, đi từng index, và **xoá
+`/rm-test` ngay sau khi vừa đọc nó**. Trước khi vá: **ĐỎ**, thấy
+`[e0,e1,e2,e3,e4,rm-test]` — mất `d`. Sau khi vá: **XANH**.
+Đây là reproducer tất định, chạy trong ~0,4 s thay vì 152 boot QEMU.
+
+### Bản vá
+`read_dir_entry_full`: `index` đổi nghĩa thành **CHỈ SỐ SLOT**
+(`block_index * DIR_ENTRIES_PER_BLOCK + slot`) — kiểu `d_off` của POSIX.
+- Ô trống ⇒ trả bản ghi `ino == 0` (client đi tiếp), **không** phải `None`;
+- `None` chỉ khi vượt slot cuối của block cuối;
+- BULK: bỏ qua bản ghi rỗng khi đóng gói (nếu không `ls` sẽ thấy entry tên rỗng),
+  nhưng vẫn tăng `index`;
+- `root_is_empty` bỏ qua ô trống.
+Hệ quả: xoá một entry **không** làm xê dịch entry nào khác ⇒ không thể bỏ sót.
+
+### Số đo sau vá (cùng máy, cùng `VIFAST_NO_RETRY=1`, `MAX_IO=256`, smp2)
+| Máy | boot | `FS V2 BAD` | đỏ khác | ghi chú |
+|---|---:|---:|---:|---|
+| `ps` | 40 | **0** | 4 | cả 4 là `BIN EXEC FAIL` (**T33a**, không phải T26) |
+| `mps` | 40 | **0** | 0 | 40/40 xanh |
+
+Trước khi vá, cùng cấu hình: **27/152 boot đỏ = 17,8 %**. Nếu tỉ lệ vẫn 17,8 %
+thì xác suất 0/40 chỉ là 0,8^40 ≈ 1,3·10⁻⁴ ⇒ bản vá có tác dụng thật.
+
+### `MAX_IO` — vẫn 128 (theo D-04)
+Nâng lên 256 cần `fs-smp-regression.py --expect green` N≥40 xanh trên **cả hai**
+máy (§5). Hiện `ps` 40 boot còn **4 đỏ vì T33a** (`BIN EXEC FAIL spawn`), không
+liên quan FS. ⇒ Chưa nâng; việc còn lại là T33a, không phải T26.
+
+### Ba cảnh báo của bản rà soát, đã ghi nhận (đừng đọc số cũ quá mạnh)
+1. `n_jrnl == n_cache` là **tautology** khi không có journal hit (nhánh dự phòng
+   cộng chính block của cache) ⇒ "ba đường đọc khớp nhau" thật ra chỉ **2**.
+2. `DIRNAME` chỉ in **8/16 slot** và **không in `name_len`** ⇒ `9:d` chưa chứng
+   minh `len == 1`.
+3. `DIRSNAP` được chụp **sau** khi vòng quét kết thúc ⇒ nó không chứng thực nội
+   dung tại index 5; `look=1` cũng đo tại lúc chụp.
+   (Ba điểm này không ảnh hưởng kết luận, vì cơ chế đã được chứng minh **độc
+   lập** bằng test host tất định.)
+
+### Còn treo
+- **T33a**: `BIN EXEC FAIL spawn` 4/40 boot ở `ps` (10 %) khi chạy 40 boot liền —
+  cao hơn con số 1,7 % của r295; cần đo lại bằng build sạch (không có đèn
+  DIRSNAP/EVL) trước khi kết luận tỉ lệ. Đây là thứ đang chặn việc nâng `MAX_IO`.
+- Nên đưa các đèn nặng (`DIRSNAP`/`RDD`/`EVL`) vào sau một feature chẩn đoán để
+  bản sản phẩm không bị nhiễu — chưa làm.

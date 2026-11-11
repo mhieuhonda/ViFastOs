@@ -617,6 +617,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - ddda086 fmt: chuẩn hoá sau bản vá tcb_wait
 - 2d6e2a8 r295 (T26): đèn req_seq+hash + BUILD id trả lời "FS hay IPC" — đáp án 4.D (FS)
 - d43eb57 r295 (bổ sung): S1b 0/5 000 vòng; reproducer NHANH cho exec (BIN EXEC FAIL spawn)
+- 5fc7b3f r296 (T26): DIRSNAP — entry `d` hiện lại GIỮA hai readdir liên tiếp; 2 giả thuyết chết
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -671,7 +672,7 @@ Test hiện tại:
 - `cargo test -p vifast-runtime`: 4/4 PASS
 - `cargo test -p vifast-user`: 0/0 PASS
 - `cargo test -p vifast-acpi`: 8/8 PASS
-- `cargo test -p vifast-fs`: 44/44 PASS
+- `cargo test -p vifast-fs`: 45/45 PASS
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status

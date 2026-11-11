@@ -1162,6 +1162,40 @@ Boot XANH: `RDD idx=6 ino=9 seq=31` (d là entry thứ 7 ⇒ index 6 ⇒ liệt 
 - Replay trên host theo đúng chuỗi request (tệp bổ sung §3) — chưa làm.
 - `MAX_IO` vẫn **128**; chưa có bản vá nào trong vòng này.
 
+
+## r296b — T26: GỐC ĐÃ TÌM RA VÀ ĐÃ VÁ (readdir theo SLOT), 0/40 ở MAX_IO=256
+
+### Cơ chế
+`write_dir_entry` ghi vào **slot trống đầu tiên**. Trong boot đỏ, `slot5` trống
+và `d` ở `slot6` ⇒ lúc `mkdir("/d")`, slot 5 đang bị `/rm-test` chiếm (root tạo
+để kiểm `FS RM OK`), nên `d` là **entry thứ 7**. Root xoá `/rm-test` **giữa lúc
+client liệt kê** ⇒ với chỉ số theo **entry**, `d` tụt từ index 6 xuống 5 trong
+khi con trỏ client đã ở 6 ⇒ **bỏ sót**. Không mất dữ liệu, không lỗi đường đọc.
+
+### Test đỏ-trước (host, tất định)
+`readdir_must_not_skip_a_later_entry_when_an_earlier_one_is_removed`:
+đi từng index trong `/` và xoá `/rm-test` ngay sau khi đọc nó.
+**Trước vá: ĐỎ** (thấy `[e0..e4, rm-test]`, mất `d`). **Sau vá: XANH.** Chạy 0,4 s
+thay cho 152 boot QEMU.
+
+### Bản vá
+`read_dir_entry_full`: `index` = **chỉ số SLOT** (kiểu `d_off`). Ô trống trả bản
+ghi `ino == 0` (client đi tiếp); `None` chỉ khi vượt slot cuối; BULK bỏ bản ghi
+rỗng nhưng vẫn tăng `index`; `root_is_empty` bỏ qua ô trống.
+
+### Số sau vá (MAX_IO=256, smp2, `VIFAST_NO_RETRY=1`)
+| Máy | boot | `FS V2 BAD` | đỏ khác |
+|---|---:|---:|---|
+| `ps` | 40 | **0** | 4 × `BIN EXEC FAIL` = **T33a** |
+| `mps` | 40 | **0** | 0 |
+
+Trước vá cùng cấu hình: 27/152 = 17,8 %. Nếu tỉ lệ cũ vẫn đúng thì 0/40 có xác
+suất 0,8^40 ≈ 1,3·10⁻⁴.
+
+### `MAX_IO` vẫn 128 (D-04)
+Cần 40 boot xanh trên **cả hai** máy; `ps` còn 4 đỏ vì **T33a**, không phải T26
+⇒ nút chặn là T33a.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1170,7 +1204,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-7b5290ab12d4a90b26b919c8730e9bb6215896934df58e94a4989eb6c67a7ce5  docs/reviews/ViFastOs-report-r262.md
+c9a6bcbd63b8cdc19e10dbca1c1853f95b2296b2b7d2dcd2108ffe20cd6b14d2  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

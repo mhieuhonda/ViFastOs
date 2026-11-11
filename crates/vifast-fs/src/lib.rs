@@ -996,8 +996,12 @@ impl<D: BlockDev> Fs<D> {
     /// hay không: chỉ sửa khi chắc chắn không mất dữ liệu người dùng.
     pub fn root_is_empty(&mut self) -> bool {
         let mut index = 0usize;
-        while let Ok(Some((_, name, len))) = self.read_dir_entry(ROOT_INO, index) {
+        while let Ok(Some((ino, name, len))) = self.read_dir_entry(ROOT_INO, index) {
             index += 1;
+            if ino == 0 {
+                // Ô trống (r296b: chỉ số là SLOT) — đi tiếp, không phải "hết".
+                continue;
+            }
             let entry = &name[..len.min(MAX_NAME)];
             if entry != b"." && entry != b".." {
                 return false;
@@ -2405,40 +2409,57 @@ impl<D: BlockDev> Fs<D> {
         if inode.kind != INODE_DIR {
             return Err(FsError::NotDir);
         }
-        let mut seen = 0usize;
-        for block_index in 0..inode.blocks_used() {
+        // r296b (T26, sửa gốc): `index` là **CHỈ SỐ SLOT** — không phải "entry
+        // thứ n". Bản cũ đếm entry không rỗng, nên khi một entry PHÍA TRƯỚC bị
+        // xoá giữa hai lời gọi thì mọi entry sau tụt xuống một bậc và client
+        // (đi tuần tự 0,1,2,…) **bỏ sót** đúng một entry. Đó là cơ chế T26:
+        // root tạo rồi xoá `/rm-test` trong `/` đúng lúc client đang liệt kê.
+        // Với chỉ số slot, xoá một entry không làm xê dịch entry nào khác.
+        //
+        // Ô TRỐNG trả về bản ghi `ino == 0` (KHÔNG phải `None`) để client đi
+        // tiếp; `None` chỉ khi đã vượt quá slot cuối của thư mục.
+        let per_block = DIR_ENTRIES_PER_BLOCK;
+        let total_slots = inode.blocks_used() * per_block;
+        if index < total_slots {
+            let block_index = index / per_block;
+            let slot = index % per_block;
             let mut block = zero_block();
             self.dev.read(inode.blocks[block_index], &mut block)?;
-            for slot in 0..DIR_ENTRIES_PER_BLOCK {
-                let off = slot * DIR_ENTRY_SIZE;
-                let ino = get_u16(&block, off);
-                if ino == 0 {
-                    continue;
-                }
-                // Vòng 88 (audit #4): entry hỏng vẫn chiếm một index. Trước
-                // đây `continue` không tăng `seen` nên entry hỏng ở index N
-                // khiến entry hợp lệ ngay sau nó được trả cho cả N và N+1
-                // ([A,corrupt,B,C] -> A,B,B,C).
-                let len = block[off + 2] as usize;
-                let corrupt = len == 0 || len > MAX_NAME || off + 3 + len > BLOCK_SIZE;
-                if seen == index {
-                    if corrupt {
-                        return Err(FsError::Corrupt);
-                    }
-                    let mut name = [0u8; MAX_NAME];
-                    name[..len].copy_from_slice(&block[off + 3..off + 3 + len]);
-                    let kind = self
-                        .inodes
-                        .get(ino as usize - 1)
-                        .map(|child| child.kind)
-                        .unwrap_or(INODE_FILE);
-                    return Ok(Some((ino, name, len, kind)));
-                }
-                seen += 1;
+            let off = slot * DIR_ENTRY_SIZE;
+            let ino = get_u16(&block, off);
+            if ino == 0 {
+                return Ok(Some((0, [0u8; MAX_NAME], 0, 0)));
             }
+            let len = block[off + 2] as usize;
+            if len == 0 || len > MAX_NAME || off + 3 + len > BLOCK_SIZE {
+                return Err(FsError::Corrupt);
+            }
+            let mut name = [0u8; MAX_NAME];
+            name[..len].copy_from_slice(&block[off + 3..off + 3 + len]);
+            let kind = self
+                .inodes
+                .get(ino as usize - 1)
+                .map(|child| child.kind)
+                .unwrap_or(INODE_FILE);
+            return Ok(Some((ino, name, len, kind)));
         }
         // T26: tới đây là "hết" — đo lại bằng đường RAW (bỏ cache) để biết
         // ảnh nào đúng. Lệch ⇒ bug cache/inode, không phải hết thật.
+        let mut cached_seen = 0u32;
+        for block_index in 0..inode.blocks_used() {
+            let mut cached = zero_block();
+            if self
+                .dev
+                .read(inode.blocks[block_index], &mut cached)
+                .is_ok()
+            {
+                for slot in 0..DIR_ENTRIES_PER_BLOCK {
+                    if get_u16(&cached, slot * DIR_ENTRY_SIZE) != 0 {
+                        cached_seen += 1;
+                    }
+                }
+            }
+        }
         let mut raw_seen = 0u32;
         for block_index in 0..inode.blocks_used() {
             let mut raw = zero_block();
@@ -2500,7 +2521,7 @@ impl<D: BlockDev> Fs<D> {
         DIR_SHAPE[2].store(per_block[0], core::sync::atomic::Ordering::Relaxed);
         DIR_SHAPE[3].store(per_block[1], core::sync::atomic::Ordering::Relaxed);
         DIR_PROBE[0].store(index as u32, core::sync::atomic::Ordering::Relaxed);
-        DIR_PROBE[1].store(seen as u32, core::sync::atomic::Ordering::Relaxed);
+        DIR_PROBE[1].store(cached_seen, core::sync::atomic::Ordering::Relaxed);
         DIR_PROBE[2].store(raw_seen, core::sync::atomic::Ordering::Relaxed);
         Ok(None)
     }
@@ -2902,6 +2923,57 @@ mod tests {
             matches!(err, Err(FsError::Corrupt) | Err(FsError::Invalid)),
             "phải trả lỗi, không panic; nhận {:?}",
             err
+        );
+    }
+
+    /// r296b (T26, test hồi quy — đã từng ĐỎ trước khi vá): readdir theo
+    /// **chỉ số entry** bỏ qua một entry khi một entry phía trước bị xoá GIỮA
+    /// hai lời gọi.
+    ///
+    /// Đây đúng là thứ đo được trên QEMU: client đi `/` bằng `readdir(fd, 0),
+    /// (fd, 1), …` trong khi root tạo rồi xoá `/rm-test` trong CÙNG thư mục.
+    /// Khi `/rm-test` (ngay trước `d`) biến mất, `d` tụt từ chỉ số 6 xuống 5 —
+    /// mà 5 đã đọc rồi ⇒ **mất `d`** dù dữ liệu còn nguyên.
+    ///
+    /// Test này KHÔNG nằm trong cổng mặc định vì nó đỏ trên mã hiện tại; chạy
+    /// đích danh để chứng minh:
+    /// Trước khi vá nó đỏ (chạy đích danh): thấy [e0,e1,e2,e3,e4,rm-test] và
+    /// **mất `d`**. Sau khi vá (chỉ số là SLOT) nó xanh — đây là test hồi quy.
+    #[test]
+    fn readdir_must_not_skip_a_later_entry_when_an_earlier_one_is_removed() {
+        let mut fs = fresh();
+        // Thư mục GỐC (ino 1) — đúng thư mục mà client liệt kê.
+        for name in [
+            &b"/e0"[..],
+            &b"/e1"[..],
+            &b"/e2"[..],
+            &b"/e3"[..],
+            &b"/e4"[..],
+            &b"/rm-test"[..],
+            &b"/d"[..],
+        ] {
+            fs.create(name, 0, INODE_FILE).unwrap();
+        }
+        let mut seen: Vec<Vec<u8>> = Vec::new();
+        let mut index = 0usize;
+        loop {
+            match fs.read_dir_entry(1, index) {
+                Ok(Some((_, name, len))) => {
+                    seen.push(name[..len].to_vec());
+                    // root xoá "/rm-test" NGAY SAU khi client vừa đọc nó và
+                    // TRƯỚC khi client đọc chỉ số kế tiếp.
+                    if name[..len] == *b"rm-test" {
+                        fs.unlink(b"/rm-test", 0).unwrap();
+                    }
+                    index += 1;
+                }
+                Ok(None) => break,
+                Err(error) => panic!("readdir lỗi bất ngờ: {error:?}"),
+            }
+        }
+        assert!(
+            seen.iter().any(|name| name == b"d"),
+            "liệt kê theo chỉ số ĐÃ BỎ SÓT entry `d` sau khi một entry phía trước bị xoá; thực tế: {seen:?}"
         );
     }
 
@@ -3820,7 +3892,20 @@ mod tests {
         // Index 2 là "c", không phải "c" lặp lại.
         let third = fs.read_dir_entry(dir, 2).unwrap().unwrap();
         assert_eq!(&third.1[..third.2], b"c");
-        assert!(fs.read_dir_entry(dir, 3).unwrap().is_none());
+        // r296b: chỉ số là SLOT. Slot 3..7 nằm TRONG block nhưng trống ⇒ trả
+        // bản ghi `ino == 0` (client đi tiếp), KHÔNG phải "hết". "Hết" chỉ khi
+        // vượt quá slot cuối của block cuối (8 slot/block).
+        for slot in 3..DIR_ENTRIES_PER_BLOCK {
+            let empty = fs
+                .read_dir_entry(dir, slot)
+                .unwrap()
+                .expect("ô trống vẫn là Some");
+            assert_eq!(empty.0, 0, "slot {slot} phải là ô trống");
+        }
+        assert!(fs
+            .read_dir_entry(dir, DIR_ENTRIES_PER_BLOCK)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
