@@ -608,6 +608,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 30adc5e r294: mạng ps sạch (0% mất gói); 3/60 hỏng khi chạy một mình, ba chữ ký khác nhau ⇒ đính chính T-IPC (chỉ để đếm, cơ chế chưa rõ)
 - 1a45eaf harness: sửa docstring T-IPC — chỉ để đếm, cơ chế chưa rõ (bác giả thuyết kẹt cap_mint)
 - 0d41234 harness: SIGTERM trước SIGKILL + chờ QEMU flush chardev (nghi mất dòng serial); đo 3/60 → 1/60 trên ps
+- a09850c r294: console nguyên tử theo khối cho debug_write (with_tx_lock); đo ps 1/60, lần hỏng còn lại là lớp exec khác
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

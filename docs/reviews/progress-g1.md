@@ -2238,3 +2238,14 @@ con số dương đêm nay (`3/60`, `5/120`, `8/150`) chỉ là **chặn trên**
 lại cùng một phép đếm byte console (`CONS TX bytes=… fnv=…` như bản rà soát đề
 xuất) trước khi dùng để kết luận. Các kết quả **0** (0 T-FS/150, 150/150 riscv)
 vẫn đúng vì mất dòng chỉ có thể PASS→FAIL.
+
+### Ghi nhận cổng: lần đầu ĐỎ do flake, lần hai XANH
+
+Ở commit `a09850c`, lần chạy cổng đầu **đỏ** ở bước `build`+`qemu` với
+`FAIL: không khớp điều kiện nào trong accept()` và ở `riscv64`:
+*"guest in đủ marker nhưng QEMU thoát mã lạ"*, rồi **retry cũng hỏng**. Chạy lại
+ngay sau đó: **10/10 xanh** (`RETRY 0/…` cả ba chỗ).
+
+⇒ Đây là đúng lớp "guest in đủ marker, QEMU thoát mã lạ" (T-INFRA) đã biết — nó
+có thể làm cổng đỏ **hai lần liên tiếp**, nên quy ước "retry một lần" của harness
+chưa đủ cho lớp này. Ghi lại để lần sau không nhầm là hồi quy do bản vá console.
