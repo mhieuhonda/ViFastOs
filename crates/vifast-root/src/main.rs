@@ -1316,11 +1316,26 @@ fn boot_exec_once(
         write(b"BIN EXEC FAIL spawn\n");
         return false;
     };
-    let waited = vifast_user::tcb_wait(tcb);
+    // r294 (T33a/r294): `tcb_wait` có thể trả lỗi khi con CÒN SỐNG (hàng chờ
+    // IPC đang bận) — bản cũ coi đó là thất bại rồi `destroy_exec` NGAY, tức
+    // GIẾT đứa con đang chạy và làm mất marker của bước đó. Nay: lỗi ≠ kết thúc
+    // thì nhường CPU rồi chờ lại (có giới hạn); chỉ báo hỏng sau khi hết lượt.
+    let mut waited = vifast_user::tcb_wait(tcb);
+    let mut tries = 0u32;
+    while waited.error != KError::Ok
+        && waited.error != KError::ObjectDestroyed
+        && tries < 64
+    {
+        let _ = vifast_user::yield_now();
+        waited = vifast_user::tcb_wait(tcb);
+        tries += 1;
+    }
     if waited.error != KError::Ok && waited.error != KError::ObjectDestroyed {
         write(b"BIN EXEC FAIL wait err=");
         write_decimal(waited.error as u64);
         write(b"\n");
+        // KHÔNG destroy khi con có thể còn sống — trả false để caller biết.
+        return false;
     }
     // Dọn NGAY sau khi con đã exit: frame/TCB/VSpace phải trả về Untyped,
     // nếu không lần exec sau (và `MEM OOM OK`) sẽ cạn — tái hiện đúng bài

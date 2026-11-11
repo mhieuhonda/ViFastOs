@@ -2345,3 +2345,36 @@ nằm trong cây, sẵn sàng cho lần gặp tới — không cần sửa gì t
 
 Ghi chú thống kê: 50 boot không gặp lớp 1–3 % là chuyện thường (P ≈ 0,2–0,6 với
 1 %), nên **không** được kết luận gì về xu hướng từ lượt này.
+
+## r294 — VÁ GỐC: `tcb_wait` lỗi ⇒ GIẾT con đang sống (mất marker + nuốt lỗi)
+
+**Cơ chế (bản rà soát chỉ ra, có chứng cứ):** trong `boot_exec_once`
+(`crates/vifast-root/src/main.rs`), nhánh `tcb_wait` trả lỗi **không `return`**,
+mà rơi xuống `destroy_exec(...)` ngay ⇒ **giết đứa con đang chạy** rồi vẫn trả
+`true`. Hệ quả kép: marker của bước đó **mất** (trông như "lệnh trước lặp") và
+lỗi bị **nuốt**.
+
+**Đính chính quan trọng về `dup`:** `harness dup` thực chất là `count != 1` ⇒
+marker **thiếu (0 lần)** cũng bị in ra là `dup`. Đếm lại 6 artifact: **không ca
+nào** có 2 lần — tất cả đều **0 lần**. Từ nay đọc `dup=[...]` phải hiểu là
+**số lần ≠ 1**, không phải "in hai lần".
+
+**Vá (chỉ phía root, không đụng kernel):**
+```rust
+let mut waited = tcb_wait(tcb);
+while waited.error != Ok && != ObjectDestroyed && tries < 64 {
+    yield_now();
+    waited = tcb_wait(tcb);
+}
+if waited.error != Ok && != ObjectDestroyed { print err; return false; }  // KHÔNG destroy
+```
+
+**Đo `ps`, x86_64, `VIFAST_RETRY_TIMEOUT=0`, 80 boot:**
+
+| Cấu hình | Hỏng |
+|---|---:|
+| trước vá (3 lượt: 60/60/50 boot) | 3/60, 1/60, 1/50 |
+| **sau vá (80 boot)** | **1/80** |
+
+Lần hỏng còn lại là `thiếu marker (1): IPC RIGHTS OK` — **lớp khác**, không phải
+exec. QEMU chuẩn 3×3 sau vá: `RETRY 0/9`.
