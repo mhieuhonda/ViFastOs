@@ -470,10 +470,21 @@ pub mod boundary {
 pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
     let kernel = A::kernel();
     let hart = A::hart_id();
-    let tcb = kernel.current_on(hart).ok_or(KError::IllegalOperation)?;
-    let root = kernel.current_root(tcb).ok_or(KError::IllegalOperation)?;
+    // r305 (T-IPC): đếm lần THẤT BẠI. Ứng viên (b): `ensure_current_root` hỏng
+    // SAU `pick_on` ⇒ `fault::suspend` lấy `old = current_on(hart)` là tác vụ
+    // VỪA NHẶT (vô can) rồi fault nó. Nếu boot đỏ có bộ đếm này > 0 thì đó là
+    // cơ chế; boot xanh phải bằng 0.
+    let Some(tcb) = kernel.current_on(hart) else {
+        ENSURE_FAIL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        return Err(KError::IllegalOperation);
+    };
+    let Some(root) = kernel.current_root(tcb) else {
+        ENSURE_FAIL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        return Err(KError::IllegalOperation);
+    };
     let asid = kernel.current_asid(tcb).unwrap_or(0);
     if root == 0 {
+        ENSURE_FAIL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         return Err(KError::IllegalOperation);
     }
     if A::switch_root(root, asid) {
@@ -492,6 +503,12 @@ static SYSCALL_COUNT: [core::sync::atomic::AtomicU32; 128] =
 /// r301 (T-IPC): chẩn đoán in MỘT lần ở cuối boot, gói trong một hàm để không
 /// phải chèn khối `{}` giữa điều kiện `if let` và thân của nó (đã làm hỏng cú
 /// pháp một lần — bài học: đèn nhiều dòng thì phải nằm trong hàm).
+/// r305 (T-IPC): số lần `ensure_current_root` thất bại trong cả boot.
+static ENSURE_FAIL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// r304 (T-IPC): số tick timer rơi vào lúc client (tcb 62) đang là `current`.
+static TICKS_62: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 fn emit_boot_diag<A: Platform>(kernel: &vifast_kernel::Kernel) {
     let count = SYSCALL_COUNT[62].load(core::sync::atomic::Ordering::Relaxed);
     vifast_kernel::klog!(A, "SYSCALLS t=62 n={}", count);
@@ -517,6 +534,10 @@ fn emit_boot_diag<A: Platform>(kernel: &vifast_kernel::Kernel) {
         }
     }
     vifast_kernel::klog!(A, "CURT t=62 h={}", owner);
+    let ticks = TICKS_62.load(core::sync::atomic::Ordering::Relaxed);
+    vifast_kernel::klog!(A, "TICKS t=62 n={}", ticks);
+    let fails = ENSURE_FAIL.load(core::sync::atomic::Ordering::Relaxed);
+    vifast_kernel::klog!(A, "ENSURE FAIL n={}", fails);
     let len = vifast_kernel::KILLED_LEN.load(core::sync::atomic::Ordering::Relaxed);
     let mut line = [0u8; 96];
     let mut at = 0usize;
@@ -2014,6 +2035,13 @@ pub mod timer {
         let hart = A::hart_id();
         let old = kernel.current_on(hart);
         let old_index = old.map(|tcb| tcb.index);
+        // r304 (T-IPC): số tick timer rơi vào lúc CLIENT đang là `current` — để
+        // phân biệt "client CHẠY vòng vô hạn ở user mode" (tick tăng đều) với
+        // "client KHÔNG chạy" (tick đứng). `SYSCALLS` không trả lời được vì nó
+        // đếm sau fast-path `GetTime`.
+        if old_index == Some(62) {
+            TICKS_62.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
         if let Some(old) = old {
             let slot = kernel.context_slot(old).unwrap_or(0) as usize;
             contexts[slot] = *context;

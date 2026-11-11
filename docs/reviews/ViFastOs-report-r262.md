@@ -1364,6 +1364,24 @@ panic, không bị huỷ; khác biệt mới là `CURT` h=0 (đỏ) so với h=9
 Bất biến "Running phải là current" **đã có** (`boundary_summary`, chỉ chạy với
 `check-boundary`).
 
+
+## r304/r305 — T-IPC: client **không quay** (TICKS≈0); `ensure_current_root` không hỏng
+
+| | xanh | đỏ |
+|---|---|---|
+| `TICKS t=62` (tick rơi lúc client là current) | **0–1** | **1–3** |
+| `CURT t=62 h=` | 9 (không hart nào) | 0 |
+| `ENSURE FAIL n=` | 0 | 0 |
+| `SYSCALLS` | 566 | 556–559 |
+
+⇒ Client **không quay vô hạn** ở user mode (nếu quay thì TICKS phải cỡ vài chục
+như tổng tick của boot) — loại "chạy mà không gọi syscall". `ensure_current_root`
+**không** thất bại lần nào ⇒ loại ứng viên "fault nhầm tác vụ vừa nhặt".
+
+Còn lại: client `Running`, `queued=0`, là `current[0]`, TICKS 1–3, SYSCALLS đứng
+⇒ nó **được nhặt làm current nhưng gần như không chạy**. Đèn cuối cùng cần: **PC
+đã lưu của client** ở cuối boot.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1372,7 +1390,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-44b531517fbe6c1f1a70a8c3bbb628e9aa4f641eb0d95b9d78b46998fdb9136c  docs/reviews/ViFastOs-report-r262.md
+d0992ae2475041b295bff49f1b99a287759eca63627820816a9191ee59601664  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

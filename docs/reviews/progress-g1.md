@@ -3104,3 +3104,39 @@ Còn lại hai ứng viên chưa kiểm: (b) `ensure_current_root` lỗi **sau**
 (1846/1882/2314) làm fault nhầm đối tượng; (c) `pick_on` lần hai trên cùng hart
 khi current cũ còn sống (`resume_blocked` 1871 không yield trước pick).
 Cả hai đều cần **`TICKS[62]`** để phân biệt "chạy mà không syscall" với "không chạy".
+
+## r304/r305 — T-IPC: client **KHÔNG quay** (TICKS≈0) và `ensure_current_root` **không** hỏng
+
+### `TICKS[62]` — số tick timer rơi lúc client đang là `current`
+| | xanh | đỏ (3 ca) |
+|---|---|---|
+| `TICKS t=62` | **0–1** | **1–3** |
+| `CURT t=62 h=` | 9 (không hart nào) | 0 |
+| `SYSCALLS` | 566 | 556–559 |
+
+⇒ Client **không quay vô hạn** ở user mode (nếu quay thì `TICKS` phải cùng bậc
+với tổng tick của boot, cỡ vài chục). Loại giả thuyết "chạy mà không gọi syscall".
+
+### `ENSURE FAIL n=` — số lần `ensure_current_root` thất bại
+**0 ở cả boot xanh lẫn boot đỏ** ⇒ loại ứng viên (b): "`ensure_current_root` hỏng
+sau `pick_on` ⇒ `fault::suspend` fault nhầm tác vụ vừa nhặt".
+
+### Trạng thái suy luận còn lại
+Boot đỏ: client `Running`, `queued=0`, là `current[0]`, `TICKS` chỉ 1–3, `SYSCALLS`
+đứng ⇒ nó **được nhặt làm current nhưng gần như không chạy**, và không vào
+`dispatch` lần nào nữa. Boot xanh: client `BlockedNotification` và **không** là
+current của hart nào.
+
+⇒ Nghi vấn mới (gọn hơn): đường `pick_on` + chuyển ngữ cảnh ở hart 0 **nhặt
+client rồi không chạy nó**, và `current[0]` còn trỏ client khi boot kết thúc.
+
+### Việc kế tiếp (một đèn duy nhất còn thiếu)
+In **PC đã lưu của client** (`contexts[slot].pc`/`rip`) ở cuối boot: nếu PC trỏ
+đúng chỗ sau lời gọi `debug_write` ⇒ client chưa hề chạy; nếu trỏ chỗ khác ⇒
+ngữ cảnh bị nạp sai. Đó là dữ kiện cuối cùng cần.
+
+### Ghi chú vòng 49: `persist` flake
+Lần chạy gate đầu vòng báo `FAILED steps: persist`; chạy riêng
+`python3 scripts/test-persist.py --check` **PASS**, chạy lại `./scripts/gate.sh`
+⇒ **all steps passed**. Ghi là **flake** của bước `persist` (QEMU chậm khi máy
+đang chạy nhiều boot song song), không phải lỗi sản phẩm.
