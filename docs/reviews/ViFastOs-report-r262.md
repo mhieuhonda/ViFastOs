@@ -891,7 +891,7 @@ Hướng sửa đổi hẳn: **không** sửa journal/cache mà sửa **đườn
 
 | Hạng mục | Trạng thái | Con số bảo vệ được |
 |---|---|---|
-| **T33a** x86 treo trước `PREEMPT OK` | **MỘT PHẦN** | 2 gốc đã tìm + vá (`LINT0` ở AP, `KERNEL_READY` gate); **0/301** đúng lớp "treo trước PREEMPT OK"; còn **2/120 (1,7 %)** lớp `EXEC FAIL` trên `ps` |
+| **T33a** x86 treo trước `PREEMPT OK` | **MỘT PHẦN** | 2 gốc đã tìm + vá (`LINT0` ở AP, `KERNEL_READY` gate); **1/301** còn treo thiếu `PREEMPT OK` (lượt sau `LINT0`); +`KERNEL_READY` đo 3/301 vs 2/301 trước ⇒ **chưa chứng minh** tác dụng; còn **2/120 (1,7 %)** lớp `EXEC FAIL` trên `ps` |
 | **T33b** riscv64 thoát sớm | **MỘT PHẦN (gần đạt)** | **0/150** boot sạch sau vá `assert_current_tcb` (trước: 2/200 có `PANIC hart=1`); trần trên ~2 % |
 | **T26** race FS khi ≥2 hart | **CHƯA** | tái lập được **12/40 = 30 %** ở `MAX_IO=256`; **11 giả thuyết bị bác bằng đo**; tầng lưu trữ chứng minh sạch; `MAX_IO` vẫn **128** |
 | **T31** `PAGER2_LABEL` xử lý hai lần | **CHƯA** | tái hiện **1/301** (không tái hiện lại được); bản vá có nhưng **chưa có phép đo xác nhận** ⇒ vẫn là giả thuyết |
@@ -905,6 +905,23 @@ Hướng sửa đổi hẳn: **không** sửa journal/cache mà sửa **đườn
    file serial chỉ hụt **4 byte ở đuôi** ⇒ "thiếu marker" là **lỗi thật phía
    guest**; (b) `harness dup` là **số lần ≠ 1** ⇒ marker **thiếu** cũng in ra là
    `dup` — cách đọc này từng làm hiểu sai nhiều vòng.
+
+**ĐÍNH CHÍNH (vòng 40, bản rà soát phát hiện):** bảng trên từng ghi T33a
+"**0/301** đúng lớp treo" — **SAI**. Lượt 301 boot sau `LINT0` vẫn còn **1 ca**
+`T-SCHED` (treo sau `shell>`, thiếu `PREEMPT OK`, artifact
+`flake-x86_64-16-a0`); lượt sau `KERNEL_READY` là **3/301** so với **2/301**
+trước đó ⇒ **chưa có bằng chứng** bản vá thứ hai có tác dụng. Nói "hai GỐC đã
+vá" là **nói quá**: mới có `LINT0` là có bằng chứng, `KERNEL_READY` là giả thuyết.
+
+**Cụm "teardown không chờ" CHƯA vá chỗ nào** (đừng tưởng đã xong cùng lượt vá
+`tcb_wait`): pager server/client (`main.rs:3066-3145`), `worker_f` (4014-4018),
+`boot_exec_once` bỏ giá trị trả về (3468/3478/3488), `let _ = wait(2)`
+(442/487/509/581), 7 chỗ `destroy_exec` thiếu suspend (3393…4134). Có giả thuyết
+cho `PAGER SRV 0/0/0` và `IPC RIGHTS OK` nhưng **chưa có bản vá nào**.
+
+**T31:** cơ chế "`apply_resume` không ghi lại `contexts[slot]`" là **giả thuyết
+đọc mã**, không phải kết quả đo; lần tái hiện 1/301 **không có** artifact chứa
+`PAGER EVICT OK` ⇒ bằng chứng tái hiện chưa đứng.
 
 **Kết luận còn treo (chưa bác, chưa chứng minh) — người sau đừng tưởng đã xong:**
 - T26: nghi vấn "tái dùng slot trống trong `write_dir_entry`" **chưa** được kiểm
@@ -1030,7 +1047,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-61bacc061ace7800b4b8cd32d8c9983097c9c136f7a38c1ebae36386620e07e6  docs/reviews/ViFastOs-report-r262.md
+d91bf9a9427cfceab647f37dd7ab16e906de87175fa0501b7fa018d0ebb23269  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

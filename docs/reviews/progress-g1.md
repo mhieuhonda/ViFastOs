@@ -2468,7 +2468,7 @@ T31/T33b là giả thuyết có vá, chưa phải kết quả đo.
 
 | Hạng mục | Trạng thái | Số bảo vệ được |
 |---|---|---|
-| **T33a** | MỘT PHẦN | 0/301 đúng lớp "treo trước PREEMPT OK"; còn 2/120 (1,7 %) lớp EXEC FAIL trên `ps` |
+| **T33a** | MỘT PHẦN | **1/301** còn treo thiếu `PREEMPT OK`; +KERNEL_READY 3/301 vs 2/301 ⇒ chưa chứng minh; còn 2/120 (1,7 %) EXEC FAIL trên `ps` |
 | **T33b** | MỘT PHẦN (gần đạt) | 0/150 riscv64 sạch (trước 2/200 panic); trần ~2 % |
 | **T26** | CHƯA | tái lập 12/40 = 30 % ở 256; 11 giả thuyết bị bác bằng đo; `MAX_IO` vẫn 128 |
 | **T31** | CHƯA | tái hiện 1/301; vá có nhưng chưa đo xác nhận |
@@ -2496,3 +2496,24 @@ T31/T33b là giả thuyết có vá, chưa phải kết quả đo.
 gộp ba ca, P2 cascade ATA, "race ở 128" từ classifier cũ, đèn `CONS TX` chọn mẫu
 lệch, `reap_task` hỏng cả 3 arch, `dup` = "số lần ≠ 1") — tất cả đều được ghi lại
 kèm số liệu, kể cả những lần sai.
+
+## r294 — ĐÍNH CHÍNH SỐ SAI + danh sách "còn treo" (rà soát chốt vòng 40)
+
+**Sai sót của tôi, đã sửa ở cả hai tài liệu:** bảng tổng kết ghi T33a là
+"**0/301** đúng lớp treo" — **SAI**. Lượt 301 boot sau `LINT0` còn **1 ca**
+`T-SCHED` (treo sau `shell>`, thiếu `PREEMPT OK`, `flake-x86_64-16-a0`); lượt sau
+`KERNEL_READY` đo **3/301** so với **2/301** trước ⇒ **chưa chứng minh** tác dụng.
+Từ nay chỉ được nói: **`LINT0` có bằng chứng; `KERNEL_READY` là giả thuyết.**
+
+**Ba điều dễ bị đọc thành "đã xong" (nay đã ghi rõ là chưa):**
+1. Cụm **teardown-không-chờ** (pager server/client 3066-3145, `worker_f` 4014-4018,
+   `boot_exec_once` bỏ bool 3468/3478/3488, `let _ = wait(2)` 442/487/509/581,
+   7 chỗ `destroy_exec` thiếu suspend) — **chưa vá chỗ nào**, chỉ có giả thuyết.
+2. **T31**: cơ chế `apply_resume` là giả thuyết đọc mã; lần tái hiện 1/301 **không
+   có artifact** chứa `PAGER EVICT OK`.
+3. Bản đồ `SLO 02 04 05 06 07 00 09 00` **có thể chỉ là ảnh chụp sau `unlink("/d")`**
+   ở cuối khối V2, không phải bằng chứng block thiếu entry.
+
+**Cổng không tất định:** đã có 2 lần "gate 10/10" phải chạy lại mới xanh (lớp
+`T-INFRA`: guest đủ marker, QEMU thoát mã lạ) ⇒ trạng thái xanh **không** là bảo
+đảm tất định.
