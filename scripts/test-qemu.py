@@ -246,6 +246,13 @@ def run_qemu_interactive(
             pass
 
 def cleanup_disks() -> None:
+    # T-IPC/r294: `VIFAST_KEEP_SERIAL=1` giữ lại thư mục tạm (serial + trace)
+    # để còn đối chiếu byte console sau khi boot xong.
+    if os.environ.get("VIFAST_KEEP_SERIAL") == "1":
+        for directory in DISK_DIRS:
+            print(f"giữ thư mục tạm: {directory}")
+        DISK_DIRS.clear()
+        return
     for directory in DISK_DIRS:
         shutil.rmtree(directory, ignore_errors=True)
     DISK_DIRS.clear()

@@ -2297,3 +2297,33 @@ Cạm bẫy đã ghi sẵn để không tính sai: `\n` được kernel đổi t
 khi ghi; phải trừ **tiền tố firmware** (OVMF ~460 B, OpenSBI ~2964 B) bằng offset
 mốc `KERNEL ENTRY` chứ không dùng hằng số; và trace có cả `serial_read` nên phải
 lọc đúng chiều ghi.
+
+## r294 — CHỐT: QEMU ghi 7450 byte, file serial có 7446 ⇒ mất ĐUÔI 4 byte
+
+Bật `VIFAST_TRACE=1` + `VIFAST_KEEP_SERIAL=1`, một boot x86_64 (PASS), rồi đếm
+trực tiếp:
+
+| Đại lượng | Số |
+|---|---:|
+| `serial_write [0x00]` (THR = byte dữ liệu QEMU thực ghi) | **7450** |
+| kích thước `serial.txt` | **7446** |
+| **chênh lệch** | **4 byte** |
+
+Phân bố offset trong trace: 7450 × `[0x00]` (THR), 8 × `[0x01]`, 5 × `[0x02]`,
+10 × `[0x03]`, 5 × `[0x04]`, 5 × `[0x07]` — tức các ghi cấu hình UART là riêng,
+chỉ `[0x00]` mới là dữ liệu.
+
+**Kết luận (định lượng, lần đầu):**
+1. **Không mất byte ở GIỮA luồng**: chênh lệch chỉ **4 byte**, không phải hàng
+   trăm ⇒ mọi "thiếu marker" giữa dòng **không** do thu thập ⇒ là **sự thật phía
+   guest**.
+2. **Có mất ĐUÔI ~4 byte** khi QEMU thoát (`isa-debug-exit` + đóng file chardev
+   trước khi flush hết) — đúng loại đã nghi, nhưng chỉ ảnh hưởng marker **cuối
+   cùng**.
+3. Vì vậy các tỉ lệ flake dương (`3/60`, `5/120`, `8/150`) **không** bị thổi phồng
+   bởi mất giữa dòng; chỉ các marker **sát cuối** (`KSTORE CANARY OK`, dòng
+   `CONS TX`) mới có nguy cơ bị cắt.
+
+**Việc tiếp:** (a) đóng lỗ hổng 4 byte bằng cách cho guest in dòng chốt **trước**
+`isa-debug-exit` (hoặc chờ THR rỗng trước khi thoát); (b) từ đây **tin** các ca
+"thiếu marker giữa dòng" là lỗi thật để soi logic exec/T32.
