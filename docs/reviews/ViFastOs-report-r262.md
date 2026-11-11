@@ -887,6 +887,24 @@ và cả hai phía `break` im lặng khi gặp `Err`
 Hướng sửa đổi hẳn: **không** sửa journal/cache mà sửa **đường readdir** (trang hoá
 + không cắt danh sách trong im lặng). Ở `MAX_IO=128`: 40/40 xanh.
 
+### ⚠️ CẢNH BÁO ĐỌC SỐ (r294) — đọc trước khi trích bất kỳ tỉ lệ nào
+
+1. **Các tỉ lệ trong tài liệu này KHÔNG so được với nhau**: khác máy (`local`
+   arm64 vs `ps` x86_64), khác mẫu số (**boot** vs **sự kiện**), classifier đã
+   **đổi nghĩa** giữa các mốc (ví dụ `T-SCHED` cũ từng là `T-ROOT main.rs:480`,
+   `T-FS` cũ từng là serial cụt), và `par-gate.sh` đặt `VIFAST_RETRY_TIMEOUT=1`
+   nên che lỗi **lần đầu**. ⇒ **Cấm cộng/trừ** các tỉ lệ với nhau.
+2. **`0/N` không có nghĩa "đã hết"**: 0/150 chỉ là **trần trên ~2 %** (một phía
+   95 %); muốn nói ≤0,5 % cần ~600 boot sạch mỗi arch.
+3. **`dup=[…]` của harness nghĩa là "số lần ≠ 1"**, KHÔNG phải "in hai lần" —
+   marker **thiếu (0 lần)** cũng bị in là `dup`.
+4. **"Thiếu marker" là lỗi THẬT phía guest**, không phải artefact: trace QEMU cho
+   thấy file serial chỉ hụt **4 byte ở đuôi** (7450 vs 7446), và
+   `artifacts/flake-riscv64-199-a0/serial.txt` (306 dòng, kết thúc
+   `KSTORE CANARY OK`) vẫn thiếu `IPC RIGHTS OK` trong khi các marker sau nó có.
+5. **`T31` và `T33b` là giả thuyết có vá, chưa phải kết quả đo**: T31 mới tái
+   hiện **1 lần** (1/301) và bản vá chưa có phép đo xác nhận; T33b 0/150 là trần.
+
 ### r294 — Đo độ tin cậy của CHÍNH thước đo (QEMU trace)
 
 Trước khi tin bất kỳ tỉ lệ flake nào, đã kiểm tầng thu thập serial bằng trace độc
@@ -985,7 +1003,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-b4111142e7a72441fbc4a009e6c2daef299cb4ca7901f358c7838abc80f97f5f  docs/reviews/ViFastOs-report-r262.md
+d54b6280cbd6e2b436f28704da66aac0afbbd39760d25044fb320d11ede6bfcb  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

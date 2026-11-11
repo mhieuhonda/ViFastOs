@@ -2427,3 +2427,39 @@ IPC), và trạng thái sau suspend khiến đường dọn phía sau sai. Muố
 
 Ghi lại để vòng sau **không** lặp: đừng gọi `tcb_suspend` lên task đang chờ IPC
 trước khi `tcb_destroy`; nếu cần dừng, phải có tín hiệu bảo nó tự thoát.
+
+## r294 — MẪU SỐ SẠCH CUỐI CÙNG: x86_64 `ps`, 120 boot, `RETRY_TIMEOUT=0`
+
+Chốt đúng như bản rà soát đề xuất: một mẫu số sạch, một máy, một classifier.
+
+```
+build OK · VIFAST_RETRY_TIMEOUT=0 · N=120 boot · x86_64 trên `ps`
+TONG 2/120   (1,7 % lần đầu)
+```
+
+Cả hai ca đỏ đều cùng một chữ ký:
+
+```
+dup=['BIN OK uname']  + BIN EXEC FAIL
+dup=['BIN OK uptime'] + BIN EXEC FAIL
+```
+
+⇒ Bản vá `tcb_wait` (r294, giết con đang sống) **có tác dụng một phần** — trước
+vá trên cùng máy là 3/60, 1/60, 1/50; sau vá 1/80 và 2/120 — nhưng lớp
+`EXEC FAIL` **chưa hết**. Với 2/120 = 1,7 %, CI 95 % ≈ 0,2–6,0 % ⇒ **không** kết
+luận được xu hướng so với 3/60; chỉ kết luận được: **còn lỗi thật ở đường exec**.
+
+**Phép đo tiếp theo (đã có đèn, chỉ cần gặp ca):** `BIN EXEC FAIL spawn` vs
+`BIN EXEC FAIL wait err=<n>` — đèn tách nguyên nhân đã nằm trong cây từ r294.
+
+### Đã ghi cảnh báo vào báo cáo r262
+
+Thêm mục **"⚠️ CẢNH BÁO ĐỌC SỐ"** (ký lại SHA-256 `d54b628…e6bfcb`) với 5 điều:
+cấm cộng/trừ tỉ lệ giữa các mốc; `0/N` chỉ là trần; `dup` = "số lần ≠ 1"; "thiếu
+marker" là lỗi thật phía guest (kèm bằng chứng trace + artifact riscv 199);
+T31/T33b là giả thuyết có vá, chưa phải kết quả đo.
+
+### Không thử lại `reap_task`
+
+Đã hỏng 0/3 cả ba arch (thiếu 22 marker) và phải revert; muốn thử lại phải đo
+**từng chỗ một**, không gộp pager server + worker_f.
