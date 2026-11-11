@@ -755,6 +755,12 @@ struct PageOps;
 /// `PageTableOps` impl below and any future caller share them): queue every
 /// target's mailbox + IPI while the BKL guard is held, then wait all ACKs.
 /// Hold time drops from the sum to the max of target latencies.
+// r299: bản test-skip-tlb-ipi cố tình bỏPublish (chứng minh TLB stale khi
+// thiếu IPI) nên các tham số/biến locality thành chưa dùng.
+#[cfg_attr(
+    feature = "test-skip-tlb-ipi",
+    allow(unused_variables, unused_mut, unused_assignments)
+)]
 fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
     // 289.4: chỉ publish khi CHÍNH hart này giữ BKL — `is_held()` còn
     // đúng cho cả hart đang xếp hàng (ticket đã lấy, chưa được phục vụ).

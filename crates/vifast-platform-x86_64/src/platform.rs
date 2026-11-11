@@ -229,9 +229,6 @@ const AP_MAINT_TLB_VA: u32 = 4;
 static TLB_VA_FLUSH: AtomicUsize = AtomicUsize::new(0);
 static TLB_IPI_SENT: AtomicUsize = AtomicUsize::new(0);
 static TLB_IPI_SKIPPED: AtomicUsize = AtomicUsize::new(0);
-static AP_MAINT_TLB_ADDR: AtomicU64 = AtomicU64::new(0);
-static AP_MAINT_TLB_PAGES: AtomicUsize = AtomicUsize::new(0);
-static AP_MAINT_TLB_ASID: AtomicU32 = AtomicU32::new(0);
 const TRAMPOLINE_STAGE_OFFSET: u64 = 0x802;
 /// P1-7 (r261): ô 4 byte trong trang trampoline ghi hart mà AP sẽ trở thành.
 /// Trước đây `ap_entry` dùng hằng `AP_HART`, nên cùng một trampoline không thể
@@ -349,7 +346,11 @@ unsafe fn init_acpi(rsdp: u64) {
 
 /// T33a (r294): đèn báo "hart này đang quay BKL quá lâu". Chỉ in MỘT lần cho
 /// mỗi hart, KHÔNG phải marker của gate.
+// r299: chỉ tồn tại khi bật đèn diag-stall — không gate thì bản thường
+// warning dead-code.
+#[cfg(feature = "diag-stall")]
 static BKL_SPIN_TICKS: [AtomicUsize; MAX_HARTS] = [const { AtomicUsize::new(0) }; MAX_HARTS];
+#[cfg(feature = "diag-stall")]
 static BKL_STUCK_REPORTED: [AtomicBool; MAX_HARTS] = [const { AtomicBool::new(false) }; MAX_HARTS];
 
 fn note_bkl_spin() {
@@ -1343,57 +1344,10 @@ unsafe fn wait_maintenance(target: usize, seq: usize) -> bool {
     MAINT[target].acked(seq)
 }
 
-#[cfg_attr(feature = "test-skip-tlb-ipi", allow(dead_code))]
-/// Publish an AP TLB-VA shootdown and return its sequence number without
-/// waiting (issue #4 — same publish/wait split as RISC-V/AArch64).  On x86
-/// there is a single AP, so the split mainly documents the contract and
-/// keeps the wait-polling (`pause` loop) reusable; returns 0 when no AP.
-unsafe fn publish_tlb_va_ap(asid: u16, va: u64, pages: usize) -> usize {
-    unsafe {
-        send_maintenance_to(
-            1,
-            AP_MAINT_TLB_VA,
-            vifast_maint::Scope::Range { va, pages, asid },
-        )
-    }
-}
-
-/// Wait until the AP acknowledges `seq`.  Safe without the BKL: publication
-/// is ordered by Release stores + LAPIC ICR.
-unsafe fn wait_ap(seq: usize) -> bool {
-    if seq == 0 {
-        return false;
-    }
-    for _ in 0..100_000 {
-        if MAINT[1].acked(seq) {
-            return true;
-        }
-        core::arch::asm!("pause");
-    }
-    false
-}
-
-unsafe fn send_tlb_va_ap(asid: u16, va: u64, pages: usize) -> bool {
-    let seq = unsafe { publish_tlb_va_ap(asid, va, pages) };
-    if seq == 0 {
-        return false;
-    }
-    unsafe { wait_ap(seq) }
-}
-
-/// Publish a full-AP TLB flush without waiting (issue #4 — pairs with
-/// [`wait_ap`]).
-unsafe fn publish_full_tlb_ap() -> usize {
-    unsafe { send_maintenance_to(1, AP_MAINT_TLB, vifast_maint::Scope::All) }
-}
-
-unsafe fn send_full_tlb_ap() -> bool {
-    let seq = unsafe { publish_full_tlb_ap() };
-    if seq == 0 {
-        return false;
-    }
-    unsafe { wait_ap(seq) }
-}
+// r299: đã bỏ cụm publish_tlb_va_ap/wait_ap/send_tlb_va_ap/publish_full_tlb_ap/
+// send_full_tlb_ap và 3 static AP_MAINT_TLB_{ADDR,PAGES,ASID} — tưng được thay
+// bằng vifast_maint::Mailbox (send_maintenance_to + wait_maintenance) từ vòng
+// 289 và không còn caller nào dưới mọi tổ hợp feature.
 
 unsafe fn rdtsc() -> u64 {
     let low: u32;
@@ -1691,8 +1645,11 @@ pub extern "C" fn ap_entry() -> ! {
         //  (b) GS_BASE phải nằm TRONG mảng CPU_STATES (kiểm biên, không so giá trị).
         let hw_apic_id =
             (core::ptr::read_volatile((lapic_base() + 0x20) as *const u32) >> 24) & 0xff;
+        // r299: đọc qua con trỏ thay vì tham chiếu chia sẻ tới `static mut`
+        // (static_mut_refs — UB tiềm ẩn theo Rust 2024).
+        let expected_apic_id = core::ptr::read_volatile(core::ptr::addr_of!(AP_APIC_ID));
         assert_eq!(
-            hw_apic_id, AP_APIC_ID,
+            hw_apic_id, expected_apic_id,
             "AP APIC id đọc từ LAPIC không khớp hart trampoline nhắm tới"
         );
         let gs = read_msr(IA32_GS_BASE);
@@ -1733,7 +1690,7 @@ pub fn panic_halt_others() {
             if !AP_ONLINE.load(Ordering::SeqCst) {
                 return;
             }
-            AP_APIC_ID
+            core::ptr::read_volatile(core::ptr::addr_of!(AP_APIC_ID))
         } else {
             0
         };
@@ -3433,23 +3390,25 @@ extern "efiapi" fn x86_irq_handler(frame: *mut TrapFrame) {
     let bkl = bkl_lock();
     assert_current_tcb("irq0");
     if cpu_state() == unsafe { core::ptr::addr_of!(CPU_STATES[0]) as *mut _ } {
-        let ticks = BSP_PIT_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+        BSP_PIT_TICKS.fetch_add(1, Ordering::Relaxed);
         // Đèn truy vết LINT0: in mỗi 64 tick để biết CHÍNH XÁC tick nào nó bị
         // mask (nếu bị). Chỉ bản có đèn.
         #[cfg(feature = "diag-tick")]
-        if ticks % 64 == 0 {
-            let base = unsafe { lapic_base() };
-            let lvt0 = unsafe { core::ptr::read_volatile((base + 0x350) as *const u32) };
-            vifast_kernel::klog!(X86Platform, "LINT0 TRACE tick={} lvt0={:#x}", ticks, lvt0);
-        }
-        #[cfg(feature = "diag-tick")]
-        if ticks % 16 == 0 {
-            vifast_kernel::klog!(
-                X86Platform,
-                "TICK {} (eoi={})",
-                ticks,
-                PIC_EOI_SENT.load(Ordering::Relaxed)
-            );
+        {
+            let ticks = BSP_PIT_TICKS.load(Ordering::Relaxed);
+            if ticks % 64 == 0 {
+                let base = unsafe { lapic_base() };
+                let lvt0 = unsafe { core::ptr::read_volatile((base + 0x350) as *const u32) };
+                vifast_kernel::klog!(X86Platform, "LINT0 TRACE tick={} lvt0={:#x}", ticks, lvt0);
+            }
+            if ticks % 16 == 0 {
+                vifast_kernel::klog!(
+                    X86Platform,
+                    "TICK {} (eoi={})",
+                    ticks,
+                    PIC_EOI_SENT.load(Ordering::Relaxed)
+                );
+            }
         }
     }
     let frame = unsafe { &mut *frame };

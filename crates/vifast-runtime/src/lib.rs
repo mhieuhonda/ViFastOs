@@ -420,10 +420,16 @@ fn write_bootinfo<A: Platform>(pa: u64, info: &BootInfo) {
 #[cfg(feature = "check-boundary")]
 pub mod boundary {
     use super::*;
-    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use core::sync::atomic::{AtomicU64, Ordering};
+    // r299: AtomicBool chỉ cần khi bật check-boundary-mutation (POISONED).
+    #[cfg(feature = "check-boundary-mutation")]
+    use core::sync::atomic::AtomicBool;
 
     static CHECKS: AtomicU64 = AtomicU64::new(0);
     static VIOLATIONS: AtomicU64 = AtomicU64::new(0);
+    // r299: chỉ dùng khi bật check-boundary-mutation — không gate thì bản
+    // check-boundary thường warning dead-code.
+    #[cfg(feature = "check-boundary-mutation")]
     static POISONED: AtomicBool = AtomicBool::new(false);
 
     /// Số ranh giới đã kiểm.
