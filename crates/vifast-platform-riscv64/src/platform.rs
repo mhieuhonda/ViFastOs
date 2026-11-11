@@ -221,6 +221,12 @@ fn poll_maintenance() {
         return;
     }
     let kind = MAINT_KIND[hart].swap(0, Ordering::AcqRel);
+    // r299 (D2): kind == 0 nghĩa là yêu cầu CHƯA công bố xong (seq đã tăng
+    // nhưng fetch_or(kind) chưa chạy) — không được ACK kẻo nuốt mất yêu
+    // cầu: poll do IPI sau đó thấy ack >= seq và bỏ qua luôn.
+    if kind == 0 {
+        return;
+    }
     if kind & MAINT_TLB != 0 {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
@@ -272,8 +278,11 @@ fn publish_maintenance(target: usize, kind: u32) -> usize {
         BKL.held_by(current_hart()),
         "maintenance IPI sender must hold BKL"
     );
-    let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
+    // r299 (D2): công bố kind TRƯỚC khi tăng seq — bản cũ tăng seq trước rồi
+    // fetch_or(kind), consumer poll đúng giữa hai lệnh sẽ thấy seq mới với
+    // kind == 0, không flush mà vẫn ACK: shootdown bị mất âm thầm.
     MAINT_KIND[target].fetch_or(kind, Ordering::AcqRel);
+    let seq = MAINT_SEQ[target].fetch_add(1, Ordering::AcqRel) + 1;
     <Riscv64 as Arch>::send_ipi(target);
     seq
 }
@@ -301,26 +310,6 @@ fn send_maintenance(target: usize, kind: u32) -> bool {
         return false;
     }
     wait_maintenance(target, seq)
-}
-
-#[cfg_attr(feature = "test-skip-tlb-ipi", allow(dead_code))]
-fn send_tlb_va(target: usize, asid: u16, va: u64, pages: usize) -> bool {
-    if target >= MAX_HARTS || !maintenance_target_online(target) {
-        return false;
-    }
-    let state = cpu_state();
-    if state.is_null() || unsafe { (*state).hart_id } == target {
-        return false;
-    }
-    // 289.4: `held_by` chứ không `is_held` — hart đang xếp hàng không được
-    // publish maintenance (nó chưa thấy trạng thái bảng trang mới nhất).
-    if !BKL.held_by(current_hart()) {
-        return false;
-    }
-    MAINT_TLB_ADDR[target].store(va as usize, Ordering::Release);
-    MAINT_TLB_PAGES[target].store(pages, Ordering::Release);
-    MAINT_TLB_ASID[target].store(asid as u32, Ordering::Release);
-    send_maintenance(target, MAINT_TLB_VA)
 }
 
 fn send_reschedule(target: usize) -> bool {
@@ -798,7 +787,15 @@ fn shootdown_va(asid: u16, va: u64, pages: usize, targets: u32) {
     #[cfg(feature = "test-skip-tlb-ipi")]
     let _ = (me, targets);
     for i in 0..count {
-        let _ = wait_maintenance(pending[i].0, pending[i].1);
+        if !wait_maintenance(pending[i].0, pending[i].1) {
+            // r299: nuốt kết quả chờ là nuốt luôn shootdown thất bại —hart
+            // đích còn TLB cũ trỏ bảng đã zero. Báo ra serial để thấy ngay.
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "TLB SHOOTDOWN TIMEOUT (hart={})",
+                pending[i].0
+            );
+        }
     }
 }
 
@@ -828,7 +825,13 @@ fn shootdown_all(targets: u32) {
         }
     }
     for i in 0..count {
-        let _ = wait_maintenance(pending[i].0, pending[i].1);
+        if !wait_maintenance(pending[i].0, pending[i].1) {
+            vifast_kernel::klog!(
+                RiscvPlatform,
+                "TLB SHOOTDOWN TIMEOUT (hart={})",
+                pending[i].0
+            );
+        }
     }
 }
 
@@ -912,8 +915,12 @@ impl vifast_kernel::PageTableOps for PageOps {
         unsafe {
             core::arch::asm!("sfence.vma zero, zero");
         }
+        // r299 (D4): bản cũ chỉ IPI MỘT hart đối diện (0↔1) — với 4 harts,
+        // hart 2/3 giữ TLB/walk-cache cũ trỏ vào bảng đã bị zero
+        // (detach_page_table gọi đúng đường này). Đi qua shootdown_all:
+        // publish tới MỌI hart online rồi chờ ACK từng hart.
         if BKL.held_by(current_hart()) {
-            let _ = request_ipi();
+            shootdown_all(u32::MAX);
         }
     }
 
@@ -1924,7 +1931,10 @@ impl Platform for RiscvPlatform {
             if let Some(counter) = USER_ENTRIES.get(hart) {
                 counter.fetch_add(1, Ordering::Relaxed);
             }
-            core::arch::asm!("csrs sie, {}", in(reg) (1u64 << 5) | (1u64 << 9));
+            core::arch::asm!(
+                "csrs sie, {}",
+                in(reg) (1u64 << 5) | (1u64 << 9) | (1u64 << 1)
+            );
             core::arch::asm!("mv tp, {}", in(reg) context.regs[4]);
             core::arch::asm!("mv sp, {}", in(reg) context.regs[2]);
             core::arch::asm!("mv a0, {}", in(reg) context.regs[10]);
@@ -2065,7 +2075,10 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
         count_user_entry();
     }
     if frame.scause == 0x8000_0000_0000_0001 {
-        let resched = MAINT_KIND[1].load(Ordering::Acquire) & MAINT_RESCHEDULE != 0;
+        // r299: đọc mailbox của CHÍNH hart đang trap, không phải cứng hart 1
+        // (trap có thể chạy trên hart 0..3).
+        let self_hart = RiscvPlatform::hart_id();
+        let resched = MAINT_KIND[self_hart].load(Ordering::Acquire) & MAINT_RESCHEDULE != 0;
         unsafe {
             core::arch::asm!("csrc sip, {}", in(reg) 1u64 << 1);
         }
@@ -2160,7 +2173,10 @@ pub extern "C" fn riscv_trap_handler(frame: *mut TrapFrame) {
     drop(bkl);
     if waiting {
         loop {
-            RiscvPlatform::wait_for_work(1);
+            // r299 (D6): park theo hart CỦA MÌNH — bản cũ cứng hart 1 nên task
+            // blocked trên hart 2/3 chờ has_ready_on(1) mãi (wakeup của nó
+            // set bit affinity 2/3, hart 1 không thấy bao giờ).
+            RiscvPlatform::wait_for_work(RiscvPlatform::hart_id());
             let bkl = bkl_lock();
             assert_current_tcb();
             if vifast_runtime::syscall::resume_blocked::<RiscvPlatform>(frame) {

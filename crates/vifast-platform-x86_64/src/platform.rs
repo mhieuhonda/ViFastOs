@@ -272,12 +272,15 @@ unsafe fn init_acpi(rsdp: u64) {
         X86_64::write_str("ACPI SKIP (above identity map)\r\n");
         return;
     }
-    let Some(revision) = (|| {
+    let Some((revision, rsdp_len)) = (|| {
         let length = identity_u32(rsdp + 20)? as usize;
         if length < 36 || length > 4096 || rsdp.saturating_add(length as u64) > 0x4000_0000 {
             return None;
         }
-        Some(core::slice::from_raw_parts(rsdp as *const u8, length)[15])
+        Some((
+            core::slice::from_raw_parts(rsdp as *const u8, length)[15],
+            length,
+        ))
     })() else {
         X86_64::write_str("ACPI SKIP (bad RSDP length)\r\n");
         return;
@@ -290,10 +293,9 @@ unsafe fn init_acpi(rsdp: u64) {
         X86_64::write_str("ACPI SKIP (above identity map)\r\n");
         return;
     };
-    let Some(rsdp_len) = identity_u32(rsdp + 20) else {
-        return;
-    };
-    let rsdp_table = core::slice::from_raw_parts(rsdp as *const u8, rsdp_len as usize);
+    // r299: dùng lại length ĐÃ KIỂM CHỨNG ở trên — đọc lại từ đĩa/bộ nhớ một
+    // lần nữa (TOCTOU) rồi dựng slice với giá trị chưa kiểm tra.
+    let rsdp_table = core::slice::from_raw_parts(rsdp as *const u8, rsdp_len);
     let Some(xsdt) = identity_table(xsdt_address, 4096) else {
         X86_64::write_str("ACPI SKIP (bad XSDT)\r\n");
         return;
@@ -1192,15 +1194,22 @@ fn assert_current_tcb(where_: &str) {
         .unwrap_or(usize::MAX);
     let actual = unsafe { (*state).current_tcb };
     if actual != expected {
-        vifast_kernel::klog!(
-            X86Platform,
-            "CURRENT MISMATCH where={} hart={} actual={} expected={}",
-            where_,
-            unsafe { (*state).hart_id },
-            actual,
-            expected
-        );
-        X86Platform::exit(1);
+        // r299 (T33b — đã đo trên riscv, đường fault_to_endpoint là code
+        // CHUNG của kernel nên x86 cùng bệnh): cache per-CPU không được cập
+        // nhật khi kernel xoá `current` của hart khác ⇒ lệch cache. Giết máy
+        // vì một chẩn đoán là sai trọng số: sửa cache + báo MỘT lần.
+        static MISMATCH_REPORTED: AtomicBool = AtomicBool::new(false);
+        if !MISMATCH_REPORTED.swap(true, Ordering::Relaxed) {
+            vifast_kernel::klog!(
+                X86Platform,
+                "CURRENT MISMATCH where={} hart={} actual={} expected={}",
+                where_,
+                hart,
+                actual,
+                expected
+            );
+        }
+        unsafe { (*state).current_tcb = expected };
     }
 }
 
@@ -1630,7 +1639,7 @@ unsafe fn install_real_trampoline() {
     ];
     let lm_offset = 0x80;
     core::ptr::copy_nonoverlapping(lm.as_mut_ptr(), page.add(lm_offset), lm.len());
-    let stack = core::ptr::addr_of!(TRAP_STACKS[AP_HART]) as u64 + 0x4000;
+    let stack = core::ptr::addr_of!(TRAP_STACKS[AP_HART]) as u64 + 32768;
     let entry = ap_entry as *const () as u64;
     core::ptr::write_unaligned(page.add(lm_offset + 16) as *mut u64, stack);
     core::ptr::write_unaligned(page.add(lm_offset + 26) as *mut u64, entry);
@@ -1854,14 +1863,14 @@ unsafe fn init_cpu(hartid: usize) {
     let index = core::cmp::min(hartid, MAX_HARTS - 1);
     CPU_STATES[index].hart_id = hartid;
     CPU_STATES[index].current_tcb = 0;
-    CPU_STATES[index].trap_stack_top = core::ptr::addr_of!(TRAP_STACKS[index]) as u64 + 16384;
+    CPU_STATES[index].trap_stack_top = core::ptr::addr_of!(TRAP_STACKS[index]) as u64 + 32768;
     write_msr(IA32_GS_BASE, core::ptr::addr_of!(CPU_STATES[index]) as u64);
     write_msr(IA32_KERNEL_GS_BASE, 0);
 }
 unsafe fn setup_hart_gdt_tss_idt(hart: usize) {
     let hart = core::cmp::min(hart, MAX_HARTS - 1);
     let tss = core::ptr::addr_of_mut!(TSSS[hart]);
-    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[hart]) as u64 + 16384;
+    (*tss).rsp0 = core::ptr::addr_of!(TRAP_STACKS[hart]) as u64 + 32768;
     (*tss).ist[0] = core::ptr::addr_of!(IST_STACKS[hart]) as u64 + 32768;
     (*tss).iomap = core::mem::size_of::<Tss>() as u16;
     let tss_base = tss as u64;
@@ -2188,9 +2197,11 @@ impl vifast_kernel::PageTableOps for PageOps {
     }
 
     fn flush_all_user(&self) {
-        unsafe {
-            reload_cr3();
-        }
+        // r299 (D4): bản cũ chỉ reload CR3 cục bộ — detach_page_table gọi
+        // đúng đường này sau khi zero bảng trang, AP còn giữ TLB cũ. Gửi
+        // shootdown tới mọi hart online như flush_all_asid (targets=all;
+        // lọc AP_STARTED/APIC_IDS bên trong).
+        self.flush_all_asid(0, u32::MAX);
     }
 
     fn flush_va_asid(&self, asid: u16, va: u64, pages: usize, targets: u32) {
@@ -2616,8 +2627,11 @@ impl Platform for X86Platform {
                 return false;
             }
             set_active_root(root_pa, asid);
+            // r299 (D1): PCID nằm ở bits 11:0 của CR3, KHÔNG phải dịch lên
+            // 12 — bản cũ `(asid << 12)` đặt "PCID" vào giữa trường địa chỉ
+            // PML4 nên PCID bật (KVM/-cpu max) là nạp SAI gốc bảng trang.
             let cr3 = if PCID_ENABLED {
-                root_pa | (((asid as u64) & 0x0fff) << 12)
+                root_pa | ((asid as u64) & 0x0fff)
             } else {
                 root_pa
             };
@@ -2974,6 +2988,14 @@ impl Platform for X86Platform {
                     core::arch::asm!("sti", "hlt", "cli", options(nomem, nostack));
                 }
                 AP_IDLE_WINDOW.store(false, Ordering::SeqCst);
+            } else if hart == 0 {
+                // r299 (D10): BSP không được quay tay với IF=0 — một task
+                // Sleep đơn độc trên hart 0 (AP chưa lên) sẽ không bao giờ
+                // được đánh thức vì IRQ0 không lọt. Cùng cửa sổ sti/hlt/cli
+                // như AP.
+                unsafe {
+                    core::arch::asm!("sti", "hlt", "cli", options(nomem, nostack));
+                }
             } else {
                 core::hint::spin_loop();
             }
@@ -3071,18 +3093,9 @@ extern "efiapi" {
 
 #[no_mangle]
 extern "efiapi" fn x86_exception_handler(frame: *const u64, vector: u64, error: u64) -> ! {
-    if X86Platform::hart_id() != 0 {
-        vifast_kernel::klog!(
-            X86Platform,
-            "AP EXCEPTION vector={} err={:#x} rip={:#x} cs={:#x} rsp={:#x}",
-            vector,
-            error,
-            unsafe { *frame.add(17) },
-            unsafe { *frame.add(18) },
-            unsafe { *frame.add(20) }
-        );
-        X86Platform::exit(1);
-    }
+    // r299 (D8): bỏ nhánh giết máy cho AP — user task CHẠY trên AP (ap_idle_loop
+    // → pick_on(1) → enter_user), một #DE/#UD/#GP ring-3 ở AP phải được đưa
+    // tới pager như trên BSP chứ không phải exit(1) giết cả máy.
     assert_irqs_disabled();
     let bkl = bkl_lock();
     assert_current_tcb("exception");

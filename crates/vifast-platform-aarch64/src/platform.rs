@@ -1,6 +1,6 @@
 //! AArch64 QEMU `virt` platform: 4-level MMU, GICv2, generic timer and PSCI.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use vifast_abi::{KError, Rights};
 use vifast_arch::bkl::{BigKernelGuard, BigKernelLock};
@@ -536,7 +536,10 @@ unsafe fn init_cpu(hartid: usize) {
         (*entries)[index].hart_id = hartid;
         (*entries)[index].current_tcb = 0;
         let stack = core::ptr::addr_of!(TRAP_STACKS[index]) as u64;
-        (*entries)[index].trap_stack_top = stack + 16384;
+        // r299 (D13): dùng HẾT slot 32 KiB (stack mọc xuống nên top phải là
+        // đáy slot + kích thước thật) — bản cũ +16384 bỏ hoang nửa dưới và
+        // lệch với riscv (+32768).
+        (*entries)[index].trap_stack_top = stack + 32768;
     }
     let state = unsafe { core::ptr::addr_of_mut!((*entries)[index]) } as u64;
     core::arch::asm!("msr tpidr_el1, {}", in(reg) state);
@@ -570,7 +573,9 @@ fn service_gic() -> (bool, bool) {
         if irq == 1023 {
             return (saw_timer, saw_sgi);
         }
-        write32(GICC + 0x010, irq);
+        // r299: EOI phải ghi lại NGUYÊN GIÁ TRỊ IAR — với SGI, GICv2 yêu cầu
+        // CPUID[12:10] đi kèm INTID; chỉ ghi INTID là hụt trường đó.
+        write32(GICC + 0x010, iar);
         if irq == 2 || vifast_arch::panic::is_panicking() {
             Aarch64::irq_disable();
             Aarch64::halt();
@@ -749,11 +754,23 @@ fn assert_current_tcb() {
         .current_on(hart)
         .map(|tcb| tcb.index as usize)
         .unwrap_or(usize::MAX);
-    assert_eq!(
-        unsafe { (*state).current_tcb },
-        expected,
-        "per-CPU current_tcb mismatch"
-    );
+    let actual = unsafe { (*state).current_tcb };
+    if actual != expected {
+        // r299 (T33b — cùng vá riscv/x86): `fault_to_endpoint` xoá `current`
+        // của MỌI hart khi park task, cache per-CPU không kịp theo ⇒ panic
+        // đo 0,5-1% boot là giết máy oan. Sửa cache + báo MỘT lần.
+        static MISMATCH_REPORTED: AtomicBool = AtomicBool::new(false);
+        if !MISMATCH_REPORTED.swap(true, Ordering::Relaxed) {
+            vifast_kernel::klog!(
+                Aarch64Platform,
+                "CURRENT MISMATCH (hart={}, cache={}, kernel={})",
+                hart,
+                actual,
+                expected
+            );
+        }
+        unsafe { (*state).current_tcb = expected };
+    }
 }
 
 fn active_root_matches_current() -> bool {
@@ -1289,7 +1306,11 @@ impl Platform for Aarch64Platform {
             }
             set_active_root(root_pa, asid);
             // TCR_EL1.AS=1 enables 16-bit ASIDs; TTBR0 carries the tag.
-            let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36);
+            // r299 (D16): SH0=0b11 (Inner Shareable) — mọi shootdown dùng
+            // tlbi ...is / dsb ish thì walk của TTBR0 cũng phải cùng shareability,
+            // không thì phần cứng 2-PE thật đi bộ bảng không nhất quán (QEMU
+            // khoan dung, máy thật thì không).
+            let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36) | (0b11 << 12);
             core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);
             let ttbr = root_pa | ((asid as u64) << 48);
             core::arch::asm!("msr ttbr0_el1, {}", in(reg) ttbr);
@@ -1391,7 +1412,9 @@ impl Platform for Aarch64Platform {
     fn enter_user(context: &TrapFrame) -> ! {
         assert_bkl_released();
         SCHED_READY.store(true, Ordering::SeqCst);
-        let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36);
+        // r299 (D16): SH0=0b11 như switch_root — walk TTBR0 cùng shareability
+        // với tlbi ...is / dsb ish.
+        let tcr: u64 = 16 | (1 << 23) | (2 << 32) | (1 << 36) | (0b11 << 12);
         let mair: u64 = 0xFF;
         unsafe {
             core::arch::asm!("msr tcr_el1, {}", in(reg) tcr);
@@ -2072,13 +2095,13 @@ extern "C" fn aarch64_irq_handler(frame: *mut TrapFrame) {
         if woke && Aarch64Platform::hart_id() == 0 && Aarch64Platform::kernel().has_ready_on(1) {
             Aarch64Platform::wake_hart(1);
         }
-        write32(GICC + 0x010, irq);
+        write32(GICC + 0x010, iar);
         drop(bkl);
         assert_bkl_released();
         return;
     }
     if irq != TIMER_IRQ {
-        write32(GICC + 0x010, irq);
+        write32(GICC + 0x010, iar);
         if irq == 1 {
             RESCHED_PENDING[1].store(false, Ordering::SeqCst);
             RESCHED_WAKE.fetch_add(1, Ordering::Relaxed);

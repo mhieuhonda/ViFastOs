@@ -210,18 +210,26 @@ impl Mailbox {
     /// Lấy việc ra làm. `None` khi không có việc THẬT (kể cả khi `seq` đã tăng
     /// nhưng `kind` chưa tới) — trường hợp đó KHÔNG được ACK.
     pub fn take(&self) -> Option<(usize, Kind, Scope)> {
+        // r299: cả quy trình phải nằm trong lock — bản cũ swap kind rồi xoá
+        // scope NGOÀI lock, một `publish()` xen vào giữa sẽ bị store_scope
+        // (Free) đè mất scope mới; yêu cầu sống sót thành (seq, kind,
+        // Scope::Free), consumer coi Free là no-op rồi ACK — flush bị nuốt.
+        self.lock();
         let seq = self.seq.load(Ordering::Acquire);
         if seq == 0 || self.ack.load(Ordering::Acquire) >= seq {
+            self.unlock();
             return None;
         }
         let kind = self.kind.swap(0, Ordering::AcqRel);
         if kind == 0 {
+            self.unlock();
             return None;
         }
         let scope = self.current_scope();
         // Payload thuộc về `seq` vừa lấy; trả vùng payload về Free để yêu cầu
         // sau không "thừa hưởng" nó.
         self.store_scope(Scope::Free);
+        self.unlock();
         Some((seq, kind, scope))
     }
 

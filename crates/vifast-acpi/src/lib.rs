@@ -89,8 +89,14 @@ pub fn parse(rsdp: &[u8], xsdt: &[u8], madt: &[u8], madt_address: u64) -> Result
         return Err(Error::BadChecksum);
     }
     let revision = rsdp[15];
-    let length = u32_at(rsdp, 20) as usize;
     if revision >= 2 {
+        // r299: cần đủ 36 byte (kích thước RSDP v2) TRƯỚC khi đọc trường
+        // length ở offset 20 — bản cũ chỉ chặn < 20 nên slice 20..24 bịa
+        // index quá mảng, ACPI hỏng là panic kernel thay vì Err sạch.
+        if rsdp.len() < 36 {
+            return Err(Error::TooShort);
+        }
+        let length = u32_at(rsdp, 20) as usize;
         if length < 36 || length > rsdp.len() {
             return Err(Error::BadLength);
         }
