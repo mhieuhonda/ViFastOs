@@ -61,7 +61,14 @@ pub mod pager {
     pub const fn valid_label(label: u64) -> bool {
         matches!(
             label,
-            LABEL_FAULT | LABEL_MAP | LABEL_UNMAP | LABEL_EVICT | LABEL_REPLY | LABEL_RUN
+            LABEL_FAULT
+                | LABEL_MAP
+                | LABEL_UNMAP
+                | LABEL_EVICT
+                | LABEL_REPLY
+                | LABEL_RUN
+                | LABEL_KILL
+                | LABEL_LOOP
         )
     }
 
@@ -183,6 +190,9 @@ pub mod pager {
                 LABEL_UNMAP,
                 LABEL_EVICT,
                 LABEL_REPLY,
+                LABEL_RUN,
+                LABEL_KILL,
+                LABEL_LOOP,
             ];
             for (index, label) in labels.iter().enumerate() {
                 assert!(valid_label(*label));
@@ -1396,6 +1406,7 @@ mod vfs_seq_tests {
     }
 }
 
+#[cfg(test)]
 mod build_tests {
     use super::build;
 
