@@ -29,7 +29,7 @@ CRATES: dict[str, str] = {
     "vifast-elf": "",
     "vifast-acpi": "",
     "vifast-fs": "định dạng đĩa, biên block, fsck; nằm trong cổng từ vòng 166",
-    "vifast-virtio": "checksum TCP/IP; nằm trong cổng từ vòng 167",
+    "vifast-virtio": "checksum TCP/IP, keymap bàn phím; nằm trong cổng từ vòng 167",
 }
 
 

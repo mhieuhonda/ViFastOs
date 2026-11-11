@@ -1276,6 +1276,118 @@ pub fn flush() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::{input_key_ascii, InputEvent, EV_KEY};
+
+    fn key(code: u16, value: u32) -> InputEvent {
+        InputEvent {
+            kind: EV_KEY,
+            code,
+            value,
+            desc_id: 0,
+        }
+    }
+
+    /// Ctrl/Alt/Meta/CapsLock phải câm: code 29 (KEY_LEFTCTRL) trước đây bị
+    /// map nhầm thành 'a' nên giữ Ctrl bơm chữ vào shell.
+    #[test]
+    fn modifier_keys_do_not_type() {
+        unsafe {
+            super::INPUT_SHIFT = false;
+        }
+        for code in [29u16, 56, 58, 97, 100, 125, 126] {
+            assert_eq!(input_key_ascii(key(code, 1)), None, "code {code}");
+        }
+    }
+
+    /// Shift trên hàng số cho ký tự trên cùng; trước đây shift+1 vẫn ra '1'
+    /// vì hai nhánh if/else giống hệt nhau.
+    #[test]
+    fn shift_row_types_top_symbols() {
+        unsafe {
+            super::INPUT_SHIFT = true;
+        }
+        for (code, shifted) in [
+            (2u16, b'!'),
+            (3, b'@'),
+            (4, b'#'),
+            (5, b'$'),
+            (6, b'%'),
+            (7, b'^'),
+            (8, b'&'),
+            (9, b'*'),
+            (10, b'('),
+            (11, b')'),
+            (12, b'_'),
+            (13, b'+'),
+            (26, b'{'),
+            (27, b'}'),
+            (39, b':'),
+            (40, b'"'),
+            (41, b'~'),
+            (43, b'|'),
+            (51, b'<'),
+            (52, b'>'),
+            (53, b'?'),
+        ] {
+            assert_eq!(input_key_ascii(key(code, 1)), Some(shifted), "code {code}");
+        }
+        unsafe {
+            super::INPUT_SHIFT = false;
+        }
+        for (code, plain) in [(2u16, b'1'), (11, b'0'), (12, b'-'), (13, b'='), (53, b'/')] {
+            assert_eq!(input_key_ascii(key(code, 1)), Some(plain), "code {code}");
+        }
+    }
+
+    /// Shift phải HOÁ THƯỜNG cho mọi chữ cái (trước đây chỉ a/h/l, còn
+    /// s/d/f/j/k/m... vẫn chữ thường khi giữ shift).
+    #[test]
+    fn shift_uppercases_every_letter() {
+        unsafe {
+            super::INPUT_SHIFT = true;
+        }
+        for (code, lower) in [
+            (16u16, b'q'),
+            (17, b'w'),
+            (30, b'a'),
+            (31, b's'),
+            (32, b'd'),
+            (33, b'f'),
+            (35, b'h'),
+            (36, b'j'),
+            (37, b'k'),
+            (38, b'l'),
+            (44, b'z'),
+            (50, b'm'),
+        ] {
+            assert_eq!(
+                input_key_ascii(key(code, 1)),
+                Some(lower.to_ascii_uppercase()),
+                "code {code}"
+            );
+        }
+        unsafe {
+            super::INPUT_SHIFT = false;
+        }
+        assert_eq!(input_key_ascii(key(31, 1)), Some(b's'));
+        assert_eq!(input_key_ascii(key(50, 1)), Some(b'm'));
+    }
+
+    /// Phím điều khiển sinh ký tự đúng: backslash (43) trước đây bị rơi vào
+    /// nhánh _ => None dù là phím thật trên bàn phím US.
+    #[test]
+    fn punctuation_and_control_keys() {
+        unsafe {
+            super::INPUT_SHIFT = false;
+        }
+        assert_eq!(input_key_ascii(key(43, 1)), Some(b'\\'));
+        assert_eq!(input_key_ascii(key(14, 1)), Some(8));
+        assert_eq!(input_key_ascii(key(15, 1)), Some(b'\t'));
+        assert_eq!(input_key_ascii(key(28, 1)), Some(b'\r'));
+        assert_eq!(input_key_ascii(key(57, 1)), Some(b' '));
+        assert_eq!(input_key_ascii(key(255, 1)), None);
+    }
+
     use super::checksum;
 
     /// RFC 1071 mẫu IPv4 header: checksum tính ra phải đúng 0xb861.
@@ -2021,8 +2133,9 @@ pub fn input_poll() -> Option<InputEvent> {
     }
 }
 
-/// Dịch sự kiện bàn phím thành byte ASCII (nếu có). Tự xử lý Shift. Trả về
-/// None cho phím không map hoặc sự kiện không phải EV_KEY.
+/// Dịch sự kiện bàn phím thành byte ASCII (nếu có). Tự xử lý Shift; Ctrl,
+/// Alt, Meta, CapsLock không sinh ký tự. Trả về None cho phím không map hoặc
+/// sự kiện không phải EV_KEY.
 pub fn input_key_ascii(event: InputEvent) -> Option<u8> {
     if event.kind == EV_SYN {
         return None;
@@ -2042,96 +2155,197 @@ pub fn input_key_ascii(event: InputEvent) -> Option<u8> {
     if event.value != 1 {
         return None;
     }
+    // Phím điều khiển không sinh ký tự. Code 29 trước đây bị map nhầm thành
+    // chữ 'a' nên mỗi lần nhấn/giữ Ctrl trái lại bơm thêm 'a' vào shell;
+    // các phím Alt/Meta/CapsLock trước đây rơi vào nhánh _ => None nhưng ghi
+    // rõ ở đây cho bảng mã đủ nghĩa (Linux input-event-codes).
+    if matches!(event.code, 29 | 56 | 58 | 97 | 100 | 125 | 126) {
+        return None;
+    }
     let shift = unsafe { INPUT_SHIFT };
+    let letter = |c: u8| if shift { c.to_ascii_uppercase() } else { c };
     let byte = match event.code {
+        // Hàng số: shift cho ký tự trên cùng (!@#$%^&*()). Trước đây shift+1
+        // vẫn trả '1' vì hai nhánh if/else giống hệt nhau.
         2 => {
             if shift {
-                b'1'
+                b'!'
             } else {
                 b'1'
             }
         }
-        3 => b'2',
-        4 => b'3',
-        5 => b'4',
-        6 => b'5',
-        7 => b'6',
-        8 => b'7',
-        9 => b'8',
-        10 => b'9',
-        11 => b'0',
-        12 => b'-',
-        13 => b'=',
+        3 => {
+            if shift {
+                b'@'
+            } else {
+                b'2'
+            }
+        }
+        4 => {
+            if shift {
+                b'#'
+            } else {
+                b'3'
+            }
+        }
+        5 => {
+            if shift {
+                b'$'
+            } else {
+                b'4'
+            }
+        }
+        6 => {
+            if shift {
+                b'%'
+            } else {
+                b'5'
+            }
+        }
+        7 => {
+            if shift {
+                b'^'
+            } else {
+                b'6'
+            }
+        }
+        8 => {
+            if shift {
+                b'&'
+            } else {
+                b'7'
+            }
+        }
+        9 => {
+            if shift {
+                b'*'
+            } else {
+                b'8'
+            }
+        }
+        10 => {
+            if shift {
+                b'('
+            } else {
+                b'9'
+            }
+        }
+        11 => {
+            if shift {
+                b')'
+            } else {
+                b'0'
+            }
+        }
+        12 => {
+            if shift {
+                b'_'
+            } else {
+                b'-'
+            }
+        }
+        13 => {
+            if shift {
+                b'+'
+            } else {
+                b'='
+            }
+        }
         14 => 8, // Backspace
         15 => b'\t',
-        16 => b'q',
-        17 => b'w',
-        18 => b'e',
-        19 => b'r',
-        20 => b't',
-        21 => b'y',
-        22 => b'u',
-        23 => b'i',
-        24 => b'o',
-        25 => b'p',
-        26 => b'[',
-        27 => b']',
+        16 => letter(b'q'),
+        17 => letter(b'w'),
+        18 => letter(b'e'),
+        19 => letter(b'r'),
+        20 => letter(b't'),
+        21 => letter(b'y'),
+        22 => letter(b'u'),
+        23 => letter(b'i'),
+        24 => letter(b'o'),
+        25 => letter(b'p'),
+        26 => {
+            if shift {
+                b'{'
+            } else {
+                b'['
+            }
+        }
+        27 => {
+            if shift {
+                b'}'
+            } else {
+                b']'
+            }
+        }
         28 => b'\r', // Enter
-        29 => {
+        30 => letter(b'a'),
+        31 => letter(b's'),
+        32 => letter(b'd'),
+        33 => letter(b'f'),
+        34 => letter(b'g'),
+        35 => letter(b'h'),
+        36 => letter(b'j'),
+        37 => letter(b'k'),
+        38 => letter(b'l'),
+        39 => {
             if shift {
-                b'A'
+                b':'
             } else {
-                b'a'
+                b';'
             }
         }
-        30 => {
+        40 => {
             if shift {
-                b'A'
+                b'"'
             } else {
-                b'a'
+                b'\''
             }
         }
-        31 => b's',
-        32 => b'd',
-        33 => b'f',
-        34 => b'g',
-        35 => {
+        41 => {
             if shift {
-                b'H'
+                b'~'
             } else {
-                b'h'
+                b'`'
             }
         }
-        36 => b'j',
-        37 => b'k',
-        38 => {
+        43 => {
             if shift {
-                b'L'
+                b'|'
             } else {
-                b'l'
+                b'\\'
             }
         }
-        39 => b';',
-        40 => b'\'',
-        41 => b'`',
-        42 => 0,
-        44 => b'z',
-        45 => b'x',
-        46 => b'c',
-        47 => b'v',
-        48 => b'b',
-        49 => b'n',
-        50 => b'm',
-        51 => b',',
-        52 => b'.',
-        53 => b'/',
-        54 => 0,
+        44 => letter(b'z'),
+        45 => letter(b'x'),
+        46 => letter(b'c'),
+        47 => letter(b'v'),
+        48 => letter(b'b'),
+        49 => letter(b'n'),
+        50 => letter(b'm'),
+        51 => {
+            if shift {
+                b'<'
+            } else {
+                b','
+            }
+        }
+        52 => {
+            if shift {
+                b'>'
+            } else {
+                b'.'
+            }
+        }
+        53 => {
+            if shift {
+                b'?'
+            } else {
+                b'/'
+            }
+        }
         57 => b' ',
         _ => return None,
     };
-    if byte == 0 {
-        return None;
-    }
     Some(byte)
 }
 
