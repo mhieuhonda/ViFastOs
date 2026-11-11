@@ -1276,7 +1276,7 @@ pub fn flush() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{input_key_ascii, InputEvent, EV_KEY};
+    use super::{input_key_ascii, keycode_ascii, InputEvent, EV_KEY};
 
     fn key(code: u16, value: u32) -> InputEvent {
         InputEvent {
@@ -1291,9 +1291,6 @@ mod tests {
     /// map nhầm thành 'a' nên giữ Ctrl bơm chữ vào shell.
     #[test]
     fn modifier_keys_do_not_type() {
-        unsafe {
-            super::INPUT_SHIFT = false;
-        }
         for code in [29u16, 56, 58, 97, 100, 125, 126] {
             assert_eq!(input_key_ascii(key(code, 1)), None, "code {code}");
         }
@@ -1303,9 +1300,6 @@ mod tests {
     /// vì hai nhánh if/else giống hệt nhau.
     #[test]
     fn shift_row_types_top_symbols() {
-        unsafe {
-            super::INPUT_SHIFT = true;
-        }
         for (code, shifted) in [
             (2u16, b'!'),
             (3, b'@'),
@@ -1329,23 +1323,20 @@ mod tests {
             (52, b'>'),
             (53, b'?'),
         ] {
-            assert_eq!(input_key_ascii(key(code, 1)), Some(shifted), "code {code}");
-        }
-        unsafe {
-            super::INPUT_SHIFT = false;
+            assert_eq!(keycode_ascii(code, true), Some(shifted), "code {code}");
         }
         for (code, plain) in [(2u16, b'1'), (11, b'0'), (12, b'-'), (13, b'='), (53, b'/')] {
-            assert_eq!(input_key_ascii(key(code, 1)), Some(plain), "code {code}");
+            assert_eq!(keycode_ascii(code, false), Some(plain), "code {code}");
         }
     }
 
     /// Shift phải HOÁ THƯỜNG cho mọi chữ cái (trước đây chỉ a/h/l, còn
-    /// s/d/f/j/k/m... vẫn chữ thường khi giữ shift).
+    /// s/d/f/j/k/m... vẫn chữ thường khi giữ shift). Chỉ test này chạm cờ
+    /// `INPUT_SHIFT` — qua đúng sự kiện phím Shift (code 42), nên không
+    /// tranh biến tĩnh với test khác khi chạy song song.
     #[test]
     fn shift_uppercases_every_letter() {
-        unsafe {
-            super::INPUT_SHIFT = true;
-        }
+        assert_eq!(input_key_ascii(key(42, 1)), None);
         for (code, lower) in [
             (16u16, b'q'),
             (17, b'w'),
@@ -1361,31 +1352,26 @@ mod tests {
             (50, b'm'),
         ] {
             assert_eq!(
-                input_key_ascii(key(code, 1)),
+                keycode_ascii(code, true),
                 Some(lower.to_ascii_uppercase()),
                 "code {code}"
             );
         }
-        unsafe {
-            super::INPUT_SHIFT = false;
-        }
-        assert_eq!(input_key_ascii(key(31, 1)), Some(b's'));
-        assert_eq!(input_key_ascii(key(50, 1)), Some(b'm'));
+        assert_eq!(input_key_ascii(key(42, 0)), None);
+        assert_eq!(keycode_ascii(31, false), Some(b's'));
+        assert_eq!(keycode_ascii(50, false), Some(b'm'));
     }
 
     /// Phím điều khiển sinh ký tự đúng: backslash (43) trước đây bị rơi vào
     /// nhánh _ => None dù là phím thật trên bàn phím US.
     #[test]
     fn punctuation_and_control_keys() {
-        unsafe {
-            super::INPUT_SHIFT = false;
-        }
-        assert_eq!(input_key_ascii(key(43, 1)), Some(b'\\'));
-        assert_eq!(input_key_ascii(key(14, 1)), Some(8));
-        assert_eq!(input_key_ascii(key(15, 1)), Some(b'\t'));
-        assert_eq!(input_key_ascii(key(28, 1)), Some(b'\r'));
-        assert_eq!(input_key_ascii(key(57, 1)), Some(b' '));
-        assert_eq!(input_key_ascii(key(255, 1)), None);
+        assert_eq!(keycode_ascii(43, false), Some(b'\\'));
+        assert_eq!(keycode_ascii(14, false), Some(8));
+        assert_eq!(keycode_ascii(15, false), Some(b'\t'));
+        assert_eq!(keycode_ascii(28, false), Some(b'\r'));
+        assert_eq!(keycode_ascii(57, false), Some(b' '));
+        assert_eq!(keycode_ascii(255, false), None);
     }
 
     use super::checksum;
@@ -2162,9 +2148,16 @@ pub fn input_key_ascii(event: InputEvent) -> Option<u8> {
     if matches!(event.code, 29 | 56 | 58 | 97 | 100 | 125 | 126) {
         return None;
     }
-    let shift = unsafe { INPUT_SHIFT };
+    keycode_ascii(event.code, unsafe { INPUT_SHIFT })
+}
+
+/// Bảng mã thuần: chỉ phụ thuộc `code` và trạng thái Shift, không đọc/ghi
+/// biến tĩnh nào. Tách khỏi `input_key_ascii` để test kiểm tra bảng mã mà
+/// không phải sửa `INPUT_SHIFT` — bốn test cùng đặt cờ toàn cục từng làm
+/// `cargo test` đa luồng flaky (race trên `static mut`).
+fn keycode_ascii(code: u16, shift: bool) -> Option<u8> {
     let letter = |c: u8| if shift { c.to_ascii_uppercase() } else { c };
-    let byte = match event.code {
+    let byte = match code {
         // Hàng số: shift cho ký tự trên cùng (!@#$%^&*()). Trước đây shift+1
         // vẫn trả '1' vì hai nhánh if/else giống hệt nhau.
         2 => {
