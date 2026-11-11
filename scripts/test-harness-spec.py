@@ -352,6 +352,16 @@ def main() -> int:
             # `<file>:<dòng>`; cả hai dạng in (có/không dấu hai chấm) đều đọc được.
             ("", "T-BOOT", "không có dòng kernel nào"),
             (
+                "KERNEL ENTRY\nbooting on\nFS V2 OK\nSHELL READY\nPREEMPT OK\n",
+                "T-IPC",
+                "vào shell nhưng dừng trước IPC RIGHTS OK ⇒ T-IPC",
+            ),
+            (
+                "KERNEL ENTRY\nbooting on\nFS V2 OK\nSHELL READY\nIPC RIGHTS BAD err=8\nPREEMPT OK\n",
+                "T-KHAC",
+                "có IPC RIGHTS BAD ⇒ không phải T-IPC",
+            ),
+            (
                 "KERNEL ENTRY\nbooting on\nPANIC AT crates/vifast-kernel/src/lib.rs:1234\n",
                 "T-ROOT crates/vifast-kernel/src/lib.rs:1234",
                 "panic kernel riscv/aarch64 có vị trí (T33b)",

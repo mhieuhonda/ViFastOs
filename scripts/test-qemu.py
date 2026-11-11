@@ -639,6 +639,16 @@ def classify_failure(output: str) -> str:
         return "T-FS"
     if "FS V2 OK" not in output and "SHELL READY" in output:
         return "T-FS"
+    # (4b) T-IPC (đo 6/156 trên `ps`, 1/201 trên riscv64 — chữ ký CHƯA có tên):
+    # xét SAU các lớp trên (để không nuốt chết-sớm), TRƯỚC (5): guest đã qua FS
+    # và shell nhưng dừng giữa `SHELL READY` và `IPC RIGHTS *` ⇒ kẹt trong
+    # `cap_mint` (syscall), không phải lỗi quyền (lỗi quyền in `IPC RIGHTS BAD`).
+    if (
+        "SHELL READY" in output
+        and "IPC RIGHTS OK" not in output
+        and "IPC RIGHTS BAD" not in output
+    ):
+        return "T-IPC"
     # (5) Thiếu PREEMPT OK mà không có dấu hiệu nào ở trên: vẫn là scheduler.
     if "PREEMPT OK" not in output:
         return "T-SCHED"
