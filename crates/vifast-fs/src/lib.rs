@@ -913,31 +913,37 @@ impl<D: BlockDev> Fs<D> {
         block_used: &mut [u8; (BITMAP_BLOCKS as usize) * BLOCK_SIZE],
     ) -> Result<(), FsError> {
         let direct = self.direct_blocks;
+        // r299: VF02 có direct = MAX_BLOCKS_PER_INODE (= 12) nên không còn
+        // slot nào cho bảng gián tiếp — `blocks[direct]` là index quá mảng
+        // [u32; 12], panic ngay khi mount+fsck ảnh v2 chứa file. File v2
+        // không vượt 12 block nên không có gì để kiểm thêm.
+        if direct >= MAX_BLOCKS_PER_INODE {
+            return Ok(());
+        }
         let single = inode.blocks[direct];
         if self.version < 4 {
-            if used_blocks > direct {
-                if single == 0 {
+            if used_blocks <= direct {
+                if single != 0 {
                     return Err(FsError::Corrupt);
                 }
-                self.fsck_mark_block(single, block_used)?;
-                let mut table = zero_block();
-                self.dev.read(single, &mut table)?;
-                let keep = used_blocks - direct;
-                for slot in 0..INDIRECT_ENTRIES {
-                    if slot >= keep && get_u32(&table, slot * 4) != 0 {
-                        return Err(FsError::Corrupt);
-                    }
+                return Ok(());
+            }
+            self.fsck_mark_block(single, block_used)?;
+            let mut table = zero_block();
+            self.dev.read(single, &mut table)?;
+            let keep = used_blocks - direct;
+            for slot in 0..INDIRECT_ENTRIES {
+                if slot >= keep && get_u32(&table, slot * 4) != 0 {
+                    return Err(FsError::Corrupt);
                 }
-            } else if single != 0 {
-                return Err(FsError::Corrupt);
             }
             return Ok(());
         }
 
-        if used_blocks > direct {
-            if single == 0 {
-                return Err(FsError::Corrupt);
-            }
+        if used_blocks > direct && single != 0 {
+            // r299: single == 0 khi used_blocks > direct là LỖ của file thưa
+            // (dữ liệu nằm hẳn ở vùng double) — hợp lệ, chỉ bỏ qua đánh dấu.
+            // Bản cũ trả Corrupt cho chính image do writer tạo ra.
             self.fsck_mark_block(single, block_used)?;
             let mut table = zero_block();
             self.dev.read(single, &mut table)?;
@@ -947,7 +953,7 @@ impl<D: BlockDev> Fs<D> {
                     return Err(FsError::Corrupt);
                 }
             }
-        } else if single != 0 {
+        } else if used_blocks <= direct && single != 0 {
             return Err(FsError::Corrupt);
         }
 
@@ -964,10 +970,10 @@ impl<D: BlockDev> Fs<D> {
             let keep_tables = (double_used + INDIRECT_ENTRIES - 1) / INDIRECT_ENTRIES;
             for slot in 0..INDIRECT_ENTRIES {
                 let second = get_u32(&table, slot * 4);
-                if slot < keep_tables {
-                    if second == 0 {
-                        return Err(FsError::Corrupt);
-                    }
+                if slot < keep_tables && second != 0 {
+                    // r299: second == 0 trong phạm vi keep là lỗ thưa giữa
+                    // chừng — bỏ qua như single ở trên; chỉ đánh dấu bảng có
+                    // thật.
                     self.fsck_mark_block(second, block_used)?;
                     let mut second_table = zero_block();
                     self.dev.read(second, &mut second_table)?;
@@ -981,7 +987,7 @@ impl<D: BlockDev> Fs<D> {
                             return Err(FsError::Corrupt);
                         }
                     }
-                } else if second != 0 {
+                } else if slot >= keep_tables && second != 0 {
                     return Err(FsError::Corrupt);
                 }
             }
@@ -1042,7 +1048,7 @@ impl<D: BlockDev> Fs<D> {
                         }
                         continue;
                     }
-                    if *block < DATA_START || *block >= self.dev.block_count() {
+                    if *block < DATA_START || *block >= self.capacity {
                         return Err(FsError::Corrupt);
                     }
                     let mut data = zero_block();
@@ -1475,15 +1481,16 @@ impl<D: BlockDev> Fs<D> {
             return Err(FsError::Corrupt);
         }
         let relative = block_index - self.direct_blocks;
-        let indirect = inode.blocks[self.direct_blocks];
-        if indirect == 0 {
-            return Ok(0);
-        }
         if self.version < 4 && relative >= INDIRECT_ENTRIES {
             // Không có double-indirect ở định dạng cũ ⇒ chỉ số này bịa.
             return Err(FsError::Corrupt);
         }
         if self.version >= 4 && relative >= INDIRECT_ENTRIES {
+            // r299: phải nhìn bảng DOUBLE TRƯỚC khi đoán theo single — bản
+            // cũ `single == 0 → return 0` đứng trước nhánh này nên file thưa
+            // có dữ liệu đầu tiên ở vùng double bị coi là lỗ hoàn toàn:
+            // read mất dữ liệu, rewrite cấp block mới và bỏ lọt block cũ
+            // (bitmap không khớp, fsck Corrupt).
             let double_index = self.direct_blocks + 1;
             let double = inode.blocks[double_index];
             if double == 0 {
@@ -1502,6 +1509,10 @@ impl<D: BlockDev> Fs<D> {
             }
             let table = self.read_staged(table)?;
             return Ok(get_u32(&table, (double_relative % INDIRECT_ENTRIES) * 4));
+        }
+        let indirect = inode.blocks[self.direct_blocks];
+        if indirect == 0 {
+            return Ok(0);
         }
         let block = self.read_staged(indirect)?;
         Ok(get_u32(&block, relative * 4))
@@ -1585,7 +1596,9 @@ impl<D: BlockDev> Fs<D> {
                 }
             }
         }
-        if inode.kind == INODE_FILE {
+        // r299: VF02 (direct = 12 = MAX_BLOCKS_PER_INODE) không có slot gián
+        // tiếp — blocks[direct] quá mảng, panic khi unlink file trên ảnh v2.
+        if inode.kind == INODE_FILE && self.direct_blocks < MAX_BLOCKS_PER_INODE {
             let indirect = inode.blocks[self.direct_blocks];
             if indirect != 0 {
                 self.mark_free(indirect);
@@ -1666,6 +1679,12 @@ impl<D: BlockDev> Fs<D> {
             return Err(FsError::NameTooLong);
         }
         if name == b"." || name == b".." {
+            return Err(FsError::Invalid);
+        }
+        // r299: fsck từ chối tên chứa NUL (name.contains(&0) → Corrupt) —
+        // writer phải chặn ngay từ next_component, nếu không một lần tạo
+        // là đủ báo ảnh dirty vĩnh viễn.
+        if name.contains(&0) {
             return Err(FsError::Invalid);
         }
         Ok(Some(name))
@@ -1971,6 +1990,11 @@ impl<D: BlockDev> Fs<D> {
         self.stage_bitmap()?;
         self.stage_inode(ino)?;
         if let Err(error) = self.write_dir_entry(parent, &name[..name_len], ino) {
+            // r299: rollback như create() — dir đầy không được để lọt inode
+            // + block đã cấp: transaction kế stage bitmap sẽ persist chỗ
+            // leak và fsck báo inode mồ côi vĩnh viễn.
+            self.release_inode(ino);
+            self.mark_free(block_no);
             self.tx_count = 0;
             return Err(error);
         }
@@ -2147,6 +2171,11 @@ impl<D: BlockDev> Fs<D> {
     /// file length.  Data blocks are freed by `truncate` before this runs.
     fn trim_indirect(&mut self, inode: &mut Inode, new_blocks: usize) -> Result<(), FsError> {
         let direct = self.direct_blocks;
+        // r299: VF02 không có slot gián tiếp (direct = 12 = kích thước mảng
+        // blocks) — trim trên ảnh v2 sẽ index quá mảng.
+        if direct >= MAX_BLOCKS_PER_INODE {
+            return Ok(());
+        }
         let single = inode.blocks[direct];
         if self.version < 4 {
             if new_blocks <= direct {
@@ -2220,6 +2249,13 @@ impl<D: BlockDev> Fs<D> {
 
     pub fn truncate(&mut self, ino: u16, size: usize, uid: u16) -> Result<(), FsError> {
         let inode = *self.inodes.get(ino as usize - 1).ok_or(FsError::BadFd)?;
+        // r299: thư mục không được truncate — free_inode_blocks sẽ quét TOÀN
+        // BỘ block của thư mục: mọi entry biến mất trong khi inode con vẫn
+        // giữ nlink cũ (fsck Corrupt, dữ liệu mất qua namespace). write/
+        // read đều đã chặn IsDir; truncate phải chặn như nhau.
+        if inode.kind == INODE_DIR {
+            return Err(FsError::IsDir);
+        }
         if inode.kind == INODE_FILE && !self.can_write(&inode, uid) {
             return Err(FsError::NoAccess);
         }
@@ -2234,7 +2270,11 @@ impl<D: BlockDev> Fs<D> {
             return Err(FsError::NoSpace);
         }
         self.tx_count = 0;
-        if size < old_size && old_size % BLOCK_SIZE != 0 {
+        if size < old_size && size % BLOCK_SIZE != 0 {
+            // r299: điều kiện cũ `old_size % BLOCK_SIZE != 0` bỏ sót cặp
+            // old_size align block (vd 1024 -> 100): đuôi block giữ dữ liệu
+            // cũ, grow lại sau đó đọc được byte cũ (POSIX yêu cầu đọc 0).
+            // Chỉ cần kiểm `size % BLOCK_SIZE != 0`.
             let block_index = size / BLOCK_SIZE;
             let block_no = self.file_block(&current, block_index)?;
             if block_no != 0 {
@@ -2629,7 +2669,13 @@ impl<D: BlockDev> Fs<D> {
         }
         let inode = self.inodes[ino as usize - 1];
         self.remove_dir_entry(old_parent, &old_name[..old_len])?;
-        self.write_dir_entry(new_parent, &new_name[..new_len], ino)?;
+        if let Err(error) = self.write_dir_entry(new_parent, &new_name[..new_len], ino) {
+            // r299: rollback như create/link/symlink — bỏ tx_count=0 thì
+            // removal đã stage sẽ bị transaction KẾ (hoặc fsync) commit
+            // theo, entry cũ biến mất dù rename đã báo lỗi.
+            self.tx_count = 0;
+            return Err(error);
+        }
         if inode.kind == INODE_DIR && old_parent != new_parent {
             let old_parent_inode = &mut self.inodes[old_parent as usize - 1];
             old_parent_inode.nlink = old_parent_inode.nlink.saturating_sub(1);
@@ -2676,19 +2722,25 @@ impl<D: BlockDev> Fs<D> {
         let first = 0usize;
         let last = end.saturating_sub(1) / BLOCK_SIZE;
         for block_index in first..=last {
-            let mut block = if current.blocks[block_index] != 0 {
-                let mut block = zero_block();
-                self.dev.read(current.blocks[block_index], &mut block)?;
-                block
+            // r299: đi qua file_block/set_file_block như writer thật — index
+            // thẳng current.blocks[] chỉ đúng cho 10 block đầu; quá 12 là
+            // index ngoài mảng [u32; 12] và bỏ luôn sơ đồ gián tiếp.
+            let existing = self.file_block(&current, block_index)?;
+            let block_no = if existing != 0 {
+                existing
             } else {
                 let block_no = self.alloc_block()?;
-                current.blocks[block_index] = block_no;
-                zero_block()
+                self.stage(block_no, &zero_block())?;
+                self.stage_bitmap()?;
+                self.set_file_block(&mut current, block_index, block_no)?;
+                block_no
             };
+            let mut block = zero_block();
+            self.dev.read(block_no, &mut block)?;
             let start = block_index * BLOCK_SIZE;
             let chunk = core::cmp::min(BLOCK_SIZE, end - start);
             block[..chunk].copy_from_slice(&data[start..start + chunk]);
-            self.stage(current.blocks[block_index], &block)?;
+            self.stage(block_no, &block)?;
         }
         current.size = end as u32;
         self.inodes[ino as usize - 1] = current;
@@ -2896,6 +2948,46 @@ mod tests {
     }
     fn reopen(fs: &Fs<MemDev>) -> Fs<MemDev> {
         Fs::mount(fs.dev.clone()).unwrap()
+    }
+
+    /// `use super::*` che mất macro `format!` (crate có hàm `format` riêng)
+    /// nên tên sinh bằng tay.
+    fn index_name(out: &mut [u8], index: u32) -> usize {
+        let mut digits = [0u8; 10];
+        let mut len = 0usize;
+        let mut value = index;
+        if value == 0 {
+            digits[0] = b'0';
+            len = 1;
+        }
+        while value > 0 {
+            digits[len] = b'0' + (value % 10) as u8;
+            value /= 10;
+            len += 1;
+        }
+        digits[..len].reverse();
+        out[..len].copy_from_slice(&digits[..len]);
+        len
+    }
+
+    /// Lấp đầy thư mục `dir` tới mức dir_block_limit bằng hard-link tới một
+    /// file (không tốn inode — chỉ có 64 inode nhưng dir chứa được 11*16
+    /// entry); trả số entry lấp được.
+    fn fill_dir_with_links(fs: &mut Fs<MemDev>, dir: &[u8], prefix: u8) -> u32 {
+        fs.create(b"/src", 1, INODE_FILE).unwrap();
+        let mut index = 0u32;
+        loop {
+            let mut path = [0u8; 40];
+            path[..dir.len()].copy_from_slice(dir);
+            path[dir.len()] = b'/';
+            path[dir.len() + 1] = prefix;
+            let len = index_name(&mut path[dir.len() + 2..], index);
+            let total = dir.len() + 2 + len;
+            if fs.link(b"/src", &path[..total], 1).is_err() {
+                return index;
+            }
+            index += 1;
+        }
     }
 
     /// P1-2 (r290, đỏ-trước): chỉ số block bịa trong inode phải trả `Corrupt`,
@@ -3426,6 +3518,150 @@ mod tests {
         let mut out = [0u8; 11 * BLOCK_SIZE];
         assert_eq!(fs.read(ino, 0, &mut out, 1).unwrap(), out.len());
         assert_eq!(out, [0x7a; 11 * BLOCK_SIZE]);
+    }
+
+    /// r299 (đỏ-trước): fsck/unlink/truncate trên ảnh VF02 (direct = 12)
+    /// index `blocks[12]` ngoài mảng [u32; 12] — panic trong VFS server ngay
+    /// lúc mount vì server gọi fsck ở boot.
+    #[test]
+    fn vf02_image_survives_fsck_truncate_and_unlink() {
+        let mut dev = MemDev::new();
+        format(&mut dev).unwrap();
+        let mut superblock = zero_block();
+        dev.read(1, &mut superblock).unwrap();
+        superblock[..4].copy_from_slice(b"VF02");
+        put_u32(&mut superblock, 4, 2);
+        let crc = crc32(&superblock[..56]);
+        put_u32(&mut superblock, 56, crc);
+        dev.write(1, &superblock).unwrap();
+
+        let mut fs = Fs::mount(dev).unwrap();
+        assert_eq!(fs.version, 2);
+        assert_eq!(fs.direct_blocks, MAX_BLOCKS_PER_INODE);
+        let ino = fs.create(b"/legacy", 1, INODE_FILE).unwrap();
+        assert_eq!(
+            fs.write(ino, 0, &[0x5a; 12 * BLOCK_SIZE], 1).unwrap(),
+            12 * BLOCK_SIZE
+        );
+        fs.fsck().unwrap();
+        // truncate từ 12 block xuống 1 block phải đi qua trim_indirect.
+        fs.truncate(ino, 100, 1).unwrap();
+        fs.fsck().unwrap();
+        // unlink đi qua free_inode_blocks.
+        fs.unlink(b"/legacy", 1).unwrap();
+        fs.fsck().unwrap();
+        let mut reopened = reopen(&fs);
+        reopened.fsck().unwrap();
+    }
+
+    /// r299 (đỏ-trước): truncate thư mục là mất dữ liệu toàn bộ namespace
+    /// con — phải chặn IsDir như read/write đã chặn.
+    #[test]
+    fn truncate_on_a_directory_is_rejected() {
+        let mut fs = fresh();
+        fs.mkdir(b"/d", 1).unwrap();
+        fs.create(b"/d/inside", 1, INODE_FILE).unwrap();
+        let dir = fs.lookup(b"/d", 1).unwrap();
+        assert_eq!(fs.truncate(dir, 0, 1), Err(FsError::IsDir));
+        // Không có gì biến mất.
+        assert!(fs.lookup(b"/d/inside", 1).is_ok());
+        fs.fsck().unwrap();
+    }
+
+    /// r299 (đỏ-trước): file thưa có lỗ ở vùng single/double là ảnh hợp lệ
+    /// do chính writer tạo ra — fsck không được báo Corrupt.
+    #[test]
+    fn fsck_accepts_sparse_files_with_indirect_holes() {
+        let mut fs = fresh();
+        let ino = fs.create(b"/sparse", 1, INODE_FILE).unwrap();
+        // Lần ghi đầu rơi thẳng vào vùng double (block 150 > 10+128): cả
+        // vùng single là lỗ.
+        let offset = 150 * BLOCK_SIZE;
+        assert_eq!(fs.write(ino, offset, &[0xAA; 16], 1).unwrap(), 16);
+        // Lỗ giữa chừng trong vùng double: block 400 nhảy qua slot bảng.
+        assert_eq!(fs.write(ino, 400 * BLOCK_SIZE, &[0xBB; 16], 1).unwrap(), 16);
+        fs.fsck().unwrap();
+        let mut reopened = reopen(&fs);
+        reopened.fsck().unwrap();
+        // Đọc lại qua lỗ phải ra số 0.
+        let mut out = [0u8; 16];
+        assert_eq!(fs.read(ino, 10 * BLOCK_SIZE, &mut out, 1).unwrap(), 16);
+        assert_eq!(out, [0u8; 16]);
+    }
+
+    /// r299 (đỏ-trước): shrink 1024 -> 100 (old_size align block) phải xoá
+    /// đuôi block — grow lại rồi đọc cũng không thấy byte cũ.
+    #[test]
+    fn truncate_from_block_aligned_size_zeroes_the_partial_tail() {
+        let mut fs = fresh();
+        let ino = fs.create(b"/tail", 1, INODE_FILE).unwrap();
+        assert_eq!(fs.write(ino, 0, &[0x7d; 2 * BLOCK_SIZE], 1).unwrap(), 1024);
+        fs.truncate(ino, 100, 1).unwrap();
+        // Grow lại bằng một ghi ở cuối: đọc block 0 phải thấy [0..100] giữ
+        // nguyên và [100..512] là số 0 (POSIX: truncate+extend đọc được 0).
+        assert_eq!(fs.write(ino, 1023, b"z", 1).unwrap(), 1);
+        let mut out = [0u8; BLOCK_SIZE];
+        assert_eq!(fs.read(ino, 0, &mut out, 1).unwrap(), BLOCK_SIZE);
+        assert_eq!(&out[..100], &[0x7d; 100]);
+        assert_eq!(&out[100..512], &[0u8; 412], "đuôi phải là số 0");
+        fs.fsck().unwrap();
+    }
+
+    /// r299 (đỏ-trước): rename hỏng ở bước write_dir_entry (dir đích đầy)
+    /// không được để entry cũ biến mất theo transaction kế/fsync.
+    #[test]
+    fn failed_rename_rolls_back_the_removal() {
+        let mut fs = fresh();
+        fs.mkdir(b"/a", 1).unwrap();
+        fs.mkdir(b"/b", 1).unwrap();
+        fs.create(b"/a/f", 1, INODE_FILE).unwrap();
+        // Lấp đầy /b tới mức dir_block_limit bằng hard-link.
+        let filled = fill_dir_with_links(&mut fs, b"/b", b'f');
+        assert!(filled > 0, "phải lấp được ít nhất một entry");
+        assert_eq!(
+            fs.rename(b"/a/f", b"/b/z", 1),
+            Err(FsError::NoSpace),
+            "dir đích đã đầy"
+        );
+        // Entry cũ phải còn nguyên.
+        assert!(
+            fs.lookup(b"/a/f", 1).is_ok(),
+            "rename hỏng không được mất entry cũ"
+        );
+        // fsync không được commit removal đã stage.
+        fs.fsync().unwrap();
+        assert!(fs.lookup(b"/a/f", 1).is_ok());
+        let mut reopened = reopen(&fs);
+        assert!(reopened.lookup(b"/a/f", 1).is_ok());
+        reopened.fsck().unwrap();
+    }
+
+    /// r299 (đỏ-trước): symlink hỏng ở write_dir_entry phải trả lại inode +
+    /// block đã cấp — không thì fsck báo inode mồ côi vĩnh viễn.
+    #[test]
+    fn failed_symlink_rolls_back_inode_and_block() {
+        let mut fs = fresh();
+        fs.mkdir(b"/b", 1).unwrap();
+        let filled = fill_dir_with_links(&mut fs, b"/b", b's');
+        assert!(filled > 0);
+        assert_eq!(fs.symlink(b"/target", b"/b/sym", 1), Err(FsError::NoSpace));
+        // Một transaction kế: rollback phải đủ sạch để fsck xanh.
+        fs.create(b"/ok", 1, INODE_FILE).unwrap();
+        fs.fsync().unwrap();
+        fs.fsck().unwrap();
+        let mut reopened = reopen(&fs);
+        reopened.fsck().unwrap();
+    }
+
+    /// r299 (đỏ-trước): tên chứa NUL bị fsck từ chối (Corrupt) — writer
+    /// phải chặn ngay từ đầu, không tạo nổi ảnh dirty.
+    #[test]
+    fn names_with_nul_bytes_are_rejected() {
+        let mut fs = fresh();
+        assert_eq!(fs.create(b"/a\0b", 1, INODE_FILE), Err(FsError::Invalid));
+        assert_eq!(fs.mkdir(b"/c\0d", 1), Err(FsError::Invalid));
+        fs.create(b"/ok", 1, INODE_FILE).unwrap();
+        fs.fsck().unwrap();
     }
 
     #[test]

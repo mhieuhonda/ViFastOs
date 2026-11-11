@@ -258,6 +258,10 @@ fn main() -> ExitCode {
                     .lookup(path.as_bytes(), 0)
                     .map_err(|e| format!("lookup: {e:?}"))?;
                 let size = fs.info(ino).map_err(|e| format!("{e:?}"))?.size as usize;
+                // Ảnh hỏng có thể khai size khủng (u32::MAX) — kẹp theo giới
+                // hạn của FS rồi để read() tự cắt theo dữ liệu thật, thay vì
+                // calloc 4 GiB rồi chết máy.
+                let size = size.min(vifast_fs::MAX_FILE_SIZE);
                 let mut out = vec![0u8; size];
                 fs.read(ino, 0, &mut out, 0)
                     .map_err(|e| format!("read: {e:?}"))?;
@@ -279,7 +283,11 @@ fn main() -> ExitCode {
                     .read_dir_entry(ino, index)
                     .map_err(|e| format!("{e:?}"))?
                 {
-                    println!("{} {}", child, String::from_utf8_lossy(&name[..len]));
+                    // Ô trống trả về `ino == 0` (r296b) — in ra sẽ thành dòng
+                    // `0 ` ma; đi tiếp.
+                    if child != 0 {
+                        println!("{} {}", child, String::from_utf8_lossy(&name[..len]));
+                    }
                     index += 1;
                 }
                 Ok(())
