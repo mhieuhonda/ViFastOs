@@ -3044,3 +3044,63 @@ và hai dương-tính-giả, nên chưa gọi nó ở boot.)
   `yield_current_on`/`switch_blocked` trước đó.
 - Bất biến cần thêm: **"mọi tcb `Running` phải là `current` của đúng một hart"**,
   kiểm ở cuối boot (rẻ, không cần cấp phát) — chính là đèn bắt lỗi này.
+
+## r303 — ĐÍNH CHÍNH r302: `s=2` KHÔNG chứng minh client bị resume sai
+
+### Dữ kiện mới (ps, 40 boot, 2 ca hỏng)
+| | xanh | đỏ |
+|---|---|---|
+| `STATE t=62` | s=6 q=0 (BlockedNotification) | s=2 q=0 (Running) |
+| **`CURT t=62 h=`** (client là current của hart nào) | **9 = không hart nào** | **0** |
+| `PICKS t=62` | 496 | 495 |
+
+### Vì sao kết luận của r302 SAI
+Bản rà soát chỉ đúng: khối in `STATE`/`CURT` nằm ở **đầu vòng lặp** của hart 0,
+**trước** `ack_timer`/`yield_current_on`/`pick_on` và ngay trước `A::exit(0)`.
+Ở đó `current[0]` **vẫn là tác vụ vừa chạy** — nên `s=2 (Running)` + `CURT h=0`
+chỉ có nghĩa "**lúc bài test kết thúc, hart 0 đang chạy client**", KHÔNG chứng
+minh được "client bị resume sai" như tôi viết ở r302.
+
+Thêm nữa, bản thân bảng của r302 đã mâu thuẫn: tôi viết "đúng MỘT lần resume
+cuối" trong khi `PICKS` của boot đỏ **ít hơn** boot xanh 1–3 lần.
+
+⇒ **RÚT LẠI** kết luận r302 ("được resume/giữ Running trong khi lẽ ra phải
+chuyển việc khác"). Giả thuyết đó **chưa có bằng chứng**.
+
+### Cái còn CHẮC (không đổi)
+- Boot đỏ: client **hụt 8–10 syscall** so với boot xanh (556–559 so với 566) rồi
+  không vào `dispatch` lần nào nữa.
+- Boot đỏ: **không** fault, **không** panic, **không** bị huỷ (`KILLED` không có 62),
+  kernel vẫn in hết và `A::exit(0)` bình thường.
+- Khác biệt mới, đáng giá: cuối boot, client là `current[0]` ở boot đỏ nhưng
+  **không là current của hart nào** ở boot xanh.
+
+### Vì sao `SYSCALLS` có thể đứng mà client vẫn chạy
+`SYSCALLS` đếm lần vào **`dispatch`**, tức **sau** fast-path `GetTime` (x86
+platform ~3280). Client quay bằng `GetTime`/`Wait` lặp lại sẽ **không** tăng bộ
+đếm này. Đây là lỗ hổng của chính đèn, không phải bằng chứng "client đứng".
+
+### Bất biến đã có sẵn (r302 nói sai là "chưa có")
+`running_tcbs`/`current_harts`/`boundary_summary` (kernel ~5873–5911) **chính là**
+bất biến "mỗi tcb Running phải là current của đúng một hart", nhưng chỉ chạy khi
+bật `check-boundary` và harness cấm marker của nó ở build chuẩn ⇒ boot thường
+không kiểm.
+
+### Việc kế tiếp (đúng thứ tự, theo bản rà soát)
+1. **Grep log đỏ xem có `CTX SLOT NONE … (dùng slot 0)` không** — chi phí 0; nếu
+   có thì thủ phạm là `slot_choice` trả slot 0 khi thiếu context slot.
+2. Đếm `TICKS[62]` (số tick timer rơi lúc 62 đang là current) — phân biệt "chạy
+   mà không syscall" với "không chạy".
+3. Chỉ sau đó mới sửa; **không** thêm `yield_current_on` trước `pick_on` ở
+   `resume_blocked`/`fault` (current ở đó đã Blocked/Faulted ⇒ ép Ready sẽ gây
+   double-run).
+
+### r303 — kết quả bước 1 (grep log đỏ): KHÔNG có `CTX SLOT NONE`
+Chạy 40 boot, giữ 2 serial đỏ: **0 lần** `CTX SLOT NONE` trong cả hai.
+⇒ Loại giả thuyết "`slot_choice` trả slot 0 khi thiếu context slot" (ứng viên (a)
+của bản rà soát) — nếu đúng thì dấu vết này phải xuất hiện.
+
+Còn lại hai ứng viên chưa kiểm: (b) `ensure_current_root` lỗi **sau** `pick_on`
+(1846/1882/2314) làm fault nhầm đối tượng; (c) `pick_on` lần hai trên cùng hart
+khi current cũ còn sống (`resume_blocked` 1871 không yield trước pick).
+Cả hai đều cần **`TICKS[62]`** để phân biệt "chạy mà không syscall" với "không chạy".

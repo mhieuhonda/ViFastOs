@@ -1343,6 +1343,27 @@ Giả thuyết đúng là "**được resume/giữ `Running` trong khi lẽ ra p
 việc khác**", không phải "rơi khỏi run-queue". Bất biến còn thiếu: *mọi tcb
 `Running` phải là `current` của đúng một hart*.
 
+
+## r303 — ĐÍNH CHÍNH r302: `s=2` không chứng minh client bị resume sai
+
+| | xanh | đỏ |
+|---|---|---|
+| `STATE t=62` | s=6 (BlockedNotification) | s=2 (Running) |
+| `CURT t=62 h=` | **9** (không hart nào) | **0** |
+| `PICKS t=62` | 496 | 495 |
+
+Khối in `STATE`/`CURT` nằm ở **đầu vòng lặp** hart 0, **trước**
+`ack_timer`/`yield`/`pick_on` và ngay trước `A::exit(0)` ⇒ `current[0]` vẫn là
+tác vụ vừa chạy. Vậy `s=2` + `CURT h=0` chỉ nghĩa "lúc test kết thúc, hart 0 đang
+chạy client", **không** chứng minh "resume sai". Bảng của r302 còn tự mâu thuẫn
+(PICKS đỏ **ít hơn** xanh). ⇒ **RÚT LẠI** kết luận r302.
+
+Còn chắc: boot đỏ hụt 8–10 syscall rồi thôi vào `dispatch`; không fault, không
+panic, không bị huỷ; khác biệt mới là `CURT` h=0 (đỏ) so với h=9 (xanh).
+`SYSCALLS` đếm sau fast-path `GetTime` nên "đứng" không đồng nghĩa "không chạy".
+Bất biến "Running phải là current" **đã có** (`boundary_summary`, chỉ chạy với
+`check-boundary`).
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1351,7 +1372,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-dd6e7f7dea977075608f8b47f79182c25da9a84beeb98923fbad31f8e40c87ca  docs/reviews/ViFastOs-report-r262.md
+44b531517fbe6c1f1a70a8c3bbb628e9aa4f641eb0d95b9d78b46998fdb9136c  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

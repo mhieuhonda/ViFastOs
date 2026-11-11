@@ -628,6 +628,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 45d9742 r299 (T-IPC): client CÓ chạy tiếp sau CapMint (NEXT n=32); mất dòng ở SAU đó
 - 10d3f77 r300 (T-IPC): client NGỪNG VÀO KERNEL sau IPC MINT RET — đếm syscall, không mất byte
 - 026602f r301 (T-IPC): đèn KILLED — client KHÔNG bị huỷ; hẹp còn BlockedReply
+- 67b2232 r302 (T-IPC): boot đỏ kết thúc với client ở Running(2), boot xanh ở BlockedNotification(6)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

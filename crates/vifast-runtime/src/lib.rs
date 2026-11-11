@@ -508,6 +508,15 @@ fn emit_boot_diag<A: Platform>(kernel: &vifast_kernel::Kernel) {
         }
         None => vifast_kernel::klog!(A, "STATE t=62 GONE"),
     }
+    // r303: client là `current` của HART NÀO lúc kết thúc boot? Nếu là hart 1
+    // (hart phụ) thì đó là manh mối rất cụ thể: AP đã nhặt tác vụ của BSP.
+    let mut owner = 9u8;
+    for hart in 0..4u8 {
+        if kernel.current_on(hart as usize).map(|tcb| tcb.index) == Some(62) {
+            owner = hart;
+        }
+    }
+    vifast_kernel::klog!(A, "CURT t=62 h={}", owner);
     let len = vifast_kernel::KILLED_LEN.load(core::sync::atomic::Ordering::Relaxed);
     let mut line = [0u8; 96];
     let mut at = 0usize;
