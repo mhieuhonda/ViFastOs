@@ -564,10 +564,19 @@ fn vfs_readdir_bulk(fd: u64, index: u64) -> Result<(usize, u64), u64> {
     let reply = vfs_send(1, vfs::READDIR_BULK, fd, index, max);
     let reply = vfs_reply(reply)?;
     if reply.label != vfs::OK {
-        return Err(vfs::EINVAL);
+        // r299: trả LỖI THẬT từ server (EBADF/ENOTDIR/...) — bản cũ ép về
+        // EINVAL nên `ls` không phân biệt được server cũ với fd hỏng.
+        return Err(reply.data[0]);
     }
     // r295: nửa cao của d1 là `index` client đã gửi (echo) ⇒ next = 32 bit thấp.
-    Ok((reply.data[0] as usize, reply.data[1] & 0xffff_ffff))
+    // r299: trang RỖNG (packed == 0) chính là "hết thư mục" của bulk — đếm
+    // vào đèn VEND (bản cũ chỉ đếm đường ERR+ENOENT nên bulk không bao giờ
+    // bật đèn).
+    let packed = reply.data[0] as usize;
+    if packed == 0 {
+        unsafe { VEND_COUNT += 1 };
+    }
+    Ok((packed, reply.data[1] & 0xffff_ffff))
 }
 
 fn vfs_readdir_bulk_entry(slot: usize) -> (u64, u8, [u8; 28], usize) {
@@ -830,9 +839,11 @@ fn shell_command(line: &[u8]) {
     // `exec <path> [args]` là bí danh của `runfs` — dịch tiền tố rồi xử lý
     // lại, để hai lệnh chia sẻ đúng một đường mã.
     if let Some(rest) = line.strip_prefix(b"exec ") {
-        let mut buf = [0u8; 64];
+        // r299: đệm 64 byte cắt tham số ở 57 — đường lệnh dài (path 128 +
+        // args) bị mất đuôi lặng lẽ. Nới theo giới hạn thật của IPC buffer.
+        let mut buf = [0u8; 160];
         buf[..6].copy_from_slice(b"runfs ");
-        let n = core::cmp::min(rest.len(), 57);
+        let n = core::cmp::min(rest.len(), 154);
         buf[6..6 + n].copy_from_slice(&rest[..n]);
         shell_command(&buf[..6 + n]);
         return;
@@ -871,7 +882,9 @@ fn shell_command(line: &[u8]) {
     }
     if let Some(arg) = line.strip_prefix(b"cd ") {
         if arg.first() == Some(&b'/') {
-            if let Some((fd, _)) = vfs_open(arg, 0) {
+            // r299: mở với O_DIRECTORY — bản cũ mở thường nên `cd /motd`
+            // (file thường) cũng đổi cwd được, ls trong đó sẽ rối.
+            if let Some((fd, _)) = vfs_open(arg, vifast_abi::O_DIRECTORY) {
                 let _ = vfs_close(fd);
                 // Ghi từng byte (không dùng `copy_from_slice`) để không kéo
                 // `core::slice::copy_from_slice` + nhánh panic vào ảnh client
@@ -904,7 +917,7 @@ fn shell_command(line: &[u8]) {
         write(b"help time echo ls history !! cd pwd kill free\n");
         write(b"cat p mkdir p rm p mv a b ln a b stat p\n");
         write(b"sync p truncate p n df fsck run [p]\n");
-        write(b"runfs p [args...] ps jobs\n");
+        write(b"runfs p [args...] ps jobs loop n\n");
     } else if line == b"kill" {
         // Vòng 169: dừng chương trình exec đang chạy (root giữ cap TCB).
         let r = vifast_user::send(CLIENT_CMD_SLOT, LABEL_KILL, 0, 0, 0);
@@ -924,15 +937,13 @@ fn shell_command(line: &[u8]) {
         if let Some((fd, _)) = vfs_open(path, 0) {
             let mut index = 0u64;
             // (#10) Bulk path first: kind arrives inline, no STAT_PATH per
-            // entry.  Falls back to per-entry READDIR + STAT_PATH on ERR.
-            let bulk_ok = vfs_readdir_bulk(fd, 0).is_ok();
-            if bulk_ok {
+            // entry. Fetch TRANG 0 làm probe và TÁI DÙNG luôn kết quả — bản
+            // cũ fetch rồi bỏ, vào vòng lặp fetch lại từ 0 (một vòng IPC
+            // thỡ mỗi lệnh ls). Falls back to per-entry READDIR on ERR.
+            let mut bulk_page = vfs_readdir_bulk(fd, 0);
+            if bulk_page.is_ok() {
                 let mut idx = 0u64;
-                loop {
-                    let (packed, next) = match vfs_readdir_bulk(fd, idx) {
-                        Ok(v) => v,
-                        Err(_) => break,
-                    };
+                while let Ok((packed, next)) = bulk_page {
                     if packed == 0 {
                         break;
                     }
@@ -951,6 +962,7 @@ fn shell_command(line: &[u8]) {
                         break;
                     }
                     idx = next;
+                    bulk_page = vfs_readdir_bulk(fd, idx);
                 }
                 let _ = index;
             } else {

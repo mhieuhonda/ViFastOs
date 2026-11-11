@@ -3842,8 +3842,8 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     let mut stat_ok = plen == 0;
                     // Vòng 75: chỉ STAT/READ khi có cap VFS badge SUPERUSER
                     // (root_vfs_slot != 0) — cap gốc badge 0 bị server từ
-                    // chối EACCES. Không có slot thì bỏ qua STAT (fail-êm,
-                    // x86) và spawn như cũ.
+                    // chối EACCES. Không có slot thì SKIP hẳn (x86 thiếu
+                    // Untyped cho cap VFS) — không spawn mù (vòng 46).
                     if plen != 0 && root_vfs_slot != 0 {
                         // Vòng 82/83: vòng tròn ghi→đọc→verify ELF on-demand
                         // (tránh call blocking cuối boot như vòng 75).

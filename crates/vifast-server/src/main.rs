@@ -382,12 +382,18 @@ fn open_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
 }
 
 fn fs_can_write(fs: &ServerFs, ino: u16, uid: u16) -> bool {
-    // The public FS write path enforces this; ask with a one-byte probe only
-    // at open time by checking the inode metadata directly through stat.
-    let _ = fs;
-    let _ = ino;
-    let _ = uid;
-    true
+    // r299: bản cũ luôn `true` — quyền chỉ thực sự bị chặn ở lần WRITE đầu
+    // tiên, còn open-time check chỉ là hình thức. Đối chiếu mode/uid đúng
+    // như `can_write` của vifast-fs (bit 1 = owner-w, bit 3 = other-w,
+    // uid 0 = siêu người dùng).
+    match fs.info(ino) {
+        Ok(info) => {
+            uid == 0
+                || (uid == info.uid && info.mode & 2 != 0)
+                || (uid != info.uid && info.mode & 8 != 0)
+        }
+        Err(_) => false,
+    }
 }
 
 fn read_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
