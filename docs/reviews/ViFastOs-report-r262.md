@@ -887,6 +887,46 @@ và cả hai phía `break` im lặng khi gặp `Err`
 Hướng sửa đổi hẳn: **không** sửa journal/cache mà sửa **đường readdir** (trang hoá
 + không cắt danh sách trong im lặng). Ở `MAX_IO=128`: 40/40 xanh.
 
+### r294 — Đo độ tin cậy của CHÍNH thước đo (QEMU trace)
+
+Trước khi tin bất kỳ tỉ lệ flake nào, đã kiểm tầng thu thập serial bằng trace độc
+lập của QEMU (`-trace enable=serial_write`, thêm qua `VIFAST_TRACE=1`):
+
+| Đại lượng | Số |
+|---|---:|
+| `serial_write [0x00]` (byte dữ liệu QEMU thực ghi) | **7450** |
+| kích thước `serial.txt` | **7446** |
+| chênh lệch | **4 byte** |
+
+⇒ Chỉ mất **đuôi ~4 byte** khi QEMU thoát; **không mất byte giữa luồng**. Vì vậy
+mọi ca "thiếu marker giữa dòng" là **lỗi thật phía guest**, không phải artefact
+của harness. Đây là cơ sở để tin các con số dưới đây.
+
+### r294 — Hai lỗi thật đã tìm và vá
+
+**(1) `tcb_wait` lỗi ⇒ giết con đang sống** (`crates/vifast-root/src/main.rs`,
+`boot_exec_once`): nhánh lỗi **không `return`** mà rơi xuống `destroy_exec` ⇒ giết
+đứa con đang chạy (mất marker bước đó) và **nuốt lỗi**. Vá: lỗi ≠ kết thúc thì
+`yield_now()` + chờ lại (≤64 lần); hết lượt mới báo hỏng và **không destroy**.
+Đo `ps` x86_64 `RETRY_TIMEOUT=0`: trước vá 3/60 · 1/60 · 1/50; **sau vá 1/80**.
+
+**(2) Đính chính `dup`:** `harness dup` là `count != 1` ⇒ marker **thiếu (0)** cũng
+bị in là `dup`. Đếm 6 artifact: **không ca nào** có 2 lần. Từ nay `dup=[…]` phải
+đọc là "số lần ≠ 1".
+
+### r294 — Console nguyên tử + nhả QEMU đúng cách
+
+- `console::with_tx_lock(body)`: giữ khoá Tx cho **cả khối**; `DebugWrite` của
+  user bọc toàn bộ vòng ghi byte trong khoá đó (trước đây chỉ `log()` của kernel
+  khoá từng dòng ⇒ hai hart chen giữa một marker).
+- Harness: timeout thì `SIGTERM` trước rồi mới `SIGKILL`, chờ QEMU flush chardev.
+
+### r294 — T33b (riscv64): 150/150 boot sạch
+
+Bản vá `assert_current_tcb` (repair + `CURRENT MISMATCH`, `d673f7e`) đưa riscv64 từ
+**2/200 có `PANIC (hart=1)`** xuống **0/150**. Đây là **chặn trên ~2 %**, chưa phải
+"đã hết" (nền cũ 0,5 %).
+
 ### T26 — tổng hợp điều tra (sau 11 giả thuyết bị loại bằng đo)
 
 Triệu chứng: ở `MAX_IO=256`, ~10–45 %/boot (tuỳ máy) `readdir("/")` không thấy
@@ -945,7 +985,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-b004445e501c9ff0adf745ca52be4a05c14491c1941b674fed7bc8f350a53aa3  docs/reviews/ViFastOs-report-r262.md
+b4111142e7a72441fbc4a009e6c2daef299cb4ca7901f358c7838abc80f97f5f  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
