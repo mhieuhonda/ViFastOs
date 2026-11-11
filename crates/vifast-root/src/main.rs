@@ -1299,17 +1299,45 @@ fn boot_exec_once(
 ) -> bool {
     destroy_exec(slots, used, used_len(used));
     *used = [0u8; MAX_EXEC_SLOTS];
-    let spawned = spawn_elf_from_fs(
-        root_vfs_slot,
-        grant_from,
-        path,
-        args,
-        meta_untyped,
-        data_untyped,
-        0b01,
-        slots,
-        used,
-    );
+    // r297 (T33a): spawn có thể hỏng TẠM THỜI vì frame của tác vụ TRƯỚC chưa
+    // được kernel trả hết (đèn `SPAWN STOP 15` = `retype(Frame)` lỗi ngay sau
+    // khi `destroy_exec`). Đo được 1 lần / 1 200 lần exec ⇒ không phải hết bộ
+    // nhớ thật. Thử lại có giới hạn, nhường CPU ở giữa — cùng kiểu vá đã dùng
+    // cho `tcb_wait`; hỏng thật vẫn báo hỏng sau khi hết lượt.
+    let mut spawned = None;
+    let mut attempt = 0u32;
+    while attempt < 3 {
+        spawned = spawn_elf_from_fs(
+            root_vfs_slot,
+            grant_from,
+            path,
+            args,
+            meta_untyped,
+            data_untyped,
+            0b01,
+            slots,
+            used,
+        );
+        if spawned.is_some() {
+            break;
+        }
+        // Dọn những gì lần hỏng đã cấp trước khi thử lại.
+        destroy_exec(slots, used, used_len(used));
+        *used = [0u8; MAX_EXEC_SLOTS];
+        let _ = vifast_user::yield_now();
+        attempt += 1;
+        if attempt < 3 {
+            let mut line = [0u8; 24];
+            let mut at = 0usize;
+            for &byte in b"BIN EXEC RETRY\n".iter() {
+                if at < line.len() {
+                    line[at] = byte;
+                    at += 1;
+                }
+            }
+            write(&line[..at]);
+        }
+    }
     let Some(tcb) = spawned else {
         // r294: tách NGUYÊN NHÂN — spawn hỏng (thiếu slot/bộ nhớ) khác hoàn
         // toàn với spawn được mà `tcb_wait` lỗi.
@@ -2202,6 +2230,69 @@ fn root_vfs_copy_to_frame(
 /// Exec-thật từ FS (mốc 9, vòng 84): đọc ELF header + phdr table (1KiB) để
 /// lấy entry/segment, rồi nạp từng page thẳng từ file vào frame đích và map
 /// — không staging, không tốn frame ngoài image. Trả TCB khi spawn xong.
+/// r297 (T33a): SPAWN dừng ở đâu — in mã điểm dừng MỘT lần cho mỗi mã.
+///
+/// Vì sao cần: `BIN EXEC FAIL spawn` gộp ít nhất 19 đường hỏng khác nhau
+/// (mở file, parse ELF, cạn slot, `retype` lỗi, ghi argv, cấp TCB, cài cap…).
+/// Đo được 3 lần / 1 000 lần exec mà không biết dừng ở đâu thì không sửa được.
+/// Bảng mã (đúng theo mã hiện tại; bản đầu tôi ghi sai và bản rà soát bắt được):
+///   1  `root_vfs_open` lỗi/None
+///   2  `track_alloc` VSpace        · 3 `track_alloc` Frame
+///   4  `track_alloc` stack frame   · 6 `track_alloc` TCB
+///   5  `write_exec_args` lỗi
+///  11  parse ELF lỗi
+///  13  `retype(VSpace)` lỗi
+///  15  `retype(Frame)` (segment) lỗi · 19 `retype(Frame)` (stack) lỗi
+///  16/17 `root_vfs_copy_to_frame` lỗi
+///  21  nạp module vào VSpace lỗi
+///  23  `retype(Tcb)` lỗi
+///  24  cấu hình TCB lỗi · 25 `tcb_set_args` · 26 `cap_mint`
+///  27  `tcb_set_affinity` · 28 `tcb_resume`
+/// Lưu ý: 15 và 23 đều là `retype` lỗi — đo được cả hai trên hai arena KHÁC nhau
+/// (`data_untyped` và `meta_untyped`), nên đây là trạng thái bộ nhớ TẠM THỜI,
+/// không phải hết slot (hết slot thì `SlotAllocator::alloc` panic).
+fn spawn_stop(site: u8) {
+    static mut SEEN: u32 = 0;
+    unsafe {
+        let bit = 1u32 << (site & 31);
+        if SEEN & bit != 0 {
+            return;
+        }
+        SEEN |= bit;
+    }
+    let mut line = [0u8; 24];
+    let mut at = 0usize;
+    for &byte in b"SPAWN STOP " {
+        if at < line.len() {
+            line[at] = byte;
+            at += 1;
+        }
+    }
+    let mut digits = [0u8; 3];
+    let mut count = 0usize;
+    let mut value = site as u32;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        value /= 10;
+        count += 1;
+        if value == 0 {
+            break;
+        }
+    }
+    while count > 0 {
+        count -= 1;
+        if at < line.len() {
+            line[at] = digits[count];
+            at += 1;
+        }
+    }
+    if at < line.len() {
+        line[at] = b'\n';
+        at += 1;
+    }
+    write(&line[..at]);
+}
+
 fn spawn_elf_from_fs(
     endpoint_slot: u8,
     grant_from: u8,
@@ -2214,7 +2305,13 @@ fn spawn_elf_from_fs(
     used: &mut [u8; MAX_EXEC_SLOTS],
 ) -> Option<u8> {
     let mut used_len = 0usize;
-    let fd = root_vfs_open(endpoint_slot, path)?;
+    let fd = match root_vfs_open(endpoint_slot, path) {
+        Some(fd) => fd,
+        None => {
+            spawn_stop(1);
+            return None;
+        }
+    };
     // 1KiB đủ ELF header (64B) + tới 16 phdr (56B mỗi cái).
     let mut head = [0u8; 1024];
     let got = root_vfs_read_prefix(endpoint_slot, fd, &mut head);
@@ -2227,25 +2324,46 @@ fn spawn_elf_from_fs(
         Ok(image) => image,
         Err(_) => {
             root_vfs_close(endpoint_slot, fd);
+            {
+                spawn_stop(11);
+                return None;
+            }
+        }
+    };
+    let vspace = match track_alloc(slots, used, &mut used_len, b'V') {
+        Some(slot) => slot,
+        None => {
+            spawn_stop(2);
             return None;
         }
     };
-    let vspace = track_alloc(slots, used, &mut used_len, b'V')?;
     let vspace_r = vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace);
     if vspace_r.error != KError::Ok {
         root_vfs_close(endpoint_slot, fd);
-        return None;
+        {
+            spawn_stop(13);
+            return None;
+        }
     }
     for segment in image.segments() {
         let page_base = segment.vaddr & !0xfff;
         let mut page = 0;
         while page < segment.page_count() {
             let va = page_base + page as u64 * vifast_abi::DEFAULT_PAGE_SIZE;
-            let frame = track_alloc(slots, used, &mut used_len, b'F')?;
+            let frame = match track_alloc(slots, used, &mut used_len, b'F') {
+                Some(slot) => slot,
+                None => {
+                    spawn_stop(3);
+                    return None;
+                }
+            };
             let frame_r = vifast_user::retype(data_untyped, ObjType::Frame as u64, frame);
             if frame_r.error != KError::Ok {
                 root_vfs_close(endpoint_slot, fd);
-                return None;
+                {
+                    spawn_stop(15);
+                    return None;
+                }
             }
             // Nạp phần file rơi vào page này; phần BSS đã zero từ retype.
             let copy_start = core::cmp::max(va, segment.vaddr);
@@ -2264,7 +2382,10 @@ fn spawn_elf_from_fs(
                     copy_end - copy_start,
                 ) {
                     root_vfs_close(endpoint_slot, fd);
-                    return None;
+                    {
+                        spawn_stop(16);
+                        return None;
+                    }
                 }
             }
             let mut rights = Rights::READ;
@@ -2285,20 +2406,38 @@ fn spawn_elf_from_fs(
                 &mut used_len,
             ) {
                 root_vfs_close(endpoint_slot, fd);
-                return None;
+                {
+                    spawn_stop(17);
+                    return None;
+                }
             }
             page += 1;
         }
     }
     root_vfs_close(endpoint_slot, fd);
     // Stack riêng như spawn_elf_copy.
-    let stack_frame = track_alloc(slots, used, &mut used_len, b'S')?;
+    let stack_frame = match track_alloc(slots, used, &mut used_len, b'S') {
+        Some(slot) => slot,
+        None => {
+            spawn_stop(4);
+            return None;
+        }
+    };
     let stack_r = vifast_user::retype(data_untyped, ObjType::Frame as u64, stack_frame);
     if stack_r.error != KError::Ok {
-        return None;
+        {
+            spawn_stop(19);
+            return None;
+        }
     }
     // D15: khối argv ghi vào frame stack TRƯỚC khi map.
-    let (argc, argv) = write_exec_args(stack_frame, args)?;
+    let (argc, argv) = match write_exec_args(stack_frame, args) {
+        Some(pair) => pair,
+        None => {
+            spawn_stop(5);
+            return None;
+        }
+    };
     if !map_frame_fallible(
         data_untyped,
         vspace,
@@ -2309,11 +2448,23 @@ fn spawn_elf_from_fs(
         used,
         &mut used_len,
     ) {
-        return None;
+        {
+            spawn_stop(21);
+            return None;
+        }
     }
-    let tcb = track_alloc(slots, used, &mut used_len, b'T')?;
+    let tcb = match track_alloc(slots, used, &mut used_len, b'T') {
+        Some(slot) => slot,
+        None => {
+            spawn_stop(6);
+            return None;
+        }
+    };
     if vifast_user::retype(meta_untyped, ObjType::Tcb as u64, tcb).error != KError::Ok {
-        return None;
+        {
+            spawn_stop(23);
+            return None;
+        }
     }
     // r247: `sp` khởi tạo ở ĐÁY khối argv để stack mọc xuống không xoá tham
     // số (x86 prologue ăn ~256 B — đủ chạm tới khối nếu sp ở đỉnh trang).
@@ -2327,10 +2478,16 @@ fn spawn_elf_from_fs(
     .error
         != KError::Ok
     {
-        return None;
+        {
+            spawn_stop(24);
+            return None;
+        }
     }
     if vifast_user::tcb_set_args(tcb, argc, argv).error != KError::Ok {
-        return None;
+        {
+            spawn_stop(25);
+            return None;
+        }
     }
     // r268 (T27/G2 Phần B): chương trình con chạy từ FS nhận endpoint VFS ở
     // slot 1 với badge 1 — CÙNG danh tính với shell (`client_tcb` được cấp y
@@ -2338,13 +2495,22 @@ fn spawn_elf_from_fs(
     // Mint từ cap endpoint GỐC (badge 0) vì `CapMint` chỉ đặt được badge mới
     // khi cap nguồn chưa có badge.
     if vifast_user::cap_mint(grant_from, tcb, 1, Rights::WRITE.0, 1).error != KError::Ok {
-        return None;
+        {
+            spawn_stop(26);
+            return None;
+        }
     }
     if vifast_user::tcb_set_affinity(tcb, affinity).error != KError::Ok {
-        return None;
+        {
+            spawn_stop(27);
+            return None;
+        }
     }
     if vifast_user::tcb_resume(tcb).error != KError::Ok {
-        return None;
+        {
+            spawn_stop(28);
+            return None;
+        }
     }
     Some(tcb)
 }

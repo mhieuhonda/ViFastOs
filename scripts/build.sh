@@ -89,9 +89,17 @@ build_modules() {
         if [ "$pkg" = "vifast-client" ]; then
             client_feats="${VIFAST_CLIENT_FEATURES:-}"
         fi
-        VIFAST_BUILD_FEATS="${client_feats:-none}" \
+        # r297: đèn nặng của server (DIRSNAP/DIRNAME/RDD/EVL) phải BẬT TAY —
+        # chúng nằm trong `handle()` nên làm dài cửa sổ IPC, tức tự bóp méo
+        # phép đo (bản rà soát chỉ ra: tỉ lệ exec hỏng tăng theo lượng đèn).
+        server_feats=""
+        if [ "$pkg" = "vifast-server" ]; then
+            server_feats="${VIFAST_SERVER_FEATURES:-}"
+        fi
+        VIFAST_BUILD_FEATS="${client_feats:-none}${server_feats:+/$server_feats}" \
         cargo rustc -p "$pkg" --profile root-task --target "$target" \
-            ${client_feats:+--features "$client_feats"} -- \
+            ${client_feats:+--features "$client_feats"} \
+            ${server_feats:+--features "$server_feats"} -- \
             "$@" \
             -C link-arg=-T -C link-arg="$module_linker" \
             -C link-arg=--defsym=ROOT_ELF_BASE=0x1000010000 \

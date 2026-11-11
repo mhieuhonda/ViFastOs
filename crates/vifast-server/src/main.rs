@@ -592,6 +592,10 @@ fn truncate_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
 ///
 /// In tối đa 3 lần mỗi boot để không phá phép đo, và in NGAY tại chỗ (không
 /// chờ cuối khối V2): ring 16 bản ghi đã từng bị trôi vì chụp muộn.
+#[cfg(not(feature = "t26-diag"))]
+fn dirsnap_maybe(_ino: u16, _index: usize, _seq: u32) {}
+
+#[cfg(feature = "t26-diag")]
 fn dirsnap_maybe(ino: u16, index: usize, seq: u32) {
     static mut PRINTED: u32 = 0;
     let Some(snap) = fs().dir_snapshot(ino, index, b"d") else {
@@ -679,6 +683,7 @@ fn readdir_request(data: [u64; 4], uid: u16, seq: u32) -> (u64, u64, u64, u64) {
             // r296: đèn ĐỐI CHIẾU — server VỪA trả entry tên đúng một ký tự `d`
             // hay không, và ở index nào. Cần để phân biệt "server không trả d"
             // với "server trả d mà client không nhận ra" (hai lỗi khác hẳn nhau).
+            #[cfg(feature = "t26-diag")]
             if len == 1 && name[0] == b'd' {
                 let mut line = [0u8; 40];
                 let mut at = 0usize;
@@ -839,6 +844,7 @@ fn dispatch(request: &vifast_user::MessageResult, op: u64) -> (u64, u64, u64, u6
             // không trả lời".
             write(if ok { b"FSV ok\n" } else { b"FSV err\n" });
             // r296: đèn eviction — đường ghi duy nhất trước đây không có nhân chứng.
+            #[cfg(feature = "t26-diag")]
             {
                 let (lost, dirty) = fs().evict_stats();
                 let mut line = [0u8; 48];

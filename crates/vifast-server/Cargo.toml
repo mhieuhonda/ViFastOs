@@ -9,3 +9,8 @@ license.workspace = true
 vifast-abi = { path = "../vifast-abi" }
 vifast-user = { path = "../vifast-user" }
 vifast-fs = { path = "../vifast-fs" }
+
+[features]
+# r297: đèn nặng T26 (DIRSNAP/DIRNAME/RDD/EVL) — CHỈ bật khi điều tra,
+# vì chúng nằm trong `handle()` và làm dài cửa sổ IPC (bản rà soát chỉ ra).
+t26-diag = []

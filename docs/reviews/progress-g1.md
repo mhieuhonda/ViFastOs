@@ -2775,3 +2775,53 @@ liên quan FS. ⇒ Chưa nâng; việc còn lại là T33a, không phải T26.
   DIRSNAP/EVL) trước khi kết luận tỉ lệ. Đây là thứ đang chặn việc nâng `MAX_IO`.
 - Nên đưa các đèn nặng (`DIRSNAP`/`RDD`/`EVL`) vào sau một feature chẩn đoán để
   bản sản phẩm không bị nhiễu — chưa làm.
+
+## r297 — T33a: exec hỏng là `retype` TẠM THỜI (không phải cạn slot); chặn bằng thử lại
+
+### Đèn mới: `SPAWN STOP <mã>` (chỉ có ở root)
+`BIN EXEC FAIL spawn` gộp **19 đường hỏng** trong `spawn_elf_from_fs`. Đã thêm
+`spawn_stop(n)` in MỘT lần cho mỗi mã. Bảng mã (đúng theo mã hiện tại):
+`1` open · `2/3/4/6` `track_alloc` V/F/S/T · `5` `write_exec_args` · `11` parse ELF ·
+`13` `retype(VSpace)` · `15` `retype(Frame)` segment · `16/17` `copy_to_frame` ·
+`19` `retype(Frame)` stack · `21` nạp module · `23` `retype(Tcb)` · `24` cấu hình TCB ·
+`25` `tcb_set_args` · `26` `cap_mint` · `27` `tcb_set_affinity` · `28` `tcb_resume`.
+(Bản đầu tôi ghi bảng mã SAI; bản rà soát bắt được — đã sửa.)
+
+### Đo được (ps, `VIFAST_ROOT_FEATURES=stress-exec`, 200 exec/boot)
+| Lượt | exec | `BIN EXEC FAIL` | mã `SPAWN STOP` |
+|---|---:|---:|---|
+| trước khi vá | 4 000 | 2 | **23** ×? · **15** ×? |
+| trước khi vá (mẻ khác) | 1 200 | 1 | 15 |
+| sau khi vá | 8 000 | **0** | (4 lần `BIN EXEC RETRY`, rồi thành công) |
+
+⇒ Hỏng nằm ở **`retype`** trên **hai arena khác nhau** (`data_untyped` với mã 15 và
+`meta_untyped` với mã 23) ⇒ **trạng thái bộ nhớ TẠM THỜI**, không phải "cạn slot"
+(hết slot thì `SlotAllocator::alloc` **panic**, không trả None).
+
+### Bản vá (T33a)
+`boot_exec_once`: thử spawn tối đa 3 lượt, giữa các lượt `destroy_exec` phần đã
+cấp + `yield_now()`. In `BIN EXEC RETRY` khi phải thử lại (để không giấu).
+Không che lỗi thật: hết 3 lượt vẫn in `BIN EXEC FAIL spawn`.
+
+### Giảm nhiễu đo (theo đúng cảnh báo của bản rà soát)
+Các đèn nặng của server (`DIRSNAP`/`DIRNAME`/`RDD`/`EVL`) nằm **trong `handle()`**
+nên làm dài cửa sổ IPC ⇒ tự bóp méo phép đo. Nay chúng nằm sau feature
+`t26-diag` (mặc định TẮT), bật bằng `VIFAST_SERVER_FEATURES=t26-diag`.
+
+### Số trên build SẠCH (không đèn nặng, MAX_IO=128, ps, 40 boot)
+`BIN EXEC FAIL = 0`, `FS V2 BAD = 0`, `BIN EXEC RETRY = 0`.
+Nhưng **6/40 boot vẫn đỏ** vì lớp KHÁC:
+- 3 boot thiếu `IPC RIGHTS OK`;
+- 3 boot `không khớp điều kiện nào trong accept()`.
+
+### T-IPC: lần đầu khoanh được vào MỘT syscall
+Giữ lại serial của 2 ca hỏng. Một ca có `SHELL READY` + `IPC MINT REQ` nhưng
+**KHÔNG có `IPC MINT RET`** ⇒ client **kẹt BÊN TRONG `cap_mint`** (`CapMint`),
+không phải "mất dòng serial" như giả thuyết cũ. Ca còn lại hỏng sớm hơn (chưa có
+`SHELL READY`). Đây là dữ kiện mới, đủ để mở T-IPC thành một mục điều tra riêng.
+
+### Còn treo
+- `IPC MINT RET` không xuất hiện ⇒ cần biết `CapMint` chờ cái gì (BKL? slot của
+  TCB đích? quyền?). Đèn gợi ý: in `hart`, `tcb`, `slot` ngay trước/sau syscall.
+- 3 ca "không khớp điều kiện nào trong accept()" chưa phân tích.
+- `MAX_IO` vẫn 128; T26 đã vá nhưng nút chặn nâng 256 giờ là các lớp hiếm trên.

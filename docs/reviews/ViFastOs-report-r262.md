@@ -1196,6 +1196,36 @@ suất 0,8^40 ≈ 1,3·10⁻⁴.
 Cần 40 boot xanh trên **cả hai** máy; `ps` còn 4 đỏ vì **T33a**, không phải T26
 ⇒ nút chặn là T33a.
 
+
+## r297 — T33a: exec hỏng là `retype` TẠM THỜI; và T-IPC khoanh được vào `cap_mint`
+
+### Đèn `SPAWN STOP <mã>`
+`BIN EXEC FAIL spawn` gộp 19 đường hỏng trong `spawn_elf_from_fs`; nay mỗi đường
+in một mã (bảng mã đầy đủ trong `progress-g1.md`). Đo (ps, 200 exec/boot):
+- **trước vá**: 3 lần hỏng / 5 200 lần exec, mã **23** (`retype(Tcb)` trên
+  `meta_untyped`) và **15** (`retype(Frame)` trên `data_untyped`);
+- **sau vá**: **0/8 000** lần exec hỏng (4 lần phải thử lại rồi thành công).
+
+⇒ Hỏng ở `retype` trên **hai arena khác nhau** ⇒ trạng thái bộ nhớ **tạm thời**,
+không phải cạn slot (cạn slot thì `SlotAllocator::alloc` panic, không trả None).
+
+### Bản vá
+`boot_exec_once` thử spawn tối đa 3 lượt, giữa các lượt dọn phần đã cấp và
+`yield_now()`; in `BIN EXEC RETRY` khi phải thử lại, và vẫn báo hỏng sau 3 lượt.
+
+### Giảm nhiễu đo
+Đèn nặng của server (`DIRSNAP`/`DIRNAME`/`RDD`/`EVL`) nằm trong `handle()` nên
+làm dài cửa sổ IPC ⇒ nay ở sau feature `t26-diag` (mặc định TẮT).
+
+### Build SẠCH, MAX_IO=128, ps, 40 boot
+`BIN EXEC FAIL = 0`, `FS V2 BAD = 0`, `BIN EXEC RETRY = 0`, nhưng **6/40 boot đỏ
+vì lớp khác**: 3 × thiếu `IPC RIGHTS OK`, 3 × `T-KHAC`.
+
+### T-IPC: lần đầu khoanh vào MỘT syscall
+Serial của ca hỏng có `SHELL READY` + `IPC MINT REQ` nhưng **không có
+`IPC MINT RET`** ⇒ client **kẹt bên trong `cap_mint`**, không phải mất dòng
+serial. Đây là dữ kiện mới để mở T-IPC thành mục điều tra riêng.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1204,7 +1234,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-c9a6bcbd63b8cdc19e10dbca1c1853f95b2296b2b7d2dcd2108ffe20cd6b14d2  docs/reviews/ViFastOs-report-r262.md
+308af99ec5807a2449751186f8018dade8352446217b4d2e0c2480937aaeaae0  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
