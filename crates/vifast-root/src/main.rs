@@ -1322,10 +1322,7 @@ fn boot_exec_once(
     // thì nhường CPU rồi chờ lại (có giới hạn); chỉ báo hỏng sau khi hết lượt.
     let mut waited = vifast_user::tcb_wait(tcb);
     let mut tries = 0u32;
-    while waited.error != KError::Ok
-        && waited.error != KError::ObjectDestroyed
-        && tries < 64
-    {
+    while waited.error != KError::Ok && waited.error != KError::ObjectDestroyed && tries < 64 {
         let _ = vifast_user::yield_now();
         waited = vifast_user::tcb_wait(tcb);
         tries += 1;

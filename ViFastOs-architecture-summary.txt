@@ -613,6 +613,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d16f6fe harness: thêm cờ VIFAST_TRACE=1 bật QEMU trace serial_write (nhân chứng byte, không sửa kernel)
 - c863b41 r294 CHỐT bằng trace: QEMU ghi 7450 byte, file 7446 ⇒ mất đuôi 4 byte, KHÔNG mất giữa luồng
 - e2c3316 root: tách BIN EXEC FAIL thành spawn/wait+err; đo ps 1/50 (timeout, không phải lớp này)
+- d451ea9 root: tcb_wait lỗi thì chờ lại thay vì giết con đang sống (mất marker + nuốt lỗi); đo ps 1/80
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
