@@ -2463,3 +2463,36 @@ T31/T33b là giả thuyết có vá, chưa phải kết quả đo.
 
 Đã hỏng 0/3 cả ba arch (thiếu 22 marker) và phải revert; muốn thử lại phải đo
 **từng chỗ một**, không gộp pager server + worker_f.
+
+## r294 — TỔNG KẾT vòng 20–40 (hết ngân sách vòng)
+
+| Hạng mục | Trạng thái | Số bảo vệ được |
+|---|---|---|
+| **T33a** | MỘT PHẦN | 0/301 đúng lớp "treo trước PREEMPT OK"; còn 2/120 (1,7 %) lớp EXEC FAIL trên `ps` |
+| **T33b** | MỘT PHẦN (gần đạt) | 0/150 riscv64 sạch (trước 2/200 panic); trần ~2 % |
+| **T26** | CHƯA | tái lập 12/40 = 30 % ở 256; 11 giả thuyết bị bác bằng đo; `MAX_IO` vẫn 128 |
+| **T31** | CHƯA | tái hiện 1/301; vá có nhưng chưa đo xác nhận |
+
+### Bản vá có trong cây (đều đã qua cổng 10/10)
+- `LINT0` phía AP + `KERNEL_READY` gate (T33a gốc 1, 2).
+- `assert_current_tcb` → repair + `CURRENT MISMATCH` (T33b).
+- **`tcb_wait` lỗi ⇒ chờ lại thay vì giết con đang sống** (lỗi thật, đo được tác
+  dụng một phần).
+- Ghi lại `contexts[slot]` sau `apply_resume` (T31, chưa đo).
+- Console `with_tx_lock` cho `debug_write` (chống chen dòng).
+- Harness: `SIGTERM` trước `SIGKILL`; `VIFAST_TRACE=1`; `VIFAST_KEEP_SERIAL=1`;
+  lớp `T-IPC` (chỉ để đếm, cơ chế chưa rõ).
+
+### Việc còn lại, theo thứ tự (đã có thiết kế, chưa làm)
+1. **T26**: thêm `seq` cho `V2RD/LOOK/SLO` rồi mới kết luận nhánh "tái dùng slot
+   trống"; khi đó mới thử nâng `MAX_IO` về 256 với N≥40 trên **cả hai** máy.
+2. **T31**: chạy phép đo đếm `USER FAULT addr=0x1001001000` (2 vs 3 lần).
+3. **T33a**: đọc đèn `BIN EXEC FAIL spawn` / `wait err=<n>` ở lần gặp tới.
+4. **Teardown**: vá **từng chỗ một** (pager server, rồi `worker_f`) — KHÔNG gộp;
+   `reap_task` gộp đã hỏng 0/3 cả ba arch và phải revert.
+
+### Giá trị lâu dài
+7 lần một kết luận bị dữ liệu lật trong đêm (đọc ngược `V2FAIL`, `V2GROUP 04`
+gộp ba ca, P2 cascade ATA, "race ở 128" từ classifier cũ, đèn `CONS TX` chọn mẫu
+lệch, `reap_task` hỏng cả 3 arch, `dup` = "số lần ≠ 1") — tất cả đều được ghi lại
+kèm số liệu, kể cả những lần sai.

@@ -887,6 +887,33 @@ và cả hai phía `break` im lặng khi gặp `Err`
 Hướng sửa đổi hẳn: **không** sửa journal/cache mà sửa **đường readdir** (trang hoá
 + không cắt danh sách trong im lặng). Ở `MAX_IO=128`: 40/40 xanh.
 
+### TỔNG KẾT r294 (vòng 20–40) — trạng thái thật của 4 hạng mục
+
+| Hạng mục | Trạng thái | Con số bảo vệ được |
+|---|---|---|
+| **T33a** x86 treo trước `PREEMPT OK` | **MỘT PHẦN** | 2 gốc đã tìm + vá (`LINT0` ở AP, `KERNEL_READY` gate); **0/301** đúng lớp "treo trước PREEMPT OK"; còn **2/120 (1,7 %)** lớp `EXEC FAIL` trên `ps` |
+| **T33b** riscv64 thoát sớm | **MỘT PHẦN (gần đạt)** | **0/150** boot sạch sau vá `assert_current_tcb` (trước: 2/200 có `PANIC hart=1`); trần trên ~2 % |
+| **T26** race FS khi ≥2 hart | **CHƯA** | tái lập được **12/40 = 30 %** ở `MAX_IO=256`; **11 giả thuyết bị bác bằng đo**; tầng lưu trữ chứng minh sạch; `MAX_IO` vẫn **128** |
+| **T31** `PAGER2_LABEL` xử lý hai lần | **CHƯA** | tái hiện **1/301** (không tái hiện lại được); bản vá có nhưng **chưa có phép đo xác nhận** ⇒ vẫn là giả thuyết |
+
+**Ba câu phải đọc kèm bảng trên:**
+1. Chỉ **T33a** và **T33b** có bản vá đã đo; **T26** và **T31** chỉ có **chẩn đoán**,
+   chưa có kết quả — đừng đọc chúng là "đã xử lý".
+2. Mọi tỉ lệ ở trên đo ở **máy khác nhau, mẫu số khác nhau, classifier đã đổi
+   nghĩa** giữa các mốc ⇒ **không cộng/trừ được**; xem mục cảnh báo ngay dưới.
+3. Hai phát hiện có giá trị lâu dài **không** phải bản vá: (a) trace QEMU chứng minh
+   file serial chỉ hụt **4 byte ở đuôi** ⇒ "thiếu marker" là **lỗi thật phía
+   guest**; (b) `harness dup` là **số lần ≠ 1** ⇒ marker **thiếu** cũng in ra là
+   `dup` — cách đọc này từng làm hiểu sai nhiều vòng.
+
+**Kết luận còn treo (chưa bác, chưa chứng minh) — người sau đừng tưởng đã xong:**
+- T26: nghi vấn "tái dùng slot trống trong `write_dir_entry`" **chưa** được kiểm
+  (3 đèn `V2RD/LOOK/SLO` chưa có `seq` nên chưa chứng minh cùng một sự kiện).
+- T33a: lớp `EXEC FAIL` **còn 1,7 %**; đèn tách `spawn` vs `wait err=` đã có
+  nhưng **chưa gặp ca** để đọc.
+- T31: phép đo chốt (đếm `USER FAULT addr=0x1001001000`: 2 ⇒ replay phía server,
+  3 ⇒ replay phía client) đã dựng nhưng **chưa chạy**.
+
 ### ⚠️ CẢNH BÁO ĐỌC SỐ (r294) — đọc trước khi trích bất kỳ tỉ lệ nào
 
 1. **Các tỉ lệ trong tài liệu này KHÔNG so được với nhau**: khác máy (`local`
@@ -1003,7 +1030,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-d54b6280cbd6e2b436f28704da66aac0afbbd39760d25044fb320d11ede6bfcb  docs/reviews/ViFastOs-report-r262.md
+61bacc061ace7800b4b8cd32d8c9983097c9c136f7a38c1ebae36386620e07e6  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
