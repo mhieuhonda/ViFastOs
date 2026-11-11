@@ -605,6 +605,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - daff2b0 r294.T26: bản đồ slot — block thiếu ino 08 (d), lộ churn 02/04/05/06/07/09; đèn cũ đo 'lần gần nhất' nên phải thêm seq
 - 4a5917f r294: đặt tên lớp flake lớn nhất — `T-IPC` (kẹt trong `cap_mint` sau `SHELL READY`)
 - 1dd0fa4 r294: T-IPC tách hai nhóm (kẹt trong cap_mint vs chết trước REQ); cập nhật quy trình rà soát đầu vòng
+- 30adc5e r294: mạng ps sạch (0% mất gói); 3/60 hỏng khi chạy một mình, ba chữ ký khác nhau ⇒ đính chính T-IPC (chỉ để đếm, cơ chế chưa rõ)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

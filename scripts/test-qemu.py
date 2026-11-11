@@ -639,10 +639,11 @@ def classify_failure(output: str) -> str:
         return "T-FS"
     if "FS V2 OK" not in output and "SHELL READY" in output:
         return "T-FS"
-    # (4b) T-IPC (đo 6/156 trên `ps`, 1/201 trên riscv64 — chữ ký CHƯA có tên):
-    # xét SAU các lớp trên (để không nuốt chết-sớm), TRƯỚC (5): guest đã qua FS
-    # và shell nhưng dừng giữa `SHELL READY` và `IPC RIGHTS *` ⇒ kẹt trong
-    # `cap_mint` (syscall), không phải lỗi quyền (lỗi quyền in `IPC RIGHTS BAD`).
+    # (4b) T-IPC: guest đã qua FS và shell nhưng THIẾU `IPC RIGHTS OK`/`BAD`.
+    # CƠ CHẾ CHƯA RÕ — đừng đọc nhãn này thành "kẹt trong `cap_mint`": đo sau đó
+    # thấy cùng chữ ký xuất hiện cả khi `MINT IN`/`MINT OUT`/`IPC RIGHTS OK` ĐỀU
+    # CÓ, nên giả thuyết "kẹt syscall" đã bị bác (bản rà soát chỉ ra trước).
+    # Khả năng cao là MẤT DÒNG serial trong cửa sổ hẹp; giữ lớp này chỉ để ĐẾM.
     if (
         "SHELL READY" in output
         and "IPC RIGHTS OK" not in output
