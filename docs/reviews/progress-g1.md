@@ -2249,3 +2249,29 @@ ngay sau đó: **10/10 xanh** (`RETRY 0/…` cả ba chỗ).
 ⇒ Đây là đúng lớp "guest in đủ marker, QEMU thoát mã lạ" (T-INFRA) đã biết — nó
 có thể làm cổng đỏ **hai lần liên tiếp**, nên quy ước "retry một lần" của harness
 chưa đủ cho lớp này. Ghi lại để lần sau không nhầm là hồi quy do bản vá console.
+
+## r294 — Bản rà soát bác cách đo `CONS TX` tôi vừa làm (và nó đúng)
+
+Tôi đã thêm `CONS TX bytes=<n> fnv=<h>` vào platform x86 rồi **gỡ lại** sau khi
+bản rà soát chỉ ra 4 lỗi làm nó **không trả lời được câu hỏi**:
+
+1. **Chọn mẫu lệch (nặng nhất):** đèn chỉ in ở đường `exit` sạch, mà lớp hỏng
+   cần đo là **treo/timeout** ⇒ đúng những lần cần lại **không có đèn**.
+2. Đếm **trước** `X86_64::putc` ⇒ hart kẹt trong `putc` vẫn bị tính byte **chưa**
+   gửi.
+3. FNV bằng load/store `Relaxed` **không nguyên tử**, và các lời gọi `A::putc`
+   ngoài khoá trong runtime (`MINT IN/OUT`, `no_current_marker`) làm hash **không
+   tái lập** ⇒ phải dùng checksum **cộng dồn** (không phụ thuộc thứ tự).
+4. Chỉ có **x86_64**; riscv64/aarch64 chưa có ⇒ **không** kiểm được 0/150 riscv
+   bằng byte.
+
+**Cách rẻ hơn, không sửa kernel (đã ghi để vòng sau dùng):** QEMU 11.1.3 trên
+máy này có trace `serial_ioport_write` ⇒ thêm
+`-trace enable=serial_ioport_write,file=…` vào lệnh QEMU, lọc offset 0 (THR) làm
+**nhân chứng từng byte QEMU đã ghi**, so với file serial. Không đụng kernel, đo
+được **cả lần treo** (không phụ thuộc đường `exit`).
+
+Nếu về sau `TX == file` thì chỉ được kết luận: **lần đó** không mất byte ở chuỗi
+putc→chardev→file (và nếu hash khớp thì chuỗi byte y hệt) ⇒ "thiếu/dup marker"
+là **sự thật phía guest**, phải soi logic exec/T32, không soi serial. **Không**
+được kết luận console nói chung sạch, và **không** suy được gì cho lần treo.
