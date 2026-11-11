@@ -59,14 +59,6 @@ pub enum Scope {
 }
 
 impl Scope {
-    fn asid(self) -> Option<u16> {
-        match self {
-            Scope::Range { asid, .. } => Some(asid),
-            Scope::Asid(asid) => Some(asid),
-            Scope::Free | Scope::All => None,
-        }
-    }
-
     /// Hợp nhất hai phạm vi — luôn BAO TRÙM cả hai, không bao giờ hẹp lại.
     pub fn merge(self, other: Scope) -> Scope {
         match (self, other) {
