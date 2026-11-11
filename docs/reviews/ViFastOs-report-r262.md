@@ -1066,6 +1066,7 @@ chẩn đoán, harness. **Trả lời: FS.**
 | S2 | **128** / smp2 (`mps`, TCG) | 5 | 0 | 5 000 | 0 | 0/0/0 |
 | S3b | 256 / **smp1** | 3 | 0 | 3 000 | 0 | 0/0/0 |
 | S4 | 256 / smp2 + `-accel tcg,thread=single` | 3 | **1** | 3 000 | 0 | 0/0/0 |
+| S1b | 256 / smp2 + **200 exec của root song song** | 5 | 0 | 5 000 | 0 | 0/0/0 |
 
 Ở 256/smp2: **10/50 boot đỏ = 20 %** (nền cũ 12/40 = 30 %, cùng bậc);
 **0 miss / 61 000 vòng**; **0/0/0 đèn** trên toàn bộ 61 lượt gọi VFS được kiểm.
@@ -1095,6 +1096,13 @@ lệch. `S4 > 0` ⇒ **race logic** (không phải race bộ nhớ host); `S3b =
   (`mkdir` trả OK, `open` thấy, readdir không thấy). **Chưa** chứng minh — đèn
   `SLO`/`LOOK` là "lần gần nhất", không có `seq`, nên không dùng để kết luận.
 
+### Thu được thêm ngoài dự kiến: reproducer NHANH cho T33a (exec)
+Lượt S1b (`stress-exec`: 200 lần `boot_exec_once("/bin/uname")` mỗi boot) bắt
+**3 lần `BIN EXEC FAIL spawn` trên 1 000 lần exec** (≈0,3 %/exec; 3/5 boot có 1
+lần). Đây là **lần đầu** đọc được nhãn phân biệt của r294: lỗi ở **spawn**
+(thiếu slot/bộ nhớ), **không** phải `tcb_wait`. Từ r296 đo T33a bằng
+`VIFAST_ROOT_FEATURES=stress-exec` thay vì 120 boot × 1 exec.
+
 ### Bài học đọc số (ghi để lần sau không sai lại)
 - `V2GROUP 06` **không** phải "nhóm 6": `v2_failed = 3 + group4` ⇒ 06 = nhóm 4c.
 - Ring 16 bản ghi phải chụp **sát chỗ hỏng**; chụp ở cuối khối thì đã trôi qua
@@ -1115,7 +1123,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-78b66d625d9d54e26627177cd352211369830a6984912f60da5672c0b3593c55  docs/reviews/ViFastOs-report-r262.md
+fed7796c67d3817eb06a15ba7e44df1d7492c1aa50c9aa685f206c7640779bfb  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

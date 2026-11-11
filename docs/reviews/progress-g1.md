@@ -2603,6 +2603,27 @@ thật, chỉ lần liệt kê ở giữa không thấy.
 của root lúc boot**. Đây là dữ kiện, không phải thất bại. Lượt **S1b** (vòng lặp
 song song với worker exec của root) **chưa làm** — xem "còn treo".
 
+### S1b — vòng lặp FS SONG SONG với 200 lần exec của root (đã chạy)
+Feature `stress-exec` (root, không bật ở gate/phát hành; build bằng
+`VIFAST_ROOT_FEATURES=stress-exec`): sau ba lần exec của khối `BIN OK`, root chạy
+thêm **200 vòng `boot_exec_once("/bin/uname")`** — đúng thứ §3.3 yêu cầu.
+
+| Cấu hình | boot | `FS V2 BAD` | vòng | miss_rd | VSEQ/VARG/VHASH |
+|---|---:|---:|---:|---:|---|
+| S1b: 256 / smp2 + 200 exec song song | 5 | **0** | 5 000 | 0 | 0/0/0 |
+
+⇒ Thêm hoạt động exec đồng thời của root **không** làm vòng lặp FS tái hiện lỗi
+(0/5 000). Lỗi vẫn chỉ xuất hiện trong **khối V2 lúc boot**. Đây là dữ kiện, không
+phải thất bại (§3.3).
+
+**Thu được thêm (ngoài dự kiến): reproducer NHANH cho lỗi exec của T33a.**
+Trong 5 boot S1b có **3 lần `BIN EXEC FAIL spawn`** trên 1 000 lần exec
+(≈0,3 %/lần exec; boot1, boot2, boot5 mỗi boot 1 lần; boot3, boot4 không có).
+Nguyên văn: `BIN OK uname` → `ViFastOs x86_64 bootinfo-v3` → `BIN EXEC FAIL spawn`.
+Đây là **lần đầu** đọc được nhãn phân biệt: lỗi ở **spawn** (thiếu slot/bộ nhớ),
+không phải `tcb_wait`. Nghĩa là từ r296 có thể đo T33a bằng
+`VIFAST_ROOT_FEATURES=stress-exec` (200 exec/boot) thay vì 120 boot × 1 exec.
+
 ### Còn treo sau r295
 1. **Cơ chế trong FS**: `V2MK open=1` (mkdir xong `open` thấy) nhưng readdir không
    thấy ⇒ nghi **vi phạm read-your-own-write ở mức entry thư mục**. Chưa chứng
@@ -2610,7 +2631,8 @@ song song với worker exec của root) **chưa làm** — xem "còn treo".
    dùng để khẳng định hai lần đọc cùng thời điểm (bản rà soát đã cảnh báo đúng).
    Việc của r296: đèn `WRITE_THEN_READ` **bên trong** `write_dir_entry`/
    `remove_dir_entry` (ghi xong đọc lại RAW ngay), có `seq`.
-2. **S1b** (vòng lặp + exec song song) chưa chạy.
+2. **S1b** đã chạy: 0/5 000 vòng ⇒ cần thêm điều kiện khác (nghi: chính các
+   lệnh **ghi** của root trong khối V2, không phải exec).
 3. `MAX_IO` **vẫn 128**; chưa có test xanh nào cho phép nâng (đúng §5).
 4. `T-BUILD` chưa bắt được ca thật nào (chưa ai build sai trong vòng này).
 5. `-smp 1` không thoát được boot ⇒ mỗi lần đo tốn hết timeout (ghi lại để lần sau

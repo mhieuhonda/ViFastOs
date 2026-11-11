@@ -142,7 +142,7 @@ bin_env() {
 }
 
 bin_env riscv64imac-unknown-none-elf
-cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf -- \
+VIFAST_BUILD_FEATS="${VIFAST_ROOT_FEATURES:-none}" cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf ${VIFAST_ROOT_FEATURES:+--features "$VIFAST_ROOT_FEATURES"} -- \
     -C code-model=medium -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/riscv64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
@@ -177,7 +177,7 @@ check_client_budget() {
 check_client_budget riscv64 "${CLIENT_RV}.stripped" 8
 
 bin_env aarch64-unknown-none-softfloat
-cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
+VIFAST_BUILD_FEATS="${VIFAST_ROOT_FEATURES:-none}" cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat ${VIFAST_ROOT_FEATURES:+--features "$VIFAST_ROOT_FEATURES"} -- \
     -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/aarch64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
@@ -188,7 +188,7 @@ scripts/check-root-elf.sh "$ROOT_ARM.stripped" aarch64-unknown-none-softfloat 18
 check_client_budget aarch64 "${CLIENT_ARM}.stripped" 8
 
 bin_env x86_64-unknown-none
-cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
+VIFAST_BUILD_FEATS="${VIFAST_ROOT_FEATURES:-none}" cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none ${VIFAST_ROOT_FEATURES:+--features "$VIFAST_ROOT_FEATURES"} -- \
     -C relocation-model=pic \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/x86_64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
@@ -209,7 +209,7 @@ VIFAST_BUILD_FEATS=test-destroy-smp cargo rustc -p vifast-root --profile root-ta
 "$OBJCOPY" --strip-all "$ROOT_RV" "${ROOT_RV}.smp.stripped"
 scripts/check-root-elf.sh "${ROOT_RV}.smp.stripped" riscv64imac-unknown-none-elf 243
 bin_env riscv64imac-unknown-none-elf
-cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf -- \
+VIFAST_BUILD_FEATS="${VIFAST_ROOT_FEATURES:-none}" cargo rustc -p vifast-root --profile root-task --target riscv64imac-unknown-none-elf ${VIFAST_ROOT_FEATURES:+--features "$VIFAST_ROOT_FEATURES"} -- \
     -C code-model=medium -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/riscv64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
@@ -226,7 +226,7 @@ VIFAST_BUILD_FEATS=test-destroy-smp cargo rustc -p vifast-root --profile root-ta
 "$OBJCOPY" --strip-all "$ROOT_ARM" "${ROOT_ARM}.smp.stripped"
 scripts/check-root-elf.sh "${ROOT_ARM}.smp.stripped" aarch64-unknown-none-softfloat 183
 bin_env aarch64-unknown-none-softfloat
-cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat -- \
+VIFAST_BUILD_FEATS="${VIFAST_ROOT_FEATURES:-none}" cargo rustc -p vifast-root --profile root-task --target aarch64-unknown-none-softfloat ${VIFAST_ROOT_FEATURES:+--features "$VIFAST_ROOT_FEATURES"} -- \
     -C relocation-model=static \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/aarch64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \
@@ -244,7 +244,7 @@ VIFAST_BUILD_FEATS=test-destroy-smp cargo rustc -p vifast-root --profile root-ta
 "$OBJCOPY" --strip-all "$ROOT_X86" "${ROOT_X86}.smp.stripped"
 scripts/check-root-elf.sh "${ROOT_X86}.smp.stripped" x86_64-unknown-none 62
 bin_env x86_64-unknown-none
-cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none -- \
+VIFAST_BUILD_FEATS="${VIFAST_ROOT_FEATURES:-none}" cargo rustc -p vifast-root --profile root-task --target x86_64-unknown-none ${VIFAST_ROOT_FEATURES:+--features "$VIFAST_ROOT_FEATURES"} -- \
     -C relocation-model=pic \
     -C link-arg=-T -C link-arg=crates/vifast-root/linkers/x86_64.ld \
     -C link-arg=--defsym=ROOT_ELF_BASE=0x1000200000 \

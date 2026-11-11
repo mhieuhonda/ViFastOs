@@ -615,6 +615,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - e2c3316 root: tách BIN EXEC FAIL thành spawn/wait+err; đo ps 1/50 (timeout, không phải lớp này)
 - d451ea9 root: tcb_wait lỗi thì chờ lại thay vì giết con đang sống (mất marker + nuốt lỗi); đo ps 1/80
 - ddda086 fmt: chuẩn hoá sau bản vá tcb_wait
+- 2d6e2a8 r295 (T26): đèn req_seq+hash + BUILD id trả lời "FS hay IPC" — đáp án 4.D (FS)
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

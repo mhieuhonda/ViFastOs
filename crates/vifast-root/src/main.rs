@@ -3504,6 +3504,32 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         &mut slots,
                         &mut exec_used,
                     );
+                    // r295 (mục 3.3, lượt S1b): vòng lặp exec của ROOT chạy
+                    // SONG SONG với vòng lặp FS của client. Đây là feature
+                    // CHẨN ĐOÁN: lỗi T26 không tái hiện trong vòng lặp FS đơn
+                    // độc (0/61 000 vòng) nhưng khối V2 lúc boot vẫn đỏ ~20 %,
+                    // nên phép thử là "có hoạt động đồng thời của root hay
+                    // không". Không in marker nào (im lặng chạy), và trả lại
+                    // đúng một `BOOT EXEC LOOP n=` để biết vòng lặp đã chạy.
+                    #[cfg(feature = "stress-exec")]
+                    {
+                        let rounds = 200u32;
+                        let mut done = 0u32;
+                        while done < rounds {
+                            boot_exec_once(
+                                root_vfs_slot,
+                                endpoint_slot,
+                                b"/bin/uname",
+                                &[b"/bin/uname"],
+                                meta_untyped,
+                                data_untyped,
+                                &mut slots,
+                                &mut exec_used,
+                            );
+                            done += 1;
+                        }
+                        write(b"BOOT EXEC LOOP 200\n");
+                    }
                     exec_tcb = 0;
                     exec_len = 0;
                 }

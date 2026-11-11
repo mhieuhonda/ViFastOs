@@ -7,6 +7,8 @@ license.workspace = true
 
 [features]
 test-destroy-smp = []
+# r295 (mục 3.3, S1b): vòng lặp exec của root chạy song song với stress-fs.
+stress-exec = []
 
 [dependencies]
 vifast-abi = { path = "../vifast-abi" }
