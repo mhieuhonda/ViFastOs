@@ -2275,3 +2275,25 @@ Nếu về sau `TX == file` thì chỉ được kết luận: **lần đó** kh�
 putc→chardev→file (và nếu hash khớp thì chuỗi byte y hệt) ⇒ "thiếu/dup marker"
 là **sự thật phía guest**, phải soi logic exec/T32, không soi serial. **Không**
 được kết luận console nói chung sạch, và **không** suy được gì cho lần treo.
+
+## r294 — QEMU trace `serial_write`: cờ đã có, CHƯA kiểm được file
+
+Sự kiện trace đúng tên trên QEMU 11.1.3 của máy này là **`serial_write`** (không
+phải `serial_ioport_write`); `-trace help` liệt kê 28 event liên quan serial.
+
+Đã thêm vào harness: `VIFAST_TRACE=1` ⇒ thêm `-trace
+enable=serial_write,file=<serial>.trace` vào lệnh QEMU **x86_64** (mặc định TẮT,
+không ảnh hưởng đường đo thường).
+
+**Chạy thử `VIFAST_TRACE=1 --arch x86_64 --repeat 2`: `RETRY 0/2`, 2/2 PASS,
+nhưng KHÔNG tìm thấy file `.trace`** — vì harness dùng `mkdtemp` cho mỗi lần boot
+rồi **xoá thư mục**, nên file trace bị xoá cùng serial.
+
+⇒ Việc còn lại (vòng sau, rất nhỏ): thêm biến `VIFAST_KEEP_SERIAL=1` (hoặc
+`VIFAST_ARTIFACT_DIR`) để giữ thư mục tạm khi bật trace; khi đó mới đếm được
+`<số dòng serial_write với offset 0>` và so với kích thước file serial.
+
+Cạm bẫy đã ghi sẵn để không tính sai: `\n` được kernel đổi thành `\r\n` **trước**
+khi ghi; phải trừ **tiền tố firmware** (OVMF ~460 B, OpenSBI ~2964 B) bằng offset
+mốc `KERNEL ENTRY` chứ không dùng hằng số; và trace có cả `serial_read` nên phải
+lọc đúng chiều ghi.
