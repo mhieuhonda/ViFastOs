@@ -76,17 +76,12 @@ pub struct SlotAddr {
 /// 290.1 (r290): nhãn của một BẢNG CHÌA vật lý. `SlotAddr` chỉ có `{tcb, slot}`
 /// nên không biểu diễn được cap nằm trong CNode đã tháo — dùng nhãn này để mọi
 /// bộ duyệt đi chung một đường.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum TableId {
+    #[default]
     Root,
     Tcb(ObjRef),
     CNode(ObjRef),
-}
-
-impl Default for TableId {
-    fn default() -> Self {
-        TableId::Root
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -269,7 +264,7 @@ pub struct PendingSend {
 impl PendingSend {
     pub fn grant_key_for(slot: u8, id: u64, obj: ObjRef) -> u64 {
         (slot as u64)
-            | ((id as u64 & 0xFF_FFFF) << 8)
+            | ((id & 0xFF_FFFF) << 8)
             | ((obj.index as u64) << 32)
             | ((obj.gen as u64 & 0xFF_FFFF) << 40)
     }
@@ -559,7 +554,7 @@ impl VSpace {
     /// heap or interval tree.
     pub(crate) fn find_free_va(&self, len: u64) -> Option<u64> {
         let page = self.page_size;
-        if page == 0 || len == 0 || len % page != 0 {
+        if page == 0 || len == 0 || !len.is_multiple_of(page) {
             return None;
         }
         let mut candidate = self.base;

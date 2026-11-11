@@ -20,9 +20,10 @@ pub const DEFAULT_PAGE_SIZE: u64 = 4096;
 
 /// Shared user-address layout for all architectures.  The high base keeps
 /// user mappings away from kernel identity maps and low MMIO.
+///
+/// Wire layout for the general pager service (protocol v2).  The kernel
+/// only relays faults; mapping, eviction and file I/O stay in user space.
 pub mod pager {
-    //! Wire layout for the general pager service (protocol v2).  The kernel
-    //! only relays faults; mapping, eviction and file I/O stay in user space.
 
     pub const LABEL_FAULT: u64 = 0x5047_0001;
     pub const LABEL_MAP: u64 = 0x5047_0002;
@@ -94,7 +95,7 @@ pub mod pager {
         }
 
         pub const fn decode(words: [u64; 4]) -> Option<Self> {
-            if words[0] % PAGE_BYTES as u64 != 0 {
+            if !words[0].is_multiple_of(PAGE_BYTES as u64) {
                 return None;
             }
             Some(Self {
@@ -142,8 +143,8 @@ pub mod pager {
 
     const _: () = assert!(MAX_CLIENTS <= 8);
     const _: () = assert!(POOL_FRAMES >= 4);
-    const _: () = assert!(CLIENT_VA_BASE % PAGE_BYTES as u64 == 0);
-    const _: () = assert!(CLIENT_VA_STRIDE % PAGE_BYTES as u64 == 0);
+    const _: () = assert!(CLIENT_VA_BASE.is_multiple_of(PAGE_BYTES as u64));
+    const _: () = assert!(CLIENT_VA_STRIDE.is_multiple_of(PAGE_BYTES as u64));
     const _: () = assert!(CLIENT_VA_BASE > super::user_layout::CODE_VA as u64 + 0x100_0000);
     const _: () = assert!(CLIENT_VA_END <= super::user_layout::USER_VA_END as u64);
     const _: () = assert!(LABEL_FAULT != LABEL_MAP);
@@ -297,12 +298,8 @@ pub mod pager {
             }
             // Mọi số từ 0..=SyscallId cuối cùng phải có mặt.
             let last = SyscallId::ModuleRelease as usize;
-            for index in 0..=last {
-                assert!(
-                    seen[index],
-                    "thiếu SyscallId {} trong bảng trạng thái",
-                    index
-                );
+            for (index, &present) in seen.iter().enumerate().take(last + 1) {
+                assert!(present, "thiếu SyscallId {} trong bảng trạng thái", index);
             }
         }
 
@@ -418,7 +415,7 @@ pub mod user_layout {
     pub const EXEC_ARGS_STR_BYTES: usize = EXEC_STACK_TOP - EXEC_ARGS_STR_BASE;
     const _: () = assert!(EXEC_ARGS_BASE > EXEC_STACK_BASE);
     const _: () = assert!(EXEC_ARGS_STR_BYTES >= 128);
-    const _: () = assert!(EXEC_ARGS_BASE % 16 == 0);
+    const _: () = assert!(EXEC_ARGS_BASE.is_multiple_of(16));
     /// IPC buffer riêng của root khi tự gọi VFS (mốc 9, vòng 46): 1 trang
     /// trong khe trống 0x24000–0x20_0000, sau EXEC stack.
     pub const ROOT_IPC_BUF_VA: usize = CODE_VA + 0x24000;

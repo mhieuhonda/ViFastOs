@@ -509,9 +509,9 @@ impl Kernel {
         if rights.is_empty() || !allowed.contains(rights) {
             return Err(KError::InvalidArg);
         }
-        if frame.pa as u64 % DEFAULT_PAGE_SIZE != 0
+        if !(frame.pa as u64).is_multiple_of(DEFAULT_PAGE_SIZE)
             || (frame.size as u64) < DEFAULT_PAGE_SIZE
-            || iova % DEFAULT_PAGE_SIZE != 0
+            || !iova.is_multiple_of(DEFAULT_PAGE_SIZE)
             || iova < IOMMU_IOVA_BASE
             || iova.saturating_add(DEFAULT_PAGE_SIZE) > IOMMU_IOVA_BASE.saturating_add(0x4000_0000)
         {
@@ -704,7 +704,7 @@ impl Kernel {
         // Không thêm refcount `asid_live` vì phải đồng bộ ở mọi đường
         // create/destroy/retype VSpace — rủi ro stale cao hơn lợi ích.
         let first = self.next_asid;
-        if first >= 1 && first < 0x0fff && !self.asid_in_use(first) {
+        if (1..0x0fff).contains(&first) && !self.asid_in_use(first) {
             self.next_asid = if first >= 0x0fff { 1 } else { first + 1 };
             return first;
         }
@@ -969,7 +969,7 @@ impl Kernel {
         if argc != 0 && argv == 0 {
             return Err(KError::InvalidArg);
         }
-        if argv % 8 != 0 {
+        if !argv.is_multiple_of(8) {
             return Err(KError::InvalidArg);
         }
         let table = self.tcb_mut(tcb).ok_or(KError::WrongType)?;
@@ -1096,10 +1096,10 @@ impl Kernel {
     pub fn irq_raise(&mut self, number: u32) -> bool {
         // (#2b) O(1) qua map thay vì quét 168 object. number >= 64 không bao
         // giờ có object (create_irq cấm) nên từ chối ngay.
-        let index = u32::try_from(number).ok().map(|n| n as usize);
-        let Some(index) = index.filter(|i| *i < 64) else {
+        let index = number as usize;
+        if index >= 64 {
             return false;
-        };
+        }
         let Some(irq_ref) = self.irq_by_number[index] else {
             return false;
         };
@@ -1261,13 +1261,9 @@ impl Kernel {
                 gen: self.objs[index].gen,
             };
             let expired = match self.objs[index].kind {
-                Kind::Tcb(tcb) => {
-                    if tcb.state == ThreadState::BlockedBudget {
-                        seen = seen.saturating_add(1);
-                        tcb.wake_at.is_some_and(|deadline| deadline <= now)
-                    } else {
-                        false
-                    }
+                Kind::Tcb(tcb) if tcb.state == ThreadState::BlockedBudget => {
+                    seen = seen.saturating_add(1);
+                    tcb.wake_at.is_some_and(|deadline| deadline <= now)
                 }
                 _ => false,
             };
@@ -1332,9 +1328,7 @@ impl Kernel {
             period_start = now;
             remaining = budget;
         }
-        if remaining != 0 {
-            remaining -= 1;
-        }
+        remaining = remaining.saturating_sub(1);
         let exhausted = remaining == 0;
         let deadline = period_start
             .saturating_add(period)
@@ -1416,7 +1410,7 @@ impl Kernel {
         // invariant/remove_caps_to đi theo view hiện tại (CNode) nên vé ẩn
         // không bao giờ bị đánh dấu/thu. Muốn bind CNode thì xóa sạch vé
         // nhúng trước (delete từng slot); unbind (None) luôn cho phép.
-        if cnode.is_some() {
+        if let Some(cnode_obj) = cnode {
             let has_live_embedded = self
                 .tcb(target)
                 .map(|table| table.cspace.iter().any(Option::is_some))
@@ -1424,7 +1418,7 @@ impl Kernel {
             if has_live_embedded {
                 return Err(KError::IllegalOperation);
             }
-            if self.cnode(cnode.unwrap()).is_none() {
+            if self.cnode(cnode_obj).is_none() {
                 return Err(KError::WrongType);
             }
         }
@@ -2261,7 +2255,7 @@ impl Kernel {
                 OBJ_METADATA_ALIGN,
             ),
             ObjType::BlockDevice => (
-                Kind::BlockDevice(BlockDevice::default()),
+                Kind::BlockDevice(BlockDevice),
                 OBJ_BLOCK_DEVICE_BYTES,
                 OBJ_METADATA_ALIGN,
             ),
@@ -2388,7 +2382,7 @@ impl Kernel {
         if page == 0 || !page.is_power_of_two() {
             return Err(KError::Alignment);
         }
-        if size == 0 || size % page != 0 {
+        if size == 0 || !size.is_multiple_of(page) {
             return Err(KError::InvalidArg);
         }
         let required = objects
@@ -2521,6 +2515,9 @@ impl Kernel {
         }
     }
 
+    /// Số tham số theo hình dạng của ELF segment + danh sách object tạo ra —
+    /// không gộp được.
+    #[allow(clippy::too_many_arguments)]
     fn map_task_segment(
         &mut self,
         untyped: ObjRef,
@@ -2598,7 +2595,7 @@ impl Kernel {
             return Err(KError::MissingPageTable);
         }
         let code_pages = match (image, shared_code) {
-            (Some(image), None) => (image.len() + page - 1) / page,
+            (Some(image), None) => image.len().div_ceil(page),
             (None, Some(frame)) => {
                 let frame = self.frame(frame).ok_or(KError::WrongType)?;
                 if frame.size < page {
@@ -2698,7 +2695,7 @@ impl Kernel {
         if page == 0 || !page.is_power_of_two() || self.page_table_ops.is_none() {
             return Err(KError::MissingPageTable);
         }
-        if stack.pages != 0 && stack.base % page as u64 != 0 {
+        if stack.pages != 0 && !stack.base.is_multiple_of(page as u64) {
             return Err(KError::Alignment);
         }
         let mut created = [ObjRef::invalid(); MAX_OBJECTS];
@@ -2828,7 +2825,7 @@ impl Kernel {
         if page_size == 0 || !page_size.is_power_of_two() || table.root % page_size != 0 {
             return Err(KError::Alignment);
         }
-        if va % page_size != 0 {
+        if !va.is_multiple_of(page_size) {
             return Err(KError::Alignment);
         }
         if va < base || va >= end {
@@ -2872,8 +2869,7 @@ impl Kernel {
                     // Vòng 101 (K54): entry cha phủ cả span — flush local
                     // không đủ, hart khác giữ page-walk cache cũ. Dùng
                     // flush_vspace_range theo mask như map_frame/remap.
-                    let span_pages =
-                        ((span / page_size as u64).max(1).min(usize::MAX as u64)) as usize;
+                    let span_pages = ((span / page_size).max(1).min(usize::MAX as u64)) as usize;
                     // `flush_vspace_range` cần &mut nhưng PTE đã ghi xong;
                     // gọi flush trực tiếp qua ops với mask hiện tại.
                     if let Some(space) = self.vspace(vspace) {
@@ -2960,7 +2956,7 @@ impl Kernel {
             .vspace(vspace)
             .map(|space| space.page_size)
             .ok_or(KError::WrongType)?;
-        if frame.size < page_size as usize || frame.pa as u64 % page_size != 0 {
+        if frame.size < page_size as usize || !(frame.pa as u64).is_multiple_of(page_size) {
             return Err(KError::Alignment);
         }
         let wants_w = rights.contains(Rights::WRITE);
@@ -3048,7 +3044,7 @@ impl Kernel {
         };
         if page_size == 0
             || !page_size.is_power_of_two()
-            || frame.pa as u64 % page_size != 0
+            || !(frame.pa as u64).is_multiple_of(page_size)
             || (frame.size as u64) < page_size
         {
             return Err(KError::Alignment);
@@ -3337,7 +3333,7 @@ impl Kernel {
                     for (i, mapping) in space.mappings.iter().enumerate() {
                         let Some(mapping) = mapping else { continue };
                         if page == 0
-                            || page.is_power_of_two() == false
+                            || !page.is_power_of_two()
                             || mapping.va % page != 0
                             || mapping.pa % page != 0
                             || mapping.len != page
@@ -3541,7 +3537,7 @@ impl Kernel {
                         table.root,
                         table
                             .root
-                            .checked_add(DEFAULT_PAGE_SIZE as u64)
+                            .checked_add(DEFAULT_PAGE_SIZE)
                             .ok_or(KError::InvalidArg)?,
                         object.owner,
                     );
@@ -3620,8 +3616,7 @@ impl Kernel {
         }
         // The object/reserved counters are derived from the live ownership
         // tree.  This also makes the parent-child quota split explicit.
-        for i in 0..untyped_count {
-            let (_, _, untyped) = untypeds[i];
+        for &(_, _, untyped) in untypeds[..untyped_count].iter() {
             let region = self.untyped(untyped).ok_or(KError::ObjectDestroyed)?;
             let mut objects = 0usize;
             let mut reserved = 0usize;
@@ -4848,7 +4843,7 @@ impl Kernel {
         if orphaned {
             if let Some(ops) = self.page_table_ops {
                 if mask != 0 && end > start {
-                    let span_pages = ((end - start) / page_size.max(1)).max(1).min(1024) as usize;
+                    let span_pages = ((end - start) / page_size.max(1)).clamp(1, 1024) as usize;
                     if span_pages > 16 {
                         ops.flush_all_asid(asid, mask);
                     } else {
@@ -5613,7 +5608,7 @@ impl Kernel {
             }
         }
 
-        const BITS: usize = (MAX_OBJECTS * MAX_CAPS_ROOT + 63) / 64;
+        const BITS: usize = (MAX_OBJECTS * MAX_CAPS_ROOT).div_ceil(64);
         let mut victim_bits = [0u64; BITS];
         let mut removed = 0usize;
         for i in 0..MAX_OBJECTS {
@@ -5632,16 +5627,16 @@ impl Kernel {
                 }
             };
             if let Some(slots) = self.cspace(r) {
-                for s in 1..slots.len() {
-                    if let Some(cap) = slots[s] {
-                        mark(s, cap, &mut victim_bits, &mut removed);
+                for (s, entry) in slots.iter().enumerate().skip(1) {
+                    if let Some(cap) = entry {
+                        mark(s, *cap, &mut victim_bits, &mut removed);
                     }
                 }
             }
             if let Some(node) = self.cnode(r) {
-                for s in 1..node.slots.len() {
-                    if let Some(cap) = node.slots[s] {
-                        mark(s, cap, &mut victim_bits, &mut removed);
+                for (s, entry) in node.slots.iter().enumerate().skip(1) {
+                    if let Some(cap) = entry {
+                        mark(s, *cap, &mut victim_bits, &mut removed);
                     }
                 }
             }
@@ -6347,13 +6342,9 @@ impl Kernel {
                 gen: self.objs[index].gen,
             };
             let expired = match self.objs[index].kind {
-                Kind::Tcb(tcb) => {
-                    if tcb.state == ThreadState::BlockedSleep {
-                        seen = seen.saturating_add(1);
-                        tcb.wake_at.is_some_and(|deadline| deadline <= now)
-                    } else {
-                        false
-                    }
+                Kind::Tcb(tcb) if tcb.state == ThreadState::BlockedSleep => {
+                    seen = seen.saturating_add(1);
+                    tcb.wake_at.is_some_and(|deadline| deadline <= now)
                 }
                 _ => false,
             };
@@ -6399,6 +6390,8 @@ impl Kernel {
     /// `Reply`, `Signal`, `Wait`, `Poll`) plus `DebugWrite`, `GetTime` and
     /// `Exit`.  Memory-bearing operations are returned as a `Debug` action so
     /// the architecture trap handler validates the user pointer.
+    /// Số tham số đi theo thanh ghi a0..a5 của ABI — không gộp được.
+    #[allow(clippy::too_many_arguments)]
     pub fn user_syscall(
         &mut self,
         tcb: ObjRef,
@@ -6413,6 +6406,9 @@ impl Kernel {
         self.user_syscall_on(tcb, 0, number, a0, a1, a2, a3, a4, a5)
     }
 
+    /// Số tham số đi theo thanh ghi a0..a5 của ABI cộng thêm hart — không
+    /// gộp được.
+    #[allow(clippy::too_many_arguments)]
     pub fn user_syscall_on(
         &mut self,
         tcb: ObjRef,
@@ -7166,7 +7162,7 @@ impl Kernel {
                         gen: self.objs[index].gen,
                     };
                     if let Some(untyped) = self.untyped(reference) {
-                        if best.map_or(true, |(size, _)| untyped.size > size) {
+                        if best.is_none_or(|(size, _)| untyped.size > size) {
                             best = Some((untyped.size, untyped.bump));
                         }
                     }
@@ -8753,18 +8749,16 @@ mod tests {
             remaining[slot] = object.take();
         }
         let mut ordered: [Option<ObjRef>; 4] = [None; 4];
-        for index in 0..remaining.len() {
+        for target_slot in ordered.iter_mut() {
             let mut largest: Option<(usize, ObjRef)> = None;
-            for slot in remaining.iter() {
-                if let Some(object) = slot {
-                    let offset = kernel.get(*object).unwrap().alloc_offset as usize;
-                    if largest.is_none_or(|(best, _)| offset > best) {
-                        largest = Some((offset, *object));
-                    }
+            for object in remaining.iter().flatten() {
+                let offset = kernel.get(*object).unwrap().alloc_offset as usize;
+                if largest.is_none_or(|(best, _)| offset > best) {
+                    largest = Some((offset, *object));
                 }
             }
             if let Some((_, object)) = largest {
-                ordered[index] = Some(object);
+                *target_slot = Some(object);
                 for slot in remaining.iter_mut() {
                     if *slot == Some(object) {
                         *slot = None;
@@ -9279,7 +9273,7 @@ mod tests {
         // Slot waiter đã sạch, other còn trong hàng.
         let waiters = kernel.notification(ntfn).unwrap().waiters;
         assert!(waiters.iter().all(|slot| *slot != Some(waiter)));
-        assert!(waiters.iter().any(|slot| *slot == Some(other)));
+        assert!(waiters.contains(&Some(other)));
         // Signal: other thức, waiter treo không bị động, bit không mất.
         assert_eq!(kernel.signal(ntfn, 0b1), Ok(()));
         assert_eq!(kernel.tcb(other).unwrap().state, ThreadState::Ready);
@@ -9393,7 +9387,7 @@ mod tests {
         // Slot của dying đã sạch, survivor còn trong hàng.
         let waiters = kernel.notification(ntfn).unwrap().waiters;
         assert!(waiters.iter().all(|slot| *slot != Some(dying)));
-        assert!(waiters.iter().any(|slot| *slot == Some(survivor)));
+        assert!(waiters.contains(&Some(survivor)));
         // Signal đánh thức survivor và không chạm zombie.
         assert_eq!(kernel.signal(ntfn, 0b1), Ok(()));
         assert_eq!(kernel.tcb(survivor).unwrap().state, ThreadState::Ready);
@@ -10206,8 +10200,8 @@ mod tests {
     fn untyped_accounts_object_metadata() {
         let mut kernel = Kernel::new();
         let untyped = kernel.create_untyped(0x100_0000, 8192).unwrap();
-        assert!(matches!(kernel.retype(untyped, ObjType::Endpoint), Ok(_)));
-        assert!(matches!(kernel.retype(untyped, ObjType::Tcb), Ok(_)));
+        assert!(kernel.retype(untyped, ObjType::Endpoint).is_ok());
+        assert!(kernel.retype(untyped, ObjType::Tcb).is_ok());
         assert_eq!(
             kernel.retype(untyped, ObjType::Tcb),
             Err(KError::OutOfMemory)
@@ -10827,10 +10821,10 @@ mod tests {
             } else if pte & 0b10 != 0 {
                 let mut rights = Rights::READ;
                 if pte & 0b100 != 0 {
-                    rights = rights | Rights::WRITE;
+                    rights |= Rights::WRITE;
                 }
                 if pte & 0b1000 != 0 {
-                    rights = rights | Rights::EXEC;
+                    rights |= Rights::EXEC;
                 }
                 Pte::Leaf(pte & !0xfff, rights)
             } else {
@@ -10918,10 +10912,10 @@ mod tests {
             } else if pte & 0b10 != 0 {
                 let mut rights = Rights::READ;
                 if pte & 0b100 != 0 {
-                    rights = rights | Rights::WRITE;
+                    rights |= Rights::WRITE;
                 }
                 if pte & 0b1000 != 0 {
-                    rights = rights | Rights::EXEC;
+                    rights |= Rights::EXEC;
                 }
                 Pte::Leaf(pte & !0xfff, rights)
             } else {
@@ -10998,7 +10992,7 @@ mod tests {
 
         fn zero_frame(&self, pa: u64, size: usize) {
             let base = ((pa >> 12) as usize) * 512;
-            let words = (size + 7) / 8;
+            let words = size.div_ceil(8);
             if let Some(slice) = FAKE_MEM.lock().unwrap().get_mut(base..base + words) {
                 slice.fill(0);
             }
@@ -11106,7 +11100,7 @@ mod tests {
         }
         fn zero_frame(&self, pa: u64, size: usize) {
             let base = ((pa >> 12) as usize) * 512;
-            let words = (size + 7) / 8;
+            let words = size.div_ceil(8);
             if let Some(slice) = PTE_FAKE_MEM.lock().unwrap().get_mut(base..base + words) {
                 slice.fill(0);
             }
@@ -12830,7 +12824,7 @@ mod tests {
                     0
                 ),
                 UserAction::Return {
-                    value: slot as u64,
+                    value: slot,
                     error: KError::Ok,
                 }
             );
@@ -12855,7 +12849,7 @@ mod tests {
                     0
                 ),
                 UserAction::Return {
-                    value: dest as u64,
+                    value: dest,
                     error: KError::Ok,
                 }
             );
@@ -13138,7 +13132,7 @@ mod tests {
                     0
                 ),
                 UserAction::Return {
-                    value: slot as u64,
+                    value: slot,
                     error: KError::Ok,
                 }
             );
@@ -14085,13 +14079,13 @@ mod tests {
                         1,
                         types[(next() as usize) % types.len()] as u64,
                         slot as u64,
-                        (next() & 0x1fff) as u64,
-                        (next() & 0x3f) as u64,
+                        next() & 0x1fff,
+                        next() & 0x3f,
                         0,
                     ),
                     1 => (
                         SyscallId::CapCopy as u64,
-                        1 + (next() % 6) as u64,
+                        1 + (next() % 6),
                         other as u64,
                         slot as u64,
                         rights.0 as u64,
@@ -14099,15 +14093,7 @@ mod tests {
                         0,
                     ),
                     2 => (SyscallId::CapDelete as u64, slot as u64, 0, 0, 0, 0, 0),
-                    3 => (
-                        SyscallId::CapRevoke as u64,
-                        1 + (next() % 6) as u64,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                    ),
+                    3 => (SyscallId::CapRevoke as u64, 1 + (next() % 6), 0, 0, 0, 0, 0),
                     4 => (
                         SyscallId::FrameMap as u64,
                         4,
@@ -15117,8 +15103,10 @@ mod tests {
             .install_cap(sender, 2, Cap::new(obj_a, ObjType::Endpoint, Rights::ALL))
             .unwrap();
         // Park với grant (msg.cap = slot 2).
-        let mut msg = Message::default();
-        msg.cap = 2;
+        let msg = Message {
+            cap: 2,
+            ..Default::default()
+        };
         assert_eq!(kernel.send(sender, ep, 0, msg, false), Ok(false));
         // Đổi slot 2 sang vé B: gỡ A (vé gốc không có con nên gỡ được),
         // cài B (id khác, object khác).
@@ -15694,8 +15682,10 @@ mod tests {
         let call = Message::new(0x1234, &[7]).unwrap();
         assert_eq!(kernel.send(client, ep, 0, call, true), Ok(true));
         kernel.tcb_mut(client).unwrap().recv_slot = 5;
-        let mut reply = Message::default();
-        reply.cap = 2;
+        let reply = Message {
+            cap: 2,
+            ..Default::default()
+        };
         assert_eq!(kernel.reply(server, reply), Ok(()));
         let got = kernel
             .cap_at(SlotAddr {
@@ -15718,8 +15708,10 @@ mod tests {
             .unwrap();
         assert_eq!(kernel.recv(server, ep, 7), Ok(None));
         assert_eq!(kernel.send(client, ep, 0, call, true), Ok(true));
-        let mut bad = Message::default();
-        bad.cap = 3;
+        let bad = Message {
+            cap: 3,
+            ..Default::default()
+        };
         assert_eq!(kernel.reply(server, bad), Err(KError::NoRights));
         assert!(kernel.check_invariants().is_ok());
     }
@@ -16011,15 +16003,12 @@ mod tests {
             let action = kernel.user_syscall(
                 root, *id as u64, args[0], args[1], args[2], args[3], args[4], args[5],
             );
-            match action {
-                UserAction::Return { value, error } => {
-                    assert!(
-                        error == KError::Ok || value == 0,
-                        "{id:?}: error {error:?} leaks value {value:#x}"
-                    );
-                }
-                // Blocked/Sleep/...: không trả value, miễn kiểm.
-                _ => {}
+            // Blocked/Sleep/...: không trả value, miễn kiểm.
+            if let UserAction::Return { value, error } = action {
+                assert!(
+                    error == KError::Ok || value == 0,
+                    "{id:?}: error {error:?} leaks value {value:#x}"
+                );
             }
         }
         assert!(kernel.check_invariants().is_ok());
@@ -17544,8 +17533,10 @@ mod tests {
         kernel.tcb_mut(server).unwrap().caller = Some((client, epoch));
         kernel.tcb_mut(client).unwrap().state = ThreadState::BlockedReply;
 
-        let mut bad = Message::default();
-        bad.cap = 99; // slot không tồn tại trong cspace của server
+        let bad = Message {
+            cap: 99, // slot không tồn tại trong cspace của server
+            ..Default::default()
+        };
         assert_eq!(kernel.reply(server, bad), Err(KError::InvalidCap));
         assert_eq!(
             kernel.tcb(server).unwrap().caller.map(|(c, _)| c),

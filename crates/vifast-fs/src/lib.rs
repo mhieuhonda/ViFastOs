@@ -526,13 +526,15 @@ fn inode_encode(inode: &Inode, out: &mut [u8]) {
     }
 }
 fn inode_decode(input: &[u8]) -> Inode {
-    let mut inode = Inode::default();
-    inode.kind = input[0];
-    inode.mode = input[1];
-    inode.uid = get_u16(input, 2);
-    inode.nlink = get_u16(input, 4);
-    inode.size = get_u32(input, 8);
-    inode.generation = get_u32(input, 12);
+    let mut inode = Inode {
+        kind: input[0],
+        mode: input[1],
+        uid: get_u16(input, 2),
+        nlink: get_u16(input, 4),
+        size: get_u32(input, 8),
+        generation: get_u32(input, 12),
+        ..Default::default()
+    };
     for index in 0..MAX_BLOCKS_PER_INODE {
         inode.blocks[index] = get_u32(input, 16 + index * 4);
     }
@@ -598,7 +600,7 @@ fn validate_super(block: &[u8; BLOCK_SIZE], capacity: u32) -> Result<SuperInfo, 
         return Err(FsError::Invalid);
     }
     let total = get_u32(block, 12);
-    if total < DATA_START + 2 || total > TOTAL_BLOCKS || total > capacity {
+    if !(DATA_START + 2..=TOTAL_BLOCKS).contains(&total) || total > capacity {
         return Err(FsError::Invalid);
     }
     let inode_limit = get_u32(block, 16) as usize;
@@ -967,7 +969,7 @@ impl<D: BlockDev> Fs<D> {
             let mut table = zero_block();
             self.dev.read(double, &mut table)?;
             let double_used = used_blocks - direct - INDIRECT_ENTRIES;
-            let keep_tables = (double_used + INDIRECT_ENTRIES - 1) / INDIRECT_ENTRIES;
+            let keep_tables = double_used.div_ceil(INDIRECT_ENTRIES);
             for slot in 0..INDIRECT_ENTRIES {
                 let second = get_u32(&table, slot * 4);
                 if slot < keep_tables && second != 0 {
@@ -1035,7 +1037,7 @@ impl<D: BlockDev> Fs<D> {
             let ino = stack[stack_len];
             let inode = self.inodes[ino as usize - 1];
             if inode.kind == INODE_DIR {
-                if inode.size % BLOCK_SIZE as u32 != 0
+                if !inode.size.is_multiple_of(BLOCK_SIZE as u32)
                     || inode.size > dir_limit_bytes
                     || inode.blocks_used() != (inode.size / BLOCK_SIZE as u32) as usize
                 {
@@ -1109,10 +1111,10 @@ impl<D: BlockDev> Fs<D> {
             if inode.size as usize > self.max_file_size {
                 return Err(FsError::Corrupt);
             }
-            if inode.kind == INODE_FILE || inode.kind == INODE_SYMLINK {
-                if inode.blocks_used() != ((inode.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) {
-                    return Err(FsError::Corrupt);
-                }
+            if (inode.kind == INODE_FILE || inode.kind == INODE_SYMLINK)
+                && inode.blocks_used() != (inode.size as usize).div_ceil(BLOCK_SIZE)
+            {
+                return Err(FsError::Corrupt);
             }
             if inode.nlink != nlink[index] {
                 return Err(FsError::Corrupt);
@@ -2219,7 +2221,7 @@ impl<D: BlockDev> Fs<D> {
             return Ok(());
         }
         let double_used = new_blocks - direct - INDIRECT_ENTRIES;
-        let keep_slots = (double_used + INDIRECT_ENTRIES - 1) / INDIRECT_ENTRIES;
+        let keep_slots = double_used.div_ceil(INDIRECT_ENTRIES);
         let mut table = self.read_staged(double)?;
         for slot in 0..keep_slots {
             let second = get_u32(&table, slot * 4);
@@ -2265,12 +2267,12 @@ impl<D: BlockDev> Fs<D> {
         let mut current = inode;
         let old_size = current.size as usize;
         let old_blocks = current.blocks_used();
-        let new_blocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        let new_blocks = size.div_ceil(BLOCK_SIZE);
         if new_blocks > self.max_file_blocks {
             return Err(FsError::NoSpace);
         }
         self.tx_count = 0;
-        if size < old_size && size % BLOCK_SIZE != 0 {
+        if size < old_size && !size.is_multiple_of(BLOCK_SIZE) {
             // r299: điều kiện cũ `old_size % BLOCK_SIZE != 0` bỏ sót cặp
             // old_size align block (vd 1024 -> 100): đuôi block giữ dữ liệu
             // cũ, grow lại sau đó đọc được byte cũ (POSIX yêu cầu đọc 0).
@@ -2285,7 +2287,7 @@ impl<D: BlockDev> Fs<D> {
                 }
                 self.stage(block_no, &block)?;
             }
-        } else if size > old_size && old_size % BLOCK_SIZE != 0 {
+        } else if size > old_size && !old_size.is_multiple_of(BLOCK_SIZE) {
             let block_index = old_size / BLOCK_SIZE;
             let block_no = self.file_block(&current, block_index)?;
             if block_no != 0 {
@@ -2444,7 +2446,7 @@ impl<D: BlockDev> Fs<D> {
         &mut self,
         dir: u16,
         index: usize,
-    ) -> Result<Option<(u16, [u8; MAX_NAME], usize, u8)>, FsError> {
+    ) -> Result<Option<DirEntryFull>, FsError> {
         let inode = *self.inodes.get(dir as usize - 1).ok_or(FsError::BadFd)?;
         if inode.kind != INODE_DIR {
             return Err(FsError::NotDir);
@@ -2514,12 +2516,16 @@ impl<D: BlockDev> Fs<D> {
         // Hình dạng thư mục tại đúng thời điểm "hết" (T26): size, blocks_used,
         // và số entry không rỗng của từng block.
         let mut per_block = [0u32; 2];
-        for block_index in 0..inode.blocks_used().min(2) {
+        let used_blocks = inode.blocks_used();
+        for (block_index, count) in per_block.iter_mut().enumerate() {
+            if block_index >= used_blocks {
+                break;
+            }
             let mut raw = zero_block();
             if self.dev.read(inode.blocks[block_index], &mut raw).is_ok() {
                 for slot in 0..DIR_ENTRIES_PER_BLOCK {
                     if get_u16(&raw, slot * DIR_ENTRY_SIZE) != 0 {
-                        per_block[block_index] += 1;
+                        *count += 1;
                     }
                 }
             }
@@ -2545,8 +2551,8 @@ impl<D: BlockDev> Fs<D> {
         if inode.blocks_used() > 0 {
             let mut probe = zero_block();
             if self.dev.read(inode.blocks[0], &mut probe).is_ok() {
-                for slot in 0..8 {
-                    SLOT_INOS[slot].store(
+                for (slot, cell) in SLOT_INOS.iter().enumerate().take(8) {
+                    cell.store(
                         get_u16(&probe, slot * DIR_ENTRY_SIZE) as u32,
                         core::sync::atomic::Ordering::Relaxed,
                     );
@@ -2840,6 +2846,10 @@ impl Inode {
         blocks
     }
 }
+
+/// Bản ghi thư mục đầy đủ (ino, tên, độ dài tên, loại inode) — dùng cho
+/// `READDIR_BULK` để client khỏi tốn thêm một `STAT_PATH` mỗi entry.
+pub type DirEntryFull = (u16, [u8; MAX_NAME], usize, u8);
 
 #[cfg(test)]
 mod tests {
@@ -3953,9 +3963,8 @@ mod tests {
                 let mut expected = old_model.clone();
                 expected[..64].copy_from_slice(&bytes);
                 let expected_len = old_len.max(64);
-                let old_matches = count == old_len && &out[..count] == &old_model[..old_len];
-                let new_matches =
-                    count == expected_len && &out[..count] == &expected[..expected_len];
+                let old_matches = count == old_len && out[..count] == old_model[..old_len];
+                let new_matches = count == expected_len && out[..count] == expected[..expected_len];
                 assert!(old_matches || new_matches, "crash produced a partial write");
                 if new_matches {
                     model = expected;
@@ -4356,7 +4365,7 @@ mod tests {
     fn mount_rejects_device_smaller_than_superblock_needs() {
         // Vòng 166 (driver block): đĩa nhỏ hơn yêu cầu tối thiểu phải bị từ
         // chối ngay, không được panic hay ghi bừa ra ngoài phạm vi.
-        let mut small = MemDev::with_blocks(DATA_START as u32 + 1);
+        let mut small = MemDev::with_blocks(DATA_START + 1);
         // format cần ít nhất DATA_START + 2 block (superblock + bitmap + dữ liệu).
         assert_eq!(format(&mut small), Err(FsError::NoSpace));
         assert!(Fs::mount(small).is_err());
@@ -4365,7 +4374,7 @@ mod tests {
     #[test]
     fn format_rejects_device_without_data_blocks() {
         // Đĩa chỉ đủ cho superblock + bitmap nhưng không có block dữ liệu.
-        let mut tiny = MemDev::with_blocks(DATA_START as u32);
+        let mut tiny = MemDev::with_blocks(DATA_START);
         assert!(format(&mut tiny).is_err());
     }
 

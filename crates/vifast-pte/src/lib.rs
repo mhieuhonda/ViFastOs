@@ -47,13 +47,13 @@ pub const fn table_span_default(levels: usize, level: usize) -> u64 {
 fn rights(r: bool, w: bool, x: bool) -> Rights {
     let mut out = Rights::NONE;
     if r {
-        out = out | Rights::READ;
+        out |= Rights::READ;
     }
     if w {
-        out = out | Rights::WRITE;
+        out |= Rights::WRITE;
     }
     if x {
-        out = out | Rights::EXEC;
+        out |= Rights::EXEC;
     }
     out
 }
@@ -253,9 +253,9 @@ pub mod aarch64 {
         let writable = entry & (1 << 7) == 0 && entry & AP_USER_RW != 0;
         let executable = entry & UXN == 0;
         let access = rights(true, writable, executable);
-        if level == LEVELS - 1 {
-            Pte::Leaf(pa, access)
-        } else if entry & 0b11 == 0b01 {
+        // r299: gộp hai nhánh cùng kết quả — trang ở mức lá, hoặc block
+        // descriptor 0b01 ở mức giữa, đều là Leaf.
+        if level == LEVELS - 1 || entry & 0b11 == 0b01 {
             Pte::Leaf(pa, access)
         } else {
             Pte::Table(pa)
@@ -444,13 +444,15 @@ mod tests {
     fn user_ranges_exclude_kernel_identity() {
         // The 64 GiB base is above the RISC-V identity map and above the
         // x86/AArch64 low 1 GiB kernel mapping.
-        assert!(USER_VA_START >= 0x8000_0000);
-        assert!(USER_VA_START >= 1 << 30);
-        assert!(USER_VA_END > USER_VA_START);
+        // r299: các phép khoá hằng số ABI chuyển sang const — bắt lỗi ngay
+        // lúc biên dịch thay vì chờ chạy test.
+        const _: () = assert!(USER_VA_START >= 0x8000_0000);
+        const _: () = assert!(USER_VA_START >= 1 << 30);
+        const _: () = assert!(USER_VA_END > USER_VA_START);
         assert_eq!(USER_VA_END - USER_VA_START, 0x10_0000_0000);
 
         // Sv39 user addresses must remain in the lower half.
-        assert!(riscv::USER_VA_END <= 1 << 38);
+        const _: () = assert!(riscv::USER_VA_END <= 1 << 38);
 
         // The whole range is inside the shared PML4/L0 entry 0 on x86 and
         // AArch64, but the level-1 indices start above the low 1 GiB

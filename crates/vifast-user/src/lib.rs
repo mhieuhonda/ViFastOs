@@ -23,6 +23,11 @@ impl SyscallResult {
 }
 
 /// Raw syscall.  The return tuple is `(error, value)` as defined by the ABI.
+///
+/// # Safety
+///
+/// Gọi từ userspace với số hiệu syscall hợp lệ; asm clobber các thanh ghi
+/// theo ABI của từng kiến trúc và không bảo toàn gì ngoài (error, value).
 #[inline]
 pub unsafe fn syscall(number: u64, args: [u64; 6]) -> (u64, u64) {
     #[cfg(target_arch = "x86_64")]
@@ -120,6 +125,14 @@ pub struct MessageResult {
     pub data: [u64; 4],
 }
 
+/// Blocking Recv.  The message registers (badge, label, data words) are
+/// captured in full, unlike the plain `recv` wrapper.
+///
+/// # Safety
+///
+/// Phải có cap READ tới endpoint trong `endpoint_slot`; chặn tới khi có
+/// message. Asm clobber thanh ghi theo ABI, kết quả đọc qua các thanh ghi
+/// trả về.
 pub unsafe fn recv_message(endpoint_slot: u8, recv_slot: u8) -> MessageResult {
     #[cfg(target_arch = "x86_64")]
     {
@@ -752,6 +765,11 @@ pub fn send(endpoint_slot: u8, label: u64, data0: u64, data1: u64, data2: u64) -
 /// Call and retain the reply label/data words.  A blocking Call resumes
 /// through the normal message registers, so this is the only way to consume
 /// request/reply payloads (the plain `call` wrapper keeps only error/value).
+///
+/// # Safety
+///
+/// Phải có cap GRANT nếu message mang vé; chặn tới khi server reply. Asm
+/// clobber thanh ghi theo ABI.
 pub unsafe fn call_message(
     endpoint_slot: u8,
     label: u64,
@@ -888,6 +906,11 @@ pub unsafe fn call_message(
 
 /// Reply to the pending caller and receive the next message, preserving the
 /// reply label/data words of the next request.
+///
+/// # Safety
+///
+/// Phải có cap WRITE tới endpoint (đang giữ caller) và cap READ để recv;
+/// asm clobber thanh ghi theo ABI.
 pub unsafe fn reply_recv_message(
     endpoint_slot: u8,
     recv_slot: u8,

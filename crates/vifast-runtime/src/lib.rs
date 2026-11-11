@@ -874,7 +874,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     to build the client VSpace in 7.4 without gaining permission to rewrite
     the shared code. */
     const USER_CODE_FIRST_SLOT: u16 = 20;
-    let user_code_count = ((image.code.len() + A::PAGE_SIZE - 1) / A::PAGE_SIZE) as u16;
+    let user_code_count = image.code.len().div_ceil(A::PAGE_SIZE) as u16;
     let free_slot_start = USER_CODE_FIRST_SLOT + user_code_count;
     let free_slot_end = vifast_kernel::MAX_CAPS as u16;
     if user_code_count == 0 || free_slot_start.saturating_add(8) > free_slot_end {
@@ -906,7 +906,7 @@ pub fn boot<A: Platform>(info: PlatformInfo, image: UserImage) -> ! {
     /* Stage boot-module ELF bytes into read-only frames in the root VSpace.
     The runtime writes them through the kernel identity map; the root loader
     then parses the slices and copies segments into child Frames. */
-    let module_pages = |bytes: &[u8]| (bytes.len() + A::PAGE_SIZE - 1) / A::PAGE_SIZE;
+    let module_pages = |bytes: &[u8]| bytes.len().div_ceil(A::PAGE_SIZE);
     if image.server_elf.is_empty() || image.client_elf.is_empty() {
         vifast_kernel::klog!(A, "BOOT MODULE EMPTY");
         A::exit(1);

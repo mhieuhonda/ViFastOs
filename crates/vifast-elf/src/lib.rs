@@ -79,8 +79,8 @@ impl LoadSegment {
         // nên (vaddr % PAGE) + memsz mới phủ hết segment. Bản cũ tính
         // ceil(memsz/PAGE) nên segment lệch trang bị thiếu trang cuối: đuôi
         // không map, task fault ngay khi chạy tới.
-        let head = (self.vaddr % PAGE_SIZE as u64) as usize;
-        (head + self.memory_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize
+        let head = (self.vaddr % PAGE_SIZE) as usize;
+        (head + self.memory_size).div_ceil(PAGE_SIZE as usize)
     }
 
     pub fn memory_end(&self) -> Option<u64> {
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(image.segment_count(), 1);
         let segment = image.segment(0).unwrap();
         // Metadata trùng khớp với parse đầy đủ (cùng file).
-        let reference = parse_test(&full).unwrap().segment(0).unwrap().clone();
+        let reference = *parse_test(&full).unwrap().segment(0).unwrap();
         assert_eq!(segment.file_offset, reference.file_offset);
         assert_eq!(segment.vaddr, reference.vaddr);
         assert_eq!(segment.file_size, reference.file_size);
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn rejects_load_segment_offset_overflow() {
         let mut bytes = valid_elf();
-        put_u64(&mut bytes, ELF_HEADER_SIZE + 8, u64::MAX & !0xfff);
+        put_u64(&mut bytes, ELF_HEADER_SIZE + 8, !0xfff);
         assert!(matches!(
             parse_test(&bytes),
             Err(ElfError::Overflow | ElfError::FileRange)
