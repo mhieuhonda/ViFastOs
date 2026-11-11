@@ -1278,6 +1278,32 @@ không in nữa.
 lại khi `WouldBlock` (≤64 lượt) thì vẫn **2/40** boot thiếu marker ⇒ đã REVERT
 theo D18. Dữ kiện âm: mất dòng **không** do nuốt `WouldBlock`.
 
+
+## r300 — T-IPC: client **NGỪNG VÀO KERNEL**, không phải mất byte console
+
+Đèn mới: `DW KERR t= v=` (DebugWrite bị kernel trả lỗi), `DW RERR t= v=`
+(`read_user` thất bại), và **`SYSCALLS t=62 n=`** — bộ đếm bền số syscall của
+tcb client in ở cuối boot (đèn `NEXT` là one-shot nên không trả lời được "client
+còn chạy không").
+
+| Boot | syscall của client | `IPC RIGHTS OK` |
+|---|---:|---|
+| xanh | **566** | có |
+| hỏng | **558** | không |
+| hỏng | **556** | không |
+
+⇒ Client **hụt 8–10 syscall rồi không vào kernel lần nào nữa**. Không phải "byte
+không ra cổng" — nó **không gọi** syscall nữa (vì thế `DW RERR`/`DW KERR` không
+xuất hiện cho tcb 62).
+
+Bị bác thêm: "`read_user` trả `IllegalOperation`" (sẽ có `DW RERR`), "`putc` treo
+LSR THRE" (sẽ không có dòng cuối boot), "`with_tx_lock` hết lượt" (vẫn gọi
+`body()`, chỉ ảnh hưởng dòng bị chen).
+
+Còn treo rất hẹp: client biến mất **giữa hai lệnh user**, không syscall, không
+fault, không panic — nghi (a) preempt rồi rơi khỏi run-queue, (b) fault bị nuốt,
+(c) bị reap nhầm.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1286,7 +1312,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-ba6469f90b4ece6285833d49b206fd285df474648fdb3e593009bc8c750933b4  docs/reviews/ViFastOs-report-r262.md
+c49d5ab9c518209d749cf453a7f6a3b0f52f7ee1eccb24a4c13175d57da68c7d  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

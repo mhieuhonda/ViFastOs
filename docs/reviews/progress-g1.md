@@ -2920,3 +2920,44 @@ chứng minh được). Ghi lại làm dữ kiện âm: mất dòng **không ph�
 - Đối chứng độc lập: `-trace serial_ioport_write` của QEMU để biết byte có thật
   sự ra cổng hay không (đã dùng được ở r294).
 - 3 ca "không khớp điều kiện nào trong accept()" vẫn chưa phân tích.
+
+## r300 — T-IPC: client **NGỪNG VÀO KERNEL** (đếm syscall), không phải mất byte
+
+### Đèn mới
+- `DW KERR t=<tcb> v=<mã>` — `DebugWrite` bị kernel trả lỗi (trước nhánh Debug).
+- `DW RERR t=<tcb> v=0` — `read_user` không đọc được buffer user.
+- `SYSCALLS t=62 n=<số>` — **bộ đếm bền** số syscall của tcb client, in ở cuối boot.
+  Cần đèn này vì `NEXT` là **one-shot**: nó không trả lời được "client còn chạy
+  không" (bản rà soát chỉ ra đúng lỗ logic đó).
+
+### Kết quả quyết định (ps, 40 boot, 2 ca hỏng)
+| Boot | syscall của client (tcb 62) | `IPC RIGHTS OK` |
+|---|---:|---|
+| xanh (mẫu) | **566** | có |
+| hỏng | **558** | không |
+| hỏng | **556** | không |
+
+⇒ Client **hụt 8–10 syscall rồi KHÔNG vào kernel lần nào nữa**. Đây **không phải**
+"byte không ra cổng": nó **không gọi** syscall nữa. Vì thế `DW RERR`/`DW KERR`
+không hề xuất hiện cho tcb 62 ở ca hỏng (đèn chỉ in khi CÓ lời gọi).
+
+### Loại thêm hai giả thuyết
+- "`read_user` từ chối ⇒ `IllegalOperation`" (ứng viên số 1 của bản rà soát):
+  bác — sẽ in `DW RERR` cho tcb 62, không có.
+- "`putc` treo trên LSR THRE": bác — treo thì không có dòng cuối boot, nhưng
+  boot vẫn in hết `KSTORE CANARY OK`.
+- "`with_tx_lock` hết lượt ⇒ ghi không khoá": không liên quan tới **mất cả
+  dòng** (vẫn gọi `body()`), chỉ liên quan tới dòng bị chen.
+
+### Còn treo (rất hẹp)
+Client biến mất **giữa hai lệnh user**, không syscall, không fault, không panic.
+Ứng viên: (a) bị preempt rồi rơi khỏi run-queue (`pick_on` không thấy nữa);
+(b) fault bị nuốt (in fault thất bại); (c) bị `reap`/destroy nhầm.
+Đèn kế tiếp: trong `pick_on`/`reap`, in `TCB 62 <trạng thái>` khi nó đổi trạng
+thái; và in số lần tcb 62 được chọn chạy (`SYSCALLS` đã là proxy tốt).
+
+### Ghi chú
+- `DW KERR t=0 v=6` (6 = `InvalidArg`) xuất hiện ở ca hỏng nhưng là của **tcb 0**,
+  không phải client — chưa kết luận gì.
+- Bản rà soát cũng chỉ ra `console.rs:34–37` còn viết "`debug_write` không khoá"
+  — SAI từ r294; sẽ sửa ở vòng sau cùng với việc thêm `TX_UNLOCKED` counter.

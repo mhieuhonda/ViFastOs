@@ -483,6 +483,42 @@ pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
     Ok(())
 }
 
+/// r300 (T-IPC): số syscall ĐÃ VÀO KERNEL của từng tcb. Đèn `NEXT` là one-shot
+/// nên không trả lời được "client còn chạy không"; bộ đếm này thì trả lời được:
+/// in ở cuối boot, nếu con số không tăng nữa ⇒ client đã ngừng vào kernel.
+static SYSCALL_COUNT: [core::sync::atomic::AtomicU32; 128] =
+    [const { core::sync::atomic::AtomicU32::new(0) }; 128];
+
+/// r300 (T-IPC): in `DW <loại> t=<tcb> v=<số>` — đèn phía KERNEL cho `DebugWrite`,
+/// để phân biệt "kernel từ chối / không đọc được buffer user" với "đã đẩy byte
+/// mà byte không ra cổng". Client dùng `let _ = debug_write(...)` nên mọi lỗi ở
+/// đây đều IM LẶNG phía user.
+fn emit_dw_error<A: Platform>(tag: &[u8], tcb: u64, value: u64) {
+    let mut line = [0u8; 40];
+    let mut at = 0usize;
+    for &byte in tag {
+        if at < line.len() {
+            line[at] = byte;
+            at += 1;
+        }
+    }
+    dec_into(&mut line, &mut at, tcb);
+    for &byte in b" v=" {
+        if at < line.len() {
+            line[at] = byte;
+            at += 1;
+        }
+    }
+    dec_into(&mut line, &mut at, value);
+    if at < line.len() {
+        line[at] = b'\n';
+        at += 1;
+    }
+    for byte in line.iter().take(at) {
+        A::putc(*byte);
+    }
+}
+
 /// r298: ghi số thập phân vào `line` tại `at` (không cấp phát, không panic).
 fn dec_into(line: &mut [u8], at: &mut usize, value: u64) {
     let mut digits = [0u8; 20];
@@ -1381,6 +1417,15 @@ pub mod syscall {
                 A::putc(*byte);
             }
         }
+        SYSCALL_COUNT[(tcb.index as usize).min(127)]
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if number == SyscallId::DebugWrite as u64 {
+            if let vifast_kernel::UserAction::Return { error, .. } = &action {
+                if *error != vifast_abi::KError::Ok {
+                    emit_dw_error::<A>(b"DW KERR t=", tcb.index as u64, *error as u64);
+                }
+            }
+        }
         if hart != 0 && number == SyscallId::Wait as u64 && matches!(&action, UserAction::Blocked) {
             A::secondary_wait_blocked();
         }
@@ -1557,6 +1602,10 @@ pub mod syscall {
                 let len = (len as usize).min(USER_COPY_MAX);
                 let mut buf = [0u8; USER_COPY_MAX];
                 if A::read_user(ptr, &mut buf[..len]).is_err() {
+                    // r300 (T-IPC): mất dòng của client không để lại dấu vết.
+                    // Đây là một trong hai chỗ nuốt cả dòng IM LẶNG
+                    // (client dùng `let _ = debug_write(...)`).
+                    emit_dw_error::<A>(b"DW RERR t=", tcb.index as u64, 0);
                     A::write_result(context, KError::InvalidArg, 0, 0, [0; 4]);
                 } else {
                     #[cfg(feature = "test-exit")]
@@ -2175,6 +2224,12 @@ pub mod timer {
                 // r229 (T4): canary vùng đệm sau KERNEL_STORAGE. Marker bắt buộc
                 // exact-one khi còn nguyên; "KSTORE CANARY BAD" nằm trong
                 // FORBIDDEN nên chỉ cần xuất hiện là gate đỏ.
+                // r300: đếm syscall của tác vụ client (index 62 trên cấu hình
+                // hiện tại) để biết nó có ngừng vào kernel hay không.
+                {
+                    let count = SYSCALL_COUNT[62].load(core::sync::atomic::Ordering::Relaxed);
+                    vifast_kernel::klog!(A, "SYSCALLS t=62 n={}", count);
+                }
                 match A::kernel_storage_canary() {
                     Some(true) => vifast_kernel::klog!(A, "KSTORE CANARY OK"),
                     Some(false) => vifast_kernel::klog!(A, "KSTORE CANARY BAD"),
