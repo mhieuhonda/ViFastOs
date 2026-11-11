@@ -1600,6 +1600,32 @@ impl Kernel {
                 }
             }
         }
+        if state == ThreadState::BlockedFault {
+            // r299 (A4): resume khi fault message vẫn còn xếp hàng (handler
+            // chưa recv) phải gỡ TCB khỏi hàng send và xoá pending — nếu
+            // không handler recv sau đó nhận fault CŨ của task đã chạy lại
+            // (đúng-once bị phá). Cùng phép quét restart_tcb/suspend_tcb.
+            for i in 0..MAX_OBJECTS {
+                let r = ObjRef {
+                    index: i as u8,
+                    gen: self.objs[i].gen,
+                };
+                if let Some(endpoint) = self.endpoint_mut(r) {
+                    endpoint.send.remove(tcb);
+                    endpoint.recv.remove(tcb);
+                }
+                if let Some(notification) = self.notification_mut(r) {
+                    for slot in notification.waiters.iter_mut() {
+                        if *slot == Some(tcb) {
+                            *slot = None;
+                        }
+                    }
+                }
+            }
+            if let Some(table) = self.tcb_mut(tcb) {
+                table.pending = None;
+            }
+        }
         if let Some(table) = self.tcb_mut(tcb) {
             table.state = ThreadState::Ready;
         }
@@ -3411,6 +3437,17 @@ impl Kernel {
                         if frame.pa as u64 != mapping.pa || frame.size < mapping.len as usize {
                             return Err(KError::WrongType);
                         }
+                        // r299 (A3): DMA-WRITE cũng phải cộng vào `frame_w` như
+                        // nhánh VSpace — iommu_map(WRITE) đã tăng
+                        // `frame.mapped_w` (K55) mà checker không đếm thì mọi
+                        // hệ thống có mapping DMA-W sống sẽ false-fail ở phép
+                        // đối chiếu cuối, tức bất biến W^X chéo CPU/DMA chẳng
+                        // bao giờ được kiểm chứng thật.
+                        if mapping.rights.contains(Rights::WRITE) {
+                            frame_w[frame_index] = frame_w[frame_index]
+                                .checked_add(1)
+                                .ok_or(KError::IllegalOperation)?;
+                        }
                         for other in domain.mappings.iter().skip(index + 1).flatten() {
                             if mapping.iova < other.iova.saturating_add(other.len)
                                 && other.iova < mapping.iova.saturating_add(mapping.len)
@@ -4328,10 +4365,111 @@ impl Kernel {
                 return Err(KError::IllegalOperation);
             }
         }
+        // r299 (A2): reparent TRƯỚC khi xoá slots — mọi cap ở bảng khác có
+        // `parent`/`creator` đi qua slot của CNode này phải được nâng lên tổ
+        // tiên còn sống. Bản cũ xoá slots thẳng tay: parent thành con trỏ
+        // chết, `revoke` không phân giải được, object thành bất tử
+        // (`HasDependents` mãi mãi) và check_invariants đỏ vĩnh viễn — cùng
+        // họ P0-3 nhưng qua đường destroy CNode thay vì destroy TCB.
+        self.reparent_cnode_caps(obj);
         if let Some(node) = self.cnode_mut(obj) {
             node.slots = [None; MAX_CAPS_TASK];
         }
         Ok(())
+    }
+
+    /// r299 (A2): CNode sắp chết phải reparent mọi tham chiếu đang đi qua
+    /// nó, cùng quy tắc với `reparent_tcb_caps` của TCB — chỉ khác bộ nhận
+    /// diện "chết cùng CNode" là `(cnode == Some(C), slot, id)` vì `addr.tcb`
+    /// trong record cũ chỉ là tên danh nghĩa của TCB từng dùng CNode.
+    fn reparent_cnode_caps(&mut self, obj: ObjRef) {
+        let Some(node) = self.cnode(obj) else {
+            return;
+        };
+        // (slot, id, parent) của mọi cap trong CNode — parent cần snapshot
+        // vì vòng survivor sau đó đọc trong khi `self` đã mượn mutable.
+        let mut dying: [(u8, u64, Option<CapRef>); MAX_CAPS_TASK] = [(0, 0, None); MAX_CAPS_TASK];
+        let mut count = 0usize;
+        for (slot, cap) in node.slots.iter().enumerate() {
+            if let Some(cap) = cap {
+                dying[count] = (slot as u8, cap.id, cap.parent);
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return;
+        }
+        let dies_here = |r: &CapRef| -> bool {
+            r.cnode == Some(obj)
+                && dying[..count]
+                    .iter()
+                    .any(|(slot, id, _)| r.addr.slot == *slot && r.id == *id)
+        };
+        // Survivor của mỗi slot chết: đi tiếp chuỗi parent của cap tại slot
+        // đó, bỏ qua mọi bước cũng chết cùng CNode.
+        let mut survivors = [None; MAX_CAPS_TASK];
+        for i in 0..count {
+            let mut parent = dying[i].2;
+            let mut depth = 0usize;
+            while let Some(reference) = parent {
+                if !dies_here(&reference) {
+                    survivors[i] = self
+                        .resolve_cap_ref(reference)
+                        .filter(|cap| cap.id == reference.id)
+                        .map(|_| reference);
+                    break;
+                }
+                let Some(next) = dying[..count]
+                    .iter()
+                    .position(|(slot, _, _)| *slot == reference.addr.slot)
+                    .and_then(|index| dying[index].2)
+                else {
+                    break;
+                };
+                parent = Some(next);
+                depth += 1;
+                if depth > MAX_OBJECTS * MAX_CAPS {
+                    break;
+                }
+            }
+        }
+        // Nâng `creator` của mọi object đang trỏ vào slot chết của CNode.
+        for object in self.objs.iter_mut() {
+            let Some(creator) = object.creator else {
+                continue;
+            };
+            if dies_here(&creator) {
+                if let Some(index) = dying[..count]
+                    .iter()
+                    .position(|(slot, id, _)| creator.addr.slot == *slot && creator.id == *id)
+                {
+                    object.creator = survivors[index];
+                }
+            }
+        }
+        // Nâng `parent` trong MỌI bảng vật lý — copy ra trước vì closure mượn
+        // `&mut self` (cùng mô-típ `reparent_tcb_caps`).
+        let mut keys = [(0u8, 0u64); MAX_CAPS_TASK];
+        let mut lifted = [None; MAX_CAPS_TASK];
+        for i in 0..count {
+            keys[i] = (dying[i].0, dying[i].1);
+            lifted[i] = survivors[i];
+        }
+        let alive = count;
+        let owner = obj;
+        self.for_each_cap_mut(|_table, _slot, cap| {
+            let Some(parent) = cap.parent else {
+                return;
+            };
+            if parent.cnode != Some(owner) {
+                return;
+            }
+            if let Some(i) =
+                (0..alive).find(|&i| keys[i].0 == parent.addr.slot && keys[i].1 == parent.id)
+            {
+                cap.parent = lifted[i];
+            }
+        });
     }
 
     fn destroy_sched_context(&mut self, obj: ObjRef) {
@@ -9378,6 +9516,33 @@ mod tests {
         assert!(kernel.check_invariants().is_ok());
     }
 
+    /// r299 (A3, đỏ-trước): mapping DMA-WRITE còn sống phải được
+    /// check_invariants đếm vào `frame_w` như nhánh VSpace — bản cũ không
+    /// đếm nên hệ thống có DMA-W map nào cũng false-fail ở phép đối chiếu,
+    /// tức bất biến W^X chéo CPU/DMA (K55) không bao giờ được kiểm chứng.
+    #[test]
+    fn check_invariants_counts_live_iommu_write_mapping() {
+        let mut kernel = Kernel::new();
+        let untyped = kernel
+            .create_untyped_with_limit(0x210_0000, 0x4000, 4096, 8)
+            .unwrap();
+        let domain = kernel.retype(untyped, ObjType::Iommu).unwrap();
+        let frame = kernel.create_frame(0xA000, 4096).unwrap();
+        kernel
+            .iommu_map(domain, frame, IOMMU_IOVA_BASE, Rights::READ | Rights::WRITE)
+            .unwrap();
+        assert!(
+            kernel.check_invariants().is_ok(),
+            "mapping DMA-W sống phải được đếm vào frame_w của checker"
+        );
+        assert_eq!(kernel.frame(frame).unwrap().mapped_w, 1);
+        assert_eq!(
+            kernel.iommu_unmap(domain, IOMMU_IOVA_BASE).unwrap().len,
+            4096
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
     fn test_root_with_untyped(kernel: &mut Kernel, base: usize, limit: usize) -> ObjRef {
         let root = kernel.root().unwrap();
         let untyped = kernel
@@ -13272,6 +13437,66 @@ mod tests {
         assert!(kernel.check_invariants().is_ok());
     }
 
+    /// r299 (A2, đỏ-trước): destroy CNode đang có cap ở bảng khác đi qua nó
+    /// — bản cũ xoá slots thẳng tay nên `parent` thành con trỏ chết:
+    /// check_invariants đỏ vĩnh viễn, revoke không tới, object thành bất
+    /// tử (HasDependents mãi mãi). Phải reparent lên tổ tiên còn sống như
+    /// đường destroy TCB.
+    #[test]
+    fn destroy_cnode_reparents_caps_that_pass_through_it() {
+        let mut kernel = Kernel::new();
+        let root = kernel.root().unwrap();
+        let a = kernel.create_tcb("a", 5).unwrap();
+        let b = kernel.create_tcb("b", 5).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        let untyped = kernel.create_untyped(0x6100_0000, 4096).unwrap();
+        let cnode = kernel.retype(untyped, ObjType::CNode).unwrap();
+
+        // root: slot 1 = endpoint (cap gốc).
+        kernel
+            .install_cap(root, 1, Cap::new(endpoint, ObjType::Endpoint, Rights::ALL))
+            .unwrap();
+        // A dùng C làm cspace; C slot 1 = bản sao cap endpoint copy từ root
+        // (slot 0 là slot rỗng nên dùng từ 1).
+        kernel.tcb_mut(a).unwrap().cnode = Some(cnode);
+        assert_eq!(kernel.copy_cap(root, 1, a, 1, Rights::READ, 0), Ok(()));
+        // B copy từ C (qua A): parent của bản ở B trỏ vào slot 1 của C.
+        assert_eq!(kernel.copy_cap(a, 1, b, 3, Rights::READ, 0), Ok(()));
+        assert_eq!(
+            kernel.tcb(b).unwrap().cspace[3]
+                .unwrap()
+                .parent
+                .unwrap()
+                .cnode,
+            Some(cnode)
+        );
+
+        // Tháo C khỏi A rồi destroy C.
+        kernel.tcb_mut(a).unwrap().cnode = None;
+        assert_eq!(kernel.destroy_object(cnode), Ok(()));
+        assert!(
+            kernel.check_invariants().is_ok(),
+            "parent trỏ CNode đã chết phải được nâng lên tổ tiên còn sống"
+        );
+        let parent = kernel.tcb(b).unwrap().cspace[3]
+            .unwrap()
+            .parent
+            .expect("phải còn parent sau reparent");
+        assert!(kernel.resolve_cap_ref(parent).is_some());
+        assert_eq!(parent.addr.tcb, root);
+
+        // revoke cap gốc phải thu hồi được bản ở B; object destroy được.
+        assert_eq!(kernel.revoke_cap(root, 1).unwrap(), 1);
+        assert!(kernel.tcb(b).unwrap().cspace[3].is_none());
+        let root_cap_id = kernel
+            .cap_at(SlotAddr { tcb: root, slot: 1 })
+            .expect("cap gốc vẫn còn")
+            .id;
+        assert_eq!(kernel.other_caps_to(endpoint, root_cap_id), 0);
+        assert_eq!(kernel.destroy_object(endpoint), Ok(()));
+        assert!(kernel.check_invariants().is_ok());
+    }
+
     /// 293.6 (r293): ngân sách tĩnh — mở epoch lên `u16` không được làm TCB
     /// phình quá mức đã chốt. Nếu phải nới, sửa CẢ con số này lẫn báo cáo,
     /// không nới lặng lẽ.
@@ -15131,6 +15356,158 @@ mod tests {
             kernel.tcb(parent).unwrap().resume_error,
             Some(KError::ObjectDestroyed)
         );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    /// r299 (A1, đỏ-trước): target có record chờ của TcbWait rồi lại
+    /// `reply_recv` — bản cũ tiêu record (epoch chép nhầm phía target) khiến
+    /// waiter mồ côi BlockedReply vĩnh viễn. Nay: NoCaller và record phải
+    /// NGUYÊN VẸN để exit vẫn đánh thức waiter đúng một lần.
+    #[test]
+    fn wait_record_is_not_consumed_by_target_reply_recv() {
+        let mut kernel = Kernel::new();
+        let parent = kernel.create_tcb("parent", 1).unwrap();
+        let child = kernel.create_tcb("child", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        // parent đã từng call ai đó ⇒ reply_epoch lệch hẳn (điều kiện tái
+        // hiện bản cũ chép epoch của target).
+        kernel.tcb_mut(parent).unwrap().reply_epoch = 7;
+        kernel.tcb_mut(child).unwrap().state = ThreadState::Ready;
+        kernel.enqueue(child);
+        kernel.tcb_mut(parent).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(parent);
+        assert_eq!(kernel.wait_tcb(parent, child), Ok(false));
+        // child như một server reply_recv: phải thấy NoCaller chứ không tiêu
+        // record chờ exit của parent.
+        assert_eq!(
+            kernel.reply_recv(child, endpoint, 4, Message::empty(0)),
+            Err(KError::NoCaller)
+        );
+        assert!(
+            kernel.tcb(child).unwrap().caller.is_some(),
+            "record chờ exit phải được trả về nguyên vẹn"
+        );
+        assert_eq!(kernel.tcb(parent).unwrap().state, ThreadState::BlockedReply);
+        // child exit: parent được wake đúng một lần và được chọn chạy tiếp.
+        kernel.tcb_mut(child).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(child);
+        let next = kernel.exit_current_on(0);
+        assert_eq!(next, Some(parent));
+        assert_eq!(
+            kernel.tcb(parent).unwrap().resume_error,
+            Some(KError::ObjectDestroyed)
+        );
+        assert_ne!(
+            kernel.tcb(parent).unwrap().state,
+            ThreadState::BlockedReply,
+            "waiter không được treo sau khi con exit"
+        );
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    /// r299 (A1, đỏ-trước): hai epoch cùng 0 — bản cũ "khớp ngẫu nhiên" nên
+    /// reply của target đánh thức waiter SỚM như thể con đã exit.
+    #[test]
+    fn wait_record_epoch_match_does_not_wake_waiter_early() {
+        let mut kernel = Kernel::new();
+        let parent = kernel.create_tcb("parent", 1).unwrap();
+        let child = kernel.create_tcb("child", 1).unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        kernel.tcb_mut(child).unwrap().state = ThreadState::Ready;
+        kernel.enqueue(child);
+        kernel.tcb_mut(parent).unwrap().state = ThreadState::Running;
+        kernel.current[0] = Some(parent);
+        assert_eq!(kernel.wait_tcb(parent, child), Ok(false));
+        // Park xong thì parent không còn Running — dọn current như scheduler
+        // thật (bất biến: current chỉ trỏ TCB Running).
+        kernel.current[0] = None;
+        assert_eq!(
+            kernel.reply_recv(child, endpoint, 4, Message::empty(0x42)),
+            Err(KError::NoCaller)
+        );
+        assert_eq!(
+            kernel.tcb(parent).unwrap().state,
+            ThreadState::BlockedReply,
+            "reply không được coi là exit"
+        );
+        assert!(kernel.tcb(parent).unwrap().resume.is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    /// r299 (290.4b, đỏ-trước): client call lại chỗ khác phải quét record
+    /// `caller` cũ — nếu không server cũ reply được "lần hai" vào record
+    /// stale, hoặc nhánh restore của reply nhầm record stale với record
+    /// chờ của TcbWait.
+    #[test]
+    fn stale_call_record_is_cleared_when_client_calls_again() {
+        let mut kernel = Kernel::new();
+        let a = kernel.create_tcb("server-a", 1).unwrap();
+        let b = kernel.create_tcb("server-b", 1).unwrap();
+        let client = kernel.create_tcb("client", 1).unwrap();
+        let ep_a = kernel.create_endpoint().unwrap();
+        let ep_b = kernel.create_endpoint().unwrap();
+        // client call A: A giữ record (client, e1).
+        assert_eq!(kernel.recv(a, ep_a, 4), Ok(None));
+        assert_eq!(
+            kernel.send(client, ep_a, 0, Message::new(1, &[1]).unwrap(), true),
+            Ok(true)
+        );
+        assert!(kernel.tcb(a).unwrap().caller.is_some());
+        kernel.reply(a, Message::empty(0)).unwrap();
+        // client call B: epoch bump phải quét record cũ ở A.
+        assert_eq!(kernel.recv(b, ep_b, 4), Ok(None));
+        assert_eq!(
+            kernel.send(client, ep_b, 0, Message::new(2, &[1]).unwrap(), true),
+            Ok(true)
+        );
+        assert!(kernel.tcb(b).unwrap().caller.is_some());
+        assert!(
+            kernel.tcb(a).unwrap().caller.is_none(),
+            "record cũ ở A phải bị quét khi client call lại"
+        );
+        // A reply lần nữa: NoCaller sạch, không đặt lại record.
+        assert_eq!(kernel.reply(a, Message::empty(0)), Err(KError::NoCaller));
+        assert!(kernel.tcb(a).unwrap().caller.is_none());
+        assert!(kernel.check_invariants().is_ok());
+    }
+
+    /// r299 (A4, đỏ-trước): resume task đang BlockedFault khi fault message
+    /// vẫn còn xếp hàng phải gỡ khỏi hàng send — handler recv sau đó không
+    /// được nhận fault CŨ của task đã chạy lại.
+    #[test]
+    fn resume_after_queued_fault_drops_the_stale_fault_message() {
+        let _guard = WALK_LOCK.lock().unwrap();
+        reset_fake();
+        set_map_range(0x4000_0000, 0x8000_0000);
+        let mut kernel = Kernel::new();
+        kernel.set_page_table_ops(&MAP_OPS);
+        let space = kernel
+            .create_vspace_with_page_size(0, 0x4000_0000, 0x4000_0000, 4096)
+            .unwrap();
+        let faulting = kernel.create_tcb("faulting", 5).unwrap();
+        kernel
+            .configure_tcb(faulting, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        let handler = kernel.create_tcb("handler", 5).unwrap();
+        kernel
+            .configure_tcb(handler, 0x4000_0000, 0x4000_4000, space, 5)
+            .unwrap();
+        let endpoint = kernel.create_endpoint().unwrap();
+        // Fault xếp hàng khi handler chưa recv (K13).
+        let message = Message::new(LABEL_FAULT, &[0x1234, 7, 0, 0]).unwrap();
+        kernel
+            .fault_to_endpoint(faulting, endpoint, message)
+            .unwrap();
+        assert_eq!(
+            kernel.tcb(faulting).unwrap().state,
+            ThreadState::BlockedFault
+        );
+        // Supervisor resume TRƯỚC khi handler kịp recv.
+        kernel.resume_tcb(faulting).unwrap();
+        assert_eq!(kernel.tcb(faulting).unwrap().state, ThreadState::Ready);
+        // recv sau đó KHÔNG được nhận fault cũ: hàng send đã bị gỡ sạch.
+        assert_eq!(kernel.recv(handler, endpoint, 4), Ok(None));
+        assert!(kernel.tcb(handler).unwrap().resume.is_none());
         assert!(kernel.check_invariants().is_ok());
     }
 

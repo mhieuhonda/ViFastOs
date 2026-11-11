@@ -94,6 +94,33 @@ impl Kernel {
         Ok(())
     }
 
+    /// r299 (290.4b): bump `reply_epoch` của client MỖI lần call, đồng thời
+    /// quét sạch mọi record `caller` cũ của nó ở server khác. Record cũ thuộc
+    /// lần call trước — client đã gọi nơi khác nên nó là stale thật; để lại
+    /// thì `reply` không phân biệt nổi record stale với record chờ của
+    /// TcbWait (mượn `caller` làm chỗ chờ exit, epoch không bao giờ khớp).
+    fn bump_reply_epoch(&mut self, sender: ObjRef) -> u16 {
+        let fresh = match self.tcb_mut(sender) {
+            Some(table) => {
+                table.reply_epoch = table.reply_epoch.wrapping_add(1);
+                table.reply_epoch
+            }
+            None => 0,
+        };
+        for index in 0..MAX_OBJECTS {
+            let reference = ObjRef {
+                index: index as u8,
+                gen: self.objs[index].gen,
+            };
+            if let Some(table) = self.tcb_mut(reference) {
+                if table.caller.is_some_and(|(client, _)| client == sender) {
+                    table.caller = None;
+                }
+            }
+        }
+        fresh
+    }
+
     /// Send a message.  Returns `true` if delivered immediately, `false` if
     /// the sender was queued.  A `Call` leaves the sender in `BlockedReply`
     /// when delivered.
@@ -135,7 +162,6 @@ impl Kernel {
             ep.recv.pop()
         };
         if let Some(receiver) = receiver {
-            let epoch = self.tcb(sender).ok_or(KError::InvalidCap)?.reply_epoch;
             let hint = self.tcb(receiver).map(|table| table.recv_slot).unwrap_or(0);
             let mut msg = msg;
             if can_grant {
@@ -170,18 +196,12 @@ impl Kernel {
             }
             self.make_ready(receiver);
             if is_call {
-                // 290.4 (r290): cấp epoch MỚI cho mỗi lần call. Trước đây
-                // `reply_epoch` không bao giờ tăng nên guard K49 luôn là
-                // `0 == 0` (rỗng): record `caller` cũ vẫn "khớp" và `reply`
-                // giao nhầm cho client đã gọi lần khác.
-                let _ = epoch;
-                let fresh_epoch = match self.tcb_mut(sender) {
-                    Some(table) => {
-                        table.reply_epoch = table.reply_epoch.wrapping_add(1);
-                        table.reply_epoch
-                    }
-                    None => 0,
-                };
+                // 290.4 (r290): cấp epoch MỚI cho mỗi lần call (kèm quét record
+                // cũ — xem `bump_reply_epoch`). Trước đây `reply_epoch` không
+                // bao giờ tăng nên guard K49 luôn là `0 == 0` (rỗng): record
+                // `caller` cũ vẫn "khớp" và `reply` giao nhầm cho client đã
+                // gọi lần khác.
+                let fresh_epoch = self.bump_reply_epoch(sender);
                 if let Some(table) = self.tcb_mut(receiver) {
                     table.caller = Some((sender, fresh_epoch));
                 }
@@ -306,14 +326,8 @@ impl Kernel {
             self.copy_ipc_buffers(sender, receiver);
             if pending.is_call {
                 // 290.4: cấp epoch MỚI cho mỗi lần call (xem chú thích ở nhánh
-                // giao ngay phía trên).
-                let epoch = match self.tcb_mut(sender) {
-                    Some(table) => {
-                        table.reply_epoch = table.reply_epoch.wrapping_add(1);
-                        table.reply_epoch
-                    }
-                    None => return Err(KError::ObjectDestroyed),
-                };
+                // giao ngay phía trên và `bump_reply_epoch`).
+                let epoch = self.bump_reply_epoch(sender);
                 let table = self.tcb_mut(receiver).ok_or(KError::InvalidCap)?;
                 table.caller = Some((sender, epoch));
                 let sender_table = self.tcb_mut(sender).ok_or(KError::ObjectDestroyed)?;
@@ -380,6 +394,22 @@ impl Kernel {
             table.state == ThreadState::BlockedReply && table.reply_epoch == epoch
         });
         if !valid {
+            // r299 (A1): record chờ của TcbWait — waiter vẫn park BlockedReply
+            // nhưng epoch không khớp (được cấp = reply_epoch+1 lúc wait). Record
+            // mượn `caller` làm chỗ chờ exit nên KHÔNG được tiêu ở đây: trả lại
+            // rồi báo NoCaller. Record stale thật (client đã call chỗ khác) đã
+            // bị quét ngay lúc bump epoch, nên nhánh này chỉ đón record chờ —
+            // nếu không waiter mồ côi BlockedReply không bao giờ được đánh thức.
+            let still_parked = self
+                .tcb(client)
+                .is_some_and(|table| table.state == ThreadState::BlockedReply);
+            if still_parked {
+                if let Some(table) = self.tcb_mut(server) {
+                    if table.caller.is_none() {
+                        table.caller = Some((client, epoch));
+                    }
+                }
+            }
             return Err(KError::NoCaller);
         }
         // Mốc 5 (vòng 11): Reply mang cap — server GRANT vé cho client qua
@@ -471,11 +501,19 @@ impl Kernel {
         if target_table.caller.is_some() {
             return Err(KError::WouldBlock);
         }
-        let waiter_state = self.tcb(waiter).ok_or(KError::InvalidCap)?.state;
-        if waiter_state == ThreadState::BlockedReply {
+        let waiter_table = self.tcb(waiter).ok_or(KError::InvalidCap)?;
+        if waiter_table.state == ThreadState::BlockedReply {
             return Err(KError::WouldBlock);
         }
-        let epoch = self.tcb(target).ok_or(KError::ObjectDestroyed)?.reply_epoch;
+        // r299 (A1): epoch của record phải gắn với WAITER, không phải target
+        // — `reply()` so với `reply_epoch` của client trong record. Lấy epoch
+        // hiện tại CỘNG 1 để không bao giờ khớp khi waiter vẫn đang park: đây
+        // là chỗ chờ exit, không phải lời call, nên target `reply`/`reply_recv`
+        // phải thấy NoCaller và record được trả về nguyên vẹn (xem `reply`).
+        // Bản cũ chép epoch của target: khớp thì reply đánh thức waiter SỚM
+        // (coi như con đã exit), lệch thì record bị tiêu mất và waiter mồ côi
+        // BlockedReply vĩnh viễn.
+        let epoch = waiter_table.reply_epoch.wrapping_add(1);
         if let Some(table) = self.tcb_mut(target) {
             table.caller = Some((waiter, epoch));
         }
