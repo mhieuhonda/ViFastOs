@@ -2327,3 +2327,21 @@ chỉ `[0x00]` mới là dữ liệu.
 **Việc tiếp:** (a) đóng lỗ hổng 4 byte bằng cách cho guest in dòng chốt **trước**
 `isa-debug-exit` (hoặc chờ THR rỗng trước khi thoát); (b) từ đây **tin** các ca
 "thiếu marker giữa dòng" là lỗi thật để soi logic exec/T32.
+
+## r294 — Tách nguyên nhân `BIN EXEC FAIL` (spawn vs wait) + đo trên `ps`
+
+**Sửa chẩn đoán:** trước đây một marker `BIN EXEC FAIL` gộp hai nguyên nhân rất
+khác nhau. Nay in rõ:
+- `BIN EXEC FAIL spawn` — `spawn_elf_from_fs` trả `None` (không cấp được
+  TCB/VSpace/frame ⇒ họ T32 "hết slot do object kẹt");
+- `BIN EXEC FAIL wait err=<mã>` — spawn được nhưng `tcb_wait` lỗi (kèm mã).
+
+**Đo `ps`, 50 boot x86_64, `VIFAST_RETRY_TIMEOUT=0`: 1/50 hỏng**, và lần hỏng đó
+là `timeout (thiếu 1 marker: PREEMPT OK)` — **không** phải `BIN EXEC FAIL`.
+
+⇒ Lớp `BIN EXEC FAIL` **không xuất hiện** trong 50 boot này (nền trước đó 1–3 %,
+50 boot chỉ đủ để nói "chưa gặp", không nói "đã hết"). Đèn tách nguyên nhân đã
+nằm trong cây, sẵn sàng cho lần gặp tới — không cần sửa gì thêm khi nó xuất hiện.
+
+Ghi chú thống kê: 50 boot không gặp lớp 1–3 % là chuyện thường (P ≈ 0,2–0,6 với
+1 %), nên **không** được kết luận gì về xu hướng từ lượt này.

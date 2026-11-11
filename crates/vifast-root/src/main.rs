@@ -1311,12 +1311,16 @@ fn boot_exec_once(
         used,
     );
     let Some(tcb) = spawned else {
-        write(b"BIN EXEC FAIL\n");
+        // r294: tách NGUYÊN NHÂN — spawn hỏng (thiếu slot/bộ nhớ) khác hoàn
+        // toàn với spawn được mà `tcb_wait` lỗi.
+        write(b"BIN EXEC FAIL spawn\n");
         return false;
     };
     let waited = vifast_user::tcb_wait(tcb);
     if waited.error != KError::Ok && waited.error != KError::ObjectDestroyed {
-        write(b"BIN EXEC FAIL\n");
+        write(b"BIN EXEC FAIL wait err=");
+        write_decimal(waited.error as u64);
+        write(b"\n");
     }
     // Dọn NGAY sau khi con đã exit: frame/TCB/VSpace phải trả về Untyped,
     // nếu không lần exec sau (và `MEM OOM OK`) sẽ cạn — tái hiện đúng bài
