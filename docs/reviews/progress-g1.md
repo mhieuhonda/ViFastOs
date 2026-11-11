@@ -2122,3 +2122,34 @@ kẹt trong đó nghĩa là **BKL bị giữ** hoặc một vòng lặp trong ke
 Ghi chú quy trình: goal đã được cập nhật — **đầu mỗi vòng phải rà soát bằng 1
 subagent**; môi trường hiện chỉ có model `ninerouter/ocg/deepseek-v4.1-flash(xhigh)`
 (không có model tên "Muse Spark 1.3 Contributor"), nên dùng model sẵn có và ghi rõ.
+
+## Rà soát đầu vòng (model `ocg/muse-spark-1.3-contributor` KHÔNG được cấp cho session)
+
+Route `ninerouter/ocg/muse-spark-1.3-contributor` bị từ chối: *"child LLM route …
+is not allowed for this Session"*. Đã dùng model sẵn có
+`ninerouter/ocg/deepseek-v4.1-flash(xhigh)` cho vai trò rà soát và **ghi rõ** ở đây
+theo yêu cầu. Bản rà soát tìm ra **5 lỗi phương pháp** — ghi lại để không lặp:
+
+1. **"Kẹt TRONG `cap_mint`" CHƯA được chứng minh.** Giữa `SHELL READY` và
+   `IPC MINT REQ` không có syscall nào; và `RET` cũng là một lệnh `write` ⇒ "có
+   REQ, không RET" **trùng chữ ký** với "`cap_mint` trả về rồi `write(RET)` treo".
+   Hai nhóm đầu có thể là **cùng một cơ chế: treo/mất đường ghi console**.
+2. **Hai mẫu số khác nhau.** `148/150` là theo *boot*, `8` là theo *sự kiện*;
+   `par-gate.sh` đặt `VIFAST_RETRY_TIMEOUT=1` nên 6 boot đã xanh nhờ **retry** ⇒
+   tỉ lệ **lần đầu** ≈ 8/150, không phải 1/150.
+3. **Nhãn ≠ cơ chế.** Dòng `RETRY …` chỉ in T-FS/T-SCHED/T-KHAC; `T-IPC` chỉ có từ
+   `4a5917f` ⇒ "toàn T-KHAC" phần lớn là do **nhãn cũ**, không phải cùng cơ chế.
+4. **"Race có ở 128" có thể SAI.** Số 3/80 đo ở `207e988` bằng **classifier cũ**
+   (thiếu `FS V2 OK` + có `SHELL READY` ⇒ gán T-FS), nên serial cụt bị dán nhãn
+   sai. Số mới `0 T-FS/150` **không tương thích** nền 3/80 (P ≈ 0,3 %) ⇒ ít nhất
+   một trong hai số sai/không so được.
+5. **"T33b đã hết" chỉ là trần.** 0/150 chỉ suy ra ≤ ~2 %; nền cũ 0,5 % chưa phân
+   biệt được. Và lượt 300 boot **thiếu aarch64** nên chưa nói "3 arch".
+
+**Ba việc tiếp theo bản rà soát** (theo tỉ lệ gốc/chi phí):
+1. Đèn **kernel in thẳng serial** (`MINT enter/exit err=`, `CONS len/fin`, kèm
+   hart/tcb) — tách "kẹt syscall" khỏi "treo write"; đo 150 boot x86 trên `ps`.
+2. **0 boot**: đọc lại `events[]` của lượt 300 và 3 artifact T-FS cũ ⇒ có thể đóng
+   nhánh "race ở 128" và sửa mẫu số.
+3. Soak mẫu số sạch: x86 300 boot **`VIFAST_RETRY_TIMEOUT=0`**; riscv 600 boot để
+   chốt T33b/T31 ở mức ≤0,5 %.
