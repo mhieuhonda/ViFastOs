@@ -483,6 +483,28 @@ pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
     Ok(())
 }
 
+/// r298: ghi số thập phân vào `line` tại `at` (không cấp phát, không panic).
+fn dec_into(line: &mut [u8], at: &mut usize, value: u64) {
+    let mut digits = [0u8; 20];
+    let mut count = 0usize;
+    let mut rest = value;
+    loop {
+        digits[count] = b'0' + (rest % 10) as u8;
+        rest /= 10;
+        count += 1;
+        if rest == 0 {
+            break;
+        }
+    }
+    while count > 0 {
+        count -= 1;
+        if *at < line.len() {
+            line[*at] = digits[count];
+            *at += 1;
+        }
+    }
+}
+
 fn note_current_tcb<A: Platform>(kernel: &Kernel) {
     let hart = A::hart_id();
     A::set_current_tcb(kernel.current_on(hart).map(|tcb| tcb.index as usize));
@@ -1297,6 +1319,65 @@ pub mod syscall {
                 _ => b"MINT OUT act\n",
             };
             for byte in tag {
+                A::putc(*byte);
+            }
+            // r298 (T-IPC): sau khi `CapMint` xử lý xong, client KHÔNG in
+            // `IPC MINT RET` trong ~7,5 % boot. Đèn này trả lời: kết quả được
+            // ghi vào context của CHÍNH tác vụ gọi hay của tác vụ khác (hart
+            // chéo) — và in cả hart để biết syscall chạy trên hart nào.
+            let slot = kernel
+                .context_slot(tcb)
+                .map(|slot| slot as usize)
+                .unwrap_or(usize::MAX);
+            let own = if slot == usize::MAX {
+                false
+            } else {
+                let base = A::contexts().as_ptr() as usize;
+                let expected = base + slot * core::mem::size_of::<A::Context>();
+                core::ptr::addr_of!(*context) as usize == expected
+            };
+            let mut line = [0u8; 48];
+            let mut at = 0usize;
+            for &byte in b"MINT RES h=" {
+                if at < line.len() {
+                    line[at] = byte;
+                    at += 1;
+                }
+            }
+            dec_into(&mut line, &mut at, hart as u64);
+            for &byte in b" t=" {
+                if at < line.len() {
+                    line[at] = byte;
+                    at += 1;
+                }
+            }
+            dec_into(&mut line, &mut at, tcb.index as u64);
+            for &byte in b" s=" {
+                if at < line.len() {
+                    line[at] = byte;
+                    at += 1;
+                }
+            }
+            dec_into(
+                &mut line,
+                &mut at,
+                if slot == usize::MAX { 99 } else { slot as u64 },
+            );
+            for &byte in b" own=" {
+                if at < line.len() {
+                    line[at] = byte;
+                    at += 1;
+                }
+            }
+            if at < line.len() {
+                line[at] = if own { b'1' } else { b'0' };
+                at += 1;
+            }
+            if at < line.len() {
+                line[at] = b'\n';
+                at += 1;
+            }
+            for byte in line.iter().take(at) {
                 A::putc(*byte);
             }
         }

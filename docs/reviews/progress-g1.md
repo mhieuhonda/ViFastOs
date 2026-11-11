@@ -2825,3 +2825,58 @@ không phải "mất dòng serial" như giả thuyết cũ. Ca còn lại hỏng
   TCB đích? quyền?). Đèn gợi ý: in `hart`, `tcb`, `slot` ngay trước/sau syscall.
 - 3 ca "không khớp điều kiện nào trong accept()" chưa phân tích.
 - `MAX_IO` vẫn 128; T26 đã vá nhưng nút chặn nâng 256 giờ là các lớp hiếm trên.
+
+## r298 — T-IPC: kernel xử lý XONG `CapMint`, client vẫn không in `IPC MINT RET`
+
+### Đèn mới `MINT RES h=<hart> t=<tcb> s=<slot> own=<0/1>`
+In ngay sau khi kernel xử lý `CapMint`, trong vòng syscall của runtime (cùng chỗ
+với `MINT IN`/`MINT OUT`), để tách ba khả năng: (a) kernel kẹt trong syscall,
+(b) kernel xong mà ghi kết quả sai context, (c) kernel xong, ghi đúng, mà user
+không chạy tiếp.
+
+### Dữ kiện (ps, build sạch, 40 boot)
+- **1/40** boot thiếu `IPC RIGHTS OK` ở mẻ này (mẻ trước 3/40).
+- Ở boot hỏng: `MINT RES h=0 t=62 s=2` **có**, `MINT OUT ilop` **có** ⇒ kernel
+  đã xử lý xong và trả đúng `IllegalOperation`; nhưng `IPC MINT RET` **không** in.
+  ⇒ Loại (a). Lỗi nằm **sau** `write_result`, tức ở đường trở về user mode hoặc
+  ở lần ghi console đầu tiên sau syscall.
+- `own=0` xuất hiện ở **cả boot xanh lẫn boot đỏ** (đã đối chứng 3 boot xanh:
+  `own=0` mọi lần) ⇒ phép so `context == contexts[slot]` của tôi là **artifact**,
+  KHÔNG phải bằng chứng. Ghi lại để không ai đọc nhầm.
+
+### Ghi chú kỹ thuật
+- Boot xanh in dòng `MINT RES … t=62` **hai lần**, boot đỏ **một lần** — chưa
+  giải thích; cần đèn đếm số lần gọi `CapMint` phía client.
+- Các dòng `MINT RES … t=0 s=0` là của demo phía kernel (không phải client).
+
+### Còn treo
+- Trả lời câu "vì sao user không chạy tiếp sau `write_result`": cần in
+  `pc/sp` của context TRƯỚC và SAU `write_result`, và in ở điểm `iret/sysret`
+  của từng arch (chỉ x86_64 trước).
+- 3 ca "không khớp điều kiện nào trong accept()" vẫn chưa phân tích.
+
+### r298 — ĐÍNH CHÍNH sau bản rà soát (quan trọng, đừng đọc số cũ)
+1. **`own=` LUÔN bằng 0 — theo CẤU TRÚC, không phải hiện tượng.** Frame syscall nằm
+   trên **trap stack của hart**, không nằm trong `CONTEXTS[slot]`
+   (`enter_user` nhận **bản sao** của `contexts[slot]`). Vậy `own=0` ở cả boot
+   xanh lẫn đỏ là **artifact của chính đèn**, và KHÔNG được dùng để nói "ghi kết
+   quả sang context hart khác". Đèn này sẽ bị bỏ hoặc thay bằng so theo hart+slot.
+2. **r294 đã bác một lớp khác:** có những boot hỏng mà `MINT IN`/`MINT OUT`/
+   `IPC MINT REQ`/`IPC RIGHTS OK` **đều có** ⇒ với lớp đó, "kẹt trong `cap_mint`"
+   là SAI. Lớp của r297/r298 là lớp KHÁC: có `MINT OUT ilop` (kernel xử lý xong,
+   trả `IllegalOperation`) mà **không** có `IPC MINT RET` ⇒ dừng ở **sau**
+   `write_result` (đường về user mode hoặc lần ghi console đầu tiên), KHÔNG phải
+   "kẹt trong syscall".
+3. Thân syscall `CapMint` là O(1), không vòng lặp, không chờ TCB/slot
+   (`copy_cap`/`install_cap` còn không chạy vì root đã mint slot 1 có badge ⇒ trả
+   `IllegalOperation` ngay). Các chỗ QUAY được chỉ còn: (a) **BKL** (hart giữ vé
+   mà chết ⇒ mọi waiter quay vĩnh viễn), (b) `A::putc` quay vô hạn trên LSR THRE
+   — và `MINT IN`/`MINT OUT` được gọi **trong lúc đang giữ BKL**.
+4. Vì vậy bước kế tiếp ĐÚNG (chưa làm) là: đọc `timed_out`/`rc` của artifact
+   trước đã (nếu `rc ≠ 0` thì không phải treo), rồi mới dùng feature `diag-stall`
+   (`BKL STUCK hart/owner/held/holders/spins`) và đặt `MINT PRE`/`MINT ACQ`
+   **NGOÀI khoá**; thêm `NEXT n=<số syscall kế>` để biết client có chạy tiếp
+   không. KHÔNG in thêm trong `dispatch` (đang giữ BKL) — mỗi dòng ~40 B ≈ 3,5 ms
+   ở 115200 baud, tự kéo dài đúng cửa sổ đang săn.
+5. Đã biết từ artifact: 2 ca hỏng đều **không** có `CURRENT MISMATCH`/`NO CURRENT`,
+   có `KSTORE CANARY OK` và `ROOT READY` ⇒ **kernel boot xong**, chỉ client dừng.

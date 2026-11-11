@@ -619,6 +619,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - d43eb57 r295 (bổ sung): S1b 0/5 000 vòng; reproducer NHANH cho exec (BIN EXEC FAIL spawn)
 - 5fc7b3f r296 (T26): DIRSNAP — entry `d` hiện lại GIỮA hai readdir liên tiếp; 2 giả thuyết chết
 - 9cd233f r296b (T26): VÁ GỐC — readdir đánh chỉ số theo SLOT; 0/40 boot đỏ ở MAX_IO=256
+- e6f47ce r297 (T33a): đèn SPAWN STOP — exec hỏng là retype TẠM THỜI; thử lại có giới hạn
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS
@@ -677,7 +678,7 @@ Test hiện tại:
 - `cargo test -p vifast-fsutil`: 0/0 PASS
 ### END GENERATED tests
 ### BEGIN GENERATED status
-- RISC-V headroom: 2263408 byte (`kernel_end=0x803d7690`)
+- RISC-V headroom: 2259312 byte (`kernel_end=0x803d8690`)
 - `Kernel = 552120`, `Object = 3192`, `Tcb = 1648`, `Cap = 64` byte
 - QEMU lần chạy gần nhất (`--repeat 3`): riscv64 3/3, aarch64 3/3, x86_64 3/3
 ### END GENERATED status

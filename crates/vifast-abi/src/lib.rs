@@ -1396,6 +1396,7 @@ mod vfs_seq_tests {
     }
 }
 
+#[cfg(test)]
 mod build_tests {
     use super::build;
 

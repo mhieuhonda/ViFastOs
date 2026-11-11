@@ -1226,6 +1226,34 @@ Serial của ca hỏng có `SHELL READY` + `IPC MINT REQ` nhưng **không có
 `IPC MINT RET`** ⇒ client **kẹt bên trong `cap_mint`**, không phải mất dòng
 serial. Đây là dữ kiện mới để mở T-IPC thành mục điều tra riêng.
 
+
+## r298 — T-IPC: kernel xử lý XONG `CapMint`, client vẫn không in `IPC MINT RET`
+
+Đèn `MINT RES h= t= s= own=` in ngay sau khi kernel xử lý `CapMint`. Ở boot đỏ
+(1/40 mẻ này) có `MINT RES … t=62`, có `MINT OUT ilop`, **không** có
+`IPC MINT RET` ⇒ kernel đã xử lý xong và trả đúng `IllegalOperation`; lỗi nằm
+**sau** `write_result` (đường trở về user mode hoặc lần ghi console đầu tiên).
+
+`own=0` xuất hiện ở **cả boot xanh** (đối chứng 3 boot) ⇒ phép so
+`context == contexts[slot]` là **artifact**, không phải bằng chứng — ghi lại để
+không đọc nhầm.
+
+
+### r298 — đính chính sau rà soát (quan trọng)
+1. **`own=` luôn 0 theo CẤU TRÚC**: frame syscall nằm trên trap stack của hart,
+   không nằm trong `CONTEXTS[slot]` ⇒ đèn của tôi là **artifact**, không dùng để
+   nói "ghi kết quả sang context hart khác".
+2. **r294 đã bác** lớp "kẹt trong `cap_mint`" cho các boot hỏng mà `MINT IN`/
+   `MINT OUT`/`IPC MINT REQ`/`IPC RIGHTS OK` đều có. Lớp r297/r298 KHÁC: có
+   `MINT OUT ilop` mà **không** có `IPC MINT RET` ⇒ dừng **sau** `write_result`.
+3. Thân `CapMint` là O(1); chỗ quay được chỉ còn **BKL** và **`putc`** (và
+   `MINT IN`/`MINT OUT` đang in **trong lúc giữ BKL**).
+4. Bước kế tiếp: đọc `timed_out`/`rc` của artifact trước, rồi `diag-stall` +
+   `MINT PRE`/`MINT ACQ` đặt **ngoài khoá**, thêm `NEXT n=` — KHÔNG in thêm
+   trong `dispatch`.
+5. Hai artifact hỏng: không có `CURRENT MISMATCH`/`NO CURRENT`, có `ROOT READY`
+   và `KSTORE CANARY OK` ⇒ kernel boot xong, chỉ client dừng.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1234,7 +1262,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-308af99ec5807a2449751186f8018dade8352446217b4d2e0c2480937aaeaae0  docs/reviews/ViFastOs-report-r262.md
+15d4d62fe450b909c85d376bbba3643e93ae4f334b2898114afea07277208736  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
