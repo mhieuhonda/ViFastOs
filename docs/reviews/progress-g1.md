@@ -2378,3 +2378,33 @@ if waited.error != Ok && != ObjectDestroyed { print err; return false; }  // KH�
 
 Lần hỏng còn lại là `thiếu marker (1): IPC RIGHTS OK` — **lớp khác**, không phải
 exec. QEMU chuẩn 3×3 sau vá: `RETRY 0/9`.
+
+## r294 — Bản rà soát chỉ ra: còn NHIỀU chỗ cùng lỗi "teardown không chờ"
+
+Sau khi vá `boot_exec_once`, bản rà soát quét toàn bộ chỗ chờ/dọn task và tìm
+cùng hình mẫu ở nhiều nơi (ghi lại để vòng sau vá tiếp, **chưa sửa** trong vòng
+này vì cần đo riêng từng chỗ):
+
+| Vị trí (`vifast-root/src/main.rs`) | Vấn đề |
+|---|---|
+| 4014-4018 | `tcb_wait` rồi `tcb_destroy` **vô điều kiện** — lỗi khác Ok/ObjectDestroyed vẫn bị coi là xong |
+| 3468/3478/3488 | gọi `boot_exec_once(...)` **bỏ** giá trị `bool` trả về |
+| 442/487/509/581 | `let _ = wait(2)` nuốt lỗi ⇒ worker rơi vào `loop { yield_now() }` |
+| 3066-3106, 3119-3145 | pager client/server: `tcb_destroy` **không** wait/suspend; nuốt `frame_unmap`, `cap_revoke` |
+| 3393, 3423, 3530, 3550, 3704, 3811, 4134 | `destroy_exec` dọn mà không suspend TCB trước (chỉ nhánh LABEL_KILL 3543-3549 làm đúng) |
+
+**Giả thuyết cho hai marker còn thiếu (khớp dữ kiện):**
+- `PAGER SRV 0/0/0` (in ở 3139, ngay sau `tcb_destroy` ở 3122): pager server
+  **không exit** (chỉ `send(PAGER_DONE)` rồi lặp) ⇒ bị destroy **khi còn sống**;
+  trên x86 SMP hart 1 có thể đang giữ BKL ⇒ destroy-giữa-lúc-chạy hỏng hoặc treo
+  trước khi kịp in.
+- `IPC RIGHTS OK` (marker cuối của client): mất khi client bị chặn, hoặc do rò
+  TCB/frame từ đường teardown ở trên.
+
+Log tốt: `PAGER SRV` ở dòng 152, `IPC RIGHTS OK` ở dòng 267 ⇒ cách nhau **hơn 100
+dòng** ⇒ đây là **hai** race cùng họ, không phải một.
+
+**Bản vá đề xuất (nhỏ nhất):** helper `reap_task(tcb) -> bool` theo đúng mẫu
+LABEL_KILL + mẫu `boot_exec_once` vừa vá: `tcb_suspend` → nếu lỗi thì `tcb_wait`
++ vòng yield ≤64 → chỉ khi Ok/ObjectDestroyed mới `frame_unmap` →
+`object_destroy` → `tcb_destroy`; gọi ở 3066, 3122, 4018; bỏ `let _ = us;` ở 3146.
