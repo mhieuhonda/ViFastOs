@@ -74,12 +74,20 @@ impl LoadSegment {
     }
 
     pub fn page_count(&self) -> usize {
-        (self.memory_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize
+        // r299: chiều dài cần map phải tính cả phần đầu trang của vaddr —
+        // parser chỉ bắt buộc vaddr ≡ p_offset (mod trang), không bắt align,
+        // nên (vaddr % PAGE) + memsz mới phủ hết segment. Bản cũ tính
+        // ceil(memsz/PAGE) nên segment lệch trang bị thiếu trang cuối: đuôi
+        // không map, task fault ngay khi chạy tới.
+        let head = (self.vaddr % PAGE_SIZE as u64) as usize;
+        (head + self.memory_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize
     }
 
     pub fn memory_end(&self) -> Option<u64> {
-        let pages = self.page_count() as u64;
-        self.vaddr.checked_add(pages.checked_mul(PAGE_SIZE)?)
+        // r299: end làm tròn LÊN theo trang — khớp đường kiểm user-range và
+        // overlap trong parse. Bản cũ vaddr + pages*PAGE lệch 1 trang khi
+        // vaddr không align, làm hai phép kiểm trong parse chênh nhau.
+        page_round_up(self.vaddr.checked_add(self.memory_size as u64)?)
     }
 }
 
@@ -320,6 +328,46 @@ mod tests {
     use super::*;
     use std::vec;
     use std::vec::Vec;
+
+    /// r299 (đỏ-trước): segment có vaddr lệch trang (parser chỉ bắt buộc
+    /// vaddr ≡ p_offset mod trang) phải đếm cả phần đầu trang — bản cũ
+    /// ceil(memsz/PAGE) làm segment 0x1120 byte chỉ map 1 trang, đuôi
+    /// không map và task fault khi chạy tới.
+    #[test]
+    fn unaligned_vaddr_counts_the_head_page() {
+        let segment = LoadSegment {
+            file_offset: 0x120,
+            file_size: 16,
+            memory_size: 0x1000,
+            vaddr: 0x4000_0120,
+            flags: PF_R | PF_X,
+        };
+        assert_eq!(
+            segment.page_count(),
+            2,
+            "0x120 (đầu trang) + 0x1000 = 0x1120 cần 2 trang"
+        );
+        assert_eq!(segment.memory_end(), Some(0x4000_2000));
+        // Segment align trang phải cho kết quả như bản cũ (không đổi hành vi).
+        let aligned = LoadSegment {
+            file_offset: 0,
+            file_size: 16,
+            memory_size: 0x1000,
+            vaddr: 0x4000_0000,
+            flags: PF_R | PF_X,
+        };
+        assert_eq!(aligned.page_count(), 1);
+        assert_eq!(aligned.memory_end(), Some(0x4000_1000));
+        let aligned_odd = LoadSegment {
+            file_offset: 0,
+            file_size: 16,
+            memory_size: 0x1001,
+            vaddr: 0x4000_0000,
+            flags: PF_R | PF_X,
+        };
+        assert_eq!(aligned_odd.page_count(), 2);
+        assert_eq!(aligned_odd.memory_end(), Some(0x4000_2000));
+    }
 
     fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());

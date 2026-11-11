@@ -1018,7 +1018,7 @@ fn dispatch(request: &vifast_user::MessageResult, op: u64) -> (u64, u64, u64, u6
                 line[4] = b'R';
                 line[5] = b'R';
                 line[6] = b' ';
-                let mut value = error as u8;
+                let value = error as u8;
                 line[7] = b'0' + value / 100 % 10;
                 line[8] = b'0' + value / 10 % 10;
                 line[9] = b'0' + value % 10;

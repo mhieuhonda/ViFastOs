@@ -11,10 +11,10 @@ use core::panic::PanicInfo;
 use vifast_abi::user_layout::{
     CLIENT_CMD_SLOT, CLIENT_IRQ_NOTIFICATION_SLOT, CLIENT_IRQ_SLOT, CLIENT_STACK_BASE,
     CLIENT_STACK_TOP, CLIENT_UART_IRQ_SLOT, CLIENT_UART_NOTIFICATION_SLOT, CNODE_STACK_BASE,
-    CNODE_STACK_TOP, CODE_VA, EXEC_STACK_BASE, EXEC_STACK_TOP, FAULT1_STACK_TOP, FAULT1_TCB_SLOT,
-    FAULT2_STACK_TOP, FAULT2_TCB_SLOT, FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE,
-    FAULT4_STACK_TOP, IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA,
-    PAGER2_STACK_BASE, PAGER2_STACK_TOP, PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_IPC_BUF_VA,
+    CNODE_STACK_TOP, CODE_VA, EXEC_STACK_BASE, FAULT1_STACK_TOP, FAULT1_TCB_SLOT, FAULT2_STACK_TOP,
+    FAULT2_TCB_SLOT, FAULT3_STACK_TOP, FAULT3_TCB_SLOT, FAULT4_STACK_BASE, FAULT4_STACK_TOP,
+    IDLE_STACK_BASE, IDLE_STACK_TOP, IPC_BUF_CLIENT_VA, IPC_BUF_SERVER_VA, PAGER2_STACK_BASE,
+    PAGER2_STACK_TOP, PAGER3_STACK_BASE, PAGER3_STACK_TOP, PAGER_IPC_BUF_VA,
     PAGER_SERVER_STACK_BASE, PAGER_SERVER_STACK_TOP, PAGER_STACK_BASE, PAGER_STACK_TOP,
     ROOT_IPC_BUF_VA, ROOT_SELF_SLOT, SERVER_STACK_TOP, USER_ENTRY_FAULT1, USER_ENTRY_FAULT2,
     USER_ENTRY_FAULT3, USER_ENTRY_FAULT4, WORKER_A_STACK_BASE, WORKER_A_STACK_TOP,
@@ -519,7 +519,8 @@ pub extern "C" fn smp_worker_d() -> ! {
     let mut a_seen = 0u64;
     let mut seen_new = false;
     let mut stale_after = 0u64;
-    let mut done_at = 0u64;
+    // r299: bỏ init chết — mọi đường break đều gán trước khi đọc.
+    let done_at;
     loop {
         let now = vifast_user::get_time().value;
         // r228 (T3): RV/x86 chỉ kết luận SAU khi root báo "đã remap xong" qua
@@ -858,8 +859,10 @@ fn map_with_tables(
 struct SlotAllocator {
     next: u8,
     end: u8,
-    // Vòng 34: 16 để chứa hết slots exec (12) khi `run` lặp.
-    released: [u8; 16],
+    // r299: đuôi theo MAX_EXEC_SLOTS (20) — bản cũ 16 nên destroy_exec của
+    // task ≥ 17 slot rơi ngoài mảng, slot không được tái chế và cứ thế
+    // `root slot range exhausted`.
+    released: [u8; MAX_EXEC_SLOTS],
     released_len: u8,
 }
 
@@ -1402,6 +1405,12 @@ fn build_argv<'a>(path: &'a [u8], words: &'a [u8], out: &mut [&'a [u8]; 8]) -> u
 /// trên trang stack — vùng dữ liệu đúng nghĩa — nên chương trình Rust thật
 /// đọc được, và cùng một ảnh ELF chạy được nhiều tên lệnh (multicall).
 fn write_exec_args(stack_frame: u8, args: &[&[u8]]) -> Option<(u64, u64)> {
+    // r299: ptrs chỉ đủ EXEC_ARGS_MAX con trỏ — quá giới hạn phải fail SỚM,
+    // nếu không vòng ghi ptrs[i*8+j] dưới đây ghi quá đệm stack của root.
+    // Kernel cũng chặn argc > 8 nhưng chỉ SAU khi root đã ghi xong.
+    if args.len() > vifast_abi::user_layout::EXEC_ARGS_MAX {
+        return None;
+    }
     let layout = vifast_abi::user_layout::EXEC_ARGS_BASE - vifast_abi::user_layout::EXEC_STACK_BASE;
     let mut ptrs = [0u8; vifast_abi::user_layout::EXEC_ARGS_MAX * 8];
     let mut strings = [0u8; 256];
@@ -1479,6 +1488,11 @@ fn spawn_elf_copy(
     if vifast_user::retype(data_untyped, ObjType::VSpace as u64, vspace).error != KError::Ok {
         return None;
     }
+    // r299: ghi lại frame ĐẦU TIÊN của segment EXEC — self-test W^X dưới
+    // dùng đúng frame này (bản cũ lấy used[0], tức slot VSpace, nên phép
+    // kiểm luôn "đạt" vì sai lý do — frame_write vào VSpace trả WrongType
+    // chứ không phải lỗi W^X).
+    let mut exec_frame = 0u8;
     for segment in image.segments() {
         let page_base = segment.vaddr & !0xfff;
         let page_count = segment.page_count();
@@ -1488,6 +1502,9 @@ fn spawn_elf_copy(
             let frame = track_alloc(slots, used, &mut used_len, b'F')?;
             if vifast_user::retype(data_untyped, ObjType::Frame as u64, frame).error != KError::Ok {
                 return None;
+            }
+            if segment.executable() && exec_frame == 0 {
+                exec_frame = frame;
             }
             // Copy nội dung segment (chunk 256B như load_module).
             let copy_start = core::cmp::max(va, segment.vaddr);
@@ -1560,9 +1577,9 @@ fn spawn_elf_copy(
     // Vòng 136: W^X — ghi vào frame ĐÃ map executable phải bị từ chối, còn
     // frame RW (stack) sau khi map vẫn ghi được. Chỉ in một lần.
     let mut wx_ok = false;
-    if let Some(code_frame) = used.first().copied().filter(|_| used_len > 0) {
+    if exec_frame != 0 {
         let denied =
-            vifast_user::frame_write(code_frame, 0, b"x".as_ptr() as u64, 1).error != KError::Ok;
+            vifast_user::frame_write(exec_frame, 0, b"x".as_ptr() as u64, 1).error != KError::Ok;
         let stack_ok =
             vifast_user::frame_write(stack_frame, 0, b"x".as_ptr() as u64, 1).error == KError::Ok;
         wx_ok = denied && stack_ok;
@@ -2057,7 +2074,12 @@ fn root_vfs_verify_at(endpoint_slot: u8, path: &[u8], offset: u64, expected: &[u
     let Some(size) = root_vfs_stat(endpoint_slot, path) else {
         return false;
     };
-    if offset + expected.len() as u64 > size {
+    if offset
+        .checked_add(expected.len() as u64)
+        .map_or(true, |end| end > size)
+    {
+        // r299: checked_add — offset bịa gần u64::MAX làm cộng wrap rồi lọt
+        // qua phép so sánh của bản cũ.
         return false;
     }
     let Some(fd) = root_vfs_open(endpoint_slot, path) else {
@@ -2333,6 +2355,10 @@ fn spawn_elf_from_fs(
     let vspace = match track_alloc(slots, used, &mut used_len, b'V') {
         Some(slot) => slot,
         None => {
+            // r299: đường hỏng track_alloc phải trả lại fd VFS như mọi đường
+            // hỏng khác — bảng fd của server chỉ có 16 ô dùng chung, leak mỗi
+            // lần là bóp nghẹt OPEN của mọi task.
+            root_vfs_close(endpoint_slot, fd);
             spawn_stop(2);
             return None;
         }
@@ -2353,6 +2379,8 @@ fn spawn_elf_from_fs(
             let frame = match track_alloc(slots, used, &mut used_len, b'F') {
                 Some(slot) => slot,
                 None => {
+                    // r299: trả lại fd VFS (đồng bộ với mọi đường hỏng khác).
+                    root_vfs_close(endpoint_slot, fd);
                     spawn_stop(3);
                     return None;
                 }
@@ -2608,7 +2636,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
     let mut slots = SlotAllocator {
         next: info.free_slot_start as u8,
         end: info.free_slot_end as u8,
-        released: [0; 16],
+        released: [0; MAX_EXEC_SLOTS],
         released_len: 0,
     };
     let endpoint_slot = slots.alloc();
@@ -3700,7 +3728,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     exec_len = 0;
                 }
             }
-            if message.label == LABEL_LOOP {
+            if message.label == LABEL_LOOP && message.badge == RUN_BADGE {
                 // Vòng 201: lặp spawn→destroy NGAY trong root (không qua IPC),
                 // để người dùng tự kiểm chứng "chạy N lần không rò rỉ" mà
                 // không phải gõ N lệnh. Đo `used` trước/sau để phát hiện rò rỉ.
@@ -3740,7 +3768,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                     b"LOOP BAD\n"
                 });
             }
-            if message.label == LABEL_KILL {
+            if message.label == LABEL_KILL && message.badge == RUN_BADGE {
                 // Vòng 169: `kill` từ shell — dừng TCB exec đang chạy.
                 if exec_len != 0 {
                     // Vòng 170: suspend TRƯỚC khi dọn — task có thể đang chạy
@@ -3773,6 +3801,12 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             break;
                         }
                         plen += 1;
+                    }
+                    // r299: path không có NUL trong 128 byte là path hỏng —
+                    // coi như run trần, không quét tham số bên ngoài vùng path
+                    // (byte 129+ là rác cũ của IPC buffer, vào argv thành rác).
+                    if plen >= vifast_abi::vfs::MAX_PATH {
+                        plen = 0;
                     }
                     // Copy path NGAY (trước mọi call VFS): các call dưới đây
                     // ghi đè IPC buffer, copy muộn sẽ nhận dữ liệu file
@@ -3849,6 +3883,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         // tạo từ ảnh ELF dựng sẵn NGAY tại đây (on-demand,
                         // không ở boot), rồi để STAT/exec-from-FS xử lý tiếp.
                         if plen == b"/prog.elf".len()
+                            && &path[..plen] == b"/prog.elf"
                             && root_vfs_stat(root_vfs_slot, b"/prog.elf").is_none()
                         {
                             let mut off = 0usize;
@@ -3889,6 +3924,7 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             // CLOSE từ root). Chỉ quan sát: in marker khi
                             // đúng magic demand-load, không đổi spawn.
                             if plen == b"/page.bin".len()
+                                && &path[..plen] == b"/page.bin"
                                 && root_vfs_read_head(root_vfs_slot, &path[..plen])
                             {
                                 write(b"ROOT READ OK\n");
@@ -3933,15 +3969,25 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                                 write(b"RUN FS OK\n");
                                 Some(tcb)
                             }
-                            None => spawn_elf_copy(
-                                meta_untyped,
-                                data_untyped,
-                                EXEC_DEMO_ELF,
-                                &[],
-                                0b01,
-                                &mut slots,
-                                &mut exec_used,
-                            ),
+                            None => {
+                                // r299: spawn từ FS hỏng giữa chừng đã cấp MỘT
+                                // PHẦN object rồi — destroy + reset trước khi
+                                // fallback, nếu không spawn_elf_copy ghi đè
+                                // exec_used từ đầu và phần object đó leak
+                                // vĩnh viễn (chính thứ tự tự bóp nghẹt bộ nhớ
+                                // khiến spawn cứ hỏng tiếp).
+                                destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
+                                exec_used = [0u8; MAX_EXEC_SLOTS];
+                                spawn_elf_copy(
+                                    meta_untyped,
+                                    data_untyped,
+                                    EXEC_DEMO_ELF,
+                                    &[],
+                                    0b01,
+                                    &mut slots,
+                                    &mut exec_used,
+                                )
+                            }
                         };
                         match spawned {
                             Some(_tcb) => {
@@ -3970,6 +4016,11 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             break;
                         }
                         plen += 1;
+                    }
+                    // r299: như nhánh `run` — path không NUL trong 128 byte là
+                    // hỏng, coi như không có path để không đọc argv rác.
+                    if plen >= vifast_abi::vfs::MAX_PATH {
+                        plen = 0;
                     }
                     // Vòng 102: nếu path trỏ tới ELF có thật trên FS thì
                     // exec-thật từ file (destroy + spawn mới, kèm tham số);
@@ -4008,13 +4059,15 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         // đã có; fail thì rơi về demo copy như nhánh đầu.
                         // Vòng 199: bật chẩn đoán cho chuỗi cấp/huỷ của lần chạy
                         // này (chỉ đường lệnh shell ⇒ cổng không đổi nhịp boot).
+                        // r299: tắt lại khi lệnh xử lý xong — bản cũ bật hai lần
+                        // rồi để bật mãi, mọi track_alloc về sau đều in TA →
+                        // loạn console.
                         DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
                         destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
                         exec_len = 0;
                         exec_tcb = 0;
                         exec_used = [0u8; MAX_EXEC_SLOTS];
                         exec_vspace = 0;
-                        DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
                         if let Some(tcb) = spawn_elf_from_fs(
                             root_vfs_slot,
                             endpoint_slot,
@@ -4038,6 +4091,10 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                         }
                     }
                     if !fs_done {
+                        // r299: như nhánh `run` bên trên — spawn từ FS hỏng giữa
+                        // chừng phải được dọn trước khi fallback demo copy.
+                        destroy_exec(&mut slots, &exec_used, used_len(&exec_used));
+                        exec_used = [0u8; MAX_EXEC_SLOTS];
                         match spawn_elf_copy(
                             meta_untyped,
                             data_untyped,
@@ -4059,6 +4116,9 @@ pub extern "C" fn root_main(bootinfo_ptr: u64) -> ! {
                             None => write(b"RUN SKIP\n"),
                         }
                     }
+                    // r299: xong lệnh thì tắt đèn chẩn đoán (chỉ bật cho đúng
+                    // một chuỗi spawn/destroy của lệnh này).
+                    DIAG.store(false, core::sync::atomic::Ordering::Relaxed);
                 }
             } else if message.label == CNODE_LABEL {
                 write(CNODE_OK);

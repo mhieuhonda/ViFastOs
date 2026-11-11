@@ -301,6 +301,8 @@ fn vfs_send(slot: u8, op: u64, data0: u64, data1: u64, data2: u64) -> vifast_use
 }
 
 /// Số đèn đã bật (dùng cho dòng `VSTAT` và cho feature `stress-fs`).
+// r299: chỉ dùng trong stress-fs — không gate thì bản thường warning dead-code.
+#[cfg(feature = "stress-fs")]
 fn vfs_bad_counts() -> (u32, u32, u32, u32) {
     unsafe { (VSEQ_COUNT, VARG_COUNT, VHASH_COUNT, VEND_COUNT) }
 }
