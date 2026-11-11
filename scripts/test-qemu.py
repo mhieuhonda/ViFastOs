@@ -1205,6 +1205,12 @@ def test_x86_64(index: int = 0, feature: str | None = None) -> bool:
         "-device", "ide-hd,drive=vd1,bus=ide.6,unit=0",
         "-device", "isa-debug-exit,iobase=0x501,iosize=0x03",
     ]
+    # T-IPC/r294: VIFAST_TRACE=1 ⇒ bật trace `serial_write` của QEMU để có
+    # NHÂN CHỨNG từng byte thực ghi ra cổng serial (không sửa kernel, dùng được
+    # cả cho lần treo vì không phụ thuộc đường exit).
+    if os.environ.get("VIFAST_TRACE") == "1":
+        cmd.append("-trace")
+        cmd.append(f"enable=serial_write,file={serial}.trace")
     # The kernel writes 0x501 with value 1, which QEMU turns into exit code 3.
     return run_qemu(
         "x86_64",
