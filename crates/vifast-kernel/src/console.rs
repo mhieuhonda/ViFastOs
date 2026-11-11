@@ -29,6 +29,37 @@ impl<C: Console> Write for Writer<C> {
     }
 }
 
+/// Giữ khoá console Tx trong suốt một khối ghi nhiều byte (T-IPC/r294).
+///
+/// Vì sao cần: `log()` chỉ khoá **một dòng của kernel**, còn `debug_write` của
+/// user đi thẳng `A::putc` **không khoá** ⇒ hai hart (hoặc user + kernel) có
+/// thể chen giữa một dòng marker, làm hỏng/hụt dòng trên serial. Đó đúng là
+/// chữ ký "thiếu marker rải rác, mỗi lần một chỗ" đã đo được.
+pub fn with_tx_lock<F: FnOnce()>(body: F) {
+    let mut spins = 0u32;
+    let locked = loop {
+        match TX_LOCK.compare_exchange_weak(
+            false,
+            true,
+            core::sync::atomic::Ordering::Acquire,
+            core::sync::atomic::Ordering::Relaxed,
+        ) {
+            Ok(_) => break true,
+            Err(_) => {
+                spins += 1;
+                if spins > 1_000_000 {
+                    break false;
+                }
+                core::hint::spin_loop();
+            }
+        }
+    };
+    body();
+    if locked {
+        TX_LOCK.store(false, core::sync::atomic::Ordering::Release);
+    }
+}
+
 pub fn log<C: Console>(args: fmt::Arguments<'_>) {
     // Vòng 105 (soak-20 x86 fail 2/20): BSP/AP klog đồng thời làm dính ký
     // tự giữa dòng (`P SSE OFFAP LONG MODE OK`), harness EXACT_ONE fail oan.

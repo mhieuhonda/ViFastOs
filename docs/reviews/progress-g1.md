@@ -2204,3 +2204,37 @@ hoặc vẫn là mất đuôi; mẫu 60 chưa đủ kết luận (3→1 nằm tr
 nghi **tầng thu thập** trước khi nghi sản phẩm — và tỉ lệ flake báo cáo trước đó
 có thể **cao hơn thực tế**. Các con số `T-IPC`, `T-KHAC` đêm nay cần đo lại bằng
 đường thu thập mới trước khi dùng để kết luận.
+
+## r294 — Sửa tính NGUYÊN TỬ của console (nguồn "mất dòng" thật, theo bản rà soát)
+
+Bản rà soát chỉ ra giả thuyết "mất dòng khi THU THẬP" **gần như sai**: `-serial
+file:` ghi bằng `write(2)`, không buffer ⇒ SIGKILL không nuốt byte đã ghi; "mất cả
+dòng ở giữa mà dòng sau vẫn còn" là **bất khả** với file chardev.
+
+Nguồn "mất dòng" **có thật** nằm ở **phía guest**: `debug_write` của user đi thẳng
+`A::putc` **không khoá**, còn `log()` của kernel chỉ khoá **một dòng**; thêm nữa
+`console::log` có nhánh "spin quá 1e6 thì ghi thẳng" ⇒ hai hart có thể chen giữa
+một dòng marker.
+
+**Sửa:**
+1. `console::with_tx_lock(body)` — API giữ khoá Tx cho **cả khối**.
+2. `DebugWrite` của user bọc **toàn bộ** vòng ghi byte trong khoá đó.
+
+**Đo trên `ps`, 60 boot, `VIFAST_RETRY_TIMEOUT=0`:**
+
+| Cấu hình | Hỏng |
+|---|---:|
+| SIGKILL (gốc) | 3/60 |
+| SIGTERM→kill + chờ flush | 1/60 |
+| + console nguyên tử theo khối | **1/60** |
+
+⇒ Hai bản vá là **cải thiện đúng về mặt cơ chế** (khoá console; nhả QEMU đúng
+cách) nhưng **chưa** diệt được lớp lỗi: mẫu 60 quá nhỏ để tách 3/60 vs 1/60, và
+lần hỏng còn lại là `dup=['BIN OK uname'] + BIN EXEC FAIL` — **lớp khác** (exec
+thất bại, họ T32), không phải mất dòng.
+
+**Kết luận trung thực:** "flake 3–5 % trên `ps`" là **hỗn hợp nhiều cơ chế**; các
+con số dương đêm nay (`3/60`, `5/120`, `8/150`) chỉ là **chặn trên** và phải đo
+lại cùng một phép đếm byte console (`CONS TX bytes=… fnv=…` như bản rà soát đề
+xuất) trước khi dùng để kết luận. Các kết quả **0** (0 T-FS/150, 150/150 riscv)
+vẫn đúng vì mất dòng chỉ có thể PASS→FAIL.

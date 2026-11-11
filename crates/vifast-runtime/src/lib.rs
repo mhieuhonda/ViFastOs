@@ -1517,9 +1517,14 @@ pub mod syscall {
                             }
                         }
                     }
-                    for byte in &buf[..len] {
-                        A::putc(*byte);
-                    }
+                    // T-IPC/r294: khoá console cho CẢ KHỐI, không chỉ từng
+                    // byte — nếu không, klog của hart khác chen vào giữa dòng
+                    // marker của user và harness thấy "thiếu marker" oan.
+                    vifast_kernel::console::with_tx_lock(|| {
+                        for byte in &buf[..len] {
+                            A::putc(*byte);
+                        }
+                    });
                     A::write_result(context, KError::Ok, 0, 0, [0; 4]);
                 }
             }
