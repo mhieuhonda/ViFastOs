@@ -2880,3 +2880,43 @@ không chạy tiếp.
    ở 115200 baud, tự kéo dài đúng cửa sổ đang săn.
 5. Đã biết từ artifact: 2 ca hỏng đều **không** có `CURRENT MISMATCH`/`NO CURRENT`,
    có `KSTORE CANARY OK` và `ROOT READY` ⇒ **kernel boot xong**, chỉ client dừng.
+
+## r299 — T-IPC: client CÓ chạy tiếp sau `CapMint`; mất dòng xảy ra SAU đó
+
+### Đèn `NEXT n=<số syscall>` — đặt lại đúng chỗ
+Bản đầu tôi đặt trong `dispatch` của runtime, tức **đang giữ BKL** — bản rà soát
+chỉ ra hai lỗi của cách đặt đó: (a) làm dài đúng critical section đang săn;
+(b) **mù** với ca "vào kernel rồi chờ khoá". Nay đèn nằm trong
+`x86_trap_handler` (platform x86_64), **trước** fast-path `GetTime` và **trước**
+`bkl_lock()`, và gắn theo **(hart, tcb)** chứ không chỉ theo hart (bản đầu chỉ
+theo hart nên bắt nhầm `Call` của root).
+
+### Kết quả (ps, 40 boot, 1 ca hỏng)
+```
+IPC MINT REQ | MINT OUT ilop | MINT RES h=0 t=62 | NEXT n=32 | IPC MINT RET
+```
+`n=32` = `DebugWrite` ⇒ **client ĐÃ chạy tiếp** và **đã in `IPC MINT RET`**.
+Vậy giả thuyết "kẹt trong `cap_mint`" và "không trở về user được" đều SAI.
+
+### Mất dòng xảy ra ngay SAU `IPC MINT RET`
+Serial của ca hỏng: sau `IPC MINT RET` **không còn dòng nào của client**
+(không `IPC RIGHTS OK`/`BAD`, không `shell> `), trong khi kernel vẫn in tiếp
+`PREEMPT OK`… `KSTORE CANARY OK` và **không có** `USER FAULT`, `PANIC`,
+`CURRENT MISMATCH`, `NO CURRENT`, `BKL STUCK`. Tức client **không fault**, chỉ
+không in nữa.
+
+### Giả thuyết "nuốt WouldBlock" — ĐÃ THỬ VÀ BỊ BÁC
+Cho `write()` của client thử lại khi `debug_write` trả `WouldBlock` (tối đa 64
+lượt, `yield_now` ở giữa): **2/40** boot vẫn thiếu `IPC RIGHTS OK` (trước đó
+1/40 và 3/40). Không cải thiện ⇒ **đã REVERT** theo D18 (không giữ bản vá không
+chứng minh được). Ghi lại làm dữ kiện âm: mất dòng **không phải** do client nuốt
+`WouldBlock`.
+
+### Còn treo (đã hẹp)
+- Sau `IPC MINT RET`, mọi lần ghi console của client biến mất mà không lỗi. Cần
+  đèn phía **kernel** cho `DebugWrite` của tcb 62: in số byte đã đẩy và mã trả về
+  (`OK`/`WouldBlock`/khác) — đèn này phải nằm **sau** `dispatch` nhưng **trước**
+  `drop(bkl)` thì mới thấy cả ca "đẩy xong mà byte không ra".
+- Đối chứng độc lập: `-trace serial_ioport_write` của QEMU để biết byte có thật
+  sự ra cổng hay không (đã dùng được ở r294).
+- 3 ca "không khớp điều kiện nào trong accept()" vẫn chưa phân tích.

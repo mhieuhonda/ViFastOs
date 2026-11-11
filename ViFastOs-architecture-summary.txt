@@ -620,6 +620,7 @@ Thư mục này LÀ git repository. Các mốc hiện tại:
 - 5fc7b3f r296 (T26): DIRSNAP — entry `d` hiện lại GIỮA hai readdir liên tiếp; 2 giả thuyết chết
 - 9cd233f r296b (T26): VÁ GỐC — readdir đánh chỉ số theo SLOT; 0/40 boot đỏ ở MAX_IO=256
 - e6f47ce r297 (T33a): đèn SPAWN STOP — exec hỏng là retype TẠM THỜI; thử lại có giới hạn
+- 2b629d1 r298 (T-IPC): kernel xử lý XONG CapMint mà client không in IPC MINT RET
 ### END GENERATED commits
 
 [HISTORICAL] Mốc 925f633 (vòng 20): per-hart ready queue + work stealing; VFS

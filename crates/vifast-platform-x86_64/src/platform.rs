@@ -3206,6 +3206,66 @@ fn note_no_tick() {
     }
 }
 
+/// r299 (T-IPC): `NEXT n=` — số syscall KẾ TIẾP của hart sau một `CapMint`.
+///
+/// Đặt Ở ĐÂY, **trước `bkl_lock()`**, không phải trong `dispatch` (bản đầu tôi
+/// đặt sai chỗ — bản rà soát chỉ ra): trong `dispatch` thì (a) làm dài đúng
+/// critical section đang săn, và (b) MÙ với ca "vào kernel rồi chờ BKL" — mà đó
+/// chính là ca cần phân biệt. Ở đây đèn in được cả khi syscall kế tiếp kẹt chờ
+/// khoá, chết trong `assert_current_tcb`, hay kẹt trong `putc` của DebugWrite.
+/// Chỉ 1 hart ghi tại một thời điểm (đèn của hart nào thì hart đó in), dòng ngắn
+/// 8–10 byte; không cấp phát, không lấy khoá.
+// Giá trị: `tcb_index + 1` của tác vụ vừa gọi `CapMint` trên hart này; 0 = không.
+static NEXT_ARMED: [core::sync::atomic::AtomicU32; MAX_HARTS] =
+    [const { core::sync::atomic::AtomicU32::new(0) }; MAX_HARTS];
+
+fn note_next_syscall(hart: usize, number: u64) {
+    let slot = hart.min(MAX_HARTS - 1);
+    // r299b: gắn theo TÁC VỤ, không chỉ theo hart — bản đầu chỉ theo hart nên
+    // bắt nhầm syscall của tác vụ khác (đo được `NEXT n=1` = Call của root ngay
+    // sau `MINT RES t=62`, không kết luận được gì).
+    let current = X86Platform::kernel()
+        .current_on(hart)
+        .map(|tcb| tcb.index as u32 + 1)
+        .unwrap_or(0);
+    if number == vifast_abi::SyscallId::CapMint as u64 {
+        NEXT_ARMED[slot].store(current, Ordering::Relaxed);
+        return;
+    }
+    let armed = NEXT_ARMED[slot].load(Ordering::Relaxed);
+    if armed == 0 || armed != current {
+        return;
+    }
+    NEXT_ARMED[slot].store(0, Ordering::Relaxed);
+    let mut line = [0u8; 24];
+    let mut at = 0usize;
+    for &byte in b"NEXT n=" {
+        line[at] = byte;
+        at += 1;
+    }
+    let mut digits = [0u8; 20];
+    let mut count = 0usize;
+    let mut rest = number;
+    loop {
+        digits[count] = b'0' + (rest % 10) as u8;
+        rest /= 10;
+        count += 1;
+        if rest == 0 || count == digits.len() {
+            break;
+        }
+    }
+    while count > 0 && at < line.len() - 1 {
+        count -= 1;
+        line[at] = digits[count];
+        at += 1;
+    }
+    line[at] = b'\n';
+    at += 1;
+    for byte in line.iter().take(at) {
+        X86Platform::putc(*byte);
+    }
+}
+
 #[no_mangle]
 extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
     if vifast_arch::panic::is_panicking() {
@@ -3213,6 +3273,9 @@ extern "efiapi" fn x86_trap_handler(frame: *mut TrapFrame) {
     }
     assert_irqs_disabled();
     let frame = unsafe { &mut *frame };
+    // r299: đèn TRƯỚC fast-path GetTime và TRƯỚC `bkl_lock()` (xem chú thích
+    // của `note_next_syscall`).
+    note_next_syscall(X86Platform::hart_id(), frame.rax);
     #[cfg(feature = "diag-tick")]
     note_no_tick();
     if frame.rax == vifast_abi::SyscallId::GetTime as u64 {

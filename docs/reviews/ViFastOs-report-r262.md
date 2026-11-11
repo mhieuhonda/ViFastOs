@@ -1254,6 +1254,30 @@ không đọc nhầm.
 5. Hai artifact hỏng: không có `CURRENT MISMATCH`/`NO CURRENT`, có `ROOT READY`
    và `KSTORE CANARY OK` ⇒ kernel boot xong, chỉ client dừng.
 
+
+## r299 — T-IPC: client CÓ chạy tiếp sau `CapMint`; mất dòng xảy ra SAU đó
+
+Đèn `NEXT n=<syscall>` đặt lại đúng chỗ: trong `x86_trap_handler`, **trước**
+`GetTime` fast-path và **trước** `bkl_lock()`, gắn theo **(hart, tcb)** — bản đầu
+đặt trong `dispatch` (đang giữ BKL) nên vừa làm dài critical section vừa mù với
+ca "chờ khoá".
+
+Kết quả (ps, 40 boot, 1 ca hỏng):
+```
+IPC MINT REQ | MINT OUT ilop | MINT RES h=0 t=62 | NEXT n=32 | IPC MINT RET
+```
+`n=32` = `DebugWrite` ⇒ client **đã chạy tiếp** và **đã in `IPC MINT RET`**.
+Hai giả thuyết "kẹt trong `cap_mint`" và "không về được user" đều **SAI**.
+
+Mất dòng xảy ra **ngay sau** `IPC MINT RET`: không còn dòng nào của client
+(không `IPC RIGHTS OK`, không `shell> `), kernel vẫn in hết và **không có**
+`USER FAULT`/`PANIC`/`CURRENT MISMATCH`/`BKL STUCK` ⇒ client không fault, chỉ
+không in nữa.
+
+**Giả thuyết "nuốt WouldBlock" đã thử và BỊ BÁC**: cho `write()` của client thử
+lại khi `WouldBlock` (≤64 lượt) thì vẫn **2/40** boot thiếu marker ⇒ đã REVERT
+theo D18. Dữ kiện âm: mất dòng **không** do nuốt `WouldBlock`.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1262,7 +1286,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-15d4d62fe450b909c85d376bbba3643e93ae4f334b2898114afea07277208736  docs/reviews/ViFastOs-report-r262.md
+ba6469f90b4ece6285833d49b206fd285df474648fdb3e593009bc8c750933b4  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm
