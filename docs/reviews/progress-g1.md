@@ -2408,3 +2408,22 @@ dòng** ⇒ đây là **hai** race cùng họ, không phải một.
 LABEL_KILL + mẫu `boot_exec_once` vừa vá: `tcb_suspend` → nếu lỗi thì `tcb_wait`
 + vòng yield ≤64 → chỉ khi Ok/ObjectDestroyed mới `frame_unmap` →
 `object_destroy` → `tcb_destroy`; gọi ở 3066, 3122, 4018; bỏ `let _ = us;` ở 3146.
+
+## r294 — Thử `reap_task` (suspend → wait → destroy): HỎNG CẢ 3 ARCH, đã revert
+
+Theo đề xuất của bản rà soát, đã thêm helper `reap_task(tcb)` (`tcb_suspend` →
+`tcb_wait` + yield ≤64 → trả bool) và gọi ở 2 chỗ: dọn pager server (3122) và
+`worker_f` (4018).
+
+**Kết quả: `riscv64 0/3`, `aarch64 0/3`, `x86_64 0/3`** — thiếu **22 marker** từ
+`RUN FS OK` trở đi (aarch64). Tức thay đổi làm **hỏng mọi cấu hình đang xanh**.
+
+⇒ **Revert ngay** (`git checkout`), build lại, đo lại: **3/3 PASS cả ba arch**.
+
+**Bài học (D18):** một bản vá "đúng hình mẫu" vẫn có thể sai vì ngữ cảnh — ở đây
+`tcb_suspend` lên pager server **không** làm nó dừng như mong đợi (nó đang chờ
+IPC), và trạng thái sau suspend khiến đường dọn phía sau sai. Muốn thử lại phải
+đo **từng chỗ một** (chỉ pager server, hoặc chỉ `worker_f`), không gộp.
+
+Ghi lại để vòng sau **không** lặp: đừng gọi `tcb_suspend` lên task đang chờ IPC
+trước khi `tcb_destroy`; nếu cần dừng, phải có tín hiệu bảo nó tự thoát.
