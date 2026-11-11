@@ -901,7 +901,12 @@ fn shell() -> ! {
     // Vòng 209 (bảo mật): cap endpoint slot 1 đã có badge ⇒ `cap_mint` phải bị
     // từ chối `IllegalOperation`. Đích là slot 20 (trống) — KHÔNG dùng 8 vì
     // `CLIENT_IRQ_SLOT = 8` (bài học vòng 208).
+    // T-IPC: hai mốc bọc lời gọi `cap_mint` để biết kẹt là TRONG syscall
+    // (`REQ` có, `RET` không) hay sau đó. Không in gì thêm khi mọi thứ bình
+    // thường — đây là mốc chẩn đoán, không thuộc hợp đồng marker.
+    write(b"IPC MINT REQ\n");
     let rights_probe = vifast_user::cap_mint(1, 7, 20, 1, 9);
+    write(b"IPC MINT RET\n");
     if rights_probe.error == KError::IllegalOperation {
         write(b"IPC RIGHTS OK\n");
     } else {

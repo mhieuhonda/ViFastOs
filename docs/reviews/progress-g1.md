@@ -2088,3 +2088,37 @@ thấy thư mục đã qua nhiều lần tạo/xoá; cuối khối V2 có `vfs_u
 chúng thuộc cùng một sự kiện; nếu vẫn thiếu ino 08 thì lỗi ở chính
 `write_dir_entry` khi tái dùng slot trống (nghi: ghi vào slot vừa unlink nhưng
 `commit`/`stage` không mang block đó).
+
+## r294 — T-IPC tách làm HAI nhóm (đèn `IPC MINT REQ/RET`)
+
+Soak 2 máy sau khi thêm hai mốc bọc lời gọi `cap_mint`:
+
+| Máy | Arch | N | Kết quả |
+|---|---|---:|---|
+| local | riscv64 | 60 | 60/60 PASS (`RETRY 0/60`) |
+| `ps` | x86_64 | 120 | 5 hỏng — **chia làm hai nhóm** |
+
+Chi tiết 5 lần hỏng trên `ps` (mốc có mặt):
+
+```
+SHELL READY, IPC MINT REQ                     ← có REQ, KHÔNG có RET ⇒ kẹt TRONG syscall
+SHELL READY                                   ← không tới được MINT (chết trước đó)
+SHELL READY, IPC MINT REQ                     ← kẹt TRONG syscall
+SHELL READY                                   ← chết trước đó
+SHELL READY, IPC MINT REQ, IPC MINT RET       ← syscall TRẢ VỀ mà vẫn thiếu IPC RIGHTS OK
+```
+
+⇒ **`T-IPC` thực chất là hai lớp khác nhau:**
+1. **T-IPC-A**: kẹt **bên trong** `cap_mint` (có `REQ`, không `RET`) — syscall không
+   trả về; họ với các lỗi IPC/BKL đã gặp.
+2. **T-IPC-B**: chết **trước** `IPC MINT REQ` (dù đã in `SHELL READY`) — cửa sổ
+   hẹp giữa vào shell và lời gọi đầu tiên.
+3. (hiếm) có `REQ`+`RET` mà vẫn thiếu `IPC RIGHTS OK` — cần xem thêm.
+
+Phân lớp này **phải** đưa vào harness (hiện tất cả vẫn là `T-IPC`), và là dữ kiện
+để vòng sau soi đúng chỗ: `cap_mint` là syscall **thuần kernel** (không IPC), nên
+kẹt trong đó nghĩa là **BKL bị giữ** hoặc một vòng lặp trong kernel.
+
+Ghi chú quy trình: goal đã được cập nhật — **đầu mỗi vòng phải rà soát bằng 1
+subagent**; môi trường hiện chỉ có model `ninerouter/ocg/deepseek-v4.1-flash(xhigh)`
+(không có model tên "Muse Spark 1.3 Contributor"), nên dùng model sẵn có và ghi rõ.
