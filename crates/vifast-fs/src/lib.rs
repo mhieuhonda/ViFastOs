@@ -135,6 +135,18 @@ pub trait BlockDev {
     fn read_uncached(&mut self, lba: u32, out: &mut [u8; BLOCK_SIZE]) -> Result<(), FsError> {
         self.read(lba, out)
     }
+
+    /// r296 (DIRSNAP): `(có trong cache, đang bẩn)`. Mặc định "không có cache";
+    /// `CachedDev` ghi đè. Chỉ dùng cho chẩn đoán.
+    fn slot_state(&self, lba: u32) -> (bool, bool) {
+        let _ = lba;
+        (false, false)
+    }
+
+    /// r296: `(evict_lost, evict_dirty)`. Mặc định 0 cho thiết bị không cache.
+    fn evict_stats(&self) -> (u64, u64) {
+        (0, 0)
+    }
 }
 
 /// Number of 512-byte blocks kept in the write-through cache.
@@ -273,6 +285,13 @@ pub struct CachedDev<D> {
     /// Số lần "ghi xong mà đọc lại thấy khác" — bằng chứng trực tiếp của việc
     /// mất lệnh ghi (T26).
     lost_writes: u64,
+    /// r296: số lần ĐẨY MỘT BLOCK BẨN RA KHỎI CACHE (eviction) xong đọc lại thì
+    /// thấy ảnh CŨ. Đây là đường ghi duy nhất trước đây KHÔNG được kiểm: `flush()`
+    /// có kiểm, còn `insert()` thì không. Giả thuyết T26 mới nhất: eviction ghi
+    /// xuống thiết bị nhưng lần đọc sau (cache miss) vẫn thấy ảnh trước đó.
+    evict_lost: u64,
+    /// r296: tổng số lần evict một block bẩn (mẫu số của `evict_lost`).
+    evict_dirty: u64,
 }
 
 impl<D: BlockDev> CachedDev<D> {
@@ -285,6 +304,8 @@ impl<D: BlockDev> CachedDev<D> {
             misses: 0,
             writes: 0,
             lost_writes: 0,
+            evict_lost: 0,
+            evict_dirty: 0,
         }
     }
 
@@ -301,12 +322,29 @@ impl<D: BlockDev> CachedDev<D> {
         self.lost_writes
     }
 
+    /// r296: `(evict_lost, evict_dirty)` — số lần đẩy block bẩn ra khỏi cache
+    /// mà đọc lại thấy ảnh cũ / tổng số lần đẩy block bẩn.
+    pub fn evict_stats(&self) -> (u64, u64) {
+        (self.evict_lost, self.evict_dirty)
+    }
+
     pub fn inner(&self) -> &D {
         &self.inner
     }
 
     pub fn inner_mut(&mut self) -> &mut D {
         &mut self.inner
+    }
+
+    /// r296 (DIRSNAP): bản ghi này có đang nằm trong cache không, và có bẩn
+    /// (chưa xuống đĩa) không. Chỉ để chẩn đoán.
+    pub fn slot_state(&self, lba: u32) -> (bool, bool) {
+        for slot in self.slots.iter().flatten() {
+            if slot.lba == lba {
+                return (true, slot.dirty);
+            }
+        }
+        (false, false)
     }
 
     /// Drop all cached blocks.  Used after formatting a device outside the
@@ -336,6 +374,13 @@ impl<D: BlockDev> CachedDev<D> {
         if let Some(old) = self.slots[index] {
             if old.dirty {
                 self.inner.write(old.lba, &old.data)?;
+                self.evict_dirty = self.evict_dirty.wrapping_add(1);
+                // r296: ĐỌC LẠI ngay sau khi đẩy ra — đường ghi này trước đây
+                // không có nhân chứng nào.
+                let mut verify = [0u8; BLOCK_SIZE];
+                if self.inner.read(old.lba, &mut verify).is_ok() && verify != old.data {
+                    self.evict_lost = self.evict_lost.wrapping_add(1);
+                }
             }
         }
         self.slots[index] = Some(CacheSlot {
@@ -382,6 +427,19 @@ impl<D: BlockDev> BlockDev for CachedDev<D> {
     /// Đi thẳng xuống thiết bị, **không** qua slot cache.
     fn read_uncached(&mut self, lba: u32, out: &mut [u8; BLOCK_SIZE]) -> Result<(), FsError> {
         self.inner.read(lba, out)
+    }
+
+    fn slot_state(&self, lba: u32) -> (bool, bool) {
+        for slot in self.slots.iter().flatten() {
+            if slot.lba == lba {
+                return (true, slot.dirty);
+            }
+        }
+        (false, false)
+    }
+
+    fn evict_stats(&self) -> (u64, u64) {
+        (self.evict_lost, self.evict_dirty)
     }
 
     fn flush(&mut self) -> Result<(), FsError> {
@@ -649,6 +707,39 @@ pub fn format_with_options<D: BlockDev>(
 /// holds `JOURNAL_BLOCKS - 2` data blocks and the commit header reserves
 /// exactly this many target slots (`header[16..80]`).
 pub const MAX_TX_WRITES: usize = 16;
+
+/// r296 (DIRSNAP): ảnh chụp ba đường đọc của một block thư mục.
+#[derive(Clone, Copy, Default)]
+pub struct DirSnap {
+    pub blocks: u32,
+    pub blk0: u32,
+    pub isize: u32,
+    pub index: u32,
+    pub cached: bool,
+    pub dirty: bool,
+    pub n_cache: u32,
+    pub n_raw: u32,
+    pub n_jrnl: u32,
+    pub lookup: u8,
+    pub lookup_ino: u16,
+    pub tx: u32,
+    /// Tên của từng slot trong block 0 (để chứng minh `d` có/không có mặt).
+    pub names: [[u8; MAX_NAME]; DIR_ENTRIES_PER_BLOCK],
+    pub name_len: [u8; DIR_ENTRIES_PER_BLOCK],
+    pub inos: [u16; DIR_ENTRIES_PER_BLOCK],
+}
+
+/// Đếm entry hợp lệ (ino != 0) trong một block thư mục.
+fn count_dir_entries(block: &[u8; BLOCK_SIZE]) -> u32 {
+    let mut count = 0u32;
+    for slot in 0..DIR_ENTRIES_PER_BLOCK {
+        let off = slot * DIR_ENTRY_SIZE;
+        if get_u16(block, off) != 0 {
+            count += 1;
+        }
+    }
+    count
+}
 
 pub struct Fs<D: BlockDev> {
     dev: D,
@@ -2199,6 +2290,96 @@ impl<D: BlockDev> Fs<D> {
         self.stage_inode(ino)?;
         self.stage_bitmap()?;
         self.commit()
+    }
+
+    /// r296: chuyển tiếp số liệu eviction của thiết bị (chỉ để chẩn đoán).
+    pub fn evict_stats(&self) -> (u64, u64) {
+        self.dev.evict_stats()
+    }
+
+    /// r296 (DIRSNAP): chụp lại ĐÚNG LÚC readdir trả "hết" — ba đường đọc
+    /// (cache, RAW bỏ cache, ảnh journal đang chờ) trên cùng một block, cộng
+    /// `isize` của inode và kết quả `lookup` ngay tại chỗ.
+    ///
+    /// Vì sao cần: `SLO`/`LOOK` là đèn "lần gần nhất" **không có `seq`**, nên
+    /// không được dùng để khẳng định hai lần đọc cùng thời điểm. Đèn này có
+    /// `seq` (server in kèm) và đọc cả ba đường trong CÙNG một lời gọi.
+    pub fn dir_snapshot(&mut self, dir: u16, index: usize, probe: &[u8]) -> Option<DirSnap> {
+        let inode = *self.inodes.get(dir as usize - 1)?;
+        if inode.kind != INODE_DIR {
+            return None;
+        }
+        let mut snap = DirSnap {
+            blocks: inode.blocks_used() as u32,
+            blk0: inode.blocks.first().copied().unwrap_or(0),
+            isize: inode.size,
+            index: index as u32,
+            cached: false,
+            dirty: false,
+            n_cache: 0,
+            n_raw: 0,
+            n_jrnl: 0,
+            lookup: 0,
+            lookup_ino: 0,
+            tx: self.tx_count as u32,
+            names: [[0u8; MAX_NAME]; DIR_ENTRIES_PER_BLOCK],
+            name_len: [0u8; DIR_ENTRIES_PER_BLOCK],
+            inos: [0u16; DIR_ENTRIES_PER_BLOCK],
+        };
+        for block_index in 0..inode.blocks_used() {
+            let lba = inode.blocks[block_index];
+            if block_index == 0 {
+                let (cached, dirty) = self.dev.slot_state(lba);
+                snap.cached = cached;
+                snap.dirty = dirty;
+            }
+            let mut block = zero_block();
+            if self.dev.read(lba, &mut block).is_ok() {
+                snap.n_cache += count_dir_entries(&block);
+                if block_index == 0 {
+                    for slot in 0..DIR_ENTRIES_PER_BLOCK {
+                        let off = slot * DIR_ENTRY_SIZE;
+                        let ino = get_u16(&block, off);
+                        let len = block[off + 2] as usize;
+                        snap.inos[slot] = ino;
+                        if ino == 0 || len == 0 || len > MAX_NAME {
+                            continue;
+                        }
+                        snap.name_len[slot] = len as u8;
+                        snap.names[slot][..len].copy_from_slice(&block[off + 3..off + 3 + len]);
+                    }
+                }
+            }
+            let mut raw = zero_block();
+            if self.dev.read_uncached(lba, &mut raw).is_ok() {
+                snap.n_raw += count_dir_entries(&raw);
+            }
+            // Ảnh "nếu áp journal đang chờ": block có đang nằm trong vùng
+            // staging (`self.journal` + `self.targets`) hay không.
+            let mut journal_hit = false;
+            for entry in 0..self.tx_count {
+                if self.targets[entry] == lba {
+                    let start = entry * BLOCK_SIZE;
+                    let mut staged = zero_block();
+                    staged.copy_from_slice(&self.journal[start..start + BLOCK_SIZE]);
+                    snap.n_jrnl += count_dir_entries(&staged);
+                    journal_hit = true;
+                }
+            }
+            if !journal_hit {
+                snap.n_jrnl += count_dir_entries(&block);
+            }
+        }
+        // `lookup` cùng tên ngay tại đây, để so trực tiếp với đường liệt kê.
+        snap.lookup = match self.lookup_child(dir, probe) {
+            Ok(Some(ino)) => {
+                snap.lookup_ino = ino;
+                1
+            }
+            Ok(None) => 0,
+            Err(_) => 2,
+        };
+        Some(snap)
     }
 
     pub fn read_dir_entry(

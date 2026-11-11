@@ -587,7 +587,83 @@ fn truncate_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
     }
 }
 
-fn readdir_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
+/// r296 (DIRSNAP): in ảnh chụp ba đường đọc khi readdir trả "hết" ở một index
+/// mà block thư mục VẪN còn entry — đúng dấu hiệu của T26.
+///
+/// In tối đa 3 lần mỗi boot để không phá phép đo, và in NGAY tại chỗ (không
+/// chờ cuối khối V2): ring 16 bản ghi đã từng bị trôi vì chụp muộn.
+fn dirsnap_maybe(ino: u16, index: usize, seq: u32) {
+    static mut PRINTED: u32 = 0;
+    let Some(snap) = fs().dir_snapshot(ino, index, b"d") else {
+        return;
+    };
+    // r296 (đo lần 2): in **MỌI** lần readdir trả "hết" ở index >= 1, không lọc.
+    // Lý do: lần đo đầu (S5, 40 boot) lọc theo "ba đường đọc phải khác nhau"
+    // nên KHÔNG in gì cả, kể cả ở 7 boot đỏ ⇒ mất đúng dữ kiện cần. Lọc theo
+    // mâu thuẫn là giả định trước câu trả lời; phải in cả ca "ba đường khớp
+    // nhau" thì `look=` mới cho biết lookup có thấy `d` ngay tại lúc đó không.
+    // Tối đa 3 dòng mỗi boot để không phá phép đo.
+    if index == 0 {
+        return;
+    }
+    unsafe {
+        if PRINTED >= 3 {
+            return;
+        }
+        PRINTED += 1;
+    }
+    let mut line = [0u8; 128];
+    let mut at = 0usize;
+    push_bytes(&mut line, &mut at, b"DIRSNAP seq=");
+    push_dec(&mut line, &mut at, seq as u64);
+    push_bytes(&mut line, &mut at, b" idx=");
+    push_dec(&mut line, &mut at, index as u64);
+    push_bytes(&mut line, &mut at, b" ino=");
+    push_dec(&mut line, &mut at, ino as u64);
+    push_bytes(&mut line, &mut at, b" blk=");
+    push_dec(&mut line, &mut at, snap.blk0 as u64);
+    push_bytes(&mut line, &mut at, b" nb=");
+    push_dec(&mut line, &mut at, snap.blocks as u64);
+    push_bytes(&mut line, &mut at, b" cache=");
+    push_dec(&mut line, &mut at, u64::from(snap.cached));
+    push_bytes(&mut line, &mut at, b" dirty=");
+    push_dec(&mut line, &mut at, u64::from(snap.dirty));
+    push_bytes(&mut line, &mut at, b" n_cache=");
+    push_dec(&mut line, &mut at, snap.n_cache as u64);
+    push_bytes(&mut line, &mut at, b" n_raw=");
+    push_dec(&mut line, &mut at, snap.n_raw as u64);
+    push_bytes(&mut line, &mut at, b" n_jrnl=");
+    push_dec(&mut line, &mut at, snap.n_jrnl as u64);
+    push_bytes(&mut line, &mut at, b" isize=");
+    push_dec(&mut line, &mut at, snap.isize as u64);
+    push_bytes(&mut line, &mut at, b" look=");
+    push_dec(&mut line, &mut at, snap.lookup as u64);
+    push_bytes(&mut line, &mut at, b" tx=");
+    push_dec(&mut line, &mut at, snap.tx as u64);
+    push_bytes(&mut line, &mut at, b" li=");
+    push_dec(&mut line, &mut at, snap.lookup_ino as u64);
+    push_bytes(&mut line, &mut at, b"\n");
+    write(&line[..at]);
+    // Dòng 2: NGUYÊN VĂN tên trong từng slot của block 0 — đây là thứ chứng
+    // minh `d` có mặt trong block hay không (không suy từ bộ đếm).
+    let mut names = [0u8; 160];
+    let mut at = 0usize;
+    push_bytes(&mut names, &mut at, b"DIRNAME");
+    for slot in 0..8 {
+        push_bytes(&mut names, &mut at, b" ");
+        push_dec(&mut names, &mut at, snap.inos[slot] as u64);
+        push_bytes(&mut names, &mut at, b":");
+        let len = core::cmp::min(snap.name_len[slot] as usize, 10);
+        push_bytes(&mut names, &mut at, &snap.names[slot][..len]);
+        if len == 0 {
+            push_bytes(&mut names, &mut at, b"-");
+        }
+    }
+    push_bytes(&mut names, &mut at, b"\n");
+    write(&names[..at]);
+}
+
+fn readdir_request(data: [u64; 4], uid: u16, seq: u32) -> (u64, u64, u64, u64) {
     let fd = match get_fd(data[0], uid) {
         Some(fd) => fd,
         None => return (vfs::ERR, vfs::EBADF, 0, 0),
@@ -600,9 +676,27 @@ fn readdir_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
             unsafe {
                 core::ptr::copy_nonoverlapping(name.as_ptr(), IPC_BUF_SERVER_VA as *mut u8, len);
             }
+            // r296: đèn ĐỐI CHIẾU — server VỪA trả entry tên đúng một ký tự `d`
+            // hay không, và ở index nào. Cần để phân biệt "server không trả d"
+            // với "server trả d mà client không nhận ra" (hai lỗi khác hẳn nhau).
+            if len == 1 && name[0] == b'd' {
+                let mut line = [0u8; 40];
+                let mut at = 0usize;
+                push_bytes(&mut line, &mut at, b"RDD idx=");
+                push_dec(&mut line, &mut at, data[1]);
+                push_bytes(&mut line, &mut at, b" ino=");
+                push_dec(&mut line, &mut at, ino as u64);
+                push_bytes(&mut line, &mut at, b" seq=");
+                push_dec(&mut line, &mut at, seq as u64);
+                push_bytes(&mut line, &mut at, b"\n");
+                write(&line[..at]);
+            }
             (vfs::OK, ino as u64, len as u64, 0)
         }
-        Ok(None) => (vfs::ERR, vfs::ENOENT, 0, 0),
+        Ok(None) => {
+            dirsnap_maybe(fd.ino, data[1] as usize, seq);
+            (vfs::ERR, vfs::ENOENT, 0, 0)
+        }
         Err(error) => err(error),
     }
 }
@@ -612,7 +706,7 @@ fn readdir_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
 /// Returns `(OK, packed_count, next_index, 0)`; when the directory is
 /// exhausted mid-page the count is short (possibly 0 with next == start).
 /// One IPC per page instead of one per entry, and no per-entry STAT_PATH.
-fn readdir_bulk_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
+fn readdir_bulk_request(data: [u64; 4], uid: u16, seq: u32) -> (u64, u64, u64, u64) {
     let fd = match get_fd(data[0], uid) {
         Some(fd) => fd,
         None => return (vfs::ERR, vfs::EBADF, 0, 0),
@@ -644,7 +738,11 @@ fn readdir_bulk_request(data: [u64; 4], uid: u16) -> (u64, u64, u64, u64) {
                 packed += 1;
                 index += 1;
             }
-            Ok(None) => break,
+            Ok(None) => {
+                // r296: đường BULK cũng phải có DIRSNAP (client dùng nó cho `ls`).
+                dirsnap_maybe(fd.ino, index, seq);
+                break;
+            }
             Err(error) => {
                 if packed == 0 {
                     return err(error);
@@ -695,8 +793,10 @@ fn dispatch(request: &vifast_user::MessageResult, op: u64) -> (u64, u64, u64, u6
         vfs::STAT => stat_request(request.data, uid),
         vfs::STAT_PATH => stat_path_request(request.data, uid),
         vfs::MKDIR => mkdir_request(request.data, uid),
-        vfs::READDIR => readdir_request(request.data, uid),
-        vfs::READDIR_BULK => readdir_bulk_request(request.data, uid),
+        vfs::READDIR => readdir_request(request.data, uid, vfs::request_seq(request.label)),
+        vfs::READDIR_BULK => {
+            readdir_bulk_request(request.data, uid, vfs::request_seq(request.label))
+        }
         vfs::UNLINK => unlink_request(request.data, uid),
         vfs::RENAME => rename_request(request.data, uid),
         vfs::LINK => link_request(request.data, uid),
@@ -733,6 +833,18 @@ fn dispatch(request: &vifast_user::MessageResult, op: u64) -> (u64, u64, u64, u6
             // `FS FSCK OK` chỉ in lần đầu nên không dùng được để suy "server
             // không trả lời".
             write(if ok { b"FSV ok\n" } else { b"FSV err\n" });
+            // r296: đèn eviction — đường ghi duy nhất trước đây không có nhân chứng.
+            {
+                let (lost, dirty) = fs().evict_stats();
+                let mut line = [0u8; 48];
+                let mut at = 0usize;
+                push_bytes(&mut line, &mut at, b"EVL lost=");
+                push_dec(&mut line, &mut at, lost);
+                push_bytes(&mut line, &mut at, b" dirty=");
+                push_dec(&mut line, &mut at, dirty);
+                push_bytes(&mut line, &mut at, b"\n");
+                write(&line[..at]);
+            }
             // T26: bằng chứng TRỰC TIẾP của mất lệnh ghi (ghi xong đọc lại khác).
             // T26: index / entry-đếm-qua-cache / entry-đếm-qua-RAW của lần
             // `read_dir_entry_full` trả "hết" gần nhất. Lệch ⇒ cache khác đĩa.

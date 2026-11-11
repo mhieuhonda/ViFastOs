@@ -2645,3 +2645,74 @@ không phải `tcb_wait`. Nghĩa là từ r296 có thể đo T33a bằng
   trắng (đã xảy ra ở lượt S1n: 7 boot đỏ mà ring không có bản ghi nào liên quan).
 - Nâng toolchain máy `ps` lên **rustc 1.99.1 (58cf8f9c3)** — trùng đúng bản của
   `mps`; trước đó `ps` là 1.93.1 và **không build được** (`rust-version` 1.99.1).
+
+## r296 — DIRSNAP: entry `d` BIẾN MẤT RỒI HIỆN LẠI **giữa hai lời gọi readdir liên tiếp**
+
+Đèn mới (đều chỉ-chẩn-đoán, gate vẫn 10/10):
+- `DIRSNAP` trong handler READDIR **của server** — in ngay tại lời gọi trả "hết",
+  có `seq`: `seq idx ino blk nb cache dirty n_cache n_raw n_jrnl isize look li tx`.
+- `DIRNAME` — nguyên văn tên 8 slot của block 0 (`ino:tên`).
+- `RDD` — in khi server VỪA trả một entry tên đúng một ký tự `d` (kèm `idx`, `seq`).
+- `EVL lost= dirty=` — số lần ĐẨY BLOCK BẨN RA KHỎI CACHE rồi đọc lại thấy ảnh cũ
+  / tổng số lần đẩy. Đây là đường ghi **duy nhất** trước đây không có nhân chứng
+  (`flush()` thì có).
+- Sửa nhãn: nhóm rename dùng `v2_failed = 12` (trước là 6 — TRÙNG với nhóm 4c
+  `3 + group4`, và chính sự trùng này làm tôi đọc sai hướng một lượt).
+
+### Tỉ lệ nền (đo lại trên mẫu lớn, MAX_IO=256, smp2, máy `ps`)
+| Lượt | boot | đỏ (`FS V2 BAD`) |
+|---|---:|---:|
+| S5 | 40 | 7 |
+| S6 | 40 | 4 |
+| S7 | 40 | 11 |
+| S8 | 12 | 4 |
+| S9 | 20 | 1 |
+| **cộng** | **152** | **27 = 17,8 %** |
+
+⇒ Khớp nền cũ 20 % (10/50). Mọi số dưới đây đo trên cùng máy `ps`, cùng
+`VIFAST_NO_RETRY=1`, mỗi lần gọi = đúng 1 boot.
+
+### Nguyên văn một boot ĐỎ (S8 boot2)
+```
+191 V2MK open=1                       ← mkdir("/d") xong, open("/d") THẤY
+193 DIRSNAP seq=31 idx=6 ino=1 blk=30 nb=1 cache=1 dirty=0
+            n_cache=6 n_raw=6 n_jrnl=6 isize=512 look=1 li=9 tx=0
+194 DIRNAME 2:bin 4:motd 5:page.bin 6:prog.elf 7:scratch 0:- 9:d 0:-
+196 V2RD end n=06                     ← liệt kê ĐẦU dừng ở index 6, KHÔNG thấy d
+198 RDD idx=5 ino=9 seq=40            ← lần liệt kê THỨ HAI mới trả d (ở idx=5)
+207 … DIRSNAP seq=41 idx=6 … n_cache=6 … look=1 li=9
+223 RDD idx=5 ino=9 seq=49
+227 … DIRSNAP seq=50 idx=6 …
+230 V2CHK open=1 rd=2
+265 V2FAIL v2=1 fsck=0 / V2GROUP 06  ← v2_failed = 3 + group4(3) = 6
+```
+Và một boot XANH: `RDD idx=6 ino=9 seq=31` → `d` là entry thứ **7** (index 6), liệt
+kê đầu **thấy** nó.
+
+### Đọc được gì (và hai giả thuyết đã CHẾT)
+1. `n_cache = n_raw = n_jrnl = 6`, `dirty=0`, `tx=0`, `cache=1` tại đúng lời gọi
+   trả ENOENT ⇒ **giả thuyết "readdir bỏ qua journal đang chờ" CHẾT** (không có
+   gì đang chờ) và **giả thuyết "cache khác đĩa" CHẾT** (ba đường đọc khớp nhau).
+2. `EVL lost=0` với **35–39 lần đẩy block bẩn mỗi boot**, ở cả boot xanh và đỏ
+   ⇒ **giả thuyết "eviction ghi mất" CHẾT**. Đường ghi xuống thiết bị đã có nhân chứng.
+3. `DIRNAME` cho thấy `d` (ino 9) **CÓ** trong block ở slot 6 — mà slot 6 là
+   **index 5** sau khi bỏ slot trống ⇒ ở lời gọi `idx=6` block đã có `d` ở index 5.
+4. Nhưng `RDD` của **lần liệt kê đầu** (seq=31) **không có** dòng nào ⇒ server
+   KHÔNG trả `d` cho lần liệt kê đó, ở bất kỳ index nào.
+5. `look=1 li=9` tại đúng lời gọi trả ENOENT ⇒ `lookup` thấy `d` **ngay lúc**
+   đường liệt kê vừa nói "hết".
+
+⇒ **Entry trở nên nhìn thấy được GIỮA hai lời gọi readdir liên tiếp của cùng một
+lần liệt kê** (idx=5 chưa thấy, idx=6 thì block đã có). Đây là vi phạm
+read-your-own-write ở mức **độ hiển thị**, không phải mất dữ liệu, và không phải
+lỗi của đường đọc (ba đường đọc khớp nhau tại mọi thời điểm đo được).
+
+### Còn treo (r296 → r296b)
+- Cần một đèn bắt **thời điểm** block đổi: ghi lại `(seq, lba, hash nội dung block)`
+  sau MỖI lần `write_dir_entry`/`commit` và in khi hash đổi giữa hai lần đọc liên
+  tiếp. Khi đó mới biết entry được ghi bởi request nào.
+- Nghi vấn mạnh nhất hiện tại: `mkdir` trả OK **trước khi** block thư mục tới được
+  trạng thái mà readdir sẽ đọc — cần soi `write_dir_entry` + `commit()` theo thứ
+  tự request (không phải theo thời điểm), tức là **replay trên host** như tệp bổ
+  sung §3 đề nghị (chưa làm).
+- `S1b` (vòng lặp + exec song song) đã chạy ở r295: 0/5 000 vòng ⇒ chưa tái hiện.

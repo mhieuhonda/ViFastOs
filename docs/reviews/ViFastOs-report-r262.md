@@ -1115,6 +1115,53 @@ lần). Đây là **lần đầu** đọc được nhãn phân biệt của r294
 - Máy `ps` đã được nâng lên **rustc 1.99.1 (58cf8f9c3)** — trùng `mps`; trước đó
   1.93.1 **không build được** (`rust-version` 1.99.1).
 
+
+## r296 — DIRSNAP: `d` biến mất rồi hiện lại GIỮA hai readdir liên tiếp
+
+Đèn mới (chỉ chẩn đoán): `DIRSNAP` (trong handler READDIR của server, **có `seq`**,
+in `n_cache/n_raw/n_jrnl/isize/look/dirty/tx`), `DIRNAME` (nguyên văn tên 8 slot),
+`RDD` (server vừa trả entry tên `d`, kèm `idx`+`seq`), `EVL` (số lần đẩy block bẩn
+ra khỏi cache rồi đọc lại thấy ảnh cũ / tổng số lần đẩy).
+
+### Tỉ lệ nền đo lại (MAX_IO=256, smp2, máy `ps`, 1 lần gọi = 1 boot)
+| Lượt | boot | đỏ |
+|---|---:|---:|
+| S5 | 40 | 7 |
+| S6 | 40 | 4 |
+| S7 | 40 | 11 |
+| S8 | 12 | 4 |
+| S9 | 20 | 1 |
+| **cộng** | **152** | **27 = 17,8 %** |
+
+### Dữ kiện quyết định
+Boot ĐỎ (S8 boot2):
+```
+DIRSNAP seq=31 idx=6 ino=1 blk=30 nb=1 cache=1 dirty=0 n_cache=6 n_raw=6
+        n_jrnl=6 isize=512 look=1 li=9 tx=0
+DIRNAME 2:bin 4:motd 5:page.bin 6:prog.elf 7:scratch 0:- 9:d 0:-
+V2RD end n=06          ← liệt kê ĐẦU không thấy d
+RDD idx=5 ino=9 seq=40 ← liệt kê THỨ HAI mới trả d
+```
+Boot XANH: `RDD idx=6 ino=9 seq=31` (d là entry thứ 7 ⇒ index 6 ⇒ liệt kê đầu thấy).
+
+### Ba kết luận
+1. **Hai giả thuyết CHẾT:** (a) "readdir bỏ qua journal đang chờ" — tại lời gọi
+   trả ENOENT `tx=0` và `n_jrnl == n_cache`; (b) "cache khác đĩa" — `n_raw == n_cache`.
+2. **Giả thuyết "eviction ghi mất" CHẾT:** `EVL lost=0` với 35–39 lần đẩy block bẩn
+   mỗi boot, ở cả boot xanh lẫn đỏ.
+3. **Cơ chế đúng hình dạng:** entry `d` **có** trong block (slot 6 ⇒ index 5) ngay
+   tại lời gọi `idx=6`, và `lookup` **thấy** nó (`li=9`), trong khi lần liệt kê
+   đang chạy **không** nhận được nó (`RDD` không có dòng cho `seq` đó) ⇒ **entry
+   trở nên nhìn thấy được GIỮA hai readdir liên tiếp**. Đây là vi phạm
+   read-your-own-write ở mức **độ hiển thị**; không phải mất dữ liệu, không phải
+   lỗi đường đọc.
+
+### Việc tiếp (r296b)
+- Đèn ghi `(seq, lba, hash nội dung block)` sau **mỗi** `write_dir_entry`/`commit`,
+  in khi hash đổi giữa hai lần đọc liên tiếp ⇒ biết entry được ghi bởi request nào.
+- Replay trên host theo đúng chuỗi request (tệp bổ sung §3) — chưa làm.
+- `MAX_IO` vẫn **128**; chưa có bản vá nào trong vòng này.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1123,7 +1170,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-fed7796c67d3817eb06a15ba7e44df1d7492c1aa50c9aa685f206c7640779bfb  docs/reviews/ViFastOs-report-r262.md
+7b5290ab12d4a90b26b919c8730e9bb6215896934df58e94a4989eb6c67a7ce5  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

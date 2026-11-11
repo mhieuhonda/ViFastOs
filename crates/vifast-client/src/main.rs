@@ -1691,7 +1691,11 @@ pub extern "C" fn client_main() -> ! {
     v2_step(7, v2);
     v2 &= vfs_open_error(b"/d/a", 0) == vfs::ENOENT;
     if !v2 && v2_failed == 0 {
-        v2_failed = 6;
+        // r296: nhãn NÀY từng là 6 — trùng với nhãn của nhóm 4c
+        // (`v2_failed = 3 + group4` với group4 = 3 ⇒ 6). Hai lỗi khác hẳn nhau
+        // mà cùng in `V2GROUP 06` đã làm tôi đọc sai hướng một lượt. Đổi sang
+        // 12 để không bao giờ trùng nữa.
+        v2_failed = 12;
     }
     if let Some((fd, _)) = vfs_open(b"/d/b", 0) {
         v2 &= vfs_stat(fd) == Some(600);
