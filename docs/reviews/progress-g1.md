@@ -2153,3 +2153,29 @@ theo yêu cầu. Bản rà soát tìm ra **5 lỗi phương pháp** — ghi lạ
    nhánh "race ở 128" và sửa mẫu số.
 3. Soak mẫu số sạch: x86 300 boot **`VIFAST_RETRY_TIMEOUT=0`**; riscv 600 boot để
    chốt T33b/T31 ở mức ≤0,5 %.
+
+## r294 — Kiểm chứng giả thuyết "mạng WiFi" và ĐÍNH CHÍNH lớp T-IPC
+
+**Mạng `ps` sạch:** `ping` 3 gói, **0 % mất**, RTT 4,0–6,5 ms; load average 1,45
+trên 12 CPU. ⇒ Giả thuyết "đổi WiFi làm `ps` fail" **không được dữ kiện ủng hộ**.
+
+**Chạy 60 boot x86 trên `ps` MỘT MÌNH** (không chạy song song máy local):
+**3/60 hỏng = 5 %**, và ba chữ ký **khác nhau**:
+
+```
+thiếu marker (1): PAGER SRV 0/0/0
+dup=['BIN OK uname']  + BIN EXEC FAIL
+dup=['BIN OK uptime'] + BIN EXEC FAIL
+```
+
+⇒ Không phải một lớp duy nhất, và cũng không phải do tải/mạng.
+
+**ĐÍNH CHÍNH lớp `T-IPC` (bản rà soát đã cảnh báo đúng):** lần soak sau, các lần
+hỏng có **đủ** `MINT IN`, `MINT OUT`, `IPC MINT REQ`, **`IPC RIGHTS OK`** ⇒ giả
+thuyết "kẹt trong `cap_mint`" **bị bác**. Nay docstring của classifier ghi rõ:
+nhãn `T-IPC` **chỉ để đếm**, cơ chế **chưa rõ**, và khả năng cao là **mất dòng
+serial** trong cửa sổ hẹp (nhiều chữ ký khác nhau, rải rác, ~3–5 %).
+
+Bài học ghi lại: **không đặt tên lớp theo cơ chế suy đoán** — chỉ đặt theo *chỗ
+quan sát được*, ghi cơ chế là "chưa rõ". Đây là lần thứ tư trong đêm một kết luận
+bị lật bởi dữ liệu mới.

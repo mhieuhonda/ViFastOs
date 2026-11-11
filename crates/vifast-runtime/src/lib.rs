@@ -1256,9 +1256,32 @@ pub mod syscall {
             A::putc(b'\n');
             A::exit(1);
         };
+        // T-IPC: đèn do CHÍNH KERNEL in (bỏ qua một lớp syscall của user) để
+        // tách "kẹt trong syscall" khỏi "treo đường ghi console" — hai cơ chế
+        // này trước đây trùng chữ ký (bản rà soát chỉ ra).
+        if number == SyscallId::CapMint as u64 {
+            for byte in b"MINT IN\n" {
+                A::putc(*byte);
+            }
+        }
         let action = kernel.user_syscall_on(
             tcb, hart, number, args[0], args[1], args[2], args[3], args[4], args[5],
         );
+        if number == SyscallId::CapMint as u64 {
+            let tag: &[u8] = match &action {
+                vifast_kernel::UserAction::Return { error, .. } => {
+                    if *error as u64 == 16 {
+                        b"MINT OUT ilop\n"
+                    } else {
+                        b"MINT OUT other\n"
+                    }
+                }
+                _ => b"MINT OUT act\n",
+            };
+            for byte in tag {
+                A::putc(*byte);
+            }
+        }
         if hart != 0 && number == SyscallId::Wait as u64 && matches!(&action, UserAction::Blocked) {
             A::secondary_wait_blocked();
         }
