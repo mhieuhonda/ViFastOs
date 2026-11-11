@@ -346,6 +346,12 @@ impl Default for Kernel {
     }
 }
 
+/// r301 (T-IPC): TCB bị huỷ trong boot này (`index + 1`, 0 = hết). Runtime đọc
+/// để in `KILLED ...` ở cuối boot.
+pub static KILLED: [core::sync::atomic::AtomicU32; 16] =
+    [const { core::sync::atomic::AtomicU32::new(0) }; 16];
+pub static KILLED_LEN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 impl Kernel {
     pub const fn new_const() -> Kernel {
         Kernel {
@@ -5144,6 +5150,15 @@ impl Kernel {
         let Some(kind) = self.get(obj).map(|object| object.kind) else {
             return Ok(());
         };
+        // r301 (T-IPC): ghi lại mọi TCB bị huỷ để runtime in ở cuối boot. Câu
+        // hỏi: client (tcb 62) biến mất giữa hai lệnh user — có ai HUỶ nó không?
+        if matches!(kind, object::Kind::Tcb(_)) {
+            let at = KILLED_LEN.load(core::sync::atomic::Ordering::Relaxed) as usize;
+            if at < KILLED.len() {
+                KILLED[at].store(obj.index as u32 + 1, core::sync::atomic::Ordering::Relaxed);
+                KILLED_LEN.store(at as u32 + 1, core::sync::atomic::Ordering::Relaxed);
+            }
+        }
         if self.current.contains(&Some(obj)) {
             if self.tcb_is_exited(obj) {
                 // T32: task đã chết thì `current` chỉ là tàn dư — dọn nó rồi

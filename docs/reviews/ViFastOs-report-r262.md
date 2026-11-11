@@ -1304,6 +1304,23 @@ Còn treo rất hẹp: client biến mất **giữa hai lệnh user**, không sy
 fault, không panic — nghi (a) preempt rồi rơi khỏi run-queue, (b) fault bị nuốt,
 (c) bị reap nhầm.
 
+
+## r301 — T-IPC: client **không bị huỷ**; hẹp còn `BlockedReply`
+
+Đèn `KILLED` (kernel ghi mọi TCB bị huỷ, runtime in một dòng ở cuối boot). Đo
+(ps, 40 boot, 2 ca hỏng): danh sách `KILLED` **giống nhau** ở boot xanh và boot
+hỏng, và **không có 62** ⇒ client không bị reap/destroy nhầm.
+
+Đính chính (bản rà soát): `SYSCALLS` đếm lần vào `dispatch`, **sau** fast-path
+`GetTime` ⇒ "không tăng" không đồng nghĩa "không vào kernel"; muốn chắc phải đếm
+`PICKS[62]`/`TICKS[62]` ở `pick_on` (chỗ duy nhất gán `current[hart]`).
+`user_ticks` trong `SMP PREEMPT OK` là của **hart 1**, không dùng được để phát
+hiện client quay vô hạn. Dự án **đã có** `check_invariants` (`Ready && !queued`)
+nhưng chỉ test gọi — gọi một lần ở cuối boot là đèn rẻ nhất cho lớp này.
+
+Giả thuyết rẻ nhất chưa thử: client **`BlockedReply`** (Call không bao giờ được
+Reply) — khớp mọi dấu hiệu, và hiện không đèn nào phân biệt được.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1312,7 +1329,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-c49d5ab9c518209d749cf453a7f6a3b0f52f7ee1eccb24a4c13175d57da68c7d  docs/reviews/ViFastOs-report-r262.md
+cdd8d2c64278794ee86d0baad88c1716595122ab83f8212c5aa91298aeba9851  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

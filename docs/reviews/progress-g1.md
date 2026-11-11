@@ -2961,3 +2961,40 @@ thái; và in số lần tcb 62 được chọn chạy (`SYSCALLS` đã là prox
   không phải client — chưa kết luận gì.
 - Bản rà soát cũng chỉ ra `console.rs:34–37` còn viết "`debug_write` không khoá"
   — SAI từ r294; sẽ sửa ở vòng sau cùng với việc thêm `TX_UNLOCKED` counter.
+
+## r301 — T-IPC: client KHÔNG bị huỷ (đèn `KILLED`); hẹp còn `BlockedReply`
+
+### Đèn `KILLED` (kernel) — bắt mọi TCB bị huỷ trong boot
+`destroy_object` ghi lại index mọi TCB bị huỷ; runtime in một dòng `KILLED …` ở
+cuối boot (`emit_boot_diag`). Đo (ps, 40 boot, 2 ca hỏng):
+
+| Boot | danh sách `KILLED` | có 62? | syscall của client |
+|---|---|---|---|
+| xanh | 67 68 69 66 112 112 115 119 122 125 71 117 119 119 119 119 | **KHÔNG** | 566 |
+| hỏng | 66 67 68 69 112 112 115 119 122 125 71 117 119 119 119 119 | **KHÔNG** | 561 |
+| hỏng | (như trên) | **KHÔNG** | 556 |
+
+⇒ **Client KHÔNG bị ai huỷ.** Loại giả thuyết "bị reap/destroy nhầm".
+
+### Đính chính của bản rà soát (đã ghi nhận)
+1. `SYSCALLS` đếm số lần vào **`dispatch`**, tức **SAU** fast-path `GetTime` ⇒
+   "không tăng" KHÔNG đồng nghĩa "không vào kernel" (client có thể quay bằng
+   `GetTime`). Muốn chắc phải đếm ở `pick_on` (chỗ duy nhất gán `current[hart]`)
+   theo TCB: `PICKS[62]`, và thêm `TICKS[62]` (timer rơi lúc 62 đang current).
+2. `SMP PREEMPT OK (user_ticks=…)` lấy số của **hart 1**, còn client chạy hart 0 ⇒
+   nó **không** dùng để phát hiện "client quay vô hạn". (Boot hỏng có
+   `user_ticks=12`, bình thường — phù hợp với "client KHÔNG chạy", nhưng không
+   chứng minh.)
+3. Dự án **đã có** `check_invariants` (`Ready && !queued` ⇒ lỗi) nhưng **chỉ test
+   gọi**, boot không gọi ⇒ gọi một lần ở cuối boot là đèn rẻ nhất bắt "rơi khỏi
+   run-queue".
+
+### Giả thuyết rẻ nhất chưa thử: client **`BlockedReply`**
+Client gửi `Call` mà server không bao giờ `Reply` ⇒ không syscall, không fault,
+không bị huỷ, boot vẫn xong — **khớp mọi dấu hiệu đã đo**. Hiện **không đèn nào**
+phân biệt được nó với "rơi khỏi run-queue".
+
+### Bài học quy trình
+Đèn nhiều dòng **phải** nằm trong một hàm (`emit_boot_diag`): lần đầu tôi chèn
+khối `{}` vào giữa `if let … =` và thân của nó ⇒ hỏng cú pháp, phải `git
+checkout` file và làm lại.

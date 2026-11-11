@@ -489,6 +489,33 @@ pub fn ensure_current_root<A: Platform>() -> Result<(), KError> {
 static SYSCALL_COUNT: [core::sync::atomic::AtomicU32; 128] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 128];
 
+/// r301 (T-IPC): chẩn đoán in MỘT lần ở cuối boot, gói trong một hàm để không
+/// phải chèn khối `{}` giữa điều kiện `if let` và thân của nó (đã làm hỏng cú
+/// pháp một lần — bài học: đèn nhiều dòng thì phải nằm trong hàm).
+fn emit_boot_diag<A: Platform>() {
+    let count = SYSCALL_COUNT[62].load(core::sync::atomic::Ordering::Relaxed);
+    vifast_kernel::klog!(A, "SYSCALLS t=62 n={}", count);
+    let len = vifast_kernel::KILLED_LEN.load(core::sync::atomic::Ordering::Relaxed);
+    let mut line = [0u8; 96];
+    let mut at = 0usize;
+    for &byte in b"KILLED" {
+        line[at] = byte;
+        at += 1;
+    }
+    for slot in 0..(len as usize).min(16) {
+        line[at] = b' ';
+        at += 1;
+        let value = vifast_kernel::KILLED[slot].load(core::sync::atomic::Ordering::Relaxed);
+        if value != 0 {
+            dec_into(&mut line, &mut at, (value - 1) as u64);
+        }
+    }
+    for byte in line.iter().take(at) {
+        A::putc(*byte);
+    }
+    A::putc(b'\n');
+}
+
 /// r300 (T-IPC): in `DW <loại> t=<tcb> v=<số>` — đèn phía KERNEL cho `DebugWrite`,
 /// để phân biệt "kernel từ chối / không đọc được buffer user" với "đã đẩy byte
 /// mà byte không ra cổng". Client dùng `let _ = debug_write(...)` nên mọi lỗi ở
@@ -2200,6 +2227,7 @@ pub mod timer {
             }
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
             vifast_kernel::klog!(A, "CTX SIZE {}", core::mem::size_of::<A::Context>());
+            emit_boot_diag::<A>();
             if let Some((size, bump, objects, max_objects)) =
                 kernel.untyped_usage_by_base(A::data_page().as_ptr() as usize)
             {
