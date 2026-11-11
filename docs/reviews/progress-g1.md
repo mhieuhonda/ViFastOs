@@ -2179,3 +2179,28 @@ serial** trong cửa sổ hẹp (nhiều chữ ký khác nhau, rải rác, ~3–
 Bài học ghi lại: **không đặt tên lớp theo cơ chế suy đoán** — chỉ đặt theo *chỗ
 quan sát được*, ghi cơ chế là "chưa rõ". Đây là lần thứ tư trong đêm một kết luận
 bị lật bởi dữ liệu mới.
+
+## r294 — Sửa tầng THU THẬP serial: SIGTERM trước SIGKILL
+
+**Cơ chế mất dòng (nghi ngờ, có cơ sở):** harness dùng `-serial file:<path>` để
+QEMU tự flush chardev, nhưng đường timeout lại gọi `proc.kill()` = **SIGKILL** ⇒
+phần đuôi QEMU còn đệm bị nuốt. Hệ quả: harness kết luận "thiếu marker" dù guest
+**đã in**.
+
+**Sửa:** timeout thì `terminate()` (SIGTERM) trước, chờ tối đa 3 s, chỉ `kill()`
+nếu còn sống; sau đó chờ thêm 0,2 s cho QEMU flush rồi mới đọc file serial.
+
+**Đo trên `ps`, 60 boot x86, `VIFAST_RETRY_TIMEOUT=0`:**
+
+| Cấu hình | Hỏng |
+|---|---:|
+| SIGKILL (cũ) | **3/60** |
+| SIGTERM→SIGKILL (mới) | **1/60** |
+
+Chữ ký còn lại vẫn là `thiếu marker (1): PAGER SRV 0/0/0` ⇒ có thể là **lỗi thật**
+hoặc vẫn là mất đuôi; mẫu 60 chưa đủ kết luận (3→1 nằm trong nhiễu).
+
+**Bài học:** khi mọi "flake" đều là *thiếu marker* mà *marker sau vẫn có*, phải
+nghi **tầng thu thập** trước khi nghi sản phẩm — và tỉ lệ flake báo cáo trước đó
+có thể **cao hơn thực tế**. Các con số `T-IPC`, `T-KHAC` đêm nay cần đo lại bằng
+đường thu thập mới trước khi dùng để kết luận.

@@ -724,8 +724,18 @@ def run_qemu_once(
                 "timeout (guest chưa thoát)",
                 monitor,
             )
-        proc.kill()
-        rc = proc.wait()
+        # T-IPC/r294: ưu tiên SIGTERM rồi mới SIGKILL. Lý do: `-serial file:`
+        # để QEMU tự flush chardev; SIGKILL có thể nuốt phần đuôi đang đệm ⇒
+        # harness thấy "thiếu marker" dù guest ĐÃ in (đo được: cùng một máy,
+        # ba chữ ký khác nhau, marker giữa dòng thiếu nhưng marker sau vẫn có).
+        proc.terminate()
+        try:
+            rc = proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            rc = proc.wait()
+        # Chờ QEMU flush nốt chardev trước khi đọc file serial.
+        time.sleep(0.2)
     elapsed = time.time() - started
     output = ""
     if os.path.exists(serial):
