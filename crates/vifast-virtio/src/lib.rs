@@ -91,7 +91,12 @@ pub const NET_BUF_SIZE: usize = 2048;
 /// csum_start(2) + csum_offset(2) = 10 byte. CHỈ thêm num_buffers(2) khi
 /// VIRTIO_NET_F_MRG_RXBUF được thoả thuận — ta không bật, nên 12 byte sẽ
 /// làm QEMU lệch frame 2 byte và slirp bỏ qua mọi gói (vòng 63).
-pub const NET_HDR_SIZE: usize = 10;
+/// Độ dài header virtio-net. Thiết bị virtio-mmio `version == 2` (modern) mà
+/// ta đàm phán `VIRTIO_F_VERSION_1` đòi header 12 byte (num_buffers của
+/// `virtio_net_hdr_mrg_rxbuf`); dùng 10 byte (bản legacy) thì QEMU ăn mất 2
+/// byte đầu khung Ethernet ở TX và ghi lệch buffer ở RX — ping/DNS/TCP trong
+/// guest đều "NO REPLY" dù TX báo thành công.
+pub const NET_HDR_SIZE: usize = 12;
 
 /// Dedicated split-queue for VirtIO-net (vòng 45). Separate static from the
 /// block `QUEUE` so net bring-up never disturbs the disk path; both live in
