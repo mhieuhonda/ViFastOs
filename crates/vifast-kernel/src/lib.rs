@@ -348,6 +348,14 @@ impl Default for Kernel {
 
 /// r301 (T-IPC): TCB bị huỷ trong boot này (`index + 1`, 0 = hết). Runtime đọc
 /// để in `KILLED ...` ở cuối boot.
+/// r302 (T-IPC): số lần mỗi tcb được CHỌN CHẠY (ghi ngay trước khi gán
+/// `current[hart]` trong `pick_on` — chỗ duy nhất ngoài test gán current).
+/// Cùng với `SYSCALLS` (số lần vào dispatch) nó phân biệt được hai ca:
+///   PICKS tăng + SYSCALLS đứng  ⇒ tác vụ VẪN chạy nhưng quay trong user mode;
+///   PICKS đứng                  ⇒ tác vụ không còn được chọn (rơi hàng đợi/BLocked).
+pub static PICKS: [core::sync::atomic::AtomicU32; 128] =
+    [const { core::sync::atomic::AtomicU32::new(0) }; 128];
+
 pub static KILLED: [core::sync::atomic::AtomicU32; 16] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 16];
 pub static KILLED_LEN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -1778,6 +1786,13 @@ impl Kernel {
         } else {
             None
         }
+    }
+
+    /// r302 (T-IPC): trạng thái + cờ `queued` của tcb theo INDEX (chẩn đoán).
+    pub fn tcb_state_at(&self, index: u8) -> Option<(ThreadState, bool)> {
+        let gen = self.objs.get(index as usize)?.gen;
+        let tcb = self.tcb(ObjRef { index, gen })?;
+        Some((tcb.state, tcb.queued))
     }
 
     pub fn tcb(&self, r: ObjRef) -> Option<&Tcb> {
@@ -5808,6 +5823,8 @@ impl Kernel {
         } else {
             self.sched_local[hart] = self.sched_local[hart].wrapping_add(1);
         }
+        PICKS[(reference.index as usize).min(127)]
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         self.current[hart] = Some(reference);
         self.stats.context_switches += 1;
         self.harts_seen |= 1u32 << hart;

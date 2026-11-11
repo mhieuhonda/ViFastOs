@@ -1321,6 +1321,28 @@ nhưng chỉ test gọi — gọi một lần ở cuối boot là đèn rẻ nh�
 Giả thuyết rẻ nhất chưa thử: client **`BlockedReply`** (Call không bao giờ được
 Reply) — khớp mọi dấu hiệu, và hiện không đèn nào phân biệt được.
 
+
+## r302 — T-IPC: boot đỏ kết thúc với client ở **Running (2)**, boot xanh ở **BlockedNotification (6)**
+
+Ba đèn: `PICKS t=62 n=` (số lần được chọn chạy, tăng ngay trước khi gán
+`current[hart]` trong `pick_on`), `STATE t=62 s=<mã> q=<0/1>`, và `SYSCALLS`
+(từ r300). Đo (ps, 40 boot, 4 ca hỏng):
+
+| | xanh | đỏ |
+|---|---|---|
+| `SYSCALLS` | 566 | 556–559 |
+| `PICKS` | 498 | 495–497 |
+| `STATE` | **s=6** BlockedNotification | **s=2** Running |
+
+Boot xanh: client chờ notification UART (đúng thiết kế). Boot đỏ: client
+**`Running` mà `queued=0`** — nó **đang giữ CPU**, không rơi khỏi hàng đợi, không
+bị Blocked, và **quay trong user mode** (SYSCALLS đứng). `PICKS` gần bằng nhau
+⇒ đúng **một lần resume cuối** đưa nó vào trạng thái chạy sai.
+
+Giả thuyết đúng là "**được resume/giữ `Running` trong khi lẽ ra phải chuyển
+việc khác**", không phải "rơi khỏi run-queue". Bất biến còn thiếu: *mọi tcb
+`Running` phải là `current` của đúng một hart*.
+
 Báo cáo này đã được ký lại sau mỗi lần sửa nội dung; khối SHA-256 ở cuối là của
 phiên bản hiện tại.
 
@@ -1329,7 +1351,7 @@ phiên bản hiện tại.
 ## SHA-256
 
 ```text
-cdd8d2c64278794ee86d0baad88c1716595122ab83f8212c5aa91298aeba9851  docs/reviews/ViFastOs-report-r262.md
+dd6e7f7dea977075608f8b47f79182c25da9a84beeb98923fbad31f8e40c87ca  docs/reviews/ViFastOs-report-r262.md
 ```
 
 Kiểm: băm mọi byte TRƯỚC dấu `<!-- SHA-256` (sau khi `rstrip()` và thêm

@@ -492,9 +492,22 @@ static SYSCALL_COUNT: [core::sync::atomic::AtomicU32; 128] =
 /// r301 (T-IPC): chẩn đoán in MỘT lần ở cuối boot, gói trong một hàm để không
 /// phải chèn khối `{}` giữa điều kiện `if let` và thân của nó (đã làm hỏng cú
 /// pháp một lần — bài học: đèn nhiều dòng thì phải nằm trong hàm).
-fn emit_boot_diag<A: Platform>() {
+fn emit_boot_diag<A: Platform>(kernel: &vifast_kernel::Kernel) {
     let count = SYSCALL_COUNT[62].load(core::sync::atomic::Ordering::Relaxed);
     vifast_kernel::klog!(A, "SYSCALLS t=62 n={}", count);
+    // r302: số lần tcb client ĐƯỢC CHỌN CHẠY. PICKS tăng mà SYSCALLS đứng ⇒
+    // client vẫn chạy nhưng quay trong user mode; PICKS đứng ⇒ không còn được
+    // chọn (rơi hàng đợi hoặc đang Blocked).
+    let picks = vifast_kernel::PICKS[62].load(core::sync::atomic::Ordering::Relaxed);
+    vifast_kernel::klog!(A, "PICKS t=62 n={}", picks);
+    // r302: trạng thái của client lúc kết thúc boot — "Blocked" nào, còn `queued`
+    // hay không. Đây là thứ phân biệt BlockedReply với rơi-khỏi-hàng-đợi.
+    match kernel.tcb_state_at(62) {
+        Some((state, queued)) => {
+            vifast_kernel::klog!(A, "STATE t=62 s={} q={}", state as u8, queued as u8)
+        }
+        None => vifast_kernel::klog!(A, "STATE t=62 GONE"),
+    }
     let len = vifast_kernel::KILLED_LEN.load(core::sync::atomic::Ordering::Relaxed);
     let mut line = [0u8; 96];
     let mut at = 0usize;
@@ -2227,7 +2240,7 @@ pub mod timer {
             }
             vifast_kernel::klog!(A, "ROOT SWITCH {}", kernel.stats().root_switches);
             vifast_kernel::klog!(A, "CTX SIZE {}", core::mem::size_of::<A::Context>());
-            emit_boot_diag::<A>();
+            emit_boot_diag::<A>(&kernel);
             if let Some((size, bump, objects, max_objects)) =
                 kernel.untyped_usage_by_base(A::data_page().as_ptr() as usize)
             {

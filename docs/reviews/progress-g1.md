@@ -2998,3 +2998,49 @@ phân biệt được nó với "rơi khỏi run-queue".
 Đèn nhiều dòng **phải** nằm trong một hàm (`emit_boot_diag`): lần đầu tôi chèn
 khối `{}` vào giữa `if let … =` và thân của nó ⇒ hỏng cú pháp, phải `git
 checkout` file và làm lại.
+
+## r302 — T-IPC: boot đỏ kết thúc với client ở **Running (2)**, boot xanh ở **BlockedNotification (6)**
+
+### Ba đèn mới
+- `PICKS t=62 n=` — số lần tcb client được **chọn chạy** (tăng ngay trước
+  `self.current[hart] = Some(reference)` trong `pick_on`, chỗ duy nhất gán current).
+- `STATE t=62 s=<mã ThreadState> q=<0/1>` — trạng thái + `queued` lúc cuối boot.
+- (`SYSCALLS t=62 n=` đã có từ r300.)
+
+### Số đo (ps, 40 boot, 4 ca hỏng)
+| | xanh | đỏ (4 boot) |
+|---|---|---|
+| `SYSCALLS` | 566 | 556–559 |
+| `PICKS` | 498 | 495–497 |
+| `STATE` | **s=6 q=0** (BlockedNotification) | **s=2 q=0** (Running) |
+
+Thứ tự `ThreadState`: 0 Inactive · 1 Ready · 2 **Running** · 3 BlockedSend ·
+4 BlockedRecv · 5 BlockedReply · 6 **BlockedNotification** · 7 Faulted · …
+
+### Ý nghĩa — đảo chiều giả thuyết trước
+- Boot **xanh** kết thúc với client `BlockedNotification`: client đang chờ
+  notification UART trong `console_read` — đúng như thiết kế.
+- Boot **đỏ** kết thúc với client **`Running` mà `queued = 0`**: nó **đang giữ
+  CPU** (là `current` của một hart) chứ **không** rơi khỏi hàng đợi, và cũng
+  **không** bị Blocked. `SYSCALLS` đứng yên ⇒ nó **quay trong user mode** (hoặc
+  bị trả về một PC sai) chứ không gọi syscall nào nữa.
+- `PICKS` gần như bằng nhau (495–497 so với 498) ⇒ nó **không** bị chọn lại
+  nhiều lần: đúng một lần "resume cuối" đưa nó vào trạng thái chạy sai.
+
+⇒ Giả thuyết đúng không phải "rơi khỏi run-queue" mà là **"được resume/giữ
+`Running` trong khi lẽ ra phải chuyển sang việc khác"** — nghi đường
+preempt/fault/exit của hart 0 (nhánh không gọi `yield_current_on` trước khi
+`pick_on`).
+
+### Vì sao trước đây tôi đọc sai
+`check_invariants` chỉ bắt "Ready mà không queued" và "đang queued mà khác
+Ready"; ca của ta là **"Running mà không phải current trên hart nào"** — chưa có
+bất biến nào kiểm. (Bản rà soát đã chỉ ra `check_invariants` có 68 điểm trả lỗi
+và hai dương-tính-giả, nên chưa gọi nó ở boot.)
+
+### Còn treo
+- Xác định nhánh nào để client ở `Running`: rà 5 chỗ gọi `pick_on` trong runtime
+  (1134, 1826, 1862, 1953, 2287) xem chỗ nào **không** đi qua
+  `yield_current_on`/`switch_blocked` trước đó.
+- Bất biến cần thêm: **"mọi tcb `Running` phải là `current` của đúng một hart"**,
+  kiểm ở cuối boot (rẻ, không cần cấp phát) — chính là đèn bắt lỗi này.
